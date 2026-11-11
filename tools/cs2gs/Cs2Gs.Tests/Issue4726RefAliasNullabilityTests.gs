@@ -2648,6 +2648,90 @@ public static class Constraint {
         AssertParity(sharedSource + Environment.NewLine + appSource, appPrinted, "x")
     }
 
+    @Fact
+    func LinkedDeclarations_PropagateTaintAndFixedContractsTransitivelyAcrossBridgeCompilation() {
+        const sharedSource = `public static class Shared {
+    public static string Scalar = "x";
+    public static (string Text, int Code) Tuple = ("x", 1);
+    public static string Fixed = "x";
+}`
+        const appSource = `public static class Obj {
+    public static string Run() {
+        ref string fixedAlias = ref Shared.Fixed;
+        return (Shared.Scalar ?? "null") + ":" + (Shared.Tuple.Text ?? "null") + ":" + (fixedAlias ?? "fallback");
+    }
+}`
+        const consumerSource = `public static class Consumer {
+    public static void Mutate() {
+        Shared.Scalar = null;
+        Shared.Tuple = (null, 1);
+    }
+#nullable enable
+    public static ref string KeepFixed() => ref Shared.Fixed;
+}`
+        let app = CSharpProjectLoader.LoadInMemory(
+            [](string, string){("Shared.cs", sharedSource), ("App.cs", appSource)},
+            assemblyName: "ProjectA"
+        )
+        let bridge = CSharpProjectLoader.LoadInMemory(
+            [](string, string){("Shared.cs", sharedSource)},
+            assemblyName: "ProjectB"
+        )
+        using let bridgeStream = MemoryStream()
+        let bridgeEmit = bridge.Compilation.Emit(bridgeStream)
+        Assert.True(bridgeEmit.Success, string.Join(Environment.NewLine, bridgeEmit.Diagnostics))
+        bridgeStream.Position = 0
+        let consumerReferences = CSharpProjectLoader
+            .RuntimeReferences()
+            .Append(MetadataReference.CreateFromStream(bridgeStream))
+            .ToArray()
+        let consumer = CSharpProjectLoader.LoadInMemory(
+            [](string, string){("Consumer.cs", consumerSource)},
+            references: consumerReferences,
+            assemblyName: "ProjectC"
+        )
+        let projects = []LoadedCSharpProject{app, bridge, consumer}
+        let repository = projects.Select((project LoadedCSharpProject) -> project.Compilation).ToArray()
+        let translator = CSharpToGSharpTranslator()
+        var appShared string? = nil
+        var bridgeShared string? = nil
+        var appPrinted = ""
+        for project in projects {
+            Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+            for document in project.Documents {
+                let context = TranslationContext(
+                    project.Compilation,
+                    document.SemanticModel,
+                    document.FilePath,
+                    siblingCompilations: repository,
+                    repositoryCompilations: repository
+                )
+                let printed = GSharpPrinter.Print(translator.TranslateDocument(document, context))
+                Assert.DoesNotContain(
+                    context.Diagnostics,
+                    (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported
+                )
+                if document.FilePath.EndsWith("Shared.cs", StringComparison.Ordinal) {
+                    if project == app {
+                        appShared = printed
+                    } else if project == bridge {
+                        bridgeShared = printed
+                    }
+                }
+                if project == app {
+                    appPrinted += printed + Environment.NewLine
+                }
+            }
+        }
+        Assert.NotNull(appShared)
+        Assert.NotNull(bridgeShared)
+        Assert.Equal(appShared, bridgeShared)
+        Assert.Contains("var Scalar string? = \"x\"", appShared!!)
+        Assert.Contains("var Tuple (Text string?, Code int32) = (\"x\", 1)", appShared!!)
+        Assert.Contains("var Fixed string = \"x\"", appShared!!)
+        AssertParity(sharedSource + Environment.NewLine + appSource, appPrinted, "x:x:x")
+    }
+
     shared {
         private func Translate(source string) string {
             let loaded = CSharpProjectLoader.LoadInMemory([](string, string){("Source.cs", source)})

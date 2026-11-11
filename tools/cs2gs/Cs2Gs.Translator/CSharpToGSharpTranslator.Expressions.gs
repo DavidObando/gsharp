@@ -3508,7 +3508,12 @@ partial class CSharpToGSharpTranslator {
             ) &&
                 !this.IsActivePatternBinding(value) && !this.LambdaResultFeedsNullableObservedInvocation(value) &&
                 !this.IsNilableOnlyInEmittedGSharp(value) && this.ReceiverNeedsNullForgiveness(value) {
-                return this.ReportStoreBridge(value, translated, EnsureNonNullAssertion(translated), targetSymbol)
+                return this.BridgeWidenedImplicitArrayConsumer(
+                    value,
+                    this.ReportStoreBridge(value, translated, EnsureNonNullAssertion(translated), targetSymbol),
+                    targetType,
+                    targetSymbol
+                )
             }
             let includePromotedLambdaArm = IsBranchArm(value) &&
                 targetSymbol is IMethodSymbol methodTarget &&
@@ -3580,43 +3585,47 @@ partial class CSharpToGSharpTranslator {
             return this.EmittedValueIsNilableBeyondItsCSharpType(unwrapped)
         }
 
-        /// Issue #5627: whether the program text writes the G# type of the slot [`targetSymbol`](paramref) that
-        /// [`value`](paramref) is stored into: a field, a property or indexer, or a parameter whose declared type
-        /// mentions no type parameter, a local whose storage a written type fixes (`LocalSlotIsDeclared`), the
-        /// result of a method or local function, or the result of a lambda that converts to a concrete delegate
-        /// type (not `Delegate`) and is itself stored into such a slot.
-        /// Only such a slot can be non-null where the value is `T?` only in G#. G# can type every other slot from
-        /// the value: a `var` or deconstructed local, a slot typed by a type parameter (inferred for the call, or
-        /// for the receiver's own inferred type, as in `var b = Wrap(value); b.Value = …`) and the result of a
-        /// lambda that such a slot receives. A value with no slot symbol (an arm of a receiver or of a `var`
-        /// initializer, a tuple element of `var` storage, a reassigned `var` local) is left to the bridge of its
-        /// whole value or to gsc.
+        /// Issue #5627, #5686, #5701: whether the emitted G# type of the slot [`targetSymbol`](paramref) that
+        /// [`value`](paramref) is stored into is fixed non-null by its declaration or emitted storage: a field,
+        /// property, indexer or parameter whose declared type mentions no type parameter or whose receiver has
+        /// declared type arguments, a local whose emitted storage is fixed (`LocalSlotIsDeclared`), an array or
+        /// collection element whose emitted element type is declared (`UnboundValueSlotIsDeclared`), the result
+        /// of a method or local function, or the result of a lambda that converts to a concrete delegate type
+        /// (not `Delegate`) and is stored into such a slot.
         private func SlotTypeIsDeclared(
             targetSymbol ISymbol?,
             value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
             tuplePath List[int32]? = nil
-        ) bool -> switch targetSymbol {
-            case namedType is INamedTypeSymbol: namedType != nil
-            case field is IFieldSymbol: this.MemberSlotIsDeclared(
-                field.OriginalDefinition.Type,
-                field.Type,
-                value,
-                tuplePath
-            )
-            case property is IPropertySymbol: this.MemberSlotIsDeclared(
-                property.OriginalDefinition.Type,
-                property.Type,
-                value,
-                tuplePath
-            )
-            case parameter is IParameterSymbol: this.ParameterSlotIsDeclared(parameter, value, tuplePath)
-            case local is ILocalSymbol: this.LocalSlotIsDeclared(local, value, tuplePath)
-            case method is IMethodSymbol: if this.ResultLambda(method, value) is {} lambda {
-                this.LambdaResultSlotIsDeclared(lambda, value, tuplePath)
-            } else {
-                true
+        ) bool {
+            if targetSymbol is IMethodSymbol methodTarget && this.ResultLambda(methodTarget, value) is {} resultLambda {
+                return this.LambdaResultSlotIsDeclared(resultLambda, value, tuplePath)
             }
-            default: false
+            if (targetSymbol == nil || targetSymbol is IMethodSymbol) && this.TryGetEnclosingArrayElementStore(
+                value,
+                tuplePath,
+                out var arrayElementSlotDeclared
+            ) {
+                return arrayElementSlotDeclared
+            }
+            return switch targetSymbol {
+                case namedType is INamedTypeSymbol: namedType != nil
+                case field is IFieldSymbol: this.MemberSlotIsDeclared(
+                    field.OriginalDefinition.Type,
+                    field.Type,
+                    value,
+                    tuplePath
+                )
+                case property is IPropertySymbol: this.MemberSlotIsDeclared(
+                    property.OriginalDefinition.Type,
+                    property.Type,
+                    value,
+                    tuplePath
+                )
+                case parameter is IParameterSymbol: this.ParameterSlotIsDeclared(parameter, value, tuplePath)
+                case local is ILocalSymbol: this.LocalSlotIsDeclared(local, value, tuplePath)
+                case IMethodSymbol: true
+                default: this.UnboundValueSlotIsDeclared(value, tuplePath)
+            }
         }
 
         private func LambdaTargetIsTranslatedSourceOrSiblingSlot(lambda AnonymousFunctionExpressionSyntax) bool {
@@ -3710,9 +3719,18 @@ partial class CSharpToGSharpTranslator {
             lambda AnonymousFunctionExpressionSyntax,
             value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
             tuplePath List[int32]?
+        ) List[int32]? -> if object.ReferenceEquals(value, lambda) {
+            tuplePath
+        } else {
+            this.ResolveValueTuplePath(value, tuplePath)
+        }
+
+        private func ResolveValueTuplePath(
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            tuplePath List[int32]?
         ) List[int32]? {
             let rawIndices = List[int32]()
-            if value != nil && value != lambda {
+            if value != nil {
                 OutermostTransparentNode(value, rawIndices)
             }
             let suffixCount = if tuplePath == nil {
@@ -3830,38 +3848,128 @@ partial class CSharpToGSharpTranslator {
         private func LambdaFeedsDeclaredCollectionElement(
             lambda AnonymousFunctionExpressionSyntax,
             tuplePath List[int32]? = nil
+        ) bool -> this
+            .GetLambdaTargetDelegateType(lambda)?.DelegateInvokeMethod != nil && this.UnboundValueSlotIsDeclared(
+            lambda,
+            tuplePath
+        )
+
+        private func TryGetEnclosingArrayElementStore(
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            tuplePath List[int32]?,
+            out isDeclared bool
         ) bool {
-            let converted = this.GetLambdaTargetDelegateType(lambda)
-            if converted?.DelegateInvokeMethod == nil {
+            isDeclared = false
+            if value == nil {
                 return false
             }
             let storeNodes = List[Microsoft.CodeAnalysis.SyntaxNode]()
-            let outermost = OutermostTransparentNode(lambda, storeNodes: storeNodes)
+            OutermostTransparentNode(value, storeNodes: storeNodes)
+            if storeNodes.Count == 0 ||
+                storeNodes[0].Parent is not Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .AssignmentExpressionSyntax assignment ||
+                !assignment.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleAssignmentExpression) ||
+                assignment.Right != storeNodes[0] ||
+                assignment.Left is not ElementAccessExpressionSyntax elementAccess ||
+                this
+                .context
+                .GetSymbolInfo(elementAccess)
+                .Symbol != nil {
+                return false
+            }
+            if (value is not AnonymousFunctionExpressionSyntax && this.ElementStoreSlotAcceptsNil(elementAccess)) ||
+                this
+                .context
+                .GetTypeInfo(elementAccess.Expression)
+                .Type is not IArrayTypeSymbol assignedArrayType {
+                return true
+            }
+            let effectiveTuplePath = if value is AnonymousFunctionExpressionSyntax {
+                tuplePath
+            } else {
+                this.ResolveValueTuplePath(value, tuplePath)
+            }
+            let elementSlot = this.EffectiveDeclaredSlotType(assignedArrayType.ElementType, value, tuplePath)
+            let receiverSlot = if ContainsTypeParameter(elementSlot) {
+                elementSlot
+            } else {
+                default(ITypeSymbol?)
+            }
+            let initialArrayDepth = if value is ImplicitArrayCreationExpressionSyntax {
+                1 + this.CountArrayDimensions(assignedArrayType.ElementType)
+            } else {
+                1
+            }
+            let isLambdaValue = value is AnonymousFunctionExpressionSyntax
+            let isAsyncLambdaValue = value is AnonymousFunctionExpressionSyntax valueLambda &&
+                valueLambda
+                .AsyncKeyword
+                .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AsyncKeyword)
+            if isLambdaValue {
+                this.PushCheckingLambdaResult(isAsyncLambdaValue)
+            }
+            try {
+                isDeclared = elementSlot != nil && this.ReceiverTypeArgumentsAreDeclared(
+                    elementAccess.Expression,
+                    receiverSlot,
+                    nil,
+                    effectiveTuplePath,
+                    initialArrayDepth
+                )
+                return true
+            } finally {
+                if isLambdaValue {
+                    this.PopCheckingLambdaResult()
+                }
+            }
+        }
+
+        private func CountArrayDimensions(type ITypeSymbol?) int32 {
+            var count = 0
+            var current = type
+            while current is IArrayTypeSymbol arrayType {
+                count++
+                current = arrayType.ElementType
+            }
+            return count
+        }
+
+        private func UnboundValueSlotIsDeclared(
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            tuplePath List[int32]? = nil
+        ) bool {
+            if value == nil {
+                return false
+            }
+            if this.TryGetEnclosingArrayElementStore(value, tuplePath, out var arrayElementSlotDeclared) {
+                return arrayElementSlotDeclared
+            }
+            let tupleIndices = List[int32]()
+            let storeNodes = List[Microsoft.CodeAnalysis.SyntaxNode]()
+            let outermost = OutermostTransparentNode(value, tupleIndices, storeNodes)
+            if tupleIndices.Count > 0 && value is not AnonymousFunctionExpressionSyntax {
+                return false
+            }
             if storeNodes.Count > 0 &&
                 storeNodes[0].Parent is Microsoft
                 .CodeAnalysis
                 .CSharp
                 .Syntax
                 .AssignmentExpressionSyntax assignment &&
-                assignment.Right == storeNodes[0] &&
-                assignment.Left is ElementAccessExpressionSyntax elementAccess &&
-                this
-                .context
-                .GetSymbolInfo(elementAccess)
-                .Symbol == nil {
-                let elementReturnSlot = if this
-                    .context
-                    .GetTypeInfo(elementAccess.Expression)
-                    .Type is IArrayTypeSymbol assignedArrayType {
-                    this.EffectiveDeclaredSlotType(assignedArrayType.ElementType, lambda, tuplePath)
-                } else {
-                    default(ITypeSymbol?)
+                assignment.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleAssignmentExpression) &&
+                assignment.Right == storeNodes[0] {
+                if tupleIndices.Count == 0 &&
+                    (tuplePath == nil || tuplePath.Count == 0) &&
+                    this.GetProjectedAssignmentTarget(
+                    assignment.Left,
+                    this.context.GetSymbolInfo(assignment.Left).Symbol
+                ) is ILocalSymbol assignedLocal {
+                    return this.LocalSlotIsDeclared(assignedLocal, value, tuplePath)
                 }
-                return elementReturnSlot != nil && this.ReceiverTypeArgumentsAreDeclared(
-                    elementAccess.Expression,
-                    slotType: elementReturnSlot,
-                    tuplePath: tuplePath
-                )
+                return false
             }
             if outermost?.Parent is ExpressionElementSyntax{Parent: CollectionExpressionSyntax collection} {
                 let collectionType = this
@@ -3878,10 +3986,24 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             if initializer.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.ArrayInitializerExpression) {
-                return this.ArrayTypeOfInitializer(initializer) != nil && this.ArrayInitializerSlotIsDeclared(
-                    initializer,
-                    tuplePath
-                )
+                let isLambda = value is AnonymousFunctionExpressionSyntax
+                let isAsyncLambda = value is AnonymousFunctionExpressionSyntax valueLambda &&
+                    valueLambda
+                    .AsyncKeyword
+                    .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AsyncKeyword)
+                if isLambda {
+                    this.PushCheckingLambdaResult(isAsyncLambda)
+                }
+                try {
+                    return this.ArrayTypeOfInitializer(initializer) != nil && this.ArrayInitializerSlotIsDeclared(
+                        initializer,
+                        tuplePath
+                    )
+                } finally {
+                    if isLambda {
+                        this.PopCheckingLambdaResult()
+                    }
+                }
             }
             if initializer.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.CollectionInitializerExpression) ||
                 (
@@ -3919,7 +4041,7 @@ partial class CSharpToGSharpTranslator {
                     out var parameter
                 ) &&
                     parameter != nil &&
-                    this.ParameterSlotIsDeclared(parameter, lambda, tuplePath)
+                    this.ParameterSlotIsDeclared(parameter, value, tuplePath)
             }
             return false
         }
@@ -4052,6 +4174,19 @@ partial class CSharpToGSharpTranslator {
                 case ArgumentSyntax{
                     Parent: BracketedArgumentListSyntax{Parent: ElementBindingExpressionSyntax elementBinding}
                 }: this.GetConditionalBindingReceiver(elementBinding)
+                case ArgumentSyntax{
+                    Parent: BracketedArgumentListSyntax{
+                        Parent: ImplicitElementAccessSyntax{
+                            Parent: Microsoft
+                                .CodeAnalysis
+                                .CSharp
+                                .Syntax
+                                .AssignmentExpressionSyntax{
+                                Parent: InitializerExpressionSyntax{Parent: BaseObjectCreationExpressionSyntax creation}
+                            }
+                        }
+                    }
+                }: creation
                 default: default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
             }
             return this.ReceiverTypeArgumentsAreDeclared(receiver, slotType)
@@ -4061,7 +4196,8 @@ partial class CSharpToGSharpTranslator {
             receiver Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
             slotType ITypeSymbol? = nil,
             memo Dictionary[ILocalSymbol, List[(Slot ITypeSymbol?, Path string, Result bool)]]? = nil,
-            tuplePath List[int32]? = nil
+            tuplePath List[int32]? = nil,
+            arrayAccessDepth int32 = 0
         ) bool {
             let activeMemo = memo ??
                 Dictionary[ILocalSymbol, List[(Slot ITypeSymbol?, Path string, Result bool)]](
@@ -4104,20 +4240,45 @@ partial class CSharpToGSharpTranslator {
                         binaryExpression.Left,
                         slotType,
                         activeMemo,
-                        tuplePath
+                        tuplePath,
+                        arrayAccessDepth
                     ) &&
-                        this.ReceiverTypeArgumentsAreDeclared(binaryExpression.Right, slotType, activeMemo, tuplePath)
+                        this.ReceiverTypeArgumentsAreDeclared(
+                        binaryExpression.Right,
+                        slotType,
+                        activeMemo,
+                        tuplePath,
+                        arrayAccessDepth
+                    )
                 }
             }
             if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalExpressionSyntax conditional {
-                return this.ReceiverTypeArgumentsAreDeclared(conditional.WhenTrue, slotType, activeMemo, tuplePath) &&
-                    this.ReceiverTypeArgumentsAreDeclared(conditional.WhenFalse, slotType, activeMemo, tuplePath)
+                return this.ReceiverTypeArgumentsAreDeclared(
+                    conditional.WhenTrue,
+                    slotType,
+                    activeMemo,
+                    tuplePath,
+                    arrayAccessDepth
+                ) &&
+                    this.ReceiverTypeArgumentsAreDeclared(
+                    conditional.WhenFalse,
+                    slotType,
+                    activeMemo,
+                    tuplePath,
+                    arrayAccessDepth
+                )
             }
             if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax switchExpression {
                 return switchExpression.Arms.Count > 0 && switchExpression.Arms.All(
                     (
                         arm Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionArmSyntax
-                    ) -> this.ReceiverTypeArgumentsAreDeclared(arm.Expression, slotType, activeMemo, tuplePath)
+                    ) -> this.ReceiverTypeArgumentsAreDeclared(
+                        arm.Expression,
+                        slotType,
+                        activeMemo,
+                        tuplePath,
+                        arrayAccessDepth
+                    )
                 )
             }
             if unwrapped is ConditionalAccessExpressionSyntax conditionalAccess {
@@ -4125,7 +4286,8 @@ partial class CSharpToGSharpTranslator {
                     conditionalAccess.WhenNotNull,
                     slotType,
                     activeMemo,
-                    tuplePath
+                    tuplePath,
+                    arrayAccessDepth
                 )
             }
             if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.AwaitExpressionSyntax awaitExpression {
@@ -4133,7 +4295,9 @@ partial class CSharpToGSharpTranslator {
                     awaitExpression,
                     awaitExpression.Expression,
                     slotType,
-                    activeMemo
+                    activeMemo,
+                    tuplePath,
+                    arrayAccessDepth
                 )
             }
             if unwrapped is Microsoft
@@ -4146,10 +4310,52 @@ partial class CSharpToGSharpTranslator {
                 let arrayType = (
                     this.context.GetTypeInfo(unwrapped).Type ?? this.context.GetTypeInfo(unwrapped).ConvertedType
                 ) as IArrayTypeSymbol
-                return arrayType != nil && !this.ReceiverTargetContainsTypeParameter(arrayType.ElementType, slotType) &&
+                if arrayType == nil || this.ReceiverTargetContainsTypeParameter(arrayType.ElementType, slotType) {
+                    return false
+                }
+                if slotType != nil {
+                    let projectedArraySlot = this.ProjectDeclaredReceiverSlot(
+                        slotType,
+                        arrayType,
+                        tuplePath,
+                        arrayAccessDepth,
+                        out _
+                    )
+                    if ContainsTypeParameter(projectedArraySlot) ||
+                        projectedArraySlot?.NullableAnnotation == Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated {
+                        return false
+                    }
+                    if unwrapped is ImplicitArrayCreationExpressionSyntax implicitSlotArray {
+                        let slotLeaves = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
+                        this.CollectArrayInitializerLeaves(implicitSlotArray.Initializer, slotLeaves)
+                        return slotLeaves.All(
+                            (
+                                leaf Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+                            ) -> this.ReceiverTypeArgumentsAreDeclared(leaf, slotType, activeMemo, tuplePath)
+                        )
+                    }
+                    return true
+                }
+                return !(
+                    unwrapped is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ArrayCreationExpressionSyntax explicitArray &&
+                        this.ExplicitArrayElementAcceptsNil(explicitArray, arrayType, arrayAccessDepth)
+                ) &&
                     (
                     unwrapped is not ImplicitArrayCreationExpressionSyntax implicitArray ||
-                        this.ImplicitArrayDelegateSlotIsDeclared(implicitArray, tuplePath: tuplePath)
+                        this
+                        .ImplicitArrayDelegateSlotIsDeclared(
+                        implicitArray,
+                        tuplePath: tuplePath,
+                        arrayAccessDepth: arrayAccessDepth,
+                        stopAtIntermediateArrayRef: true
+                    )
                 )
             }
             if unwrapped is ElementAccessExpressionSyntax innerElementAccess &&
@@ -4157,11 +4363,17 @@ partial class CSharpToGSharpTranslator {
                 .context
                 .GetSymbolInfo(innerElementAccess)
                 .Symbol == nil {
+                let nextArrayDepth = if this.IsRangeElementAccess(innerElementAccess) {
+                    arrayAccessDepth
+                } else {
+                    arrayAccessDepth + 1
+                }
                 return this.ReceiverTypeArgumentsAreDeclared(
                     innerElementAccess.Expression,
                     slotType,
                     activeMemo,
-                    tuplePath
+                    tuplePath,
+                    nextArrayDepth
                 )
             }
             if unwrapped is BaseObjectCreationExpressionSyntax creation {
@@ -4190,16 +4402,30 @@ partial class CSharpToGSharpTranslator {
                         invocation,
                         slotType,
                         awaitExpression: nil,
-                        activeMemo
+                        activeMemo,
+                        tuplePath,
+                        arrayAccessDepth
                     )
                 }
                 let declaredReturn = receiverMethod.OriginalDefinition.ReturnType
-                let projectedDeclaredReturn = this.ProjectSlotThroughReceiverType(slotType, declaredReturn)
+                let projectedDeclaredReturn = this.ProjectDeclaredReceiverSlot(
+                    slotType,
+                    declaredReturn,
+                    tuplePath,
+                    arrayAccessDepth,
+                    out var remainingInvocationArrayDepth
+                )
                 if !ContainsTypeParameter(projectedDeclaredReturn) {
                     return true
                 }
                 if MentionedTypeParameterKind(projectedDeclaredReturn, TypeParameterKind.Method) &&
-                    !this.InferredMethodTypeArgumentsAreDeclared(invocation, receiverMethod) {
+                    !this
+                    .InferredMethodTypeArgumentsAreDeclared(
+                    invocation,
+                    receiverMethod,
+                    projectedDeclaredReturn,
+                    remainingInvocationArrayDepth
+                ) {
                     return false
                 }
                 if MentionedTypeParameterKind(projectedDeclaredReturn, TypeParameterKind.Type) {
@@ -4216,7 +4442,9 @@ partial class CSharpToGSharpTranslator {
                     return this.ReceiverTypeArgumentsAreDeclared(
                         invocationReceiver,
                         projectedDeclaredReturn,
-                        activeMemo
+                        activeMemo,
+                        tuplePath,
+                        remainingInvocationArrayDepth
                     )
                 }
                 return true
@@ -4228,21 +4456,26 @@ partial class CSharpToGSharpTranslator {
                     local,
                     slotType,
                     activeMemo,
-                    tuplePath
+                    tuplePath,
+                    arrayAccessDepth
                 )
                 case field is IFieldSymbol: this.MemberReceiverTypeArgumentsAreDeclared(
                     field.OriginalDefinition.Type,
                     field.Type,
                     unwrapped,
                     slotType,
-                    activeMemo
+                    activeMemo,
+                    tuplePath,
+                    arrayAccessDepth
                 )
                 case property is IPropertySymbol: this.MemberReceiverTypeArgumentsAreDeclared(
                     property.OriginalDefinition.Type,
                     property.Type,
                     unwrapped,
                     slotType,
-                    activeMemo
+                    activeMemo,
+                    tuplePath,
+                    arrayAccessDepth
                 )
                 case parameter is IParameterSymbol: !this.ReceiverTargetContainsTypeParameter(
                     parameter.Type,
@@ -4269,12 +4502,18 @@ partial class CSharpToGSharpTranslator {
             local ILocalSymbol,
             slotType ITypeSymbol? = nil,
             memo Dictionary[ILocalSymbol, List[(Slot ITypeSymbol?, Path string, Result bool)]]? = nil,
-            tuplePath List[int32]? = nil
+            tuplePath List[int32]? = nil,
+            arrayAccessDepth int32 = 0
         ) bool {
-            let pathKey = if tuplePath == nil {
+            let basePathKey = if tuplePath == nil {
                 ""
             } else {
                 FormatTupleProjection(tuplePath)
+            }
+            let pathKey = if arrayAccessDepth > 0 {
+                "${basePathKey}#${arrayAccessDepth}"
+            } else {
+                basePathKey
             }
             if TryGetReceiverLocalMemo(memo, local, slotType, pathKey, out var cached) {
                 return cached
@@ -4286,7 +4525,78 @@ partial class CSharpToGSharpTranslator {
                 .DeclaringSyntaxReferences
                 .FirstOrDefault()
                 ?.GetSyntax() is not VariableDeclaratorSyntax declarator {
-                return !IsImplicitlyTypedLocal(local)
+                if local
+                    .DeclaringSyntaxReferences
+                    .FirstOrDefault()
+                    ?.GetSyntax() is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ForEachStatementSyntax forEach {
+                    let activeForEachMemo = memo ??
+                        Dictionary[ILocalSymbol, List[(Slot ITypeSymbol?, Path string, Result bool)]](
+                        SymbolEqualityComparer.Default
+                    )
+                    SetReceiverLocalMemo(activeForEachMemo, local, slotType, pathKey, false)
+                    if this.activeForEachStatements == nil {
+                        this.activeForEachStatements = List[
+                            Microsoft.CodeAnalysis.CSharp.Syntax.ForEachStatementSyntax
+                        ]()
+                    }
+                    this.activeForEachStatements!!.Add(forEach)
+                    try {
+                        let forEachSlot = this.ProjectForEachElementSlot(
+                            forEach,
+                            slotType,
+                            tuplePath,
+                            arrayAccessDepth,
+                            out var nextArrayDepth
+                        )
+                        let forEachResult = if this.ForEachHasTypeClause(forEach) {
+                            true
+                        } else if forEachSlot != nil && !ContainsTypeParameter(forEachSlot) {
+                            forEachSlot.NullableAnnotation != Microsoft.CodeAnalysis.NullableAnnotation.Annotated
+                        } else {
+                            this.ReceiverTypeArgumentsAreDeclared(
+                                forEach.Expression,
+                                forEachSlot,
+                                activeForEachMemo,
+                                tuplePath,
+                                nextArrayDepth
+                            )
+                        }
+                        SetReceiverLocalMemo(activeForEachMemo, local, slotType, pathKey, forEachResult)
+                        return forEachResult
+                    } finally {
+                        this.activeForEachStatements!!.RemoveAt(this.activeForEachStatements!!.Count - 1)
+                    }
+                }
+                if local
+                    .DeclaringSyntaxReferences
+                    .FirstOrDefault()
+                    ?.GetSyntax() is SingleVariableDesignationSyntax{
+                    Parent: DeclarationExpressionSyntax{Parent: ArgumentSyntax outArgument}
+                } &&
+                    this.GetArgumentParameter(outArgument) is {} outParameter {
+                    let activeOutMemo = memo ??
+                        Dictionary[ILocalSymbol, List[(Slot ITypeSymbol?, Path string, Result bool)]](
+                        SymbolEqualityComparer.Default
+                    )
+                    return this.OutLocalReceiverTypeArgumentsAreDeclared(
+                        local,
+                        outArgument,
+                        outParameter,
+                        slotType,
+                        activeOutMemo,
+                        pathKey,
+                        tuplePath,
+                        arrayAccessDepth
+                    )
+                }
+                if this.IsExplicitlyTypedPatternLocal(local) {
+                    return true
+                }
+                return this.state.EmittedLocalTypeClauses.Contains(local)
             }
             if !IsImplicitlyTypedLocal(local) &&
                 (this.state.EmittedLocalTypeClauses.Contains(local) || declarator.Initializer?.Value == nil) {
@@ -4300,8 +4610,88 @@ partial class CSharpToGSharpTranslator {
                 SymbolEqualityComparer.Default
             )
             SetReceiverLocalMemo(activeMemo, local, slotType, pathKey, false)
-            let result = this.ReceiverTypeArgumentsAreDeclared(initializer, slotType, activeMemo, tuplePath)
+            let result = this.ReceiverTypeArgumentsAreDeclared(
+                initializer,
+                slotType,
+                activeMemo,
+                tuplePath,
+                arrayAccessDepth
+            )
             SetReceiverLocalMemo(activeMemo, local, slotType, pathKey, result)
+            return result
+        }
+
+        private func ProjectForEachElementSlot(
+            forEach Microsoft.CodeAnalysis.CSharp.Syntax.ForEachStatementSyntax,
+            slotType ITypeSymbol?,
+            tuplePath List[int32]?,
+            arrayAccessDepth int32,
+            out nextArrayDepth int32
+        ) ITypeSymbol? {
+            nextArrayDepth = 0
+            let info = this.context.SemanticModel.GetForEachStatementInfo(forEach)
+            if info.GetEnumeratorMethod is not{} getEnumerator || info.CurrentProperty is not{} currentProp {
+                nextArrayDepth = arrayAccessDepth + 1
+                return slotType
+            }
+            let openElement = this.ProjectSlotThroughReceiverType(
+                currentProp.OriginalDefinition.Type,
+                getEnumerator.OriginalDefinition.ReturnType,
+                allowSequenceUnwrap: false
+            )
+            if openElement == nil {
+                nextArrayDepth = arrayAccessDepth
+                return slotType
+            }
+            if openElement is ITypeParameterSymbol {
+                nextArrayDepth = arrayAccessDepth
+                return slotType ?? openElement
+            }
+            return this.ProjectDeclaredReceiverSlot(slotType, openElement, tuplePath, arrayAccessDepth)
+        }
+
+        private func OutLocalReceiverTypeArgumentsAreDeclared(
+            local ILocalSymbol,
+            outArgument ArgumentSyntax,
+            outParameter IParameterSymbol,
+            slotType ITypeSymbol?,
+            memo Dictionary[ILocalSymbol, List[(Slot ITypeSymbol?, Path string, Result bool)]],
+            pathKey string,
+            tuplePath List[int32]?,
+            arrayAccessDepth int32 = 0
+        ) bool {
+            SetReceiverLocalMemo(memo, local, slotType, pathKey, false)
+            let projectedDeclared = this.ProjectDeclaredReceiverSlot(
+                slotType,
+                outParameter.OriginalDefinition.Type,
+                tuplePath,
+                arrayAccessDepth,
+                out var remainingOutArrayDepth
+            )
+            var result = true
+            if ContainsTypeParameter(projectedDeclared) {
+                if MentionedTypeParameterKind(projectedDeclared, TypeParameterKind.Method) {
+                    if !(
+                        outArgument.Parent is ArgumentListSyntax{Parent: InvocationExpressionSyntax outInvocation} &&
+                            this
+                            .context
+                            .GetSymbolInfo(outInvocation)
+                            .Symbol is IMethodSymbol outMethod &&
+                            this.InferredMethodTypeArgumentsAreDeclared(
+                            outInvocation,
+                            outMethod,
+                            projectedDeclared,
+                            remainingOutArrayDepth
+                        )
+                    ) {
+                        result = false
+                    }
+                }
+                if result && MentionedTypeParameterKind(projectedDeclared, TypeParameterKind.Type) {
+                    result = this.CallReceiverSlotIsDeclared(outArgument.Expression, projectedDeclared)
+                }
+            }
+            SetReceiverLocalMemo(memo, local, slotType, pathKey, result)
             return result
         }
 
@@ -4310,12 +4700,20 @@ partial class CSharpToGSharpTranslator {
             constructedType ITypeSymbol?,
             memberAccessSyntax Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
             slotType ITypeSymbol? = nil,
-            memo Dictionary[ILocalSymbol, List[(Slot ITypeSymbol?, Path string, Result bool)]]? = nil
+            memo Dictionary[ILocalSymbol, List[(Slot ITypeSymbol?, Path string, Result bool)]]? = nil,
+            tuplePath List[int32]? = nil,
+            arrayAccessDepth int32 = 0
         ) bool {
             if this.ReceiverTargetContainsTypeParameter(constructedType, slotType) {
                 return false
             }
-            let projectedDeclared = this.ProjectSlotThroughReceiverType(slotType, declaredType)
+            let projectedDeclared = this.ProjectDeclaredReceiverSlot(
+                slotType,
+                declaredType,
+                tuplePath,
+                arrayAccessDepth,
+                out var remainingMemberArrayDepth
+            )
             if !ContainsTypeParameter(projectedDeclared) || memberAccessSyntax is SimpleNameSyntax {
                 return true
             }
@@ -4332,7 +4730,13 @@ partial class CSharpToGSharpTranslator {
                 Dictionary[ILocalSymbol, List[(Slot ITypeSymbol?, Path string, Result bool)]](
                 SymbolEqualityComparer.Default
             )
-            return this.ReceiverTypeArgumentsAreDeclared(containingReceiver, projectedDeclared, activeMemo)
+            return this.ReceiverTypeArgumentsAreDeclared(
+                containingReceiver,
+                projectedDeclared,
+                activeMemo,
+                tuplePath,
+                remainingMemberArrayDepth
+            )
         }
 
         private func TryGetReceiverLocalMemo(
@@ -4381,7 +4785,95 @@ partial class CSharpToGSharpTranslator {
             return receiverType == nil
         }
 
-        private func ProjectSlotThroughReceiverType(slotType ITypeSymbol?, receiverType ITypeSymbol?) ITypeSymbol? {
+        private var checkingLambdaAsyncStack List[bool]?
+
+        private func PushCheckingLambdaResult(isAsync bool) {
+            if this.checkingLambdaAsyncStack == nil {
+                this.checkingLambdaAsyncStack = List[bool]()
+            }
+            this.checkingLambdaAsyncStack!!.Add(isAsync)
+        }
+
+        private func PopCheckingLambdaResult() {
+            this.checkingLambdaAsyncStack!!.RemoveAt(this.checkingLambdaAsyncStack!!.Count - 1)
+        }
+
+        private func ProjectDeclaredReceiverSlot(
+            slotType ITypeSymbol?,
+            declaredReceiverType ITypeSymbol?,
+            tuplePath List[int32]? = nil,
+            arrayAccessDepth int32 = 0
+        ) ITypeSymbol? -> this.ProjectDeclaredReceiverSlot(
+            slotType,
+            declaredReceiverType,
+            tuplePath,
+            arrayAccessDepth,
+            out _
+        )
+
+        private func ProjectDeclaredReceiverSlot(
+            slotType ITypeSymbol?,
+            declaredReceiverType ITypeSymbol?,
+            tuplePath List[int32]?,
+            arrayAccessDepth int32,
+            out remainingArrayDepth int32
+        ) ITypeSymbol? {
+            if slotType != nil && arrayAccessDepth <= 0 {
+                remainingArrayDepth = 0
+                return this.ProjectSlotThroughReceiverType(slotType, declaredReceiverType)
+            }
+            var current = if slotType != nil {
+                this.ProjectSlotThroughReceiverType(slotType, declaredReceiverType)
+            } else {
+                declaredReceiverType
+            }
+            remainingArrayDepth = if arrayAccessDepth > 0 {
+                arrayAccessDepth
+            } else {
+                1
+            }
+            while remainingArrayDepth > 0 && current is IArrayTypeSymbol array {
+                current = array.ElementType
+                remainingArrayDepth--
+            }
+            if this.checkingLambdaAsyncStack != nil && this.checkingLambdaAsyncStack!!.Count > 0 {
+                let isLambdaAsync = this.checkingLambdaAsyncStack!![this.checkingLambdaAsyncStack!!.Count - 1]
+                let delegateType = UnwrapExpressionTreeDelegateType(current) as INamedTypeSymbol
+                if delegateType?.DelegateInvokeMethod is {} invoke {
+                    current = GetEffectiveReturnType(invoke.ReturnType, isAsync: isLambdaAsync)
+                }
+            }
+            if (tuplePath == nil || tuplePath.Count == 0) &&
+                (
+                (
+                    current is INamedTypeSymbol{IsTupleType: false} namedCurrent &&
+                        namedCurrent.NullableAnnotation != Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated
+                ) ||
+                    (
+                    current is IArrayTypeSymbol arrayCurrent &&
+                        arrayCurrent.NullableAnnotation != Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated
+                )
+            ) {
+                remainingArrayDepth = 0
+                return nil
+            }
+            if tuplePath != nil && tuplePath.Count > 0 {
+                current = this.GetTupleElementTypeAtPath(current, tuplePath) ?? current
+            }
+            return current
+        }
+
+        private func ProjectSlotThroughReceiverType(
+            slotType ITypeSymbol?,
+            receiverType ITypeSymbol?,
+            allowSequenceUnwrap bool = true
+        ) ITypeSymbol? {
             if slotType == nil {
                 return receiverType
             }
@@ -4390,12 +4882,14 @@ partial class CSharpToGSharpTranslator {
             }
             switch slotType {
                 case typeParameter is ITypeParameterSymbol when typeParameter.TypeParameterKind == TypeParameterKind.Type {
-                    return this.ResolveReceiverTypeArgument(typeParameter, receiverType) ?? slotType
+                    return this.ResolveReceiverTypeArgument(typeParameter, receiverType, allowSequenceUnwrap) ??
+                        slotType
                 }
                 case array is IArrayTypeSymbol {
                     return if this.ProjectSlotThroughReceiverType(
                         array.ElementType,
-                        receiverType
+                        receiverType,
+                        allowSequenceUnwrap
                     ) is {} projectedElement &&
                         !SymbolEqualityComparer
                         .Default
@@ -4407,7 +4901,11 @@ partial class CSharpToGSharpTranslator {
                 }
                 case named is INamedTypeSymbol when named.IsGenericType {
                     let projectedContaining = if named.ContainingType != nil {
-                        this.ProjectSlotThroughReceiverType(named.ContainingType, receiverType) as INamedTypeSymbol
+                        this.ProjectSlotThroughReceiverType(
+                            named.ContainingType,
+                            receiverType,
+                            allowSequenceUnwrap
+                        ) as INamedTypeSymbol
                     } else {
                         default(INamedTypeSymbol?)
                     }
@@ -4432,7 +4930,12 @@ partial class CSharpToGSharpTranslator {
                     let args = List[ITypeSymbol](named.TypeArguments.Length)
                     var changed = false
                     for argument in named.TypeArguments {
-                        let projected = this.ProjectSlotThroughReceiverType(argument, receiverType) ?? argument
+                        let projected = this.ProjectSlotThroughReceiverType(
+                            argument,
+                            receiverType,
+                            allowSequenceUnwrap
+                        ) ??
+                            argument
                         if !SymbolEqualityComparer.Default.Equals(projected, argument) {
                             changed = true
                         }
@@ -4460,43 +4963,186 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
+        private var activeForEachStatements List[Microsoft.CodeAnalysis.CSharp.Syntax.ForEachStatementSyntax]?
+
+        private func IsExplicitlyTypedPatternLocal(local ILocalSymbol) bool -> switch local
+            .DeclaringSyntaxReferences
+            .FirstOrDefault()
+            ?.GetSyntax() {
+            case SingleVariableDesignationSyntax{
+                Parent: Microsoft.CodeAnalysis.CSharp.Syntax.DeclarationPatternSyntax declarationPattern
+            }: !declarationPattern
+                .Type
+                .IsVar
+            case SingleVariableDesignationSyntax{
+                Parent: RecursivePatternSyntax recursivePattern
+            }: recursivePattern.Type != nil &&
+                !recursivePattern.Type!!.IsVar
+            default: false
+        }
+
         private func ResolveReceiverTypeArgument(
             typeParameter ITypeParameterSymbol,
-            receiverType ITypeSymbol?
+            receiverType ITypeSymbol?,
+            allowSequenceUnwrap bool = true
         ) ITypeSymbol? {
-            if receiverType is ITypeParameterSymbol {
-                return receiverType
-            }
-            if typeParameter.TypeParameterKind != TypeParameterKind.Type ||
-                typeParameter.ContainingType is not INamedTypeSymbol declaringType {
-                return nil
-            }
-            let targetDefinition = declaringType.OriginalDefinition
-            var current = receiverType as INamedTypeSymbol
-            while current != nil {
-                var owner INamedTypeSymbol? = current
-                while owner != nil {
-                    if SymbolEqualityComparer.Default.Equals(owner.OriginalDefinition, targetDefinition) &&
-                        typeParameter.Ordinal < owner
-                        .TypeArguments
-                        .Length {
-                        return owner.TypeArguments[typeParameter.Ordinal]
-                    }
-                    owner = owner.ContainingType
+            var currentReceiver = receiverType
+            let visitedTypes = HashSet[ITypeSymbol](SymbolEqualityComparer.Default)
+            while currentReceiver != nil && visitedTypes.Add(currentReceiver) {
+                while currentReceiver is IArrayTypeSymbol arrayReceiver {
+                    currentReceiver = arrayReceiver.ElementType
                 }
-                current = current.BaseType
-            }
-            if receiverType is INamedTypeSymbol namedReceiver {
-                for iface in namedReceiver.AllInterfaces {
-                    if SymbolEqualityComparer.Default.Equals(iface.OriginalDefinition, targetDefinition) &&
-                        typeParameter.Ordinal < iface
-                        .TypeArguments
-                        .Length {
-                        return iface.TypeArguments[typeParameter.Ordinal]
+                if currentReceiver is ITypeParameterSymbol {
+                    return currentReceiver
+                }
+                if typeParameter.TypeParameterKind != TypeParameterKind.Type ||
+                    typeParameter.ContainingType is not INamedTypeSymbol declaringType {
+                    return nil
+                }
+                let targetDefinition = declaringType.OriginalDefinition
+                var current = currentReceiver as INamedTypeSymbol
+                while current != nil {
+                    var owner INamedTypeSymbol? = current
+                    while owner != nil {
+                        if SymbolEqualityComparer.Default.Equals(owner.OriginalDefinition, targetDefinition) &&
+                            typeParameter.Ordinal < owner
+                            .TypeArguments
+                            .Length {
+                            return owner.TypeArguments[typeParameter.Ordinal]
+                        }
+                        owner = owner.ContainingType
                     }
+                    current = current.BaseType
+                }
+                if currentReceiver is INamedTypeSymbol namedReceiver {
+                    for iface in namedReceiver.AllInterfaces {
+                        if SymbolEqualityComparer.Default.Equals(iface.OriginalDefinition, targetDefinition) &&
+                            typeParameter.Ordinal < iface
+                            .TypeArguments
+                            .Length {
+                            return iface.TypeArguments[typeParameter.Ordinal]
+                        }
+                    }
+                    if allowSequenceUnwrap {
+                        currentReceiver = this.TryGetSequenceElementType(namedReceiver)
+                        continue
+                    }
+                }
+                break
+            }
+            return nil
+        }
+
+        private func TryGetSequenceElementType(sequenceType INamedTypeSymbol) ITypeSymbol? {
+            if this.activeForEachStatements != nil {
+                for var i = this.activeForEachStatements!!.Count - 1; i >= 0; i-- {
+                    let info = this.context.SemanticModel.GetForEachStatementInfo(this.activeForEachStatements!![i])
+                    if info.GetEnumeratorMethod is {} boundGetEnumerator &&
+                        info.CurrentProperty is {} boundCurrentProp &&
+                        this.ProjectSequenceElementViaEnumerator(
+                        sequenceType,
+                        boundGetEnumerator,
+                        boundCurrentProp
+                    ) is {} boundElement {
+                        return boundElement
+                    }
+                }
+            }
+            var currentType INamedTypeSymbol? = sequenceType
+            while currentType != nil {
+                for member in currentType.GetMembers("GetEnumerator") {
+                    if member is IMethodSymbol{
+                        IsStatic: false,
+                        DeclaredAccessibility: Accessibility.Public,
+                        Parameters: {Length: 0}
+                    } getEnumerator {
+                        for currentMember in getEnumerator.ReturnType.GetMembers("Current") {
+                            if currentMember is IPropertySymbol{IsStatic: false} currentProp &&
+                                this.ProjectSequenceElementViaEnumerator(
+                                sequenceType,
+                                getEnumerator,
+                                currentProp
+                            ) is {} projectedElement {
+                                return projectedElement
+                            }
+                        }
+                    }
+                }
+                currentType = currentType.BaseType
+            }
+            if IsGenericEnumerableInterface(sequenceType) && sequenceType.TypeArguments.Length == 1 {
+                return sequenceType.TypeArguments[0]
+            }
+            for iface in sequenceType.AllInterfaces {
+                if IsGenericEnumerableInterface(iface) && iface.TypeArguments.Length == 1 {
+                    return iface.TypeArguments[0]
                 }
             }
             return nil
+        }
+
+        private func ProjectSequenceElementViaEnumerator(
+            sequenceType INamedTypeSymbol,
+            getEnumerator IMethodSymbol,
+            currentProperty IPropertySymbol
+        ) ITypeSymbol? {
+            if !this.SequenceMatchesEnumeratorOwner(sequenceType, getEnumerator) {
+                return nil
+            }
+            let openElement = this.ProjectSlotThroughReceiverType(
+                currentProperty.OriginalDefinition.Type,
+                getEnumerator.OriginalDefinition.ReturnType,
+                allowSequenceUnwrap: false
+            )
+            return this.ProjectSlotThroughReceiverType(openElement, sequenceType, allowSequenceUnwrap: false)
+        }
+
+        private func SequenceMatchesEnumeratorOwner(sequenceType INamedTypeSymbol, getEnumerator IMethodSymbol) bool {
+            let ownerType = if getEnumerator.ReducedFrom is {} reduced && reduced.Parameters.Length > 0 {
+                reduced.OriginalDefinition.Parameters[0].Type as INamedTypeSymbol
+            } else {
+                getEnumerator.OriginalDefinition.ContainingType
+            }
+            if ownerType == nil {
+                return false
+            }
+            let ownerDef = ownerType.OriginalDefinition
+            var current INamedTypeSymbol? = sequenceType
+            while current != nil {
+                if SymbolEqualityComparer.Default.Equals(current.OriginalDefinition, ownerDef) {
+                    return true
+                }
+                current = current.BaseType
+            }
+            for iface in sequenceType.AllInterfaces {
+                if SymbolEqualityComparer.Default.Equals(iface.OriginalDefinition, ownerDef) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func IsGenericEnumerableInterface(type INamedTypeSymbol) bool {
+            let special = type.OriginalDefinition.SpecialType
+            if special == SpecialType.System_Collections_Generic_IEnumerable_T ||
+                special == SpecialType.System_Collections_Generic_IEnumerator_T ||
+                special == SpecialType.System_Collections_Generic_IList_T ||
+                special == SpecialType.System_Collections_Generic_ICollection_T ||
+                special == SpecialType.System_Collections_Generic_IReadOnlyList_T ||
+                special == SpecialType.System_Collections_Generic_IReadOnlyCollection_T {
+                return true
+            }
+            return (
+                type
+                    .OriginalDefinition
+                    .MetadataName == "IAsyncEnumerable`1" ||
+                    type
+                    .OriginalDefinition
+                    .MetadataName == "IAsyncEnumerator`1"
+            ) &&
+                type
+                .ContainingNamespace
+                ?.ToDisplayString() == "System.Collections.Generic"
         }
 
         private func MentionedTypeParameterKind(type ITypeSymbol?, kind TypeParameterKind) bool -> switch type {
@@ -4509,9 +5155,45 @@ partial class CSharpToGSharpTranslator {
             default: false
         }
 
+        private func CollectMethodTypeParameterOrdinals(type ITypeSymbol?, ordinals HashSet[int32]) {
+            switch type {
+                case typeParameter is ITypeParameterSymbol when typeParameter.TypeParameterKind == TypeParameterKind.Method {
+                    ordinals.Add(typeParameter.Ordinal)
+                }
+                case array is IArrayTypeSymbol {
+                    this.CollectMethodTypeParameterOrdinals(array.ElementType, ordinals)
+                }
+                case named is INamedTypeSymbol {
+                    this.CollectMethodTypeParameterOrdinals(named.ContainingType, ordinals)
+                    for argument in named.TypeArguments {
+                        this.CollectMethodTypeParameterOrdinals(argument, ordinals)
+                    }
+                }
+            }
+        }
+
+        private func TypeMentionsAnyMethodTypeParameterOrdinal(
+            type ITypeSymbol?,
+            ordinals HashSet[int32]
+        ) bool -> switch type {
+            case typeParameter is ITypeParameterSymbol: typeParameter.TypeParameterKind == TypeParameterKind.Method &&
+                ordinals.Contains(typeParameter.Ordinal)
+            case array is IArrayTypeSymbol: this.TypeMentionsAnyMethodTypeParameterOrdinal(array.ElementType, ordinals)
+            case named is INamedTypeSymbol: this.TypeMentionsAnyMethodTypeParameterOrdinal(
+                named.ContainingType,
+                ordinals
+            ) ||
+                named
+                .TypeArguments
+                .Any((argument ITypeSymbol) -> this.TypeMentionsAnyMethodTypeParameterOrdinal(argument, ordinals))
+            default: false
+        }
+
         private func InferredMethodTypeArgumentsAreDeclared(
             invocation InvocationExpressionSyntax,
-            receiverMethod IMethodSymbol
+            receiverMethod IMethodSymbol,
+            relevantSlot ITypeSymbol? = nil,
+            remainingArrayDepth int32 = 0
         ) bool {
             if HasExplicitTypeArguments(invocation.Expression) {
                 return true
@@ -4519,28 +5201,109 @@ partial class CSharpToGSharpTranslator {
             if receiverMethod.TypeArguments.IsDefaultOrEmpty {
                 return false
             }
-            for typeArg in receiverMethod.TypeArguments {
-                if typeArg.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
+            let relevantOrdinals = HashSet[int32]()
+            this.CollectMethodTypeParameterOrdinals(relevantSlot, relevantOrdinals)
+            let filterOrdinals = relevantOrdinals.Count > 0
+            for var i = 0; i < receiverMethod.TypeArguments.Length; i++ {
+                if filterOrdinals && !relevantOrdinals.Contains(i) {
+                    continue
+                }
+                var checkTypeArg ITypeSymbol? = receiverMethod.TypeArguments[i]
+                for var d = 0; d < remainingArrayDepth && checkTypeArg is IArrayTypeSymbol arrayTypeArg; d++ {
+                    checkTypeArg = arrayTypeArg.ElementType
+                }
+                if checkTypeArg == nil ||
+                    checkTypeArg.NullableAnnotation == Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated {
                     return false
                 }
             }
+            let originalMethod = receiverMethod.ReducedFrom?.OriginalDefinition ?? receiverMethod.OriginalDefinition
             let argumentExpressions = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
+            var sawVerifiedDeclaredInput = false
+            var sawRejectedNilableInput = false
             if receiverMethod.ReducedFrom != nil &&
                 invocation.Expression is MemberAccessExpressionSyntax{Expression: {} extensionReceiver} {
-                argumentExpressions.Add(extensionReceiver)
-            }
-            for argument in invocation.ArgumentList.Arguments {
-                if argument.Expression != nil {
-                    argumentExpressions.Add(argument.Expression)
+                if !filterOrdinals {
+                    argumentExpressions.Add(extensionReceiver)
+                } else if originalMethod.Parameters.Length > 0 && this.TypeMentionsAnyMethodTypeParameterOrdinal(
+                    originalMethod.Parameters[0].Type,
+                    relevantOrdinals
+                ) {
+                    this.CollectRelevantInferenceSubexpressions(
+                        extensionReceiver,
+                        originalMethod.Parameters[0].Type,
+                        relevantOrdinals,
+                        argumentExpressions,
+                        ref sawVerifiedDeclaredInput,
+                        ref sawRejectedNilableInput,
+                        nil,
+                        remainingArrayDepth
+                    )
                 }
             }
-            if argumentExpressions.Count == 0 {
+            for argument in invocation.ArgumentList.Arguments {
+                if argument.Expression == nil ||
+                    (
+                    argument.RefKindKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.OutKeyword) &&
+                        Unparenthesize(argument.Expression) is DeclarationExpressionSyntax{Type: {IsVar: true}}
+                ) {
+                    continue
+                }
+                if this.GetArgumentParameter(argument) is {} boundParam {
+                    let paramDef = boundParam.OriginalDefinition
+                    let expandedParams = boundParam.IsParams && this.TryGetExpandedParamsElementTarget(
+                        argument,
+                        boundParam,
+                        out _,
+                        out _
+                    )
+                    let effectiveParamType = if expandedParams {
+                        GetParamsElementType(paramDef) ?? paramDef.Type
+                    } else {
+                        paramDef.Type
+                    }
+                    if filterOrdinals && !this.TypeMentionsAnyMethodTypeParameterOrdinal(
+                        effectiveParamType,
+                        relevantOrdinals
+                    ) {
+                        continue
+                    }
+                    if boundParam.RefKind != RefKind.None && this.ByRefArgumentSuppliesNilableAtDepth(
+                        argument,
+                        paramDef,
+                        effectiveParamType,
+                        remainingArrayDepth
+                    ) {
+                        return false
+                    }
+                    if filterOrdinals {
+                        this.CollectRelevantInferenceSubexpressions(
+                            argument.Expression,
+                            effectiveParamType,
+                            relevantOrdinals,
+                            argumentExpressions,
+                            ref sawVerifiedDeclaredInput,
+                            ref sawRejectedNilableInput,
+                            nil,
+                            remainingArrayDepth
+                        )
+                        continue
+                    }
+                }
+                argumentExpressions.Add(argument.Expression)
+            }
+            if sawRejectedNilableInput {
                 return false
             }
+            if argumentExpressions.Count == 0 {
+                return sawVerifiedDeclaredInput
+            }
             for argExpr in argumentExpressions {
-                if this.MentionsValueNilableOnlyInEmittedGSharp(argExpr) || this.YieldsValueNilableBeyondItsCSharpType(
-                    argExpr
-                ) {
+                if this.ResultMentionsValueNilableOnlyInEmittedGSharp(argExpr) ||
+                    this.YieldsValueNilableBeyondItsCSharpType(argExpr) {
                     return false
                 }
                 if Unparenthesize(argExpr) is AnonymousFunctionExpressionSyntax argLambda &&
@@ -4558,11 +5321,833 @@ partial class CSharpToGSharpTranslator {
             return true
         }
 
-        // Issue #5627: whether a written type fixes the G# storage of [`local`](paramref). The declaration's own
-        // initializer meets the type that a declarator writes; a `var` declarator and a deconstruction write
-        // none. A later write meets the storage that the declaration emitted: a type clause fixes it, and without
-        // one G# inferred it from the initializer, which is certain when the bridge asserted that initializer or
-        // when it mentions no value that is `T?` only in G#.
+        private func ByRefArgumentSuppliesNilableAtDepth(
+            argument ArgumentSyntax,
+            declaredParameter IParameterSymbol,
+            effectiveParamType ITypeSymbol?,
+            remainingArrayDepth int32
+        ) bool {
+            var unwrappedParam = effectiveParamType
+            var paramArrayLayers = 0
+            while unwrappedParam is IArrayTypeSymbol arrParam {
+                paramArrayLayers++
+                unwrappedParam = arrParam.ElementType
+            }
+            if unwrappedParam is not ITypeParameterSymbol {
+                return false
+            }
+            let totalArrayDepth = paramArrayLayers + remainingArrayDepth
+            if totalArrayDepth <= 0 {
+                return this.ByRefArgumentStorageIsNilableInGSharp(argument, declaredParameter)
+            }
+            if !this.PassesArgumentStorageUnasserted(argument) || this.IsTranslatorWidenedDeclaration(
+                declaredParameter
+            ) {
+                return false
+            }
+            var storage Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = Unparenthesize(argument.Expression)
+            if storage is PostfixUnaryExpressionSyntax suppressed && suppressed.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression
+            ) {
+                storage = Unparenthesize(suppressed.Operand)
+            }
+            if storage == nil {
+                return false
+            }
+            var elemType ITypeSymbol? = this.GetDeclaredValueType(storage) ?? this.context.GetTypeInfo(storage).Type
+            for var d = 0; d < totalArrayDepth; d++ {
+                elemType = (elemType as IArrayTypeSymbol)?.ElementType
+            }
+            if elemType == nil || elemType.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
+                return true
+            }
+            return !this.ReceiverTypeArgumentsAreDeclared(storage, nil, nil, nil, totalArrayDepth)
+        }
+
+        private func CollectRelevantInferenceSubexpressions(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            parameterType ITypeSymbol?,
+            relevantOrdinals HashSet[int32],
+            results List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax],
+            ref sawVerifiedDeclaredInput bool,
+            ref sawRejectedNilableInput bool,
+            visitedLocals HashSet[ILocalSymbol]? = nil,
+            remainingArrayDepth int32 = 0
+        ) {
+            var unwrapped = Unparenthesize(expression)
+            while unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax checkedExpr {
+                unwrapped = Unparenthesize(checkedExpr.Expression)
+            }
+            if unwrapped == nil {
+                return
+            }
+            if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax coalesce && coalesce.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression
+            ) &&
+                (parameterType is not ITypeParameterSymbol || remainingArrayDepth > 0) {
+                this.CollectRelevantInferenceSubexpressions(
+                    coalesce.Left,
+                    parameterType,
+                    relevantOrdinals,
+                    results,
+                    ref sawVerifiedDeclaredInput,
+                    ref sawRejectedNilableInput,
+                    visitedLocals,
+                    remainingArrayDepth
+                )
+                this.CollectRelevantInferenceSubexpressions(
+                    coalesce.Right,
+                    parameterType,
+                    relevantOrdinals,
+                    results,
+                    ref sawVerifiedDeclaredInput,
+                    ref sawRejectedNilableInput,
+                    visitedLocals,
+                    remainingArrayDepth
+                )
+                return
+            }
+            if this.ComposedValueOperands(unwrapped) is {} operands {
+                for operand in operands {
+                    this.CollectRelevantInferenceSubexpressions(
+                        operand,
+                        parameterType,
+                        relevantOrdinals,
+                        results,
+                        ref sawVerifiedDeclaredInput,
+                        ref sawRejectedNilableInput,
+                        visitedLocals,
+                        remainingArrayDepth
+                    )
+                }
+                return
+            }
+            if parameterType is ITypeParameterSymbol && remainingArrayDepth > 0 {
+                if unwrapped is ImplicitArrayCreationExpressionSyntax directImplicitArr {
+                    if this.ImplicitArrayDelegateSlotIsDeclared(
+                        directImplicitArr,
+                        arrayAccessDepth: remainingArrayDepth,
+                        stopAtIntermediateArrayRef: true
+                    ) {
+                        sawVerifiedDeclaredInput = true
+                    } else {
+                        sawRejectedNilableInput = true
+                    }
+                    return
+                }
+                if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.ArrayCreationExpressionSyntax directExplicitArr {
+                    let directExplicitType = this.context.GetTypeInfo(directExplicitArr).Type as IArrayTypeSymbol
+                    if directExplicitType != nil && !this.ExplicitArrayElementAcceptsNil(
+                        directExplicitArr,
+                        directExplicitType,
+                        remainingArrayDepth
+                    ) {
+                        sawVerifiedDeclaredInput = true
+                    } else {
+                        sawRejectedNilableInput = true
+                    }
+                    return
+                }
+                var unwrappedStorage = unwrapped
+                if unwrappedStorage is PostfixUnaryExpressionSyntax suppressedStorage && suppressedStorage.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression
+                ) {
+                    unwrappedStorage = Unparenthesize(suppressedStorage.Operand) ?? unwrappedStorage
+                }
+                var directElemAtDepth ITypeSymbol? = this.GetDeclaredValueType(unwrappedStorage) ??
+                    this
+                    .context
+                    .GetTypeInfo(unwrappedStorage)
+                    .Type
+                for var d = 0; d < remainingArrayDepth; d++ {
+                    directElemAtDepth = (directElemAtDepth as IArrayTypeSymbol)?.ElementType
+                }
+                if directElemAtDepth == nil ||
+                    directElemAtDepth.NullableAnnotation == Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated {
+                    sawRejectedNilableInput = true
+                    return
+                }
+                if this.ReceiverTypeArgumentsAreDeclared(unwrapped, nil, nil, nil, remainingArrayDepth) {
+                    sawVerifiedDeclaredInput = true
+                } else {
+                    sawRejectedNilableInput = true
+                }
+                return
+            }
+            if parameterType is IArrayTypeSymbol arrayParamType {
+                let targetElemDepth = 1 + remainingArrayDepth
+                if unwrapped is ImplicitArrayCreationExpressionSyntax implicitArr {
+                    if arrayParamType.ElementType is ITypeParameterSymbol {
+                        if this.ImplicitArrayDelegateSlotIsDeclared(
+                            implicitArr,
+                            arrayAccessDepth: targetElemDepth,
+                            stopAtIntermediateArrayRef: true
+                        ) {
+                            sawVerifiedDeclaredInput = true
+                        } else {
+                            sawRejectedNilableInput = true
+                        }
+                        return
+                    }
+                    if implicitArr.Initializer != nil {
+                        for elemExpr in implicitArr.Initializer.Expressions {
+                            this.CollectRelevantInferenceSubexpressions(
+                                elemExpr,
+                                arrayParamType.ElementType,
+                                relevantOrdinals,
+                                results,
+                                ref sawVerifiedDeclaredInput,
+                                ref sawRejectedNilableInput,
+                                visitedLocals,
+                                remainingArrayDepth
+                            )
+                        }
+                        return
+                    }
+                }
+                if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.ArrayCreationExpressionSyntax explicitArr {
+                    let explicitArrayType = this.context.GetTypeInfo(explicitArr).Type as IArrayTypeSymbol
+                    if arrayParamType.ElementType is ITypeParameterSymbol {
+                        if explicitArrayType != nil && !this.ExplicitArrayElementAcceptsNil(
+                            explicitArr,
+                            explicitArrayType,
+                            targetElemDepth
+                        ) {
+                            sawVerifiedDeclaredInput = true
+                        } else {
+                            sawRejectedNilableInput = true
+                        }
+                        return
+                    }
+                    if explicitArrayType != nil && !this.ExplicitArrayElementAcceptsNil(
+                        explicitArr,
+                        explicitArrayType,
+                        targetElemDepth
+                    ) &&
+                        explicitArr.Initializer == nil {
+                        sawVerifiedDeclaredInput = true
+                        return
+                    }
+                    if explicitArr.Initializer is {} explicitInit {
+                        for elemExpr in explicitInit.Expressions {
+                            this.CollectRelevantInferenceSubexpressions(
+                                elemExpr,
+                                arrayParamType.ElementType,
+                                relevantOrdinals,
+                                results,
+                                ref sawVerifiedDeclaredInput,
+                                ref sawRejectedNilableInput,
+                                visitedLocals,
+                                remainingArrayDepth
+                            )
+                        }
+                        return
+                    }
+                }
+                if arrayParamType.ElementType is ITypeParameterSymbol {
+                    var elemAtDepth ITypeSymbol? = this.context.GetTypeInfo(unwrapped).Type
+                    for var d = 0; d < targetElemDepth; d++ {
+                        elemAtDepth = (elemAtDepth as IArrayTypeSymbol)?.ElementType
+                    }
+                    if elemAtDepth == nil ||
+                        elemAtDepth.NullableAnnotation == Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated {
+                        sawRejectedNilableInput = true
+                        return
+                    }
+                    if this.ReceiverTypeArgumentsAreDeclared(unwrapped, nil, nil, nil, targetElemDepth) {
+                        sawVerifiedDeclaredInput = true
+                    } else {
+                        sawRejectedNilableInput = true
+                    }
+                    return
+                }
+            }
+            if this.UnwrapNullableValueTupleType(parameterType) is INamedTypeSymbol{IsTupleType: true} paramTuple {
+                if unwrapped is TupleExpressionSyntax tupleExpr &&
+                    tupleExpr
+                    .Arguments
+                    .Count == paramTuple
+                    .TupleElements
+                    .Length {
+                    for var i = 0; i < tupleExpr.Arguments.Count; i++ {
+                        let elemParamType = paramTuple.TupleElements[i].Type
+                        if this.TypeMentionsAnyMethodTypeParameterOrdinal(elemParamType, relevantOrdinals) {
+                            this.CollectRelevantInferenceSubexpressions(
+                                tupleExpr.Arguments[i].Expression,
+                                elemParamType,
+                                relevantOrdinals,
+                                results,
+                                ref sawVerifiedDeclaredInput,
+                                ref sawRejectedNilableInput,
+                                visitedLocals,
+                                remainingArrayDepth
+                            )
+                        }
+                    }
+                    return
+                }
+                if unwrapped is IdentifierNameSyntax localIdentifier &&
+                    this
+                    .context
+                    .GetSymbolInfo(unwrapped)
+                    .Symbol is ILocalSymbol tupleLocal {
+                    let tupleInit = if tupleLocal
+                        .DeclaringSyntaxReferences
+                        .FirstOrDefault()
+                        ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} initVal}} {
+                        initVal
+                    } else {
+                        default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
+                    }
+                    this.CollectTupleLocalInferenceSubexpressions(
+                        localIdentifier,
+                        tupleLocal,
+                        tupleLocal.Type,
+                        parameterType,
+                        tupleInit,
+                        List[int32](),
+                        relevantOrdinals,
+                        results,
+                        ref sawVerifiedDeclaredInput,
+                        ref sawRejectedNilableInput,
+                        visitedLocals,
+                        remainingArrayDepth
+                    )
+                    return
+                }
+            }
+            results.Add(unwrapped)
+        }
+
+        private func CollectTupleLocalInferenceSubexpressions(
+            localRef IdentifierNameSyntax,
+            tupleLocal ILocalSymbol,
+            localType ITypeSymbol?,
+            parameterType ITypeSymbol?,
+            initializerExpr Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            tuplePath List[int32],
+            relevantOrdinals HashSet[int32],
+            results List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax],
+            ref sawVerifiedDeclaredInput bool,
+            ref sawRejectedNilableInput bool,
+            visitedLocals HashSet[ILocalSymbol]?,
+            remainingArrayDepth int32 = 0
+        ) {
+            if this.UnwrapNullableValueTupleType(parameterType) is INamedTypeSymbol{IsTupleType: true} paramTuple &&
+                this.UnwrapNullableValueTupleType(localType) is INamedTypeSymbol{IsTupleType: true} localTuple &&
+                localTuple
+                .TupleElements
+                .Length == paramTuple
+                .TupleElements
+                .Length {
+                let unwrappedInit = Unparenthesize(initializerExpr)
+                let tupleInit = if unwrappedInit is TupleExpressionSyntax tInit &&
+                    tInit
+                    .Arguments
+                    .Count == paramTuple
+                    .TupleElements
+                    .Length {
+                    tInit
+                } else {
+                    default(TupleExpressionSyntax?)
+                }
+                for var i = 0; i < paramTuple.TupleElements.Length; i++ {
+                    let elemParamType = paramTuple.TupleElements[i].Type
+                    if !this.TypeMentionsAnyMethodTypeParameterOrdinal(elemParamType, relevantOrdinals) {
+                        continue
+                    }
+                    let elemLocalType = localTuple.TupleElements[i].Type
+                    let childPath = List[int32](tuplePath){i}
+                    let elemInit = if tupleInit != nil {
+                        tupleInit.Arguments[i].Expression
+                    } else {
+                        default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
+                    }
+                    if this.UnwrapNullableValueTupleType(elemParamType) is INamedTypeSymbol{IsTupleType: true} {
+                        this.CollectTupleLocalInferenceSubexpressions(
+                            localRef,
+                            tupleLocal,
+                            elemLocalType,
+                            elemParamType,
+                            elemInit,
+                            childPath,
+                            relevantOrdinals,
+                            results,
+                            ref sawVerifiedDeclaredInput,
+                            ref sawRejectedNilableInput,
+                            visitedLocals,
+                            remainingArrayDepth
+                        )
+                        continue
+                    }
+                    let leafAcceptsNil = elemLocalType.NullableAnnotation == Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated ||
+                        ObliviousNullabilityAnalyzer.TupleContractPositionAcceptsNil(
+                        this.context.Compilation,
+                        tupleLocal,
+                        childPath
+                    ) ||
+                        ObliviousNullabilityAnalyzer
+                        .IsTupleElementTainted(
+                        this.context.Compilation,
+                        tupleLocal,
+                        childPath,
+                        this.context.SiblingCompilations
+                    )
+                    if leafAcceptsNil {
+                        sawRejectedNilableInput = true
+                        continue
+                    }
+                    let leafHasFixedContract = !IsImplicitlyTypedLocal(tupleLocal) &&
+                        elemParamType is ITypeParameterSymbol &&
+                        (
+                        this
+                            .state
+                            .EmittedLocalTypeClauses
+                            .Contains(tupleLocal) ||
+                            !(
+                            elemLocalType is INamedTypeSymbol{IsGenericType: true} || elemLocalType is IArrayTypeSymbol
+                        )
+                    )
+                    if leafHasFixedContract {
+                        sawVerifiedDeclaredInput = true
+                        continue
+                    }
+                    if elemInit != nil {
+                        let activeVisited = visitedLocals ?? HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
+                        if activeVisited.Add(tupleLocal) {
+                            try {
+                                this.CollectRelevantInferenceSubexpressions(
+                                    elemInit,
+                                    elemParamType,
+                                    relevantOrdinals,
+                                    results,
+                                    ref sawVerifiedDeclaredInput,
+                                    ref sawRejectedNilableInput,
+                                    activeVisited,
+                                    remainingArrayDepth
+                                )
+                            } finally {
+                                activeVisited.Remove(tupleLocal)
+                            }
+                        }
+                    } else if initializerExpr != nil {
+                        let activeVisited = visitedLocals ?? HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
+                        if activeVisited.Add(tupleLocal) {
+                            try {
+                                this.CollectRelevantInferenceSubexpressions(
+                                    initializerExpr,
+                                    parameterType,
+                                    relevantOrdinals,
+                                    results,
+                                    ref sawVerifiedDeclaredInput,
+                                    ref sawRejectedNilableInput,
+                                    activeVisited,
+                                    remainingArrayDepth
+                                )
+                            } finally {
+                                activeVisited.Remove(tupleLocal)
+                            }
+                        }
+                    } else {
+                        results.Add(localRef)
+                    }
+                }
+                return
+            }
+            if initializerExpr != nil {
+                let activeVisited = visitedLocals ?? HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
+                if activeVisited.Add(tupleLocal) {
+                    try {
+                        this.CollectRelevantInferenceSubexpressions(
+                            initializerExpr,
+                            parameterType,
+                            relevantOrdinals,
+                            results,
+                            ref sawVerifiedDeclaredInput,
+                            ref sawRejectedNilableInput,
+                            activeVisited,
+                            remainingArrayDepth
+                        )
+                    } finally {
+                        activeVisited.Remove(tupleLocal)
+                    }
+                    return
+                }
+            }
+            results.Add(localRef)
+        }
+
+        private func ExplicitArrayElementAcceptsNil(
+            explicitArr Microsoft.CodeAnalysis.CSharp.Syntax.ArrayCreationExpressionSyntax,
+            explicitArrayType IArrayTypeSymbol,
+            arrayAccessDepth int32 = 1
+        ) bool {
+            let effectiveDepth = if arrayAccessDepth > 0 {
+                arrayAccessDepth
+            } else {
+                1
+            }
+            if effectiveDepth > 1 {
+                var targetElemType ITypeSymbol? = explicitArrayType
+                for var d = 0; d < effectiveDepth; d++ {
+                    if targetElemType is not IArrayTypeSymbol nextArr {
+                        return false
+                    }
+                    targetElemType = nextArr.ElementType
+                }
+                if targetElemType == nil ||
+                    targetElemType.NullableAnnotation == Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated {
+                    return true
+                }
+                if explicitArr.Initializer is {} nestedInit {
+                    for element in nestedInit.Expressions {
+                        let unwrappedElem = Unparenthesize(element)
+                        if unwrappedElem is ImplicitArrayCreationExpressionSyntax childImplicit {
+                            if !this.ImplicitArrayDelegateSlotIsDeclared(
+                                childImplicit,
+                                arrayAccessDepth: effectiveDepth - 1,
+                                stopAtIntermediateArrayRef: true
+                            ) {
+                                return true
+                            }
+                        } else if unwrappedElem is Microsoft
+                            .CodeAnalysis
+                            .CSharp
+                            .Syntax
+                            .ArrayCreationExpressionSyntax childExplicit &&
+                            this
+                            .context
+                            .GetTypeInfo(childExplicit)
+                            .Type is IArrayTypeSymbol childExplicitType {
+                            if this.ExplicitArrayElementAcceptsNil(
+                                childExplicit,
+                                childExplicitType,
+                                effectiveDepth - 1
+                            ) {
+                                return true
+                            }
+                        } else if !this.ReceiverTypeArgumentsAreDeclared(
+                            unwrappedElem,
+                            nil,
+                            nil,
+                            nil,
+                            effectiveDepth - 1
+                        ) {
+                            return true
+                        }
+                    }
+                }
+                return false
+            }
+            let elemType = explicitArrayType.ElementType
+            if elemType.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
+                return true
+            }
+            if !elemType.IsReferenceType {
+                return false
+            }
+            if this.IsGeneratedArrayElementPromotedSink(this.ResolveValueSink(explicitArr)) ||
+                this.IsWidenedArrayCreationElement(explicitArr) || this.ObliviousContainerPositions(
+                this.ResolveValueSink(explicitArr)
+            )
+                ?.Contains("0") == true {
+                return true
+            }
+            if explicitArr.Initializer is {} explicitInit {
+                for element in explicitInit.Expressions {
+                    if element != nil && (IsNullOrDefaultLiteral(element) || this.IsNullDataRowRead(element)) {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+
+        private var resultNilableTopLevelLocalCache Dictionary[ILocalSymbol, bool]?
+        private var resultNilableFullLocalCache Dictionary[ILocalSymbol, bool]?
+
+        private func ResultMentionsValueNilableOnlyInEmittedGSharp(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            topLevelOnly bool = false
+        ) bool {
+            var unwrapped = Unparenthesize(expression)
+            while unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax checkedExpr {
+                unwrapped = Unparenthesize(checkedExpr.Expression)
+            }
+            if unwrapped == nil ||
+                unwrapped is BaseObjectCreationExpressionSyntax ||
+                unwrapped is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ArrayCreationExpressionSyntax ||
+                (
+                topLevelOnly &&
+                    (unwrapped is ImplicitArrayCreationExpressionSyntax || unwrapped is CollectionExpressionSyntax)
+            ) ||
+                unwrapped is AnonymousObjectCreationExpressionSyntax ||
+                unwrapped is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .InterpolatedStringExpressionSyntax ||
+                unwrapped is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .TypeOfExpressionSyntax ||
+                unwrapped is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ThrowExpressionSyntax {
+                return false
+            }
+            if unwrapped is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .BinaryExpressionSyntax concatenation &&
+                concatenation.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AddExpression) &&
+                this
+                .context
+                .GetTypeInfo(concatenation)
+                .Type
+                ?.SpecialType == SpecialType.System_String {
+                return false
+            }
+            if unwrapped is CastExpressionSyntax cast &&
+                !(cast.Type is NullableTypeSyntax) &&
+                this.CastUsesCheckedReferenceConversion(cast) {
+                return false
+            }
+            if unwrapped is PostfixUnaryExpressionSyntax suppression && suppression.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression
+            ) &&
+                !IsNullOrSuppressedNull(suppression.Operand) {
+                if topLevelOnly {
+                    return false
+                }
+                let suppressedType = this.context.GetTypeInfo(suppression).Type
+                if suppressedType is not INamedTypeSymbol{IsGenericType: true} &&
+                    suppressedType is not IArrayTypeSymbol {
+                    return false
+                }
+                return this.ResultMentionsValueNilableOnlyInEmittedGSharp(suppression.Operand, topLevelOnly: false)
+            }
+            if this.ComposedValueOperands(unwrapped) is {} operands {
+                for operand in operands {
+                    if this.ResultMentionsValueNilableOnlyInEmittedGSharp(operand, topLevelOnly) {
+                        return true
+                    }
+                }
+                return false
+            }
+            if unwrapped is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .AwaitExpressionSyntax awaitExpr &&
+                !this
+                .EmittedValueIsNilableBeyondItsCSharpType(awaitExpr) {
+                var awaitedOperand = Unparenthesize(awaitExpr.Expression)
+                while awaitedOperand is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax checkedAwait {
+                    awaitedOperand = Unparenthesize(checkedAwait.Expression)
+                }
+                if awaitedOperand is InvocationExpressionSyntax awaitedInvocation &&
+                    this
+                    .context
+                    .GetSymbolInfo(awaitedInvocation)
+                    .Symbol is IMethodSymbol awaitedMethod &&
+                    awaitedMethod.MethodKind != MethodKind.DelegateInvoke &&
+                    awaitedMethod
+                    .ContainingType
+                    ?.TypeKind != TypeKind
+                    .Delegate {
+                    let declaredAwaitedReturn = this.GetAwaitedResultType(
+                        awaitExpr,
+                        (awaitedMethod.ReducedFrom ?? awaitedMethod).OriginalDefinition.ReturnType
+                    )
+                    if declaredAwaitedReturn != nil &&
+                        (
+                        !ContainsTypeParameter(declaredAwaitedReturn) ||
+                            (
+                            topLevelOnly &&
+                                declaredAwaitedReturn is not ITypeParameterSymbol &&
+                                declaredAwaitedReturn.NullableAnnotation != Microsoft
+                                .CodeAnalysis
+                                .NullableAnnotation
+                                .Annotated
+                        )
+                    ) {
+                        return false
+                    }
+                }
+                let awaitMemo = Dictionary[ILocalSymbol, List[(Slot ITypeSymbol?, Path string, Result bool)]](
+                    SymbolEqualityComparer.Default
+                )
+                return !this.AwaitedReceiverTypeArgumentsAreDeclared(awaitExpr, awaitExpr.Expression, nil, awaitMemo)
+            }
+            if unwrapped is InvocationExpressionSyntax invocation && !this.EmittedValueIsNilableBeyondItsCSharpType(
+                invocation
+            ) &&
+                this
+                .context
+                .GetSymbolInfo(invocation)
+                .Symbol is IMethodSymbol invokedMethod &&
+                invokedMethod.MethodKind != MethodKind.DelegateInvoke &&
+                invokedMethod
+                .ContainingType
+                ?.TypeKind != TypeKind
+                .Delegate {
+                let declaredReturn = (invokedMethod.ReducedFrom ?? invokedMethod).OriginalDefinition.ReturnType
+                if !ContainsTypeParameter(declaredReturn) ||
+                    (
+                    topLevelOnly &&
+                        declaredReturn is not ITypeParameterSymbol &&
+                        declaredReturn.NullableAnnotation != Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated
+                ) {
+                    return false
+                }
+                if MentionedTypeParameterKind(declaredReturn, TypeParameterKind.Method) &&
+                    !this.InferredMethodTypeArgumentsAreDeclared(invocation, invokedMethod, declaredReturn) {
+                    return true
+                }
+                if MentionedTypeParameterKind(declaredReturn, TypeParameterKind.Type) {
+                    let invocationReceiver = switch invocation.Expression {
+                        case memberAccess is MemberAccessExpressionSyntax: memberAccess.Expression
+                        case memberBinding is MemberBindingExpressionSyntax: this.GetConditionalBindingReceiver(
+                            memberBinding
+                        )
+                        default: default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
+                    }
+                    if invocation.Expression is not SimpleNameSyntax && !this.ReceiverTypeArgumentsAreDeclared(
+                        invocationReceiver,
+                        declaredReturn
+                    ) {
+                        return true
+                    }
+                }
+                return false
+            }
+            if (unwrapped is MemberAccessExpressionSyntax || unwrapped is ElementAccessExpressionSyntax) &&
+                !this
+                .EmittedValueIsNilableBeyondItsCSharpType(unwrapped) {
+                let memberSymbol = this.context.GetSymbolInfo(unwrapped).Symbol
+                let declaredMemberType = switch memberSymbol {
+                    case field is IFieldSymbol: field.OriginalDefinition.Type
+                    case property is IPropertySymbol: property.OriginalDefinition.Type
+                    default: default(ITypeSymbol?)
+                }
+                let constructedMemberType = switch memberSymbol {
+                    case field is IFieldSymbol: field.Type
+                    case property is IPropertySymbol: property.Type
+                    default: default(ITypeSymbol?)
+                }
+                if declaredMemberType != nil {
+                    if !ContainsTypeParameter(declaredMemberType) ||
+                        (
+                        topLevelOnly &&
+                            declaredMemberType is not ITypeParameterSymbol &&
+                            declaredMemberType.NullableAnnotation != Microsoft
+                            .CodeAnalysis
+                            .NullableAnnotation
+                            .Annotated
+                    ) {
+                        return false
+                    }
+                    return !this.MemberReceiverTypeArgumentsAreDeclared(
+                        declaredMemberType,
+                        constructedMemberType,
+                        unwrapped,
+                        declaredMemberType
+                    )
+                }
+                if unwrapped is ElementAccessExpressionSyntax elemAccess && memberSymbol == nil {
+                    let elemDepth = if this.IsRangeElementAccess(elemAccess) {
+                        0
+                    } else {
+                        1
+                    }
+                    return elemDepth > 0 && !this.ReceiverTypeArgumentsAreDeclared(
+                        elemAccess.Expression,
+                        nil,
+                        nil,
+                        nil,
+                        elemDepth
+                    )
+                }
+            }
+            if unwrapped is IdentifierNameSyntax &&
+                this
+                .context
+                .GetSymbolInfo(unwrapped)
+                .Symbol is ILocalSymbol aliasedLocal &&
+                aliasedLocal
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} aliasInit}} {
+                if !IsImplicitlyTypedLocal(aliasedLocal) &&
+                    aliasedLocal
+                    .Type
+                    .NullableAnnotation != Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated &&
+                    (
+                    this
+                        .state
+                        .EmittedLocalTypeClauses
+                        .Contains(aliasedLocal) ||
+                        this.YieldsValueNilableBeyondItsCSharpType(aliasInit)
+                ) {
+                    return false
+                }
+                var cache = if topLevelOnly {
+                    this.resultNilableTopLevelLocalCache
+                } else {
+                    this.resultNilableFullLocalCache
+                }
+                if cache == nil {
+                    cache = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
+                    if topLevelOnly {
+                        this.resultNilableTopLevelLocalCache = cache
+                    } else {
+                        this.resultNilableFullLocalCache = cache
+                    }
+                }
+                if cache.TryGetValue(aliasedLocal, out var cachedResult) {
+                    return cachedResult
+                }
+                cache[aliasedLocal] = false
+                let computedResult = this.ResultMentionsValueNilableOnlyInEmittedGSharp(aliasInit, topLevelOnly)
+                cache[aliasedLocal] = computedResult
+                return computedResult
+            }
+            return this.MentionsValueNilableOnlyInEmittedGSharp(unwrapped)
+        }
+
+        // Issue #5627, #5686, #5701: whether the declaration of [`local`](paramref) fixes non-null G# storage.
+        // The declaration's own initializer meets the type that an explicit declarator writes; a `var`
+        // declarator and a deconstruction write none. A later write meets the storage that the declaration
+        // emitted (`EmittedLocalStorageAcceptsNil`, `EmittedLocalTypeClauses`): a type clause, an object
+        // creation, an asserted explicit initializer, or an initializer that mentions no value that is `T?`
+        // only in G#.
         private func LocalSlotIsDeclared(
             local ILocalSymbol,
             value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = nil,
@@ -4575,64 +6160,110 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             if IsImplicitlyTypedLocal(local) {
-                var localDelegateType = local.Type
-                while localDelegateType is IArrayTypeSymbol localArrayType {
-                    localDelegateType = localArrayType.ElementType
-                }
-                let localDelegate = UnwrapExpressionTreeDelegateType(localDelegateType) as INamedTypeSymbol
-                let localInvoke = localDelegate?.DelegateInvokeMethod
                 let varInitializer = declarator.Initializer?.Value
-                let isLambdaOrImplicitArray = value is AnonymousFunctionExpressionSyntax ||
-                    value is ImplicitArrayCreationExpressionSyntax
-                if !isLambdaOrImplicitArray || varInitializer == nil || varInitializer.Span.Contains(value!!.Span) ||
-                    localInvoke == nil {
+                if varInitializer == nil || (value != nil && varInitializer.Span.Contains(value.Span)) {
                     return false
                 }
-                let effectiveReturnType = GetEffectiveReturnType(
-                    localInvoke.ReturnType,
-                    this.SourceDelegateReturnIsAsync(value, varInitializer)
-                )
-                let explicitlyTypedInit = this
-                    .state
-                    .EmittedLocalTypeClauses
-                    .Contains(local) ||
-                    (
-                    Unparenthesize(varInitializer) is AnonymousFunctionExpressionSyntax initLambda &&
-                        this.LambdaHasExplicitDelegateCast(initLambda)
-                ) ||
-                    Unparenthesize(varInitializer) is CastExpressionSyntax
-                if tuplePath != nil && tuplePath.Count > 0 {
-                    let tupleElementType = this.GetTupleElementTypeAtPath(effectiveReturnType, tuplePath)
-                    if tupleElementType == nil ||
-                        tupleElementType.NullableAnnotation == Microsoft
+                let isLambdaOrImplicitArray = value is AnonymousFunctionExpressionSyntax ||
+                    value is ImplicitArrayCreationExpressionSyntax
+                if isLambdaOrImplicitArray {
+                    var localDelegateType = local.Type
+                    var localArrayDepth = 0
+                    while localDelegateType is IArrayTypeSymbol localArrayType {
+                        localArrayDepth++
+                        localDelegateType = localArrayType.ElementType
+                    }
+                    let localDelegate = UnwrapExpressionTreeDelegateType(localDelegateType) as INamedTypeSymbol
+                    let localInvoke = localDelegate?.DelegateInvokeMethod
+                    if localInvoke == nil {
+                        if value is not ImplicitArrayCreationExpressionSyntax || local.Type is not IArrayTypeSymbol {
+                            return false
+                        }
+                        if tuplePath != nil && tuplePath.Count > 0 {
+                            let tupleElementType = this.GetTupleElementTypeAtPath(localDelegateType, tuplePath)
+                            if tupleElementType == nil ||
+                                tupleElementType.NullableAnnotation == Microsoft
+                                .CodeAnalysis
+                                .NullableAnnotation
+                                .Annotated {
+                                return false
+                            }
+                        } else if this.UnwrapNullableValueTupleType(localDelegateType) is INamedTypeSymbol tupleElem &&
+                            tupleElem
+                            .IsTupleType {
+                            if Unparenthesize(varInitializer) is not CastExpressionSyntax &&
+                                !this.InitializerTupleHasAnyDeclaredLeaf(varInitializer, tupleElem, List[int32]()) {
+                                return false
+                            }
+                        } else if localDelegateType == nil ||
+                            localDelegateType.NullableAnnotation == Microsoft
+                            .CodeAnalysis
+                            .NullableAnnotation
+                            .Annotated {
+                            return false
+                        }
+                        return this.LocalReceiverTypeArgumentsAreDeclared(local, nil, nil, tuplePath, localArrayDepth)
+                    }
+                    let effectiveReturnType = GetEffectiveReturnType(
+                        localInvoke.ReturnType,
+                        this.SourceDelegateReturnIsAsync(value, varInitializer)
+                    )
+                    let explicitlyTypedInit = (
+                        Unparenthesize(varInitializer) is AnonymousFunctionExpressionSyntax initLambda &&
+                            this.LambdaHasExplicitDelegateCast(initLambda)
+                    ) ||
+                        Unparenthesize(varInitializer) is CastExpressionSyntax
+                    if tuplePath != nil && tuplePath.Count > 0 {
+                        let tupleElementType = this.GetTupleElementTypeAtPath(effectiveReturnType, tuplePath)
+                        if tupleElementType == nil ||
+                            tupleElementType.NullableAnnotation == Microsoft
+                            .CodeAnalysis
+                            .NullableAnnotation
+                            .Annotated {
+                            return false
+                        }
+                        return explicitlyTypedInit || !this.InitializerLambdaReturnsNilableAtTuplePath(
+                            varInitializer,
+                            tuplePath,
+                            nil
+                        )
+                    }
+                    if this.UnwrapNullableValueTupleType(effectiveReturnType) is INamedTypeSymbol tupleReturn &&
+                        tupleReturn
+                        .IsTupleType {
+                        return explicitlyTypedInit || this.InitializerTupleHasAnyDeclaredLeaf(
+                            varInitializer,
+                            tupleReturn,
+                            List[int32]()
+                        )
+                    }
+                    if effectiveReturnType == nil ||
+                        effectiveReturnType.NullableAnnotation == Microsoft
                         .CodeAnalysis
                         .NullableAnnotation
                         .Annotated {
                         return false
                     }
-                    return explicitlyTypedInit || !this.InitializerLambdaReturnsNilableAtTuplePath(
-                        varInitializer,
-                        tuplePath,
-                        nil
+                    return explicitlyTypedInit || !this.InitializerLambdaReturnsNilableBeyondItsCSharpType(
+                        varInitializer
                     )
                 }
-                if this.UnwrapNullableValueTupleType(effectiveReturnType) is INamedTypeSymbol tupleReturn &&
-                    tupleReturn
-                    .IsTupleType {
-                    return explicitlyTypedInit || this.InitializerTupleHasAnyDeclaredLeaf(
-                        varInitializer,
-                        tupleReturn,
-                        List[int32]()
-                    )
-                }
-                if effectiveReturnType == nil ||
-                    effectiveReturnType.NullableAnnotation == Microsoft
-                    .CodeAnalysis
-                    .NullableAnnotation
-                    .Annotated {
+                if !local
+                    .Type
+                    .IsReferenceType ||
+                    (tuplePath != nil && tuplePath.Count > 0) ||
+                    !this
+                    .state
+                    .EmittedLocalStorageAcceptsNil
+                    .TryGetValue(local, out var varAcceptsNil) ||
+                    varAcceptsNil {
                     return false
                 }
-                return explicitlyTypedInit || !this.InitializerLambdaReturnsNilableBeyondItsCSharpType(varInitializer)
+                return this
+                    .state
+                    .EmittedLocalTypeClauses
+                    .Contains(local) ||
+                    !this.ResultMentionsValueNilableOnlyInEmittedGSharp(varInitializer, topLevelOnly: true)
             }
             if !this.state.EmittedLocalStorageAcceptsNil.TryGetValue(local, out var acceptsNil) {
                 return true
@@ -4647,7 +6278,7 @@ partial class CSharpToGSharpTranslator {
                     .Initializer
                     ?.Value is not{} initializer ||
                     this.YieldsValueNilableBeyondItsCSharpType(initializer) ||
-                    !this.MentionsValueNilableOnlyInEmittedGSharp(initializer)
+                    !this.ResultMentionsValueNilableOnlyInEmittedGSharp(initializer, topLevelOnly: true)
             )
         }
 
@@ -4775,18 +6406,156 @@ partial class CSharpToGSharpTranslator {
             return this.ImplicitArrayDelegateSlotIsDeclared(implicitArray, tuplePath: tuplePath)
         }
 
+        private var implicitArrayComponentCache Dictionary[
+            ImplicitArrayCreationExpressionSyntax,
+            (Levels List[List[ImplicitArrayCreationExpressionSyntax]], Depth int32)
+        ]?
+        private var implicitArrayDeclaredSlotCache Dictionary[ImplicitArrayCreationExpressionSyntax, bool]?
+        private var activeImplicitArraySlotChecks HashSet[ImplicitArrayCreationExpressionSyntax]?
+        private var implicitArrayParentsCache Dictionary[
+            ImplicitArrayCreationExpressionSyntax,
+            List[ImplicitArrayCreationExpressionSyntax]
+        ]?
+        private var implicitArrayInnermostPromotedCache Dictionary[
+            ImplicitArrayCreationExpressionSyntax,
+            List[(ElementType ITypeSymbol, InputType GTypeReference, Promoted GTypeReference?)]
+        ]?
+        private var componentLevelDeclaredSlotCache Dictionary[
+            ImplicitArrayCreationExpressionSyntax,
+            Dictionary[string, bool]
+        ]?
+        private var componentLevelNilableSiblingCache Dictionary[
+            ImplicitArrayCreationExpressionSyntax,
+            Dictionary[string, bool]
+        ]?
+        private var implicitArrayNilableRefLeavesCache Dictionary[ImplicitArrayCreationExpressionSyntax, bool]?
+        private var scopeIdentifierIndexCache Dictionary[
+            Microsoft.CodeAnalysis.SyntaxNode,
+            Dictionary[string, List[IdentifierNameSyntax]]
+        ]?
+
         private func ImplicitArrayDelegateSlotIsDeclared(
+            implicitArray ImplicitArrayCreationExpressionSyntax,
+            memo Dictionary[ILocalSymbol, bool]? = nil,
+            tuplePath List[int32]? = nil,
+            arrayAccessDepth int32 = 0,
+            stopAtIntermediateArrayRef bool = false
+        ) bool {
+            let component = this.GetImplicitArrayComponent(implicitArray)
+            let levels = component.Levels
+            let depth = component.Depth
+            let innermostDepth = if levels.Count > 0 {
+                levels.Count - 1
+            } else {
+                0
+            }
+            let targetDepth = if arrayAccessDepth > 0 {
+                depth + arrayAccessDepth - 1
+            } else {
+                innermostDepth
+            }
+            for var d = depth; d <= targetDepth && d < innermostDepth; d++ {
+                if !this.ComponentLevelHasDeclaredNonNullSlot(levels, d, nil, implicitArray) {
+                    for peer in levels[d] {
+                        if this.ImplicitArrayLeavesYieldNilableArrayReference(peer) {
+                            return false
+                        }
+                    }
+                }
+            }
+            if stopAtIntermediateArrayRef && targetDepth < innermostDepth {
+                return true
+            }
+            if this.ComponentLevelHasDeclaredNonNullSlot(levels, innermostDepth, tuplePath, implicitArray) {
+                return true
+            }
+            if this.ComponentLevelHasNilableFixedSibling(levels, innermostDepth, tuplePath, implicitArray) {
+                return false
+            }
+            let targetPeers = if levels.Count > 0 {
+                levels[innermostDepth]
+            } else {
+                List[ImplicitArrayCreationExpressionSyntax]{implicitArray}
+            }
+            var expectedInnerElement = (this.context.GetTypeInfo(implicitArray).Type as IArrayTypeSymbol)?.ElementType
+            for var d = depth; d < innermostDepth; d++ {
+                if expectedInnerElement is IArrayTypeSymbol innerArr {
+                    expectedInnerElement = innerArr.ElementType
+                }
+            }
+            let remainingLeafArrayDepth = if arrayAccessDepth > 0 && targetDepth > innermostDepth {
+                targetDepth - innermostDepth
+            } else {
+                0
+            }
+            if remainingLeafArrayDepth > 0 {
+                var leafElement = expectedInnerElement
+                for var d = 0; d < remainingLeafArrayDepth; d++ {
+                    leafElement = (leafElement as IArrayTypeSymbol)?.ElementType
+                }
+                if leafElement == nil {
+                    return false
+                }
+                let projectedLeafSlot = if tuplePath != nil && tuplePath.Count > 0 {
+                    this.GetTupleElementTypeAtPath(leafElement, tuplePath)
+                } else {
+                    leafElement
+                }
+                if projectedLeafSlot == nil ||
+                    projectedLeafSlot.NullableAnnotation == Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated {
+                    return false
+                }
+                for peer in targetPeers {
+                    if expectedInnerElement != nil && !this.PeerHasCompatibleElementType(peer, expectedInnerElement) {
+                        continue
+                    }
+                    let leaves = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
+                    this.CollectArrayInitializerLeaves(peer.Initializer, leaves)
+                    for leaf in leaves {
+                        if !this.ReceiverTypeArgumentsAreDeclared(leaf, nil, nil, tuplePath, remainingLeafArrayDepth) {
+                            return false
+                        }
+                    }
+                }
+                return true
+            }
+            for peer in targetPeers {
+                if expectedInnerElement != nil && !this.PeerHasCompatibleElementType(peer, expectedInnerElement) {
+                    continue
+                }
+                if !this.SingleImplicitArrayDelegateSlotIsDeclared(peer, memo, tuplePath) {
+                    return false
+                }
+            }
+            if depth < innermostDepth && !this.ComponentLevelHasDeclaredNonNullSlot(levels, depth, nil, implicitArray) {
+                for peer in levels[depth] {
+                    if this.ImplicitArrayLeavesYieldNilableArrayReference(peer) {
+                        return false
+                    }
+                }
+            }
+            return true
+        }
+
+        private func SingleImplicitArrayDelegateSlotIsDeclared(
             implicitArray ImplicitArrayCreationExpressionSyntax,
             memo Dictionary[ILocalSymbol, bool]? = nil,
             tuplePath List[int32]? = nil
         ) bool {
-            if this.ImplicitArrayHasDeclaredTargetSlot(implicitArray) {
-                return true
-            }
             let leaves = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
             this.CollectArrayInitializerLeaves(implicitArray.Initializer, leaves)
             if leaves.Count == 0 {
                 return true
+            }
+            var innermostElement = (this.context.GetTypeInfo(implicitArray).Type as IArrayTypeSymbol)?.ElementType
+            while innermostElement is IArrayTypeSymbol innerArr {
+                innermostElement = innerArr.ElementType
+            }
+            let isDelegateElement = UnwrapExpressionTreeDelegateType(innermostElement) is INamedTypeSymbol{
+                DelegateInvokeMethod: {}
             }
             var sawNilableReturn = false
             for leaf in leaves {
@@ -4796,8 +6565,11 @@ partial class CSharpToGSharpTranslator {
                     this.InitializerLambdaReturnsNilableBeyondItsCSharpType(leaf, memo)
                 }
                 if leafNilable {
+                    if !isDelegateElement {
+                        return false
+                    }
                     sawNilableReturn = true
-                } else if !this.IsUncastAnonymousFunctionOperand(leaf) {
+                } else if isDelegateElement && !this.IsUncastAnonymousFunctionOperand(leaf) {
                     return true
                 }
             }
@@ -4805,6 +6577,899 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func ImplicitArrayHasDeclaredTargetSlot(implicitArray ImplicitArrayCreationExpressionSyntax) bool {
+            let component = this.GetImplicitArrayComponent(implicitArray)
+            return this.ComponentLevelHasDeclaredNonNullSlot(component.Levels, component.Depth, nil, implicitArray)
+        }
+
+        private func GetComponentLevelContractCacheKey(depth int32, tuplePath List[int32]?) string {
+            let pathKey = if tuplePath == nil {
+                "_"
+            } else {
+                FormatTupleProjection(tuplePath)
+            }
+            let lambdaKey = if this.checkingLambdaAsyncStack == nil || this.checkingLambdaAsyncStack!!.Count == 0 {
+                "none"
+            } else if this.checkingLambdaAsyncStack!![this.checkingLambdaAsyncStack!!.Count - 1] {
+                "async"
+            } else {
+                "sync"
+            }
+            return "${depth}:${pathKey}:${lambdaKey}"
+        }
+
+        private func ComponentLevelHasDeclaredNonNullSlot(
+            levels List[List[ImplicitArrayCreationExpressionSyntax]],
+            depth int32,
+            tuplePath List[int32]?,
+            originArray ImplicitArrayCreationExpressionSyntax? = nil
+        ) bool {
+            if levels.Count == 0 || levels[0].Count == 0 {
+                return false
+            }
+            let cacheNode = if originArray != nil &&
+                !(levels[0].Count == 1 && levels[0][0].Span.Contains(originArray.Span)) {
+                originArray
+            } else {
+                levels[0][0]
+            }
+            let cacheKey = this.GetComponentLevelContractCacheKey(depth, tuplePath)
+            if this.componentLevelDeclaredSlotCache == nil {
+                this.componentLevelDeclaredSlotCache = Dictionary[
+                    ImplicitArrayCreationExpressionSyntax,
+                    Dictionary[string, bool]
+                ]()
+            }
+            if !this.componentLevelDeclaredSlotCache!!.TryGetValue(cacheNode, out var rootCache) {
+                rootCache = Dictionary[string, bool]()
+                this.componentLevelDeclaredSlotCache!![cacheNode] = rootCache
+            } else if rootCache.TryGetValue(cacheKey, out var cached) {
+                return cached
+            }
+            rootCache[cacheKey] = false
+            let result = this.ComputeComponentLevelHasDeclaredNonNullSlot(levels, depth, tuplePath, originArray)
+            rootCache[cacheKey] = result
+            return result
+        }
+
+        private func ComputeComponentLevelHasDeclaredNonNullSlot(
+            levels List[List[ImplicitArrayCreationExpressionSyntax]],
+            depth int32,
+            tuplePath List[int32]?,
+            originArray ImplicitArrayCreationExpressionSyntax? = nil
+        ) bool {
+            if levels.Count == 0 {
+                return false
+            }
+            for root in levels[0] {
+                if originArray != nil && !root.Span.Contains(originArray.Span) {
+                    continue
+                }
+                if this.RootHasDeclaredNonNullSlotAtDepth(root, depth, tuplePath) {
+                    return true
+                }
+            }
+            for var parentDepth = 0; parentDepth < depth && parentDepth < levels.Count; parentDepth++ {
+                for parentPeer in levels[parentDepth] {
+                    if originArray != nil && !parentPeer.Span.Contains(originArray.Span) {
+                        continue
+                    }
+                    let leaves = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
+                    this.CollectArrayInitializerLeaves(parentPeer.Initializer, leaves)
+                    for leaf in leaves {
+                        if !this.LeafIsPurelyInferredImplicitArray(leaf) &&
+                            this
+                            .context
+                            .GetTypeInfo(leaf)
+                            .Type is IArrayTypeSymbol fixedLeafArrayType &&
+                            !this.ResultMentionsValueNilableOnlyInEmittedGSharp(leaf) &&
+                            this.ArrayTypeHasDeclaredNonNullSlotAtDepth(
+                            fixedLeafArrayType,
+                            depth - (parentDepth + 1),
+                            tuplePath
+                        ) {
+                            return true
+                        }
+                    }
+                }
+            }
+            return false
+        }
+
+        private func ComponentLevelHasNilableFixedSibling(
+            levels List[List[ImplicitArrayCreationExpressionSyntax]],
+            depth int32,
+            tuplePath List[int32]?,
+            originArray ImplicitArrayCreationExpressionSyntax? = nil
+        ) bool {
+            if levels.Count == 0 || levels[0].Count == 0 {
+                return false
+            }
+            let cacheNode = if originArray != nil &&
+                !(levels[0].Count == 1 && levels[0][0].Span.Contains(originArray.Span)) {
+                originArray
+            } else {
+                levels[0][0]
+            }
+            let cacheKey = this.GetComponentLevelContractCacheKey(depth, tuplePath)
+            if this.componentLevelNilableSiblingCache == nil {
+                this.componentLevelNilableSiblingCache = Dictionary[
+                    ImplicitArrayCreationExpressionSyntax,
+                    Dictionary[string, bool]
+                ]()
+            }
+            if !this.componentLevelNilableSiblingCache!!.TryGetValue(cacheNode, out var rootCache) {
+                rootCache = Dictionary[string, bool]()
+                this.componentLevelNilableSiblingCache!![cacheNode] = rootCache
+            } else if rootCache.TryGetValue(cacheKey, out var cached) {
+                return cached
+            }
+            rootCache[cacheKey] = false
+            let result = this.ComputeComponentLevelHasNilableFixedSibling(levels, depth, tuplePath, originArray)
+            rootCache[cacheKey] = result
+            return result
+        }
+
+        private func ComputeComponentLevelHasNilableFixedSibling(
+            levels List[List[ImplicitArrayCreationExpressionSyntax]],
+            depth int32,
+            tuplePath List[int32]?,
+            originArray ImplicitArrayCreationExpressionSyntax? = nil
+        ) bool {
+            if levels.Count == 0 || this.ComponentLevelHasDeclaredNonNullSlot(levels, depth, tuplePath, originArray) {
+                return false
+            }
+            for var peerDepth = 0; peerDepth <= depth && peerDepth < levels.Count; peerDepth++ {
+                for peer in levels[peerDepth] {
+                    if originArray != nil && !peer.Span.Contains(originArray.Span) {
+                        continue
+                    }
+                    let aliasUses = List[IdentifierNameSyntax]()
+                    this.CollectImplicitArrayAliasUses(
+                        peer,
+                        aliasUses,
+                        HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
+                    )
+                    for aliasUse in aliasUses {
+                        if !this.AliasUseExecutesUnconditionallyWithDeclaration(peer, aliasUse) {
+                            continue
+                        }
+                        if this.TryGetEnclosingArrayElementSlotAtRelativeDepth(
+                            aliasUse,
+                            depth - peerDepth,
+                            tuplePath,
+                            out var elementSlotDeclared
+                        ) {
+                            if !elementSlotDeclared {
+                                return true
+                            }
+                            continue
+                        }
+                        if this.DirectAliasUseHasDeclaredTargetSlot(aliasUse) &&
+                            this.TryGetExpressionDeclaredTargetArrayType(aliasUse) is {} useTargetArrayType &&
+                            !this.ArrayTypeHasDeclaredNonNullSlotAtDepth(
+                            useTargetArrayType,
+                            depth - peerDepth,
+                            tuplePath
+                        ) {
+                            return true
+                        }
+                    }
+                }
+            }
+            for var parentDepth = 0; parentDepth < depth && parentDepth < levels.Count; parentDepth++ {
+                for parentPeer in levels[parentDepth] {
+                    if originArray != nil && !parentPeer.Span.Contains(originArray.Span) {
+                        continue
+                    }
+                    let leaves = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
+                    this.CollectArrayInitializerLeaves(parentPeer.Initializer, leaves)
+                    for leaf in leaves {
+                        if !this.LeafIsPurelyInferredImplicitArray(leaf) &&
+                            this
+                            .context
+                            .GetTypeInfo(leaf)
+                            .Type is IArrayTypeSymbol fixedLeafArrayType {
+                            if !this.ArrayTypeHasDeclaredNonNullSlotAtDepth(
+                                fixedLeafArrayType,
+                                depth - (parentDepth + 1),
+                                tuplePath
+                            ) ||
+                                this.ResultMentionsValueNilableOnlyInEmittedGSharp(leaf) {
+                                return true
+                            }
+                        }
+                    }
+                }
+            }
+            return false
+        }
+
+        private func AliasUseExecutesUnconditionallyWithDeclaration(
+            peer ImplicitArrayCreationExpressionSyntax,
+            aliasUse IdentifierNameSyntax
+        ) bool {
+            let outermost = OutermostTransparentNode(peer)
+            if !(outermost?.Parent is EqualsValueClauseSyntax{Parent: VariableDeclaratorSyntax declarator}) {
+                return false
+            }
+            let declBlock = declarator.FirstAncestorOrSelf[BlockSyntax]()
+            if declBlock == nil {
+                return false
+            }
+            var current Microsoft.CodeAnalysis.SyntaxNode? = aliasUse.Parent
+            while current != nil && current != declBlock {
+                if current is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .IfStatementSyntax ||
+                    current is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .SwitchStatementSyntax ||
+                    current is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .WhileStatementSyntax ||
+                    current is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ForStatementSyntax ||
+                    current is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ForEachStatementSyntax ||
+                    current is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .DoStatementSyntax ||
+                    current is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ConditionalExpressionSyntax ||
+                    current is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .SwitchExpressionSyntax ||
+                    current is ConditionalAccessExpressionSyntax ||
+                    current is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .BinaryExpressionSyntax{
+                    RawKind: int32(Microsoft.CodeAnalysis.CSharp.SyntaxKind.LogicalAndExpression) or
+                        int32(Microsoft.CodeAnalysis.CSharp.SyntaxKind.LogicalOrExpression) or
+                        int32(Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression)
+                } ||
+                    current is AnonymousFunctionExpressionSyntax ||
+                    current is LocalFunctionStatementSyntax {
+                    return false
+                }
+                current = current.Parent
+            }
+            return current == declBlock
+        }
+
+        private func CollectImplicitArrayAliasUses(
+            node Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            uses List[IdentifierNameSyntax],
+            visitedLocals HashSet[ILocalSymbol]
+        ) {
+            let outermost = OutermostTransparentNode(node)
+            if outermost?.Parent is EqualsValueClauseSyntax{Parent: VariableDeclaratorSyntax declarator} &&
+                this
+                .context
+                .SemanticModel
+                .GetDeclaredSymbol(declarator) is ILocalSymbol local &&
+                IsImplicitlyTypedLocal(local) &&
+                visitedLocals
+                .Add(local) {
+                let scopeNode = declarator.FirstAncestorOrSelf[BlockSyntax]() as Microsoft
+                    .CodeAnalysis
+                    .SyntaxNode ??
+                    declarator.FirstAncestorOrSelf[MemberDeclarationSyntax]() ?? declarator.SyntaxTree.GetRoot()
+                if this.GetScopeIdentifiersByName(scopeNode, local.Name) is {} matchingIdentifiers {
+                    for identifier in matchingIdentifiers {
+                        if SymbolEqualityComparer.Default.Equals(this.context.GetSymbolInfo(identifier).Symbol, local) {
+                            uses.Add(identifier)
+                            this.CollectImplicitArrayAliasUses(identifier, uses, visitedLocals)
+                        }
+                    }
+                }
+            }
+        }
+
+        private func DirectAliasUseHasDeclaredTargetSlot(
+            aliasUse Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+        ) bool {
+            var node Microsoft.CodeAnalysis.SyntaxNode? = aliasUse
+            while node != nil {
+                switch node.Parent {
+                    case Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ParenthesizedExpressionSyntax,
+                    Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .CheckedExpressionSyntax {
+                        node = node.Parent
+                    }
+                    case suppress is PostfixUnaryExpressionSyntax when suppress.IsKind(
+                        Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression
+                    ) {
+                        node = suppress
+                    }
+                    case conditional is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ConditionalExpressionSyntax when conditional.Condition != node {
+                        node = conditional
+                    }
+                    case arm is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .SwitchExpressionArmSyntax when arm.Expression == node {
+                        node = arm.Parent
+                    }
+                    case coalesce is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax when coalesce.IsKind(
+                        Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression
+                    ) {
+                        node = coalesce
+                    }
+                    case castExpr is CastExpressionSyntax {
+                        if this.context.GetTypeInfo(castExpr.Type).Type is IArrayTypeSymbol {
+                            return true
+                        }
+                        node = castExpr
+                    }
+                    default {
+                        node = nil
+                    }
+                }
+            }
+            let storeNodes = List[Microsoft.CodeAnalysis.SyntaxNode]()
+            let outermost = OutermostTransparentNode(aliasUse, storeNodes: storeNodes)
+            if outermost?.Parent is InitializerExpressionSyntax outerInitializer && outerInitializer.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.ArrayInitializerExpression
+            ) {
+                var rootOuter = outerInitializer
+                while rootOuter.Parent is InitializerExpressionSyntax parentOuter && parentOuter.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.ArrayInitializerExpression
+                ) {
+                    rootOuter = parentOuter
+                }
+                if rootOuter.Parent is ImplicitArrayCreationExpressionSyntax {
+                    return false
+                }
+                return this.ArrayTypeOfInitializer(outerInitializer) is {} outerArrayType &&
+                    !ContainsTypeParameter(outerArrayType.ElementType)
+            }
+            let sink = this.ResolveValueSink(aliasUse) ??
+                (
+                if this.FindResultLambda(aliasUse) is {} enclosingLambda {
+                    this.GetLambdaTargetDelegateType(enclosingLambda)?.DelegateInvokeMethod
+                } else {
+                    default(IMethodSymbol?)
+                }
+            )
+            if sink is ILocalSymbol sinkLocal && IsImplicitlyTypedLocal(sinkLocal) {
+                return false
+            }
+            if sink != nil {
+                return this.SlotTypeIsDeclared(sink, aliasUse)
+            }
+            return this.TryGetEnclosingArrayElementStore(aliasUse, nil, out var elemDeclared) && elemDeclared
+        }
+
+        private func LeafIsPurelyInferredImplicitArray(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            memo Dictionary[ILocalSymbol, bool]? = nil
+        ) bool {
+            var unwrapped = Unparenthesize(expression)
+            while true {
+                if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax checkedExpr {
+                    unwrapped = Unparenthesize(checkedExpr.Expression)
+                    continue
+                }
+                if unwrapped is PostfixUnaryExpressionSyntax and
+                    {
+                    RawKind: int32(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression)
+                } suppressed {
+                    unwrapped = Unparenthesize(suppressed.Operand)
+                    continue
+                }
+                break
+            }
+            if unwrapped == nil || unwrapped is CastExpressionSyntax {
+                return false
+            }
+            if unwrapped is ImplicitArrayCreationExpressionSyntax {
+                return true
+            }
+            let activeMemo = memo ?? Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
+            if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax coalesce && coalesce.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression
+            ) {
+                return this.LeafIsPurelyInferredImplicitArray(coalesce.Left, activeMemo) &&
+                    this.LeafIsPurelyInferredImplicitArray(coalesce.Right, activeMemo)
+            }
+            if this.ComposedValueOperands(unwrapped, includeConvertedNonNullCoalesceAssignment: true) is {} operands {
+                return operands.Count > 0 && operands.All(
+                    (
+                        operand Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+                    ) -> this.LeafIsPurelyInferredImplicitArray(operand, activeMemo)
+                )
+            }
+            if this
+                .context
+                .GetSymbolInfo(unwrapped)
+                .Symbol is ILocalSymbol aliasedLocal &&
+                IsImplicitlyTypedLocal(aliasedLocal) &&
+                aliasedLocal
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} aliasInit}} {
+                if activeMemo.TryGetValue(aliasedLocal, out var cached) {
+                    return cached
+                }
+                activeMemo[aliasedLocal] = false
+                let result = this.LeafIsPurelyInferredImplicitArray(aliasInit, activeMemo)
+                activeMemo[aliasedLocal] = result
+                return result
+            }
+            return false
+        }
+
+        private func TryGetEnclosingArrayElementSlotAtRelativeDepth(
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            relativeDepth int32,
+            tuplePath List[int32]?,
+            out isDeclared bool
+        ) bool {
+            isDeclared = false
+            if value == nil {
+                return false
+            }
+            let storeNodes = List[Microsoft.CodeAnalysis.SyntaxNode]()
+            OutermostTransparentNode(value, storeNodes: storeNodes)
+            if storeNodes.Count == 0 ||
+                storeNodes[0].Parent is not Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .AssignmentExpressionSyntax assignment ||
+                !assignment.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleAssignmentExpression) ||
+                assignment.Right != storeNodes[0] ||
+                assignment.Left is not ElementAccessExpressionSyntax elementAccess ||
+                this
+                .context
+                .GetSymbolInfo(elementAccess)
+                .Symbol != nil {
+                return false
+            }
+            if this.context.GetTypeInfo(elementAccess.Expression).Type is not IArrayTypeSymbol assignedArrayType {
+                return true
+            }
+            let accessStep = if this.IsRangeElementAccess(elementAccess) {
+                0
+            } else {
+                1
+            }
+            let totalArrayDepth = accessStep + relativeDepth + 1
+            if !this.ArrayTypeHasDeclaredNonNullSlotAtDepth(assignedArrayType, totalArrayDepth - 1, tuplePath) {
+                return true
+            }
+            var targetElement = assignedArrayType.ElementType
+            for var d = 1; d < totalArrayDepth; d++ {
+                if targetElement is not IArrayTypeSymbol nextArray {
+                    return true
+                }
+                targetElement = nextArray.ElementType
+            }
+            let elementSlot = if tuplePath != nil && tuplePath.Count > 0 {
+                this.GetTupleElementTypeAtPath(targetElement, tuplePath)
+            } else {
+                targetElement
+            }
+            let receiverSlot = if ContainsTypeParameter(elementSlot) {
+                elementSlot
+            } else {
+                default(ITypeSymbol?)
+            }
+            isDeclared = elementSlot != nil && this.ReceiverTypeArgumentsAreDeclared(
+                elementAccess.Expression,
+                receiverSlot,
+                nil,
+                tuplePath,
+                totalArrayDepth
+            )
+            return true
+        }
+
+        private func RootHasDeclaredNonNullSlotAtDepth(
+            root ImplicitArrayCreationExpressionSyntax,
+            depth int32,
+            tuplePath List[int32]?
+        ) bool {
+            if this.TryGetEnclosingArrayElementSlotAtRelativeDepth(
+                root,
+                depth,
+                tuplePath,
+                out var elementSlotDeclared
+            ) {
+                return elementSlotDeclared
+            }
+            if !this.CachedDirectImplicitArrayHasDeclaredTargetSlot(root) {
+                return false
+            }
+            let targetArrayType = this.TryGetExpressionDeclaredTargetArrayType(root)
+            if targetArrayType == nil {
+                return false
+            }
+            return this.ArrayTypeHasDeclaredNonNullSlotAtDepth(targetArrayType, depth, tuplePath)
+        }
+
+        private func ArrayTypeHasDeclaredNonNullSlotAtDepth(
+            targetArrayType IArrayTypeSymbol,
+            depth int32,
+            tuplePath List[int32]?
+        ) bool {
+            var currentArrayType = targetArrayType
+            for var d = 0; d < depth; d++ {
+                if currentArrayType.ElementType is not IArrayTypeSymbol nextArrayType {
+                    return false
+                }
+                currentArrayType = nextArrayType
+            }
+            let slotElementType = currentArrayType.ElementType
+            if UnwrapExpressionTreeDelegateType(slotElementType) is INamedTypeSymbol{DelegateInvokeMethod: {} invoke} {
+                let isAsync = if this.checkingLambdaAsyncStack != nil && this.checkingLambdaAsyncStack!!.Count > 0 {
+                    this.checkingLambdaAsyncStack!![this.checkingLambdaAsyncStack!!.Count - 1]
+                } else {
+                    true
+                }
+                let effectiveReturn = GetEffectiveReturnType(invoke.ReturnType, isAsync: isAsync)
+                if tuplePath != nil && tuplePath.Count > 0 {
+                    let tupleElem = this.GetTupleElementTypeAtPath(effectiveReturn, tuplePath)
+                    return tupleElem != nil &&
+                        tupleElem.NullableAnnotation != Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated
+                }
+                if this.UnwrapNullableValueTupleType(effectiveReturn) is INamedTypeSymbol tupleReturn &&
+                    tupleReturn.IsTupleType {
+                    return this.DeclaredTupleHasAnyNonNullLeaf(tupleReturn)
+                }
+                return effectiveReturn != nil &&
+                    effectiveReturn.NullableAnnotation != Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated
+            }
+            if tuplePath != nil && tuplePath.Count > 0 {
+                let tupleElem = this.GetTupleElementTypeAtPath(slotElementType, tuplePath)
+                return tupleElem != nil &&
+                    tupleElem.NullableAnnotation != Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated
+            }
+            if this.UnwrapNullableValueTupleType(slotElementType) is INamedTypeSymbol tupleElement &&
+                tupleElement.IsTupleType {
+                return this.DeclaredTupleHasAnyNonNullLeaf(tupleElement)
+            }
+            return slotElementType.NullableAnnotation != Microsoft.CodeAnalysis.NullableAnnotation.Annotated
+        }
+
+        private func DeclaredTupleHasAnyNonNullLeaf(tupleType INamedTypeSymbol) bool {
+            for elem in tupleType.TupleElements {
+                if this.UnwrapNullableValueTupleType(elem.Type) is INamedTypeSymbol nestedTuple &&
+                    nestedTuple.IsTupleType {
+                    if this.DeclaredTupleHasAnyNonNullLeaf(nestedTuple) {
+                        return true
+                    }
+                } else if elem.Type.NullableAnnotation != Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func TargetArrayNeedsWidenedElementCast(
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            targetArrayType IArrayTypeSymbol,
+            depth int32
+        ) bool {
+            var currentArrayType = targetArrayType
+            for var d = 0; d < depth; d++ {
+                if currentArrayType.ElementType is not IArrayTypeSymbol nextArrayType {
+                    return false
+                }
+                currentArrayType = nextArrayType
+            }
+            var slotElementType ITypeSymbol? = currentArrayType.ElementType
+            if UnwrapExpressionTreeDelegateType(slotElementType) is INamedTypeSymbol{DelegateInvokeMethod: {} invoke} {
+                slotElementType = GetEffectiveReturnType(invoke.ReturnType, isAsync: true)
+            }
+            if this.UnwrapNullableValueTupleType(slotElementType) is INamedTypeSymbol tupleType &&
+                tupleType.IsTupleType {
+                return this.TargetTupleHasWidenedNonNullLeaf(value, tupleType, List[int32]())
+            }
+            return slotElementType != nil &&
+                slotElementType.IsReferenceType &&
+                slotElementType.NullableAnnotation != Microsoft
+                .CodeAnalysis
+                .NullableAnnotation
+                .Annotated
+        }
+
+        private func TargetTupleHasWidenedNonNullLeaf(
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            tupleType INamedTypeSymbol,
+            path List[int32]
+        ) bool {
+            for var i = 0; i < tupleType.TupleElements.Length; i++ {
+                let elemType = tupleType.TupleElements[i].Type
+                let childPath = List[int32](path){i}
+                if this.UnwrapNullableValueTupleType(elemType) is INamedTypeSymbol nestedTuple &&
+                    nestedTuple.IsTupleType {
+                    if this.TargetTupleHasWidenedNonNullLeaf(value, nestedTuple, childPath) {
+                        return true
+                    }
+                } else if elemType.IsReferenceType &&
+                    elemType.NullableAnnotation != Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated &&
+                    this.ExpressionYieldsWidenedImplicitArrayAtTuplePath(value, childPath) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func ExpressionYieldsWidenedImplicitArrayAtTuplePath(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            tuplePath List[int32],
+            visitedLocals HashSet[ILocalSymbol]? = nil
+        ) bool {
+            var unwrapped = Unparenthesize(expression)
+            while true {
+                if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax checkedExpr {
+                    unwrapped = Unparenthesize(checkedExpr.Expression)
+                    continue
+                }
+                if unwrapped is PostfixUnaryExpressionSyntax and
+                    {
+                    RawKind: int32(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression)
+                } suppressedExpr {
+                    unwrapped = Unparenthesize(suppressedExpr.Operand)
+                    continue
+                }
+                break
+            }
+            if unwrapped == nil || unwrapped is CastExpressionSyntax {
+                return false
+            }
+            if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax coalesce && coalesce.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression
+            ) {
+                return this.ExpressionYieldsWidenedImplicitArrayAtTuplePath(coalesce.Left, tuplePath, visitedLocals) ||
+                    this.ExpressionYieldsWidenedImplicitArrayAtTuplePath(coalesce.Right, tuplePath, visitedLocals)
+            }
+            if this.ComposedValueOperands(unwrapped, includeConvertedNonNullCoalesceAssignment: true) is {} operands {
+                for operand in operands {
+                    if this.ExpressionYieldsWidenedImplicitArrayAtTuplePath(operand, tuplePath, visitedLocals) {
+                        return true
+                    }
+                }
+                return false
+            }
+            if unwrapped is ElementAccessExpressionSyntax elemAccess &&
+                this
+                .context
+                .GetSymbolInfo(elemAccess)
+                .Symbol == nil {
+                return this.ExpressionYieldsWidenedImplicitArrayAtTuplePath(
+                    elemAccess.Expression,
+                    tuplePath,
+                    visitedLocals
+                )
+            }
+            if unwrapped is ImplicitArrayCreationExpressionSyntax implicitArr {
+                return !this.ImplicitArrayDelegateSlotIsDeclared(implicitArr, tuplePath: tuplePath)
+            }
+            if unwrapped is IdentifierNameSyntax idExpr &&
+                this
+                .context
+                .GetSymbolInfo(idExpr)
+                .Symbol is ILocalSymbol local &&
+                IsImplicitlyTypedLocal(local) &&
+                local
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} localInit}} {
+                let activeVisited = visitedLocals ?? HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
+                if !activeVisited.Add(local) {
+                    return false
+                }
+                let initArrays = List[ImplicitArrayCreationExpressionSyntax]()
+                this.CollectUnderlyingImplicitArrays(localInit, initArrays)
+                if initArrays.Count > 0 {
+                    return initArrays.Any(
+                        (arr ImplicitArrayCreationExpressionSyntax) -> !this.ImplicitArrayDelegateSlotIsDeclared(
+                            arr,
+                            tuplePath: tuplePath
+                        )
+                    )
+                }
+                return this.ExpressionYieldsWidenedImplicitArrayAtTuplePath(localInit, tuplePath, activeVisited)
+            }
+            return false
+        }
+
+        private func TryGetExpressionDeclaredTargetArrayType(
+            root Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+        ) IArrayTypeSymbol? {
+            var node Microsoft.CodeAnalysis.SyntaxNode? = root
+            while node != nil {
+                switch node.Parent {
+                    case Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ParenthesizedExpressionSyntax,
+                    Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .CheckedExpressionSyntax {
+                        node = node.Parent
+                    }
+                    case suppress is PostfixUnaryExpressionSyntax when suppress.IsKind(
+                        Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression
+                    ) {
+                        node = suppress
+                    }
+                    case conditional is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ConditionalExpressionSyntax when conditional.Condition != node {
+                        node = conditional
+                    }
+                    case arm is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .SwitchExpressionArmSyntax when arm.Expression == node {
+                        node = arm.Parent
+                    }
+                    case coalesce is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax when coalesce.IsKind(
+                        Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression
+                    ) {
+                        node = coalesce
+                    }
+                    case castExpr is CastExpressionSyntax {
+                        if this.AsTargetArrayType(
+                            this.context.GetTypeInfo(castExpr.Type).Type,
+                            root
+                        ) is {} castArrayType {
+                            return castArrayType
+                        }
+                        node = castExpr
+                    }
+                    default {
+                        node = nil
+                    }
+                }
+            }
+            let outermost = OutermostTransparentNode(root)
+            if outermost?.Parent is InitializerExpressionSyntax outerInitializer && outerInitializer.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.ArrayInitializerExpression
+            ) {
+                if this.ArrayTypeOfInitializer(outerInitializer) is {} outerArrayType {
+                    return this.AsTargetArrayType(outerArrayType.ElementType, root)
+                }
+            }
+            let sink = this.ResolveValueSink(root) ??
+                (
+                if this.FindResultLambda(root) is {} enclosingLambda {
+                    this.GetLambdaTargetDelegateType(enclosingLambda)?.DelegateInvokeMethod
+                } else {
+                    default(IMethodSymbol?)
+                }
+            )
+            let sinkType ITypeSymbol? = switch sink {
+                case field is IFieldSymbol: field.Type
+                case property is IPropertySymbol: property.Type
+                case parameter is IParameterSymbol: if parameter.IsParams &&
+                    outermost?.Parent is ArgumentSyntax paramArg &&
+                    this.TryGetExpandedParamsElementTarget(paramArg, parameter, out _, out _) {
+                    GetParamsElementType(parameter) ?? parameter.Type
+                } else {
+                    parameter.Type
+                }
+                case local is ILocalSymbol: local.Type
+                case method is IMethodSymbol: GetEffectiveReturnType(method.ReturnType, isAsync: true)
+                default: default(ITypeSymbol?)
+            }
+            let outerExpr = outermost as Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax ?? root
+            if sinkType != nil {
+                return this.AsTargetArrayType(sinkType, outerExpr)
+            }
+            let convertedType = this.context.GetTypeInfo(outerExpr).ConvertedType
+            return this.AsTargetArrayType(convertedType, outerExpr)
+        }
+
+        private func AsTargetArrayType(
+            targetType ITypeSymbol?,
+            rootExpr Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = nil
+        ) IArrayTypeSymbol? {
+            var effectiveTarget = targetType
+            if rootExpr != nil && this.GetUserDefinedConversionInputOperator(rootExpr, effectiveTarget, out _) is {
+                Parameters: {Length: 1} convParams
+            } {
+                effectiveTarget = convParams[0].Type
+            }
+            if effectiveTarget is IArrayTypeSymbol arrayType {
+                return arrayType
+            }
+            if effectiveTarget is INamedTypeSymbol{
+                TypeKind: TypeKind.Interface,
+                IsGenericType: true,
+                TypeArguments: {Length: 1} typeArgs,
+                ContainingNamespace: {} ns
+            } &&
+                ns.ToDisplayString() == "System.Collections.Generic" {
+                return this.context.Compilation.CreateArrayTypeSymbol(typeArgs[0], 1)
+            }
+            return nil
+        }
+
+        private func CachedDirectImplicitArrayHasDeclaredTargetSlot(
+            implicitArray ImplicitArrayCreationExpressionSyntax
+        ) bool {
+            if this.implicitArrayDeclaredSlotCache == nil {
+                this.implicitArrayDeclaredSlotCache = Dictionary[ImplicitArrayCreationExpressionSyntax, bool]()
+            }
+            if this.implicitArrayDeclaredSlotCache!!.TryGetValue(implicitArray, out var cached) {
+                return cached
+            }
+            if this.activeImplicitArraySlotChecks == nil {
+                this.activeImplicitArraySlotChecks = HashSet[ImplicitArrayCreationExpressionSyntax]()
+            }
+            if !this.activeImplicitArraySlotChecks!!.Add(implicitArray) {
+                return false
+            }
+            let activeBefore = this.activeImplicitArraySlotChecks!!.Count
+            try {
+                let result = this.DirectImplicitArrayHasDeclaredTargetSlot(implicitArray)
+                if activeBefore == 1 {
+                    this.implicitArrayDeclaredSlotCache!![implicitArray] = result
+                }
+                return result
+            } finally {
+                this.activeImplicitArraySlotChecks!!.Remove(implicitArray)
+            }
+        }
+
+        private func DirectImplicitArrayHasDeclaredTargetSlot(
+            implicitArray ImplicitArrayCreationExpressionSyntax
+        ) bool {
             var node Microsoft.CodeAnalysis.SyntaxNode? = implicitArray
             while node != nil {
                 switch node.Parent {
@@ -4820,6 +7485,11 @@ partial class CSharpToGSharpTranslator {
                         .CheckedExpressionSyntax {
                         node = node.Parent
                     }
+                    case suppress is PostfixUnaryExpressionSyntax when suppress.IsKind(
+                        Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression
+                    ) {
+                        node = suppress
+                    }
                     case conditional is Microsoft
                         .CodeAnalysis
                         .CSharp
@@ -4833,6 +7503,11 @@ partial class CSharpToGSharpTranslator {
                         .Syntax
                         .SwitchExpressionArmSyntax when arm.Expression == node {
                         node = arm.Parent
+                    }
+                    case coalesce is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax when coalesce.IsKind(
+                        Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression
+                    ) {
+                        node = coalesce
                     }
                     case castExpr is CastExpressionSyntax {
                         if this.context.GetTypeInfo(castExpr.Type).Type is IArrayTypeSymbol {
@@ -4849,19 +7524,26 @@ partial class CSharpToGSharpTranslator {
             let outermost = OutermostTransparentNode(implicitArray, storeNodes: storeNodes)
             if outermost?.Parent is InitializerExpressionSyntax outerInitializer && outerInitializer.IsKind(
                 Microsoft.CodeAnalysis.CSharp.SyntaxKind.ArrayInitializerExpression
-            ) &&
-                this.ArrayTypeOfInitializer(outerInitializer) is {} outerArrayType &&
-                !ContainsTypeParameter(outerArrayType.ElementType) {
+            ) {
+                if this.ArrayTypeOfInitializer(outerInitializer) is not{} outerArrayType ||
+                    ContainsTypeParameter(outerArrayType.ElementType) ||
+                    this
+                    .context
+                    .GetTypeInfo(implicitArray)
+                    .Type is not IArrayTypeSymbol implicitArrayType ||
+                    !SymbolEqualityComparer
+                    .Default
+                    .Equals(outerArrayType.ElementType, implicitArrayType) {
+                    return false
+                }
                 var rootOuter = outerInitializer
                 while rootOuter.Parent is InitializerExpressionSyntax parentOuter && parentOuter.IsKind(
                     Microsoft.CodeAnalysis.CSharp.SyntaxKind.ArrayInitializerExpression
                 ) {
                     rootOuter = parentOuter
                 }
-                if rootOuter.Parent is not ImplicitArrayCreationExpressionSyntax outerImplicitArray ||
-                    this.ImplicitArrayHasDeclaredTargetSlot(outerImplicitArray) {
-                    return true
-                }
+                return rootOuter.Parent is not ImplicitArrayCreationExpressionSyntax outerImplicitArray ||
+                    this.CachedDirectImplicitArrayHasDeclaredTargetSlot(outerImplicitArray)
             }
             let sink = this.ResolveValueSink(implicitArray) ??
                 (
@@ -4893,7 +7575,8 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func IsUncastAnonymousFunctionOperand(
-            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            memo Dictionary[ILocalSymbol, bool]? = nil
         ) bool {
             var unwrapped = Unparenthesize(expression)
             while unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax checkedExpr {
@@ -4902,13 +7585,718 @@ partial class CSharpToGSharpTranslator {
             if unwrapped == nil || unwrapped is CastExpressionSyntax {
                 return false
             }
-            if IsNullOrDefaultLiteral(unwrapped) || IsNullOrSuppressedNull(unwrapped) {
+            if IsNullOrDefaultLiteral(unwrapped) ||
+                IsNullOrSuppressedNull(unwrapped) ||
+                unwrapped is ImplicitArrayCreationExpressionSyntax {
                 return true
             }
+            let activeMemo = memo ?? Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
             if this.ComposedValueOperands(unwrapped, includeConvertedNonNullCoalesceAssignment: true) is {} operands {
-                return operands.Count > 0 && operands.All(this.IsUncastAnonymousFunctionOperand)
+                return operands.Count > 0 && operands.All(
+                    (
+                        operand Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+                    ) -> this.IsUncastAnonymousFunctionOperand(operand, activeMemo)
+                )
+            }
+            if this
+                .context
+                .GetSymbolInfo(unwrapped)
+                .Symbol is ILocalSymbol aliasedLocal &&
+                IsImplicitlyTypedLocal(aliasedLocal) &&
+                !this
+                .state
+                .EmittedLocalTypeClauses
+                .Contains(aliasedLocal) &&
+                aliasedLocal
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} aliasInit}} {
+                if activeMemo.TryGetValue(aliasedLocal, out var cached) {
+                    return cached
+                }
+                activeMemo[aliasedLocal] = false
+                let result = this.IsUncastAnonymousFunctionOperand(aliasInit, activeMemo)
+                activeMemo[aliasedLocal] = result
+                return result
             }
             return unwrapped is AnonymousFunctionExpressionSyntax lambda && !this.LambdaHasExplicitDelegateCast(lambda)
+        }
+
+        private func ParentChildImplicitArraysMatch(
+            parentArray ImplicitArrayCreationExpressionSyntax,
+            childArray ImplicitArrayCreationExpressionSyntax
+        ) bool -> this
+            .context
+            .GetTypeInfo(parentArray)
+            .Type is IArrayTypeSymbol parentArrayType &&
+            this
+            .context
+            .GetTypeInfo(childArray)
+            .Type is IArrayTypeSymbol childArrayType &&
+            SymbolEqualityComparer
+            .Default
+            .Equals(parentArrayType.ElementType, childArrayType)
+
+        private func CollectUnderlyingImplicitArrays(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            results List[ImplicitArrayCreationExpressionSyntax],
+            seenArrays HashSet[ImplicitArrayCreationExpressionSyntax]? = nil,
+            visitedLocals HashSet[ILocalSymbol]? = nil
+        ) {
+            var unwrapped = Unparenthesize(expression)
+            while true {
+                if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax checkedExpr {
+                    unwrapped = Unparenthesize(checkedExpr.Expression)
+                    continue
+                }
+                if unwrapped is PostfixUnaryExpressionSyntax and
+                    {
+                    RawKind: int32(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression)
+                } suppressed {
+                    unwrapped = Unparenthesize(suppressed.Operand)
+                    continue
+                }
+                break
+            }
+            if unwrapped == nil || unwrapped is CastExpressionSyntax {
+                return
+            }
+            if unwrapped is ImplicitArrayCreationExpressionSyntax implicitArray {
+                if seenArrays == nil || seenArrays.Add(implicitArray) {
+                    results.Add(implicitArray)
+                }
+                return
+            }
+            if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax coalesce && coalesce.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression
+            ) {
+                this.CollectUnderlyingImplicitArrays(coalesce.Left, results, seenArrays, visitedLocals)
+                this.CollectUnderlyingImplicitArrays(coalesce.Right, results, seenArrays, visitedLocals)
+                return
+            }
+            if this.ComposedValueOperands(unwrapped, includeConvertedNonNullCoalesceAssignment: true) is {} operands {
+                for operand in operands {
+                    this.CollectUnderlyingImplicitArrays(operand, results, seenArrays, visitedLocals)
+                }
+                return
+            }
+            if this
+                .context
+                .GetSymbolInfo(unwrapped)
+                .Symbol is ILocalSymbol aliasedLocal &&
+                IsImplicitlyTypedLocal(aliasedLocal) &&
+                aliasedLocal
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} aliasInit}} {
+                let activeVisited = visitedLocals ?? HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
+                if activeVisited.Add(aliasedLocal) {
+                    this.CollectUnderlyingImplicitArrays(aliasInit, results, seenArrays, activeVisited)
+                }
+            }
+        }
+
+        private func GetParentImplicitArrays(implicitArray ImplicitArrayCreationExpressionSyntax) List[
+            ImplicitArrayCreationExpressionSyntax
+        ] {
+            if this.implicitArrayParentsCache == nil {
+                this.implicitArrayParentsCache = Dictionary[
+                    ImplicitArrayCreationExpressionSyntax,
+                    List[ImplicitArrayCreationExpressionSyntax]
+                ]()
+            }
+            if this.implicitArrayParentsCache!!.TryGetValue(implicitArray, out var cachedParents) {
+                return cachedParents
+            }
+            let parents = List[ImplicitArrayCreationExpressionSyntax]()
+            let seenParents = HashSet[ImplicitArrayCreationExpressionSyntax]()
+            this.CollectParentImplicitArrays(
+                implicitArray,
+                implicitArray,
+                parents,
+                seenParents,
+                HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
+            )
+            this.implicitArrayParentsCache!![implicitArray] = parents
+            return parents
+        }
+
+        private func SameDepthImplicitArraysMatch(
+            firstArray ImplicitArrayCreationExpressionSyntax,
+            secondArray ImplicitArrayCreationExpressionSyntax
+        ) bool -> this
+            .context
+            .GetTypeInfo(firstArray)
+            .Type is IArrayTypeSymbol firstArrayType &&
+            this
+            .context
+            .GetTypeInfo(secondArray)
+            .Type is IArrayTypeSymbol secondArrayType &&
+            SymbolEqualityComparer
+            .Default
+            .Equals(firstArrayType, secondArrayType)
+
+        private func CollectSameDepthComposedImplicitArrays(
+            implicitArray ImplicitArrayCreationExpressionSyntax,
+            results List[ImplicitArrayCreationExpressionSyntax]
+        ) {
+            let seenResults = HashSet[ImplicitArrayCreationExpressionSyntax]()
+            let visitedLocals = HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
+            this.CollectSameDepthComposedFromExpression(
+                implicitArray,
+                implicitArray,
+                results,
+                seenResults,
+                visitedLocals
+            )
+        }
+
+        private func CollectSameDepthComposedFromExpression(
+            originArray ImplicitArrayCreationExpressionSyntax,
+            node Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            results List[ImplicitArrayCreationExpressionSyntax],
+            seenResults HashSet[ImplicitArrayCreationExpressionSyntax],
+            visitedLocals HashSet[ILocalSymbol]
+        ) {
+            var top Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax = node
+            var climbedComposed = false
+            while true {
+                switch top.Parent {
+                    case parenthesized is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax {
+                        top = parenthesized
+                    }
+                    case checkedExpr is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax {
+                        top = checkedExpr
+                    }
+                    case suppress is PostfixUnaryExpressionSyntax when suppress.IsKind(
+                        Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression
+                    ) {
+                        top = suppress
+                    }
+                    case conditional is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ConditionalExpressionSyntax when conditional.Condition != top {
+                        top = conditional
+                        climbedComposed = true
+                    }
+                    case arm is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .SwitchExpressionArmSyntax when arm.Expression == top &&
+                        arm.Parent is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .SwitchExpressionSyntax switchExpr {
+                        top = switchExpr
+                        climbedComposed = true
+                    }
+                    case coalesce is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax when coalesce.IsKind(
+                        Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression
+                    ) {
+                        top = coalesce
+                        climbedComposed = true
+                    }
+                    default {
+                        if climbedComposed {
+                            let candidates = List[ImplicitArrayCreationExpressionSyntax]()
+                            let seenCandidates = HashSet[ImplicitArrayCreationExpressionSyntax]()
+                            this.CollectUnderlyingImplicitArrays(top, candidates, seenCandidates)
+                            for candidate in candidates {
+                                if !object.ReferenceEquals(candidate, originArray) && this.SameDepthImplicitArraysMatch(
+                                    originArray,
+                                    candidate
+                                ) &&
+                                    seenResults.Add(candidate) {
+                                    results.Add(candidate)
+                                }
+                            }
+                        }
+                        if top.Parent is EqualsValueClauseSyntax{Parent: VariableDeclaratorSyntax declarator} &&
+                            this
+                            .context
+                            .SemanticModel
+                            .GetDeclaredSymbol(declarator) is ILocalSymbol local &&
+                            IsImplicitlyTypedLocal(local) &&
+                            !this
+                            .state
+                            .EmittedLocalTypeClauses
+                            .Contains(local) &&
+                            visitedLocals
+                            .Add(local) {
+                            let scopeNode = declarator.FirstAncestorOrSelf[BlockSyntax]() as Microsoft
+                                .CodeAnalysis
+                                .SyntaxNode ??
+                                declarator.FirstAncestorOrSelf[MemberDeclarationSyntax]() ??
+                                declarator
+                                .SyntaxTree
+                                .GetRoot()
+                            if this.GetScopeIdentifiersByName(scopeNode, local.Name) is {} matchingIdentifiers {
+                                for identifier in matchingIdentifiers {
+                                    if SymbolEqualityComparer.Default.Equals(
+                                        this.context.GetSymbolInfo(identifier).Symbol,
+                                        local
+                                    ) {
+                                        this.CollectSameDepthComposedFromExpression(
+                                            originArray,
+                                            identifier,
+                                            results,
+                                            seenResults,
+                                            visitedLocals
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        return
+                    }
+                }
+            }
+        }
+
+        private func GetScopeIdentifiersByName(scopeNode Microsoft.CodeAnalysis.SyntaxNode, name string) List[
+            IdentifierNameSyntax
+        ]? {
+            if this.scopeIdentifierIndexCache == nil {
+                this.scopeIdentifierIndexCache = Dictionary[
+                    Microsoft.CodeAnalysis.SyntaxNode,
+                    Dictionary[string, List[IdentifierNameSyntax]]
+                ]()
+            }
+            if !this.scopeIdentifierIndexCache!!.TryGetValue(scopeNode, out var byName) {
+                byName = Dictionary[string, List[IdentifierNameSyntax]](StringComparer.Ordinal)
+                for identifier in scopeNode.DescendantNodes().OfType[IdentifierNameSyntax]() {
+                    let idName = identifier.Identifier.ValueText
+                    if !byName.TryGetValue(idName, out var list) {
+                        list = List[IdentifierNameSyntax]()
+                        byName[idName] = list
+                    }
+                    list.Add(identifier)
+                }
+                this.scopeIdentifierIndexCache!![scopeNode] = byName
+            }
+            return if byName.TryGetValue(name, out var matched) {
+                matched
+            } else {
+                default(List[IdentifierNameSyntax]?)
+            }
+        }
+
+        private func CollectParentImplicitArrays(
+            originArray ImplicitArrayCreationExpressionSyntax,
+            node Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            parents List[ImplicitArrayCreationExpressionSyntax],
+            seenParents HashSet[ImplicitArrayCreationExpressionSyntax],
+            visitedLocals HashSet[ILocalSymbol]
+        ) {
+            let outermost = OutermostTransparentNode(node)
+            if outermost?.Parent is InitializerExpressionSyntax outerInitializer && outerInitializer.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.ArrayInitializerExpression
+            ) {
+                var rootOuter = outerInitializer
+                while rootOuter.Parent is InitializerExpressionSyntax parentOuter && parentOuter.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.ArrayInitializerExpression
+                ) {
+                    rootOuter = parentOuter
+                }
+                if rootOuter.Parent is ImplicitArrayCreationExpressionSyntax parentImplicitArray &&
+                    this.ParentChildImplicitArraysMatch(parentImplicitArray, originArray) && seenParents.Add(
+                    parentImplicitArray
+                ) {
+                    parents.Add(parentImplicitArray)
+                }
+                return
+            }
+            if outermost?.Parent is EqualsValueClauseSyntax{Parent: VariableDeclaratorSyntax declarator} &&
+                this
+                .context
+                .SemanticModel
+                .GetDeclaredSymbol(declarator) is ILocalSymbol local &&
+                IsImplicitlyTypedLocal(local) &&
+                !this
+                .state
+                .EmittedLocalTypeClauses
+                .Contains(local) &&
+                visitedLocals
+                .Add(local) {
+                let scopeNode = declarator.FirstAncestorOrSelf[BlockSyntax]() as Microsoft
+                    .CodeAnalysis
+                    .SyntaxNode ??
+                    declarator.FirstAncestorOrSelf[MemberDeclarationSyntax]() ?? declarator.SyntaxTree.GetRoot()
+                if this.GetScopeIdentifiersByName(scopeNode, local.Name) is {} matchingIdentifiers {
+                    for identifier in matchingIdentifiers {
+                        if SymbolEqualityComparer.Default.Equals(this.context.GetSymbolInfo(identifier).Symbol, local) {
+                            this.CollectParentImplicitArrays(
+                                originArray,
+                                identifier,
+                                parents,
+                                seenParents,
+                                visitedLocals
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        private func GetImplicitArrayComponent(implicitArray ImplicitArrayCreationExpressionSyntax)(
+            Levels List[List[ImplicitArrayCreationExpressionSyntax]],
+            Depth int32
+        ) {
+            if this.implicitArrayComponentCache == nil {
+                this.implicitArrayComponentCache = Dictionary[
+                    ImplicitArrayCreationExpressionSyntax,
+                    (Levels List[List[ImplicitArrayCreationExpressionSyntax]], Depth int32)
+                ]()
+            }
+            if this.implicitArrayComponentCache!!.TryGetValue(implicitArray, out var cachedComponent) {
+                return cachedComponent
+            }
+            let relDepthByNode = Dictionary[ImplicitArrayCreationExpressionSyntax, int32]()
+            let orderedNodes = List[ImplicitArrayCreationExpressionSyntax]{implicitArray}
+            let queue = Queue[ImplicitArrayCreationExpressionSyntax]()
+            relDepthByNode[implicitArray] = 0
+            queue.Enqueue(implicitArray)
+            var minDepth = 0
+            var maxDepth = 0
+            while queue.Count > 0 {
+                let current = queue.Dequeue()
+                let currentDepth = relDepthByNode[current]
+                let sameDepthPeers = List[ImplicitArrayCreationExpressionSyntax]()
+                this.CollectSameDepthComposedImplicitArrays(current, sameDepthPeers)
+                for samePeer in sameDepthPeers {
+                    if !relDepthByNode.ContainsKey(samePeer) {
+                        relDepthByNode[samePeer] = currentDepth
+                        orderedNodes.Add(samePeer)
+                        queue.Enqueue(samePeer)
+                    }
+                }
+                for parent in this.GetParentImplicitArrays(current) {
+                    if !relDepthByNode.ContainsKey(parent) {
+                        let parentDepth = currentDepth - 1
+                        relDepthByNode[parent] = parentDepth
+                        if parentDepth < minDepth {
+                            minDepth = parentDepth
+                        }
+                        orderedNodes.Add(parent)
+                        queue.Enqueue(parent)
+                    }
+                }
+                let leaves = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
+                this.CollectArrayInitializerLeaves(current.Initializer, leaves)
+                let children = List[ImplicitArrayCreationExpressionSyntax]()
+                let seenChildren = HashSet[ImplicitArrayCreationExpressionSyntax]()
+                for leaf in leaves {
+                    this.CollectUnderlyingImplicitArrays(leaf, children, seenChildren)
+                }
+                for child in children {
+                    if this.ParentChildImplicitArraysMatch(current, child) && !relDepthByNode.ContainsKey(child) {
+                        let childDepth = currentDepth + 1
+                        relDepthByNode[child] = childDepth
+                        if childDepth > maxDepth {
+                            maxDepth = childDepth
+                        }
+                        orderedNodes.Add(child)
+                        queue.Enqueue(child)
+                    }
+                }
+            }
+            let levelCount = maxDepth - minDepth + 1
+            let levels = List[List[ImplicitArrayCreationExpressionSyntax]](levelCount)
+            for var d = 0; d < levelCount; d++ {
+                levels.Add(List[ImplicitArrayCreationExpressionSyntax]())
+            }
+            for node in orderedNodes {
+                levels[relDepthByNode[node] - minDepth].Add(node)
+            }
+            for node in orderedNodes {
+                this.implicitArrayComponentCache!![node] = (levels, relDepthByNode[node] - minDepth)
+            }
+            return this.implicitArrayComponentCache!![implicitArray]
+        }
+
+        private func PeerHasCompatibleElementType(
+            peer ImplicitArrayCreationExpressionSyntax,
+            elementTypeSymbol ITypeSymbol
+        ) bool -> this
+            .context
+            .GetTypeInfo(peer)
+            .Type is IArrayTypeSymbol peerArrayType &&
+            SymbolEqualityComparer
+            .Default
+            .Equals(peerArrayType.ElementType, elementTypeSymbol)
+
+        private func SameElementTypeAndTupleNames(a ITypeSymbol?, b ITypeSymbol?) bool {
+            if !SymbolEqualityComparer.IncludeNullability.Equals(a, b) {
+                return false
+            }
+            return this.SameTupleElementNames(a, b)
+        }
+
+        private func SameTupleElementNames(a ITypeSymbol?, b ITypeSymbol?) bool {
+            if a == nil || b == nil {
+                return a == b
+            }
+            if a is IArrayTypeSymbol arrA && b is IArrayTypeSymbol arrB {
+                return this.SameTupleElementNames(arrA.ElementType, arrB.ElementType)
+            }
+            if a is INamedTypeSymbol namedA && b is INamedTypeSymbol namedB {
+                if !this.SameTupleElementNames(namedA.ContainingType, namedB.ContainingType) {
+                    return false
+                }
+                if namedA.IsTupleType && namedB.IsTupleType {
+                    if namedA.TupleElements.Length != namedB.TupleElements.Length {
+                        return false
+                    }
+                    for var i = 0; i < namedA.TupleElements.Length; i++ {
+                        if namedA.TupleElements[i].Name != namedB.TupleElements[i].Name || !this.SameTupleElementNames(
+                            namedA.TupleElements[i].Type,
+                            namedB.TupleElements[i].Type
+                        ) {
+                            return false
+                        }
+                    }
+                    return true
+                }
+                if namedA.TypeArguments.Length != namedB.TypeArguments.Length {
+                    return false
+                }
+                for var i = 0; i < namedA.TypeArguments.Length; i++ {
+                    if !this.SameTupleElementNames(namedA.TypeArguments[i], namedB.TypeArguments[i]) {
+                        return false
+                    }
+                }
+            }
+            return true
+        }
+
+        private func ImplicitArrayLeavesYieldNilableArrayReference(
+            implicitArray ImplicitArrayCreationExpressionSyntax
+        ) bool {
+            if this.implicitArrayNilableRefLeavesCache != nil && this.implicitArrayNilableRefLeavesCache!!.TryGetValue(
+                implicitArray,
+                out var cached
+            ) {
+                return cached
+            }
+            let leaves = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
+            this.CollectArrayInitializerLeaves(implicitArray.Initializer, leaves)
+            let emptyPath = List[int32]()
+            let result = leaves.Any(
+                (
+                    leaf Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+                ) -> this.TupleElementYieldsNilableBeyondItsCSharpType(leaf, emptyPath)
+            )
+            if this.implicitArrayNilableRefLeavesCache == nil {
+                this.implicitArrayNilableRefLeavesCache = Dictionary[ImplicitArrayCreationExpressionSyntax, bool]()
+            }
+            this.implicitArrayNilableRefLeavesCache!![implicitArray] = result
+            return result
+        }
+
+        private func InnermostArrayElementCanPromote(elementTypeSymbol ITypeSymbol?) bool {
+            if elementTypeSymbol == nil {
+                return false
+            }
+            if UnwrapExpressionTreeDelegateType(elementTypeSymbol) is INamedTypeSymbol{DelegateInvokeMethod: {}} {
+                return true
+            }
+            if this.UnwrapNullableValueTupleType(elementTypeSymbol) is INamedTypeSymbol tupleType &&
+                tupleType
+                .IsTupleType {
+                for tupleElem in tupleType.TupleElements {
+                    if this.InnermostArrayElementCanPromote(tupleElem.Type) {
+                        return true
+                    }
+                }
+                return false
+            }
+            return elementTypeSymbol.IsReferenceType &&
+                elementTypeSymbol.NullableAnnotation != Microsoft
+                .CodeAnalysis
+                .NullableAnnotation
+                .Annotated
+        }
+
+        private func SamePromotedTypeReferenceNullability(a GTypeReference?, b GTypeReference?) bool {
+            if object.ReferenceEquals(a, b) {
+                return true
+            }
+            if a == nil || b == nil || a.IsNullable != b.IsNullable {
+                return false
+            }
+            if a is ArrayTypeReference arrA && b is ArrayTypeReference arrB {
+                return arrA.Rank == arrB.Rank && this.SamePromotedTypeReferenceNullability(
+                    arrA.ElementType,
+                    arrB.ElementType
+                )
+            }
+            if a is TupleTypeReference tupA && b is TupleTypeReference tupB {
+                if tupA.ElementTypes.Count != tupB.ElementTypes.Count {
+                    return false
+                }
+                for var i = 0; i < tupA.ElementTypes.Count; i++ {
+                    if !this.SamePromotedTypeReferenceNullability(tupA.ElementTypes[i], tupB.ElementTypes[i]) {
+                        return false
+                    }
+                }
+                return true
+            }
+            if a is ArrowTypeReference arrowA && b is ArrowTypeReference arrowB {
+                return arrowA.IsAsync == arrowB.IsAsync &&
+                    arrowA
+                    .ReturnTypes
+                    .Count == arrowB
+                    .ReturnTypes
+                    .Count &&
+                    (
+                    arrowA.ReturnTypes.Count == 0 || this.SamePromotedTypeReferenceNullability(
+                        arrowA.ReturnTypes[0],
+                        arrowB.ReturnTypes[0]
+                    )
+                )
+            }
+            if a is NamedTypeReference namedA && b is NamedTypeReference namedB {
+                if namedA.Name != namedB.Name || namedA.TypeArguments.Count != namedB.TypeArguments.Count {
+                    return false
+                }
+                for var i = 0; i < namedA.TypeArguments.Count; i++ {
+                    if !this.SamePromotedTypeReferenceNullability(namedA.TypeArguments[i], namedB.TypeArguments[i]) {
+                        return false
+                    }
+                }
+                return true
+            }
+            return true
+        }
+
+        private func TryGetAssignedInferredArrayInitializer(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            out lhsIndexDepth int32
+        ) ImplicitArrayCreationExpressionSyntax? {
+            lhsIndexDepth = 0
+            if expression == nil {
+                return nil
+            }
+            let storeNodes = List[Microsoft.CodeAnalysis.SyntaxNode]()
+            OutermostTransparentNode(expression, storeNodes: storeNodes)
+            if storeNodes.Count == 0 ||
+                storeNodes[0].Parent is not Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .AssignmentExpressionSyntax assignment ||
+                !assignment.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleAssignmentExpression) ||
+                assignment.Right != storeNodes[0] {
+                return nil
+            }
+            var targetExpr = Unparenthesize(assignment.Left)
+            while true {
+                while targetExpr is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax checkedTarget {
+                    targetExpr = Unparenthesize(checkedTarget.Expression)
+                }
+                while targetExpr is PostfixUnaryExpressionSyntax and
+                    {
+                    RawKind: int32(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression)
+                } suppressedTarget {
+                    targetExpr = Unparenthesize(suppressedTarget.Operand)
+                }
+                if targetExpr is ElementAccessExpressionSyntax elemTarget &&
+                    this
+                    .context
+                    .GetSymbolInfo(elemTarget)
+                    .Symbol == nil {
+                    if !this.IsRangeElementAccess(elemTarget) {
+                        lhsIndexDepth++
+                    }
+                    targetExpr = Unparenthesize(elemTarget.Expression)
+                    continue
+                }
+                break
+            }
+            if targetExpr == nil ||
+                this
+                .context
+                .GetSymbolInfo(targetExpr)
+                .Symbol is not ILocalSymbol local ||
+                !IsImplicitlyTypedLocal(local) {
+                return nil
+            }
+            let resolved = this.TryResolveLocalWidenedImplicitArrayInitializer(
+                local,
+                out var localDepthOffset,
+                HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
+            )
+            lhsIndexDepth += localDepthOffset
+            return resolved
+        }
+
+        private func TryResolveLocalWidenedImplicitArrayInitializer(
+            local ILocalSymbol,
+            out depthOffset int32,
+            visitedLocals HashSet[ILocalSymbol]
+        ) ImplicitArrayCreationExpressionSyntax? {
+            depthOffset = 0
+            if !IsImplicitlyTypedLocal(local) || !visitedLocals.Add(local) ||
+                !(
+                local
+                    .DeclaringSyntaxReferences
+                    .FirstOrDefault()
+                    ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} initValue}}
+            ) {
+                return nil
+            }
+            let initArrays = List[ImplicitArrayCreationExpressionSyntax]()
+            this.CollectUnderlyingImplicitArrays(initValue, initArrays)
+            if initArrays.Count > 0 {
+                return initArrays[0]
+            }
+            var current = Unparenthesize(initValue)
+            var currentOffset = 0
+            while true {
+                while current is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax checkedExpr {
+                    current = Unparenthesize(checkedExpr.Expression)
+                }
+                while current is PostfixUnaryExpressionSyntax and
+                    {
+                    RawKind: int32(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression)
+                } suppressedExpr {
+                    current = Unparenthesize(suppressedExpr.Operand)
+                }
+                if current is ElementAccessExpressionSyntax elemAccess &&
+                    this
+                    .context
+                    .GetSymbolInfo(elemAccess)
+                    .Symbol == nil {
+                    if !this.IsRangeElementAccess(elemAccess) {
+                        currentOffset++
+                    }
+                    current = Unparenthesize(elemAccess.Expression)
+                    continue
+                }
+                break
+            }
+            if current is ImplicitArrayCreationExpressionSyntax directImplicit {
+                depthOffset = currentOffset
+                return directImplicit
+            }
+            if current is IdentifierNameSyntax idExpr &&
+                this
+                .context
+                .GetSymbolInfo(idExpr)
+                .Symbol is ILocalSymbol sourceLocal &&
+                this.TryResolveLocalWidenedImplicitArrayInitializer(
+                sourceLocal,
+                out var sourceOffset,
+                visitedLocals
+            ) is {} sourceArray {
+                depthOffset = currentOffset + sourceOffset
+                return sourceArray
+            }
+            return nil
         }
 
         private func PromoteInferredDelegateArrayElementType(
@@ -4919,32 +8307,204 @@ partial class CSharpToGSharpTranslator {
             if elementType == nil || elementTypeSymbol == nil {
                 return elementType
             }
+            let component = this.GetImplicitArrayComponent(implicitArray)
+            var promoted = this.PromoteImplicitArrayLevel(
+                elementType,
+                elementTypeSymbol,
+                implicitArray,
+                component.Levels,
+                component.Depth
+            )
+            if component.Levels.Count > 0 {
+                for root in component.Levels[0] {
+                    if this.TryGetAssignedInferredArrayInitializer(root, out var lhsDepthOffset) is {} initArray &&
+                        !object
+                        .ReferenceEquals(initArray, root) {
+                        let initComponent = this.GetImplicitArrayComponent(initArray)
+                        promoted = this.PromoteImplicitArrayLevel(
+                            promoted,
+                            elementTypeSymbol,
+                            initArray,
+                            initComponent.Levels,
+                            initComponent.Depth + lhsDepthOffset + component.Depth
+                        )
+                    }
+                }
+            }
+            return promoted
+        }
+
+        private func PromoteImplicitArrayLevel(
+            elementType GTypeReference?,
+            elementTypeSymbol ITypeSymbol?,
+            fallbackArray ImplicitArrayCreationExpressionSyntax,
+            levels List[List[ImplicitArrayCreationExpressionSyntax]],
+            depth int32
+        ) GTypeReference? {
+            if elementType == nil || elementTypeSymbol == nil {
+                return elementType
+            }
+            let peers = if depth < levels.Count && levels[depth].Count > 0 {
+                levels[depth]
+            } else {
+                List[ImplicitArrayCreationExpressionSyntax]{fallbackArray}
+            }
             if elementType is ArrayTypeReference nestedArrayRef &&
                 elementTypeSymbol is IArrayTypeSymbol nestedArraySymbol {
-                let promotedInner = this.PromoteInferredDelegateArrayElementType(
-                    nestedArrayRef.ElementType,
-                    nestedArraySymbol.ElementType,
-                    implicitArray
+                if this.implicitArrayInnermostPromotedCache == nil {
+                    this.implicitArrayInnermostPromotedCache = Dictionary[
+                        ImplicitArrayCreationExpressionSyntax,
+                        List[(ElementType ITypeSymbol, InputType GTypeReference, Promoted GTypeReference?)]
+                    ]()
+                }
+                let outerCacheKey = if levels.Count > 0 && levels[0].Count == 1 && levels[0][0].Span.Contains(
+                    fallbackArray.Span
+                ) {
+                    peers[0]
+                } else {
+                    fallbackArray
+                }
+                if this.implicitArrayInnermostPromotedCache!!.TryGetValue(outerCacheKey, out var outerCachedEntries) {
+                    for entry in outerCachedEntries {
+                        if this.SameElementTypeAndTupleNames(entry.ElementType, elementTypeSymbol) &&
+                            this.SamePromotedTypeReferenceNullability(entry.InputType, elementType) {
+                            return entry.Promoted
+                        }
+                    }
+                } else {
+                    outerCachedEntries = List[
+                        (ElementType ITypeSymbol, InputType GTypeReference, Promoted GTypeReference?)
+                    ]()
+                    this.implicitArrayInnermostPromotedCache!![outerCacheKey] = outerCachedEntries
+                }
+                let promotedInner = if depth + 1 < levels.Count {
+                    this.PromoteImplicitArrayLevel(
+                        nestedArrayRef.ElementType,
+                        nestedArraySymbol.ElementType,
+                        fallbackArray,
+                        levels,
+                        depth + 1
+                    )
+                } else {
+                    nestedArrayRef.ElementType
+                }
+                let outerIsNullable = nestedArrayRef.IsNullable ||
+                    (
+                    nestedArraySymbol.NullableAnnotation != Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated &&
+                        peers.Any(this.ImplicitArrayLeavesYieldNilableArrayReference) &&
+                        !this.ComponentLevelHasDeclaredNonNullSlot(levels, depth, nil, fallbackArray)
                 )
-                return if promotedInner != nil && !object.ReferenceEquals(promotedInner, nestedArrayRef.ElementType) {
-                    ArrayTypeReference(promotedInner, nestedArrayRef.Rank){IsNullable = nestedArrayRef.IsNullable}
+                let finalInner = promotedInner ?? nestedArrayRef.ElementType
+                let outerResult GTypeReference? = if !object.ReferenceEquals(finalInner, nestedArrayRef.ElementType) ||
+                    outerIsNullable != nestedArrayRef.IsNullable {
+                    ArrayTypeReference(finalInner, nestedArrayRef.Rank){IsNullable = outerIsNullable}
                 } else {
                     elementType
                 }
+                outerCachedEntries.Add((elementTypeSymbol, elementType, outerResult))
+                return outerResult
             }
+            if !this.InnermostArrayElementCanPromote(elementTypeSymbol) {
+                return elementType
+            }
+            let compatiblePeers = List[ImplicitArrayCreationExpressionSyntax]()
+            for peer in peers {
+                if this.PeerHasCompatibleElementType(peer, elementTypeSymbol) {
+                    compatiblePeers.Add(peer)
+                }
+            }
+            if compatiblePeers.Count == 0 {
+                compatiblePeers.Add(fallbackArray)
+            }
+            if this.implicitArrayInnermostPromotedCache == nil {
+                this.implicitArrayInnermostPromotedCache = Dictionary[
+                    ImplicitArrayCreationExpressionSyntax,
+                    List[(ElementType ITypeSymbol, InputType GTypeReference, Promoted GTypeReference?)]
+                ]()
+            }
+            let cacheKey = if levels.Count > 0 && levels[0].Count == 1 && levels[0][0].Span.Contains(
+                fallbackArray.Span
+            ) {
+                compatiblePeers[0]
+            } else {
+                fallbackArray
+            }
+            if this.implicitArrayInnermostPromotedCache!!.TryGetValue(cacheKey, out var cachedEntries) {
+                for entry in cachedEntries {
+                    if this.SameElementTypeAndTupleNames(entry.ElementType, elementTypeSymbol) &&
+                        this.SamePromotedTypeReferenceNullability(entry.InputType, elementType) {
+                        return entry.Promoted
+                    }
+                }
+            } else {
+                cachedEntries = List[(ElementType ITypeSymbol, InputType GTypeReference, Promoted GTypeReference?)]()
+                this.implicitArrayInnermostPromotedCache!![cacheKey] = cachedEntries
+            }
+            var promoted GTypeReference? = elementType
+            for peer in compatiblePeers {
+                promoted = this.PromoteSingleImplicitArrayElementType(
+                    promoted,
+                    elementTypeSymbol,
+                    peer,
+                    levels,
+                    depth,
+                    fallbackArray
+                )
+            }
+            cachedEntries.Add((elementTypeSymbol, elementType, promoted))
+            return promoted
+        }
+
+        private func PromoteSingleImplicitArrayElementType(
+            elementType GTypeReference?,
+            elementTypeSymbol ITypeSymbol?,
+            implicitArray ImplicitArrayCreationExpressionSyntax,
+            levels List[List[ImplicitArrayCreationExpressionSyntax]]? = nil,
+            depth int32 = 0,
+            originArray ImplicitArrayCreationExpressionSyntax? = nil
+        ) GTypeReference? {
+            if elementType == nil || elementTypeSymbol == nil {
+                return elementType
+            }
+            let effectiveOrigin = originArray ?? implicitArray
             let delegateType = UnwrapExpressionTreeDelegateType(elementTypeSymbol) as INamedTypeSymbol
             let invoke = delegateType?.DelegateInvokeMethod
-            if invoke == nil || this.ImplicitArrayDelegateSlotIsDeclared(implicitArray) {
+            if this.SingleImplicitArrayDelegateSlotIsDeclared(implicitArray) &&
+                (levels == nil || !this.ComponentLevelHasNilableFixedSibling(levels, depth, nil, effectiveOrigin)) {
                 return elementType
+            }
+            if invoke == nil {
+                return this.WidenInferredDelegateReturnType(
+                    elementType,
+                    elementTypeSymbol,
+                    implicitArray,
+                    List[int32](),
+                    levels,
+                    depth,
+                    effectiveOrigin
+                ) ??
+                    elementType
             }
             if elementType is ArrowTypeReference arrow && arrow.ReturnTypes.Count == 1 {
                 let effectiveReturnType = GetEffectiveReturnType(invoke.ReturnType, arrow.IsAsync)
-                let widenedReturn = this.WidenInferredDelegateReturnType(
-                    arrow.ReturnTypes[0],
-                    effectiveReturnType,
-                    implicitArray,
-                    List[int32]()
-                )
+                this.PushCheckingLambdaResult(arrow.IsAsync)
+                var widenedReturn GTypeReference? = nil
+                try {
+                    widenedReturn = this.WidenInferredDelegateReturnType(
+                        arrow.ReturnTypes[0],
+                        effectiveReturnType,
+                        implicitArray,
+                        List[int32](),
+                        levels,
+                        depth,
+                        effectiveOrigin
+                    )
+                } finally {
+                    this.PopCheckingLambdaResult()
+                }
                 if widenedReturn != nil && !object.ReferenceEquals(widenedReturn, arrow.ReturnTypes[0]) {
                     return ArrowTypeReference(arrow.ParameterTypes, List[GTypeReference]{widenedReturn}, arrow.IsAsync){
                         IsNullable = arrow.IsNullable
@@ -4957,12 +8517,21 @@ partial class CSharpToGSharpTranslator {
                 .ReturnTypes
                 .Count == 1 {
                 let effectiveReturnType = GetEffectiveReturnType(invoke.ReturnType, innerArrow.IsAsync)
-                let widenedReturn = this.WidenInferredDelegateReturnType(
-                    innerArrow.ReturnTypes[0],
-                    effectiveReturnType,
-                    implicitArray,
-                    List[int32]()
-                )
+                this.PushCheckingLambdaResult(innerArrow.IsAsync)
+                var widenedReturn GTypeReference? = nil
+                try {
+                    widenedReturn = this.WidenInferredDelegateReturnType(
+                        innerArrow.ReturnTypes[0],
+                        effectiveReturnType,
+                        implicitArray,
+                        List[int32](),
+                        levels,
+                        depth,
+                        effectiveOrigin
+                    )
+                } finally {
+                    this.PopCheckingLambdaResult()
+                }
                 if widenedReturn != nil && !object.ReferenceEquals(widenedReturn, innerArrow.ReturnTypes[0]) {
                     let widenedArrow GTypeReference = ArrowTypeReference(
                         innerArrow.ParameterTypes,
@@ -4981,7 +8550,10 @@ partial class CSharpToGSharpTranslator {
             returnTypeRef GTypeReference?,
             returnTypeSymbol ITypeSymbol?,
             implicitArray ImplicitArrayCreationExpressionSyntax,
-            path List[int32]
+            path List[int32],
+            levels List[List[ImplicitArrayCreationExpressionSyntax]]? = nil,
+            depth int32 = 0,
+            originArray ImplicitArrayCreationExpressionSyntax? = nil
         ) GTypeReference? {
             if returnTypeRef == nil || returnTypeSymbol == nil {
                 return returnTypeRef
@@ -5003,7 +8575,10 @@ partial class CSharpToGSharpTranslator {
                         existing,
                         tupleType.TupleElements[i].Type,
                         implicitArray,
-                        childPath
+                        childPath,
+                        levels,
+                        depth,
+                        originArray
                     ) ??
                         existing
                     if !object.ReferenceEquals(widenedElem, existing) {
@@ -5019,13 +8594,19 @@ partial class CSharpToGSharpTranslator {
                     returnTypeRef
                 }
             }
+            if levels != nil && this.ComponentLevelHasDeclaredNonNullSlot(levels, depth, path, originArray) {
+                return returnTypeRef
+            }
             if !returnTypeRef.IsNullable &&
                 returnTypeSymbol.IsReferenceType &&
                 returnTypeSymbol.NullableAnnotation != Microsoft
                 .CodeAnalysis
                 .NullableAnnotation
                 .Annotated &&
-                (path.Count == 0 || this.ImplicitArrayLeavesYieldNilableAtTuplePath(implicitArray, path)) {
+                (
+                path.Count == 0 || this.ImplicitArrayLeavesYieldNilableAtTuplePath(implicitArray, path) ||
+                    (levels != nil && this.ComponentLevelHasNilableFixedSibling(levels, depth, path, originArray))
+            ) {
                 return MakeNullable(returnTypeRef)
             }
             return returnTypeRef
@@ -5108,7 +8689,7 @@ partial class CSharpToGSharpTranslator {
                 SetTuplePathMemo(activeMemo, aliasedLocal, pathKey, result)
                 return result
             }
-            return false
+            return this.TupleElementYieldsNilableBeyondItsCSharpType(unwrapped, path, activeMemo)
         }
 
         private func BlockReturnsNilableAtTuplePath(
@@ -5139,7 +8720,9 @@ partial class CSharpToGSharpTranslator {
             awaitExpression Microsoft.CodeAnalysis.CSharp.Syntax.AwaitExpressionSyntax,
             operand Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
             slotType ITypeSymbol?,
-            memo Dictionary[ILocalSymbol, List[(Slot ITypeSymbol?, Path string, Result bool)]]
+            memo Dictionary[ILocalSymbol, List[(Slot ITypeSymbol?, Path string, Result bool)]],
+            tuplePath List[int32]? = nil,
+            arrayAccessDepth int32 = 0
         ) bool {
             var unwrapped = Unparenthesize(operand)
             while true {
@@ -5181,13 +8764,18 @@ partial class CSharpToGSharpTranslator {
                         awaitExpression,
                         binaryExpression.Left,
                         slotType,
-                        memo
+                        memo,
+                        tuplePath,
+                        arrayAccessDepth
                     ) &&
-                        this.AwaitedReceiverTypeArgumentsAreDeclared(
+                        this
+                        .AwaitedReceiverTypeArgumentsAreDeclared(
                         awaitExpression,
                         binaryExpression.Right,
                         slotType,
-                        memo
+                        memo,
+                        tuplePath,
+                        arrayAccessDepth
                     )
                 }
             }
@@ -5196,15 +8784,32 @@ partial class CSharpToGSharpTranslator {
                     awaitExpression,
                     conditional.WhenTrue,
                     slotType,
-                    memo
+                    memo,
+                    tuplePath,
+                    arrayAccessDepth
                 ) &&
-                    this.AwaitedReceiverTypeArgumentsAreDeclared(awaitExpression, conditional.WhenFalse, slotType, memo)
+                    this
+                    .AwaitedReceiverTypeArgumentsAreDeclared(
+                    awaitExpression,
+                    conditional.WhenFalse,
+                    slotType,
+                    memo,
+                    tuplePath,
+                    arrayAccessDepth
+                )
             }
             if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax switchExpression {
                 return switchExpression.Arms.Count > 0 && switchExpression.Arms.All(
                     (
                         arm Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionArmSyntax
-                    ) -> this.AwaitedReceiverTypeArgumentsAreDeclared(awaitExpression, arm.Expression, slotType, memo)
+                    ) -> this.AwaitedReceiverTypeArgumentsAreDeclared(
+                        awaitExpression,
+                        arm.Expression,
+                        slotType,
+                        memo,
+                        tuplePath,
+                        arrayAccessDepth
+                    )
                 )
             }
             if unwrapped is ConditionalAccessExpressionSyntax conditionalAccess {
@@ -5212,7 +8817,9 @@ partial class CSharpToGSharpTranslator {
                     awaitExpression,
                     conditionalAccess.WhenNotNull,
                     slotType,
-                    memo
+                    memo,
+                    tuplePath,
+                    arrayAccessDepth
                 )
             }
             if unwrapped is InvocationExpressionSyntax invocation {
@@ -5227,24 +8834,39 @@ partial class CSharpToGSharpTranslator {
                 if receiverMethod.MethodKind == MethodKind.DelegateInvoke ||
                     receiverMethod
                     .ContainingType
-                    ?.TypeKind == TypeKind.Delegate {
+                    ?.TypeKind == TypeKind
+                    .Delegate {
                     return this.DelegateInvocationReturnTypeArgumentsAreDeclared(
                         invocation,
                         slotType,
                         awaitExpression,
-                        memo
+                        memo,
+                        tuplePath,
+                        arrayAccessDepth
                     )
                 }
                 let declaredResult = this.GetAwaitedResultType(
                     awaitExpression,
-                    receiverMethod.OriginalDefinition.ReturnType
+                    (receiverMethod.ReducedFrom ?? receiverMethod).OriginalDefinition.ReturnType
                 )
-                let projectedDeclaredReturn = this.ProjectSlotThroughReceiverType(slotType, declaredResult)
+                let projectedDeclaredReturn = this.ProjectDeclaredReceiverSlot(
+                    slotType,
+                    declaredResult,
+                    tuplePath,
+                    arrayAccessDepth,
+                    out var remainingAwaitedArrayDepth
+                )
                 if !ContainsTypeParameter(projectedDeclaredReturn) {
                     return true
                 }
                 if MentionedTypeParameterKind(projectedDeclaredReturn, TypeParameterKind.Method) &&
-                    !this.InferredMethodTypeArgumentsAreDeclared(invocation, receiverMethod) {
+                    !this
+                    .InferredMethodTypeArgumentsAreDeclared(
+                    invocation,
+                    receiverMethod,
+                    projectedDeclaredReturn,
+                    remainingAwaitedArrayDepth
+                ) {
                     return false
                 }
                 if MentionedTypeParameterKind(projectedDeclaredReturn, TypeParameterKind.Type) {
@@ -5258,21 +8880,44 @@ partial class CSharpToGSharpTranslator {
                         )
                         default: default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
                     }
-                    if declaredResult is ITypeParameterSymbol {
+                    if declaredResult is ITypeParameterSymbol && this.GetAwaitedResultType(
+                        awaitExpression,
+                        this.context.GetTypeInfo(invocationReceiver).Type
+                    ) != nil {
                         return this.AwaitedReceiverTypeArgumentsAreDeclared(
                             awaitExpression,
                             invocationReceiver,
                             slotType,
-                            memo
+                            memo,
+                            tuplePath,
+                            arrayAccessDepth
                         )
                     }
-                    return this.ReceiverTypeArgumentsAreDeclared(invocationReceiver, projectedDeclaredReturn, memo)
+                    return this.ReceiverTypeArgumentsAreDeclared(
+                        invocationReceiver,
+                        projectedDeclaredReturn,
+                        memo,
+                        tuplePath,
+                        remainingAwaitedArrayDepth
+                    )
                 }
                 return true
             }
             let symbol = this.context.GetSymbolInfo(unwrapped).Symbol
+            let basePathKey = if tuplePath == nil {
+                ""
+            } else {
+                FormatTupleProjection(tuplePath)
+            }
+            let awaitPathKey = "@await:${basePathKey}#${arrayAccessDepth}"
             return switch symbol {
-                case local is ILocalSymbol: if TryGetReceiverLocalMemo(memo, local, slotType, "", out var cached) {
+                case local is ILocalSymbol: if TryGetReceiverLocalMemo(
+                    memo,
+                    local,
+                    slotType,
+                    awaitPathKey,
+                    out var cached
+                ) {
                     cached
                 } else if IsImplicitlyTypedLocal(local) &&
                     !this
@@ -5283,7 +8928,16 @@ partial class CSharpToGSharpTranslator {
                     .DeclaringSyntaxReferences
                     .FirstOrDefault()
                     ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} localInit}} {
-                    this.AwaitedLocalReceiverTypeArgumentsAreDeclared(awaitExpression, local, localInit, slotType, memo)
+                    this.AwaitedLocalReceiverTypeArgumentsAreDeclared(
+                        awaitExpression,
+                        local,
+                        localInit,
+                        slotType,
+                        memo,
+                        awaitPathKey,
+                        tuplePath,
+                        arrayAccessDepth
+                    )
                 } else {
                     !this.ReceiverTargetContainsTypeParameter(
                         this.GetAwaitedResultType(awaitExpression, local.Type),
@@ -5295,14 +8949,18 @@ partial class CSharpToGSharpTranslator {
                     this.GetAwaitedResultType(awaitExpression, field.Type),
                     unwrapped,
                     slotType,
-                    memo
+                    memo,
+                    tuplePath,
+                    arrayAccessDepth
                 )
                 case property is IPropertySymbol: this.MemberReceiverTypeArgumentsAreDeclared(
                     this.GetAwaitedResultType(awaitExpression, property.OriginalDefinition.Type),
                     this.GetAwaitedResultType(awaitExpression, property.Type),
                     unwrapped,
                     slotType,
-                    memo
+                    memo,
+                    tuplePath,
+                    arrayAccessDepth
                 )
                 case parameter is IParameterSymbol: !this.ReceiverTargetContainsTypeParameter(
                     this.GetAwaitedResultType(awaitExpression, parameter.Type),
@@ -5330,11 +8988,21 @@ partial class CSharpToGSharpTranslator {
             local ILocalSymbol,
             localInit Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
             slotType ITypeSymbol?,
-            memo Dictionary[ILocalSymbol, List[(Slot ITypeSymbol?, Path string, Result bool)]]
+            memo Dictionary[ILocalSymbol, List[(Slot ITypeSymbol?, Path string, Result bool)]],
+            pathKey string,
+            tuplePath List[int32]?,
+            arrayAccessDepth int32
         ) bool {
-            SetReceiverLocalMemo(memo, local, slotType, "", false)
-            let result = this.AwaitedReceiverTypeArgumentsAreDeclared(awaitExpression, localInit, slotType, memo)
-            SetReceiverLocalMemo(memo, local, slotType, "", result)
+            SetReceiverLocalMemo(memo, local, slotType, pathKey, false)
+            let result = this.AwaitedReceiverTypeArgumentsAreDeclared(
+                awaitExpression,
+                localInit,
+                slotType,
+                memo,
+                tuplePath,
+                arrayAccessDepth
+            )
+            SetReceiverLocalMemo(memo, local, slotType, pathKey, result)
             return result
         }
 
@@ -5390,7 +9058,9 @@ partial class CSharpToGSharpTranslator {
             invocation InvocationExpressionSyntax,
             slotType ITypeSymbol?,
             awaitExpression Microsoft.CodeAnalysis.CSharp.Syntax.AwaitExpressionSyntax?,
-            memo Dictionary[ILocalSymbol, List[(Slot ITypeSymbol?, Path string, Result bool)]]
+            memo Dictionary[ILocalSymbol, List[(Slot ITypeSymbol?, Path string, Result bool)]],
+            tuplePath List[int32]? = nil,
+            arrayAccessDepth int32 = 0
         ) bool {
             let callable = if invocation.Expression is MemberAccessExpressionSyntax{
                 Name: {Identifier: {ValueText: "Invoke"}}
@@ -5399,14 +9069,23 @@ partial class CSharpToGSharpTranslator {
             } else {
                 invocation.Expression
             }
-            return this.CallableReturnTypeArgumentsAreDeclared(callable, slotType, awaitExpression, memo)
+            return this.CallableReturnTypeArgumentsAreDeclared(
+                callable,
+                slotType,
+                awaitExpression,
+                memo,
+                tuplePath,
+                arrayAccessDepth
+            )
         }
 
         private func CallableReturnTypeArgumentsAreDeclared(
             callable Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
             slotType ITypeSymbol?,
             awaitExpression Microsoft.CodeAnalysis.CSharp.Syntax.AwaitExpressionSyntax?,
-            memo Dictionary[ILocalSymbol, List[(Slot ITypeSymbol?, Path string, Result bool)]]
+            memo Dictionary[ILocalSymbol, List[(Slot ITypeSymbol?, Path string, Result bool)]],
+            tuplePath List[int32]? = nil,
+            arrayAccessDepth int32 = 0
         ) bool {
             var unwrapped = Unparenthesize(callable)
             while true {
@@ -5449,24 +9128,51 @@ partial class CSharpToGSharpTranslator {
                     binaryExpression.Left,
                     slotType,
                     awaitExpression,
-                    memo
+                    memo,
+                    tuplePath,
+                    arrayAccessDepth
                 ) &&
-                    this.CallableReturnTypeArgumentsAreDeclared(binaryExpression.Right, slotType, awaitExpression, memo)
+                    this
+                    .CallableReturnTypeArgumentsAreDeclared(
+                    binaryExpression.Right,
+                    slotType,
+                    awaitExpression,
+                    memo,
+                    tuplePath,
+                    arrayAccessDepth
+                )
             }
             if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalExpressionSyntax conditional {
                 return this.CallableReturnTypeArgumentsAreDeclared(
                     conditional.WhenTrue,
                     slotType,
                     awaitExpression,
-                    memo
+                    memo,
+                    tuplePath,
+                    arrayAccessDepth
                 ) &&
-                    this.CallableReturnTypeArgumentsAreDeclared(conditional.WhenFalse, slotType, awaitExpression, memo)
+                    this
+                    .CallableReturnTypeArgumentsAreDeclared(
+                    conditional.WhenFalse,
+                    slotType,
+                    awaitExpression,
+                    memo,
+                    tuplePath,
+                    arrayAccessDepth
+                )
             }
             if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax switchExpression {
                 return switchExpression.Arms.Count > 0 && switchExpression.Arms.All(
                     (
                         arm Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionArmSyntax
-                    ) -> this.CallableReturnTypeArgumentsAreDeclared(arm.Expression, slotType, awaitExpression, memo)
+                    ) -> this.CallableReturnTypeArgumentsAreDeclared(
+                        arm.Expression,
+                        slotType,
+                        awaitExpression,
+                        memo,
+                        tuplePath,
+                        arrayAccessDepth
+                    )
                 )
             }
             if unwrapped is AnonymousFunctionExpressionSyntax lambda {
@@ -5476,9 +9182,16 @@ partial class CSharpToGSharpTranslator {
                 let isAsyncLambda = lambda.AsyncKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AsyncKeyword)
                 if lambda.Body is Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax exprBody {
                     return if awaitExpression != nil && !isAsyncLambda {
-                        this.AwaitedReceiverTypeArgumentsAreDeclared(awaitExpression, exprBody, slotType, memo)
+                        this.AwaitedReceiverTypeArgumentsAreDeclared(
+                            awaitExpression,
+                            exprBody,
+                            slotType,
+                            memo,
+                            tuplePath,
+                            arrayAccessDepth
+                        )
                     } else {
-                        this.ReceiverTypeArgumentsAreDeclared(exprBody, slotType, memo)
+                        this.ReceiverTypeArgumentsAreDeclared(exprBody, slotType, memo, tuplePath, arrayAccessDepth)
                     }
                 }
                 if lambda.Body is Microsoft.CodeAnalysis.CSharp.Syntax.BlockSyntax block {
@@ -5490,17 +9203,24 @@ partial class CSharpToGSharpTranslator {
                         } else {
                             awaitExpression
                         },
-                        memo
+                        memo,
+                        tuplePath,
+                        arrayAccessDepth
                     )
                 }
                 return false
             }
             let symbol = this.context.GetSymbolInfo(unwrapped).Symbol
             if symbol is ILocalSymbol local {
-                let pathKey = if awaitExpression != nil {
-                    "@await-callable"
+                let basePathKey = if tuplePath == nil {
+                    ""
                 } else {
-                    "@callable"
+                    FormatTupleProjection(tuplePath)
+                }
+                let pathKey = if awaitExpression != nil {
+                    "@await-callable:${basePathKey}#${arrayAccessDepth}"
+                } else {
+                    "@callable:${basePathKey}#${arrayAccessDepth}"
                 }
                 if TryGetReceiverLocalMemo(memo, local, slotType, pathKey, out var cached) {
                     return cached
@@ -5532,16 +9252,32 @@ partial class CSharpToGSharpTranslator {
                     return false
                 }
                 SetReceiverLocalMemo(memo, local, slotType, pathKey, false)
-                let result = this.CallableReturnTypeArgumentsAreDeclared(localInit, slotType, awaitExpression, memo)
+                let result = this.CallableReturnTypeArgumentsAreDeclared(
+                    localInit,
+                    slotType,
+                    awaitExpression,
+                    memo,
+                    tuplePath,
+                    arrayAccessDepth
+                )
                 SetReceiverLocalMemo(memo, local, slotType, pathKey, result)
                 return result
             }
             let callableType = this.context.GetTypeInfo(unwrapped).Type as INamedTypeSymbol
             let invokeReturn = callableType?.OriginalDefinition.DelegateInvokeMethod?.ReturnType
-            let projectedCallableSlot = if awaitExpression != nil {
-                this.ProjectSlotThroughReceiverType(slotType, this.GetAwaitedResultType(awaitExpression, invokeReturn))
+            let rawCallableReturn = if awaitExpression != nil {
+                this.GetAwaitedResultType(awaitExpression, invokeReturn)
             } else {
-                this.ProjectSlotThroughReceiverType(slotType, invokeReturn)
+                invokeReturn
+            }
+            let projectedCallableSlot = this.ProjectDeclaredReceiverSlot(
+                slotType,
+                rawCallableReturn,
+                tuplePath,
+                arrayAccessDepth
+            )
+            if !ContainsTypeParameter(projectedCallableSlot) {
+                return true
             }
             return this.ReceiverTypeArgumentsAreDeclared(unwrapped, projectedCallableSlot, memo)
         }
@@ -5550,7 +9286,9 @@ partial class CSharpToGSharpTranslator {
             node Microsoft.CodeAnalysis.SyntaxNode,
             slotType ITypeSymbol?,
             awaitExpression Microsoft.CodeAnalysis.CSharp.Syntax.AwaitExpressionSyntax?,
-            memo Dictionary[ILocalSymbol, List[(Slot ITypeSymbol?, Path string, Result bool)]]
+            memo Dictionary[ILocalSymbol, List[(Slot ITypeSymbol?, Path string, Result bool)]],
+            tuplePath List[int32]? = nil,
+            arrayAccessDepth int32 = 0
         ) bool {
             var sawReturn = false
             return this.BlockReturnsAllHaveDeclaredTypeArguments(
@@ -5558,7 +9296,9 @@ partial class CSharpToGSharpTranslator {
                 slotType,
                 awaitExpression,
                 memo,
-                ref sawReturn
+                ref sawReturn,
+                tuplePath,
+                arrayAccessDepth
             ) &&
                 sawReturn
         }
@@ -5568,7 +9308,9 @@ partial class CSharpToGSharpTranslator {
             slotType ITypeSymbol?,
             awaitExpression Microsoft.CodeAnalysis.CSharp.Syntax.AwaitExpressionSyntax?,
             memo Dictionary[ILocalSymbol, List[(Slot ITypeSymbol?, Path string, Result bool)]],
-            ref sawReturn bool
+            ref sawReturn bool,
+            tuplePath List[int32]? = nil,
+            arrayAccessDepth int32 = 0
         ) bool {
             if node is Microsoft.CodeAnalysis.CSharp.Syntax.ReturnStatementSyntax returnStmt {
                 if returnStmt.Expression == nil {
@@ -5576,9 +9318,22 @@ partial class CSharpToGSharpTranslator {
                 }
                 sawReturn = true
                 return if awaitExpression != nil {
-                    this.AwaitedReceiverTypeArgumentsAreDeclared(awaitExpression, returnStmt.Expression, slotType, memo)
+                    this.AwaitedReceiverTypeArgumentsAreDeclared(
+                        awaitExpression,
+                        returnStmt.Expression,
+                        slotType,
+                        memo,
+                        tuplePath,
+                        arrayAccessDepth
+                    )
                 } else {
-                    this.ReceiverTypeArgumentsAreDeclared(returnStmt.Expression, slotType, memo)
+                    this.ReceiverTypeArgumentsAreDeclared(
+                        returnStmt.Expression,
+                        slotType,
+                        memo,
+                        tuplePath,
+                        arrayAccessDepth
+                    )
                 }
             }
             for child in node.ChildNodes() {
@@ -5590,7 +9345,9 @@ partial class CSharpToGSharpTranslator {
                     slotType,
                     awaitExpression,
                     memo,
-                    ref sawReturn
+                    ref sawReturn,
+                    tuplePath,
+                    arrayAccessDepth
                 ) {
                     return false
                 }
@@ -5824,20 +9581,423 @@ partial class CSharpToGSharpTranslator {
             reportedSlotType ITypeSymbol? = nil,
             fixedSink bool = false
         ) GExpression? -> this
-            .ReportStoreBridge(
+            .BridgeWidenedImplicitArrayConsumer(
             value,
-            translated,
-            this.ForgiveNullableReferenceValueCore(
+            this.ReportStoreBridge(
                 value,
                 translated,
-                targetType,
-                targetSymbol,
-                includePromotedValue,
-                fixedSink: fixedSink
+                this.ForgiveNullableReferenceValueCore(
+                    value,
+                    translated,
+                    targetType,
+                    targetSymbol,
+                    includePromotedValue,
+                    fixedSink: fixedSink
+                ),
+                targetSymbol ?? reportedTarget,
+                reportedSlotType
             ),
-            targetSymbol ?? reportedTarget,
-            reportedSlotType
+            targetType,
+            targetSymbol
         )
+
+        private var widenedImplicitArrayLocalCache Dictionary[
+            ILocalSymbol,
+            (IsWidened bool, ArrayType IArrayTypeSymbol?)
+        ]?
+
+        private func ImplicitArrayExpressionHasPromotedNullableElement(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            extraAccessDepth int32 = 0,
+            visitedLocals HashSet[ILocalSymbol]? = nil
+        ) bool {
+            let exprTypeInfo = if expression != nil {
+                this.context.GetTypeInfo(expression)
+            } else {
+                default(Microsoft.CodeAnalysis.TypeInfo)
+            }
+            if extraAccessDepth == 0 &&
+                (
+                (exprTypeInfo.Type ?? exprTypeInfo.ConvertedType) is not IArrayTypeSymbol exprArrayType ||
+                    UnwrapExpressionTreeDelegateType(exprArrayType.ElementType) is INamedTypeSymbol{
+                    DelegateInvokeMethod: {}
+                }
+            ) {
+                return false
+            }
+            var current = Unparenthesize(expression)
+            var accessDepth = 1 + extraAccessDepth
+            while true {
+                while current is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax checkedExpr {
+                    current = Unparenthesize(checkedExpr.Expression)
+                }
+                while current is PostfixUnaryExpressionSyntax and
+                    {
+                    RawKind: int32(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression)
+                } suppressed {
+                    current = Unparenthesize(suppressed.Operand)
+                }
+                if current is ElementAccessExpressionSyntax elemAccess &&
+                    this
+                    .context
+                    .GetSymbolInfo(elemAccess)
+                    .Symbol == nil {
+                    if !this.IsRangeElementAccess(elemAccess) {
+                        accessDepth++
+                    }
+                    current = Unparenthesize(elemAccess.Expression)
+                    continue
+                }
+                break
+            }
+            if current is ImplicitArrayCreationExpressionSyntax implicitArr {
+                return !this.ImplicitArrayDelegateSlotIsDeclared(
+                    implicitArr,
+                    arrayAccessDepth: accessDepth,
+                    stopAtIntermediateArrayRef: true
+                )
+            }
+            if current is IdentifierNameSyntax idExpr &&
+                this
+                .context
+                .GetSymbolInfo(idExpr)
+                .Symbol is ILocalSymbol local &&
+                IsImplicitlyTypedLocal(local) &&
+                local
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} localInit}} {
+                let activeVisited = visitedLocals ?? HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
+                if !activeVisited.Add(local) {
+                    return false
+                }
+                let initArrays = List[ImplicitArrayCreationExpressionSyntax]()
+                this.CollectUnderlyingImplicitArrays(localInit, initArrays)
+                if initArrays.Count > 0 {
+                    return initArrays.Any(
+                        (arr ImplicitArrayCreationExpressionSyntax) -> !this.ImplicitArrayDelegateSlotIsDeclared(
+                            arr,
+                            arrayAccessDepth: accessDepth,
+                            stopAtIntermediateArrayRef: true
+                        )
+                    )
+                }
+                return this.ImplicitArrayExpressionHasPromotedNullableElement(localInit, accessDepth - 1, activeVisited)
+            }
+            return false
+        }
+
+        private func ExpressionYieldsWidenedImplicitArray(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            out widenedArrayType IArrayTypeSymbol?,
+            visitedLocals HashSet[ILocalSymbol]? = nil,
+            indexDepth int32 = 0
+        ) bool {
+            widenedArrayType = nil
+            var unwrapped = Unparenthesize(expression)
+            while true {
+                if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax checkedExpr {
+                    unwrapped = Unparenthesize(checkedExpr.Expression)
+                    continue
+                }
+                if unwrapped is PostfixUnaryExpressionSyntax and
+                    {
+                    RawKind: int32(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression)
+                } suppressedExpr {
+                    unwrapped = Unparenthesize(suppressedExpr.Operand)
+                    continue
+                }
+                break
+            }
+            if unwrapped == nil || unwrapped is CastExpressionSyntax {
+                return false
+            }
+            if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax coalesce && coalesce.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression
+            ) {
+                return this.ExpressionYieldsWidenedImplicitArray(
+                    coalesce.Left,
+                    out widenedArrayType,
+                    visitedLocals,
+                    indexDepth
+                ) ||
+                    this.ExpressionYieldsWidenedImplicitArray(
+                    coalesce.Right,
+                    out widenedArrayType,
+                    visitedLocals,
+                    indexDepth
+                )
+            }
+            if this.ComposedValueOperands(unwrapped, includeConvertedNonNullCoalesceAssignment: true) is {} operands {
+                for operand in operands {
+                    if this.ExpressionYieldsWidenedImplicitArray(
+                        operand,
+                        out widenedArrayType,
+                        visitedLocals,
+                        indexDepth
+                    ) {
+                        return true
+                    }
+                }
+                return false
+            }
+            if unwrapped is ElementAccessExpressionSyntax elemAccess &&
+                this
+                .context
+                .GetSymbolInfo(elemAccess)
+                .Symbol == nil {
+                let nextIndexDepth = if this.IsRangeElementAccess(elemAccess) {
+                    indexDepth
+                } else {
+                    indexDepth + 1
+                }
+                return this.ExpressionYieldsWidenedImplicitArray(
+                    elemAccess.Expression,
+                    out widenedArrayType,
+                    visitedLocals,
+                    nextIndexDepth
+                )
+            }
+            if unwrapped is ImplicitArrayCreationExpressionSyntax implicitArr {
+                var targetType ITypeSymbol? = this.context.GetTypeInfo(implicitArr).Type
+                for var d = 0; d < indexDepth; d++ {
+                    targetType = (targetType as IArrayTypeSymbol)?.ElementType
+                }
+                if targetType is not IArrayTypeSymbol subArrayType || this.ImplicitArrayDelegateSlotIsDeclared(
+                    implicitArr
+                ) {
+                    return false
+                }
+                widenedArrayType = subArrayType
+                return true
+            }
+            if unwrapped is IdentifierNameSyntax idExpr &&
+                this
+                .context
+                .GetSymbolInfo(idExpr)
+                .Symbol is ILocalSymbol local {
+                var cache = this.widenedImplicitArrayLocalCache
+                if cache == nil {
+                    cache = Dictionary[ILocalSymbol, (IsWidened bool, ArrayType IArrayTypeSymbol?)](
+                        SymbolEqualityComparer.Default
+                    )
+                    this.widenedImplicitArrayLocalCache = cache
+                }
+                if indexDepth == 0 && cache.TryGetValue(local, out var cached) {
+                    widenedArrayType = cached.ArrayType
+                    return cached.IsWidened
+                }
+                if !IsImplicitlyTypedLocal(local) ||
+                    local.Type is not IArrayTypeSymbol localArrayType ||
+                    !(
+                    local
+                        .DeclaringSyntaxReferences
+                        .FirstOrDefault()
+                        ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} localInit}}
+                ) {
+                    if indexDepth == 0 {
+                        cache[local] = (false, nil)
+                    }
+                    return false
+                }
+                var projectedType ITypeSymbol? = localArrayType
+                for var d = 0; d < indexDepth; d++ {
+                    projectedType = (projectedType as IArrayTypeSymbol)?.ElementType
+                }
+                if projectedType is not IArrayTypeSymbol projectedArrayType {
+                    return false
+                }
+                let activeVisited = visitedLocals ?? HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
+                if !activeVisited.Add(local) {
+                    return false
+                }
+                let initArrays = List[ImplicitArrayCreationExpressionSyntax]()
+                this.CollectUnderlyingImplicitArrays(localInit, initArrays)
+                if initArrays.Count > 0 && initArrays.Any(
+                    (arr ImplicitArrayCreationExpressionSyntax) -> !this.ImplicitArrayDelegateSlotIsDeclared(arr)
+                ) {
+                    if indexDepth == 0 {
+                        cache[local] = (true, localArrayType)
+                    }
+                    widenedArrayType = projectedArrayType
+                    return true
+                }
+                let aliasedResult = this.ExpressionYieldsWidenedImplicitArray(
+                    localInit,
+                    out var aliasedArrayType,
+                    activeVisited,
+                    indexDepth
+                )
+                if indexDepth == 0 {
+                    cache[local] = (aliasedResult, aliasedArrayType)
+                }
+                widenedArrayType = aliasedArrayType
+                return aliasedResult
+            }
+            return false
+        }
+
+        private func IsInnerOperandOfComposedOrSlicedArray(
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+        ) bool {
+            var current Microsoft.CodeAnalysis.SyntaxNode? = value
+            while current?.Parent is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ParenthesizedExpressionSyntax ||
+                current?.Parent is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .CheckedExpressionSyntax ||
+                (
+                current?.Parent is PostfixUnaryExpressionSyntax and
+                    {RawKind: int32(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression)}
+            ) {
+                current = current?.Parent
+            }
+            if current?.Parent is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .BinaryExpressionSyntax coalesce &&
+                coalesce.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression) {
+                return true
+            }
+            if current?.Parent is ElementAccessExpressionSyntax elemAccess &&
+                elemAccess.Expression == current &&
+                this
+                .context
+                .GetSymbolInfo(elemAccess)
+                .Symbol == nil {
+                return true
+            }
+            return false
+        }
+
+        private func TryBridgeAssignedToWidenedImplicitArrayLocal(
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            translated GExpression
+        ) GExpression? {
+            let unwrapped = Unparenthesize(value)
+            if unwrapped == nil ||
+                IsNullOrDefaultLiteral(unwrapped) ||
+                IsNullOrSuppressedNull(unwrapped) ||
+                unwrapped is ImplicitArrayCreationExpressionSyntax ||
+                unwrapped is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ArrayCreationExpressionSyntax ||
+                unwrapped is CollectionExpressionSyntax ||
+                this.ExpressionYieldsWidenedImplicitArray(value, out _) {
+                return nil
+            }
+            if this.TryGetAssignedInferredArrayInitializer(value, out var lhsDepthOffset) is not{} assignedInitArray ||
+                this.ImplicitArrayDelegateSlotIsDeclared(assignedInitArray) {
+                return nil
+            }
+            let typeInfo = this.context.GetTypeInfo(value)
+            if (typeInfo.ConvertedType ?? typeInfo.Type) is not IArrayTypeSymbol assignedArrayType {
+                return nil
+            }
+            let nonNullArrayType = assignedArrayType.WithNullableAnnotation(
+                Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated
+            )
+            if this.typeMapper.Map(
+                nonNullArrayType,
+                this.context,
+                value.GetLocation()
+            ) is not ArrayTypeReference mappedArrayRef {
+                return nil
+            }
+            let initComponent = this.GetImplicitArrayComponent(assignedInitArray)
+            let promotedElem = this.PromoteImplicitArrayLevel(
+                mappedArrayRef.ElementType,
+                assignedArrayType.ElementType,
+                assignedInitArray,
+                initComponent.Levels,
+                initComponent.Depth + lhsDepthOffset
+            )
+            if promotedElem == nil || object.ReferenceEquals(promotedElem, mappedArrayRef.ElementType) {
+                return nil
+            }
+            return ConversionExpression(
+                ArrayTypeReference(promotedElem, mappedArrayRef.Rank),
+                translated,
+                isCheckedReferenceCast: true
+            )
+        }
+
+        private func BridgeWidenedImplicitArrayConsumer(
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            translated GExpression?,
+            targetType ITypeSymbol?,
+            targetSymbol ISymbol?,
+            allowArrayInitializerElement bool = false
+        ) GExpression? {
+            if translated == nil || translated is ConversionExpression || value == nil {
+                return translated
+            }
+            if this.TryBridgeAssignedToWidenedImplicitArrayLocal(value, translated) is {} bridgedRhs {
+                return bridgedRhs
+            }
+            if this.IsInnerOperandOfComposedOrSlicedArray(value) {
+                return translated
+            }
+            if !this.ExpressionYieldsWidenedImplicitArray(value, out var widenedArrayType) || widenedArrayType == nil {
+                return translated
+            }
+            let outermost = OutermostTransparentNode(value)
+            let enclosingArrayInitializer = if outermost?.Parent is InitializerExpressionSyntax outerInit &&
+                outerInit.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.ArrayInitializerExpression) {
+                outerInit
+            } else {
+                default(InitializerExpressionSyntax?)
+            }
+            if targetSymbol == nil && enclosingArrayInitializer != nil && !allowArrayInitializerElement {
+                return translated
+            }
+            if targetSymbol is IParameterSymbol paramTarget && this.ObliviousContainerPositions(paramTarget)?.Contains(
+                "0"
+            ) == true {
+                return translated
+            }
+            let effectiveTargetArray = if enclosingArrayInitializer != nil {
+                this.TryGetExpressionDeclaredTargetArrayType(value) ?? this.AsTargetArrayType(targetType, value)
+            } else {
+                this.AsTargetArrayType(targetType, value) ?? this.TryGetExpressionDeclaredTargetArrayType(value)
+            }
+            if effectiveTargetArray == nil {
+                return translated
+            }
+            let arrayDepth = this.CountArrayDimensions(widenedArrayType) - 1
+            if arrayDepth < 0 || !this.TargetArrayNeedsWidenedElementCast(value, effectiveTargetArray, arrayDepth) {
+                return translated
+            }
+            let hasDeclaredTarget = if targetSymbol != nil {
+                this.SlotTypeIsDeclared(targetSymbol, value)
+            } else if enclosingArrayInitializer != nil {
+                this.DirectAliasUseHasDeclaredTargetSlot(value) || this.ArrayInitializerSlotIsDeclared(
+                    enclosingArrayInitializer
+                )
+            } else {
+                this.DirectAliasUseHasDeclaredTargetSlot(value)
+            }
+            if !hasDeclaredTarget {
+                return translated
+            }
+            let castTargetArray = effectiveTargetArray.WithNullableAnnotation(
+                Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated
+            )
+            let mappedTarget = this.typeMapper.Map(castTargetArray, this.context, value.GetLocation())
+            return if mappedTarget != nil {
+                ConversionExpression(mappedTarget, translated, isCheckedReferenceCast: true)
+            } else {
+                translated
+            }
+        }
 
         private func ForgiveNullableReferenceValueCore(
             value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
@@ -5866,19 +10026,24 @@ partial class CSharpToGSharpTranslator {
             }
             if conversionOperator != nil {
                 let parameter = conversionOperator.Parameters[0]
-                let operatorOperand GExpression? = this.ReportStoreBridge(
+                let operatorOperand GExpression? = this.BridgeWidenedImplicitArrayConsumer(
                     value,
-                    translated,
-                    this.ForgiveNullableReferenceValueCore(
+                    this.ReportStoreBridge(
                         value,
                         translated,
-                        parameter.Type,
+                        this.ForgiveNullableReferenceValueCore(
+                            value,
+                            translated,
+                            parameter.Type,
+                            parameter,
+                            includePromotedValue,
+                            operatorInput: true
+                        ),
                         parameter,
-                        includePromotedValue,
-                        operatorInput: true
+                        parameter.Type
                     ),
-                    parameter,
-                    parameter.Type
+                    parameter.Type,
+                    parameter
                 )
                 if convertsValue && !resultAcceptsNil && this.TargetWillRemainNonNullableReference(
                     targetType,
@@ -6385,12 +10550,13 @@ partial class CSharpToGSharpTranslator {
                 .TryResolveTupleContainerSource(
                 assignment.Left,
                 this.context.SemanticModel,
-                out _,
+                out var containerSymbol,
                 out var containerType,
                 out var containerPrefix,
                 unwrapSuppressions: true
             ) &&
                 containerPrefix.Length > 0 {
+                effectiveSymbol ??= containerSymbol
                 current = containerType
                 for component in containerPrefix.Split('.') {
                     if int32.TryParse(component, out var prefixIndex) {
@@ -7361,6 +11527,9 @@ partial class CSharpToGSharpTranslator {
                     // but G# never narrows an indexed read — only the DECLARED
                     // element nullability counts, so a `!` over a
                     // nullable-element read must keep its `!!`.
+                    if this.IsRangeElementAccess(arrayElement) {
+                        return true
+                    }
                     if arrayType.ElementType is {IsValueType: true} valueElement {
                         return valueElement.OriginalDefinition?.SpecialType != SpecialType.System_Nullable_T
                     }
@@ -8182,6 +12351,13 @@ partial class CSharpToGSharpTranslator {
                 .context
                 .GetTypeInfo(arrayAccess.Expression)
                 .Type is IArrayTypeSymbol {
+                if this.IsRangeElementAccess(arrayAccess) {
+                    return slotChain.Count > 0 && this.ExpressionCarriesNilableOnlyAtSlotChain(
+                        arrayAccess.Expression,
+                        slotChain,
+                        localMemo
+                    )
+                }
                 return this.ArrayExpressionElementsCarryNilableOnlyAtSlotChain(
                     arrayAccess.Expression,
                     slotChain,
@@ -8628,6 +12804,18 @@ partial class CSharpToGSharpTranslator {
             localMemo List[(Local ILocalSymbol, Chain IReadOnlyList[ITypeParameterSymbol], Result bool)]?
         ) bool {
             if unwrapped is ImplicitArrayCreationExpressionSyntax implicitArray {
+                let implicitElemType = (this.context.GetTypeInfo(implicitArray).Type as IArrayTypeSymbol)?.ElementType
+                if slotChain.Count == 0 &&
+                    UnwrapExpressionTreeDelegateType(implicitElemType) is not INamedTypeSymbol{
+                    DelegateInvokeMethod: {}
+                } &&
+                    !this.ImplicitArrayDelegateSlotIsDeclared(
+                    implicitArray,
+                    arrayAccessDepth: 1,
+                    stopAtIntermediateArrayRef: true
+                ) {
+                    return true
+                }
                 let leaves = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
                 this.CollectArrayInitializerLeaves(implicitArray.Initializer, leaves)
                 return leaves.Any(
@@ -8656,6 +12844,22 @@ partial class CSharpToGSharpTranslator {
                 }
                 return false
             }
+            if unwrapped is ElementAccessExpressionSyntax elemAccess &&
+                this
+                .context
+                .GetSymbolInfo(elemAccess)
+                .Symbol == nil {
+                if slotChain.Count == 0 && this.ImplicitArrayExpressionHasPromotedNullableElement(elemAccess) {
+                    return true
+                }
+                if this.IsRangeElementAccess(elemAccess) {
+                    return this.ArrayExpressionElementsCarryNilableOnlyAtSlotChain(
+                        elemAccess.Expression,
+                        slotChain,
+                        localMemo
+                    )
+                }
+            }
             if this.ComposedValueOperands(unwrapped) is {} operands {
                 return operands.Any(
                     (
@@ -8678,10 +12882,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 var localAnswer = false
                 if declaration is VariableDeclaratorSyntax{Initializer: {Value: {} initializer}} &&
-                    !this
-                    .state
-                    .EmittedLocalTypeClauses
-                    .Contains(local) {
+                    (!this.state.EmittedLocalTypeClauses.Contains(local) || IsImplicitlyTypedLocal(local)) {
                     localAnswer = this.ArrayExpressionElementsCarryNilableOnlyAtSlotChain(
                         initializer,
                         slotChain,
@@ -9408,7 +13609,7 @@ partial class CSharpToGSharpTranslator {
             } else {
                 default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
             }
-            let answer = source != nil && this.MentionsValueNilableOnlyInEmittedGSharp(source)
+            let answer = source != nil && this.ResultMentionsValueNilableOnlyInEmittedGSharp(source)
             this.state.LocalsMentioningNilableOnlyValues[local] = answer
             return answer
         }

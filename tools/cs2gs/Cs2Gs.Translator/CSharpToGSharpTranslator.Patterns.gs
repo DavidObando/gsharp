@@ -4027,6 +4027,16 @@ partial class CSharpToGSharpTranslator {
             // Issue #5537: an array stored in oblivious container storage has its
             // element type, nested positions included (#5541).
             elementType = this.PromoteObliviousArrayElement(elementType, elementTypeSymbol, creation)
+            if this.TryGetAssignedInferredArrayInitializer(creation, out var lhsDepthOffset) is {} assignedInitArray {
+                let initComponent = this.GetImplicitArrayComponent(assignedInitArray)
+                elementType = this.PromoteImplicitArrayLevel(
+                    elementType,
+                    elementTypeSymbol,
+                    assignedInitArray,
+                    initComponent.Levels,
+                    initComponent.Depth + lhsDepthOffset
+                )
+            }
             return ArrayAllocationExpression(elementType, length)
         }
 
@@ -4084,7 +4094,9 @@ partial class CSharpToGSharpTranslator {
         private func IsNullableArrayElementAccess(expression ExpressionSyntax?) bool {
             var expression = expression
             expression = Unparenthesize(expression)
-            if expression is not ElementAccessExpressionSyntax elementAccess {
+            if expression is not ElementAccessExpressionSyntax elementAccess || this.IsRangeElementAccess(
+                elementAccess
+            ) {
                 return false
             }
             if this.ArrayExpressionHasNullableReferenceLikeElement(elementAccess.Expression) {
@@ -4196,6 +4208,14 @@ partial class CSharpToGSharpTranslator {
                     .ManagedReferenceArrayNullable
                     .MappedArrayElementByElementType
                     .Add(array.ElementType, mappedElement)
+            }
+            if mappedElement != nil &&
+                !mappedElement.IsNullable &&
+                array
+                .ElementType
+                .IsReferenceType &&
+                this.ImplicitArrayExpressionHasPromotedNullableElement(expression) {
+                return MakeNullable(mappedElement)
             }
             return mappedElement
         }
@@ -4834,6 +4854,19 @@ partial class CSharpToGSharpTranslator {
             expression ExpressionSyntax,
             elementType ITypeSymbol?,
             elementTypeAcceptsNil bool = false
+        ) GExpression? -> this
+            .BridgeWidenedImplicitArrayConsumer(
+            expression,
+            this.TranslateArrayInitializerElementCore(expression, elementType, elementTypeAcceptsNil),
+            elementType,
+            nil,
+            allowArrayInitializerElement: true
+        )
+
+        private func TranslateArrayInitializerElementCore(
+            expression ExpressionSyntax,
+            elementType ITypeSymbol?,
+            elementTypeAcceptsNil bool
         ) GExpression? {
             var translated GExpression? = this.TranslateExpression(expression)
             // Issues #3682 and #4525: the effective translated element type
@@ -5206,7 +5239,14 @@ partial class CSharpToGSharpTranslator {
             arrayExpression ExpressionSyntax,
             elementTypeSyntax TypeSyntax?
         ) GTypeReference? {
-            let nullableElementSyntax = elementTypeSyntax is NullableTypeSyntax
+            let nullableElementSyntax = elementTypeSyntax is NullableTypeSyntax &&
+                (
+                arrayExpression is not ArrayCreationExpressionSyntax arrayCreation ||
+                    arrayCreation
+                    .Type
+                    .RankSpecifiers
+                    .Count <= 1
+            )
             let info = this.context.GetTypeInfo(arrayExpression)
             let arrayType ITypeSymbol? = info.Type ?? info.ConvertedType
             if arrayType is IArrayTypeSymbol array && this.typeMapper.Map(

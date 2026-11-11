@@ -292,9 +292,45 @@ partial class CSharpToGSharpTranslator {
                     // documents — structurally equivalent delegates are not
                     // interchangeable — and falls through to Map unchanged for
                     // every non-delegate type, so only this shape moves.
-                    type = MakeNullable(
-                        this.typeMapper.MapEventType(inferredLocal.Type, this.context, declaration!!.Type.GetLocation())
+                    var mappedInferredType = this.typeMapper.MapEventType(
+                        inferredLocal.Type,
+                        this.context,
+                        declaration!!.Type.GetLocation()
                     )
+                    if inferredLocal.Type is IArrayTypeSymbol inferredArraySymbol &&
+                        mappedInferredType is ArrayTypeReference mappedInferredArray &&
+                        this
+                        .TryResolveLocalWidenedImplicitArrayInitializer(
+                        inferredLocal,
+                        out var localDepthOffset,
+                        HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
+                    ) is {} originInitArray {
+                        let promotedInferredElem = if localDepthOffset == 0 {
+                            this.PromoteInferredDelegateArrayElementType(
+                                mappedInferredArray.ElementType,
+                                inferredArraySymbol.ElementType,
+                                originInitArray
+                            )
+                        } else {
+                            let originComponent = this.GetImplicitArrayComponent(originInitArray)
+                            this.PromoteImplicitArrayLevel(
+                                mappedInferredArray.ElementType,
+                                inferredArraySymbol.ElementType,
+                                originInitArray,
+                                originComponent.Levels,
+                                originComponent.Depth + localDepthOffset
+                            )
+                        }
+                        if promotedInferredElem != nil && !object.ReferenceEquals(
+                            promotedInferredElem,
+                            mappedInferredArray.ElementType
+                        ) {
+                            mappedInferredType = ArrayTypeReference(promotedInferredElem, mappedInferredArray.Rank){
+                                IsNullable = mappedInferredArray.IsNullable
+                            }
+                        }
+                    }
+                    type = MakeNullable(mappedInferredType)
                 } else if initializer != nil &&
                     (
                     declarator.Initializer!!.Value is BaseObjectCreationExpressionSyntax and
