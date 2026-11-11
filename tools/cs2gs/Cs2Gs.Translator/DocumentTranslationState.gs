@@ -77,7 +77,10 @@ internal class DocumentTranslationState {
         VarCaptureInputNonNull = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         NilableOnlyInEmittedGSharpLocals = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         NilableOnlyInEmittedGSharpNodes = Dictionary[Microsoft.CodeAnalysis.SyntaxNode, bool]()
-        VarCaptureUndecided = HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
+        NilableOnlySlotChainNodes = Dictionary[
+            Microsoft.CodeAnalysis.SyntaxNode,
+            List[(Chain IReadOnlyList[ITypeParameterSymbol], PathKey string, Result bool)]
+        ]()
         LocalsMentioningNilableOnlyValues = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         ConditionalElementReceivers = Dictionary[ElementBindingExpressionSyntax, GExpression]()
         ConditionalElementBindingReplacements = Dictionary[ElementBindingExpressionSyntax, GExpression]()
@@ -472,9 +475,12 @@ internal class DocumentTranslationState {
         get;
     }
 
-    // Issue #5582: `var` captures whose emitted type the capture decision cannot name. Each form keeps its
-    // previous translation for them.
-    prop VarCaptureUndecided HashSet[ILocalSymbol] {
+    // Issue #5656: whether a type-parameter slot chain of an expression node carries a value that is `T?`
+    // only in the emitted G#.
+    prop NilableOnlySlotChainNodes Dictionary[
+        Microsoft.CodeAnalysis.SyntaxNode,
+        List[(Chain IReadOnlyList[ITypeParameterSymbol], PathKey string, Result bool)]
+    ] {
         get;
     }
 

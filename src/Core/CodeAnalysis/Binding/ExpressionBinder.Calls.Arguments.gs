@@ -3255,7 +3255,7 @@ internal partial class ExpressionBinder {
     /// @param clrBase The CLR base type to search (its base chain is walked by reflection).
     /// @param methodName The invoked method name.
     /// @returns The deduplicated candidate methods (most-derived signature wins).
-    private func CollectBaseClrMethodCandidates(clrBase Type?, methodName string) IReadOnlyList[MethodInfo] {
+    internal func CollectBaseClrMethodCandidates(clrBase Type?, methodName string) IReadOnlyList[MethodInfo] {
         let result = List[MethodInfo]()
         if clrBase == nil {
             return result
@@ -4814,7 +4814,7 @@ internal partial class ExpressionBinder {
         /// Issue #658: variant of (cref:IsUserClassAssignableToInterface) that
         /// works with (cref:ImmutableArray{T}) arguments (used by instance
         /// method call paths).
-        private func IsUserClassAssignableToInterfaceFromArgs(
+        internal func IsUserClassAssignableToInterfaceFromArgs(
             boundArguments ImmutableArray[BoundExpression],
             argTypes[]Type?,
             source Type,
@@ -4825,7 +4825,12 @@ internal partial class ExpressionBinder {
                 if !ClrTypeUtilities.AreSame(argTypes[i + argumentOffset], source) {
                     continue
                 }
-                if boundArguments[i].Type is StructSymbol{IsClass: true} ss {
+                let rawType = switch boundArguments[i].Type {
+                    case nullable is NullableTypeSymbol: nullable.UnderlyingType
+                    case platform is PlatformTypeSymbol: platform.UnderlyingType
+                    default: boundArguments[i].Type
+                }
+                if rawType is StructSymbol{IsClass: true} ss {
                     if UserClassImplementsInterface(ss, target) {
                         return true
                     }

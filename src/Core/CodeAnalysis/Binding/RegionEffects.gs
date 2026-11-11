@@ -152,9 +152,18 @@ internal enum RegionReceiverStepKind {
 
 /// One step of a receiver path.
 internal sealed class RegionReceiverStep {
-    init(kind RegionReceiverStepKind, name string?) {
+    init(
+        kind RegionReceiverStepKind,
+        name string?,
+        arguments List[RegionReceiverPath?]? = nil,
+        argumentForms List[RegionArgumentForm]? = nil,
+        callSyntax CallExpressionSyntax? = nil
+    ) {
         Kind = kind
         Name = name
+        Arguments = arguments ?? List[RegionReceiverPath?]()
+        ArgumentForms = argumentForms ?? List[RegionArgumentForm]()
+        CallSyntax = callSyntax
     }
 
     prop Kind RegionReceiverStepKind {
@@ -163,6 +172,21 @@ internal sealed class RegionReceiverStep {
 
     /// Gets the member name of a `Member` or `Call` step, or `nil`.
     prop Name string? {
+        get;
+    }
+
+    /// Gets the argument paths of a `Call` step, in argument order.
+    prop Arguments List[RegionReceiverPath?] {
+        get;
+    }
+
+    /// Gets the argument forms of a `Call` step, in argument order.
+    prop ArgumentForms List[RegionArgumentForm] {
+        get;
+    }
+
+    /// Gets the syntax of a `Call` step, or `nil`.
+    prop CallSyntax CallExpressionSyntax? {
         get;
     }
 }
@@ -209,12 +233,18 @@ internal sealed class RegionReceiverPath {
     }
 
     /// Returns the path with one more step.
-    func Append(kind RegionReceiverStepKind, name string?) RegionReceiverPath -> RegionReceiverPath(
+    func Append(
+        kind RegionReceiverStepKind,
+        name string?,
+        arguments List[RegionReceiverPath?]? = nil,
+        argumentForms List[RegionArgumentForm]? = nil,
+        callSyntax CallExpressionSyntax? = nil
+    ) RegionReceiverPath -> RegionReceiverPath(
         RootName,
         RootIsCall,
         RootType,
         RootLiteralType,
-        Steps.Add(RegionReceiverStep(kind, name))
+        Steps.Add(RegionReceiverStep(kind, name, arguments, argumentForms, callSyntax))
     )
 
     /// Returns the path with the steps of [`tail`](paramref) after its own.
@@ -420,10 +450,12 @@ internal sealed class RegionCall {
         receiver RegionReceiverPath? = nil,
         arguments List[RegionReceiverPath?]? = nil,
         argumentForms List[RegionArgumentForm]? = nil,
-        hasTypeArguments bool = false
+        hasTypeArguments bool = false,
+        syntax CallExpressionSyntax? = nil
     ) {
         ArgumentForms = argumentForms ?? List[RegionArgumentForm]()
         HasTypeArguments = hasTypeArguments
+        Syntax = syntax
         Kind = kind
         CalleeName = calleeName
         ReceiverName = receiverName
@@ -433,6 +465,10 @@ internal sealed class RegionCall {
         ByValueNames = byValueNames
         HasUnresolvedOperand = hasUnresolvedOperand
         Position = position
+    }
+
+    prop Syntax CallExpressionSyntax? {
+        get;
     }
 
     prop Kind RegionCallKind {

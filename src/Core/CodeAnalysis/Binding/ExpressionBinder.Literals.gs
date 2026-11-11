@@ -1561,7 +1561,10 @@ internal partial class ExpressionBinder {
             if paramIndex >= parameters.Length {
                 continue
             }
-            let argSyntax = OverloadResolver.UnwrapNamedArgumentValue(argumentSyntax[i - receiverArgCount])
+            var argSyntax = OverloadResolver.UnwrapNamedArgumentValue(argumentSyntax[i - receiverArgCount])
+            while argSyntax is ParenthesizedExpressionSyntax parenthesized {
+                argSyntax = parenthesized.Expression
+            }
             var targetType = parameters[paramIndex].ParameterType
             if isExpanded && paramIndex == paramsIndex && ClrOverloadResolution.IsParamsArrayParameter(
                 parameters[paramIndex]
@@ -5048,7 +5051,7 @@ internal partial class ExpressionBinder {
         /// receiver and [`argumentSyntax`](paramref)[i] lands at flags[i +
         /// receiverArgCount]. Mirrors the offset already threaded through
         /// (cref:RebindFormattableInterpolationArguments) for the same shape.
-        private func ComputeInterpolatedStringArgFlags(
+        internal func ComputeInterpolatedStringArgFlags(
             argumentSyntax GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax],
             count int32,
             receiverArgCount int32 = 0
@@ -5060,7 +5063,10 @@ internal partial class ExpressionBinder {
                 // argument (`M(arg: $"…")`) is wrapped by NamedArgumentExpressionSyntax.
                 // Unwrap before classifying so target typing to
                 // IFormattable/FormattableString flows through named arguments too.
-                let argSyntax = OverloadResolver.UnwrapNamedArgumentValue(argumentSyntax[i])
+                var argSyntax = OverloadResolver.UnwrapNamedArgumentValue(argumentSyntax[i])
+                while argSyntax is ParenthesizedExpressionSyntax parenthesized {
+                    argSyntax = parenthesized.Expression
+                }
                 if argSyntax is InterpolatedStringExpressionSyntax {
                     flags ??= [count]bool
                     flags!![i + receiverArgCount] = true

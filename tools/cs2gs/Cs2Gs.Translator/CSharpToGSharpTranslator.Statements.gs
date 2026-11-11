@@ -685,6 +685,24 @@ partial class CSharpToGSharpTranslator {
             if this.context.GetSymbolInfo(expression).Symbol is not ILocalSymbol local || !visited.Add(local) {
                 return false
             }
+            let declaration = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+            if declaration is VariableDeclaratorSyntax && !this.IsLocalReassigned(local) && visited.All(
+                (sym ISymbol) -> sym is ILocalSymbol visitedLocal && !this.IsLocalReassigned(visitedLocal)
+            ) {
+                let emptyChain = Array.Empty[ITypeParameterSymbol]()
+                if this.TryGetSlotChainNodeMemo(declaration, emptyChain, out var cachedDefault, pathKey: "@default") {
+                    return cachedDefault
+                }
+                this.SetSlotChainNodeMemo(declaration, emptyChain, false, pathKey: "@default")
+                let cachedResult = this.GetReachingLocalValues(local, expression!!.SpanStart, visited).Any(
+                    (value ExpressionSyntax) -> this.InferredInitializerOriginatesFromDefault(
+                        value,
+                        HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
+                    )
+                )
+                this.SetSlotChainNodeMemo(declaration, emptyChain, cachedResult, pathKey: "@default")
+                return cachedResult
+            }
             return this.GetReachingLocalValues(local, expression!!.SpanStart, visited).Any(
                 (value ExpressionSyntax) -> this.InferredInitializerOriginatesFromDefault(
                     value,
@@ -771,6 +789,31 @@ partial class CSharpToGSharpTranslator {
                 .Symbol is ILocalSymbol local &&
                 visited
                 .Add(local) {
+                let declaration = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                if declaration is VariableDeclaratorSyntax && !this.IsLocalReassigned(local) && visited.All(
+                    (sym ISymbol) -> sym is ILocalSymbol visitedLocal && !this.IsLocalReassigned(visitedLocal)
+                ) {
+                    let emptyChain = Array.Empty[ITypeParameterSymbol]()
+                    let pathKey = "@default" + FormatTupleProjection(path!!.ToList())
+                    if this.TryGetSlotChainNodeMemo(
+                        declaration,
+                        emptyChain,
+                        out var cachedTupleDefault,
+                        pathKey: pathKey
+                    ) {
+                        return cachedTupleDefault
+                    }
+                    this.SetSlotChainNodeMemo(declaration, emptyChain, false, pathKey: pathKey)
+                    let cachedResult = this.GetReachingLocalValues(local, source!!.SpanStart, visited).Any(
+                        (value ExpressionSyntax) -> this.InferredTupleProjectionOriginatesFromDefault(
+                            value,
+                            path,
+                            HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
+                        )
+                    )
+                    this.SetSlotChainNodeMemo(declaration, emptyChain, cachedResult, pathKey: pathKey)
+                    return cachedResult
+                }
                 return this.GetReachingLocalValues(local, source!!.SpanStart, visited).Any(
                     (value ExpressionSyntax) -> this.InferredTupleProjectionOriginatesFromDefault(
                         value,
