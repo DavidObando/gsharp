@@ -272,6 +272,51 @@ internal shared class ObliviousNullabilityAnalyzer {
             this.DelegateReturnEdges = delegateReturnEdges
             this.ParamsElementTainted = paramsElementTainted
             this.ParamsElementEdges = paramsElementEdges
+            let contractByTarget = Dictionary[TupleElementKey, List[TupleElementKey]](TupleContractKeyComparer.Instance)
+            for (target, source) in tupleContractEdges {
+                if !contractByTarget.TryGetValue(target, out var sources) {
+                    sources = List[TupleElementKey]()
+                    contractByTarget.Add(target, sources)
+                }
+                sources.Add(source)
+            }
+            this.TupleContractEdgesByTarget = contractByTarget
+            let tupleByTarget = Dictionary[TupleElementKey, List[TupleElementKey]](TupleElementKeyComparer.Instance)
+            for (target, source) in tupleEdges {
+                if !tupleByTarget.TryGetValue(target, out var sources) {
+                    sources = List[TupleElementKey]()
+                    tupleByTarget.Add(target, sources)
+                }
+                sources.Add(source)
+            }
+            this.TupleEdgesByTarget = tupleByTarget
+            let tupleScalarByTarget = Dictionary[TupleElementKey, List[ISymbol]](TupleElementKeyComparer.Instance)
+            for (target, source) in tupleScalarEdges {
+                if !tupleScalarByTarget.TryGetValue(target, out var sources) {
+                    sources = List[ISymbol]()
+                    tupleScalarByTarget.Add(target, sources)
+                }
+                sources.Add(source)
+            }
+            this.TupleScalarEdgesByTarget = tupleScalarByTarget
+            let scalarTupleByTarget = Dictionary[ISymbol, List[TupleElementKey]](SymbolEqualityComparer.Default)
+            for (target, source) in scalarTupleEdges {
+                if !scalarTupleByTarget.TryGetValue(target, out var sources) {
+                    sources = List[TupleElementKey]()
+                    scalarTupleByTarget.Add(target, sources)
+                }
+                sources.Add(source)
+            }
+            this.ScalarTupleEdgesByTarget = scalarTupleByTarget
+            let delegateByTarget = Dictionary[ISymbol, List[ISymbol]](SymbolEqualityComparer.Default)
+            for (target, source) in delegateReturnEdges {
+                if !delegateByTarget.TryGetValue(target, out var sources) {
+                    sources = List[ISymbol]()
+                    delegateByTarget.Add(target, sources)
+                }
+                sources.Add(source)
+            }
+            this.DelegateReturnEdgesByTarget = delegateByTarget
         }
 
         prop Tainted HashSet[ISymbol] {
@@ -290,7 +335,15 @@ internal shared class ObliviousNullabilityAnalyzer {
             get;
         }
 
+        prop TupleContractEdgesByTarget Dictionary[TupleElementKey, List[TupleElementKey]] {
+            get;
+        }
+
         prop TupleEdges List[(Target TupleElementKey, Source TupleElementKey)] {
+            get;
+        }
+
+        prop TupleEdgesByTarget Dictionary[TupleElementKey, List[TupleElementKey]] {
             get;
         }
 
@@ -298,11 +351,23 @@ internal shared class ObliviousNullabilityAnalyzer {
             get;
         }
 
+        prop TupleScalarEdgesByTarget Dictionary[TupleElementKey, List[ISymbol]] {
+            get;
+        }
+
         prop ScalarTupleEdges List[(Target ISymbol, Source TupleElementKey)] {
             get;
         }
 
+        prop ScalarTupleEdgesByTarget Dictionary[ISymbol, List[TupleElementKey]] {
+            get;
+        }
+
         prop DelegateReturnEdges List[(Target ISymbol, Source ISymbol)] {
+            get;
+        }
+
+        prop DelegateReturnEdgesByTarget Dictionary[ISymbol, List[ISymbol]] {
             get;
         }
 
@@ -514,6 +579,11 @@ internal shared class ObliviousNullabilityAnalyzer {
     private let NullElementTargets ConditionalWeakTable[Compilation, HashSet[string]] = ConditionalWeakTable[
         Compilation,
         HashSet[string]
+    ]()
+
+    private let EfEntities ConditionalWeakTable[Compilation, HashSet[INamedTypeSymbol]] = ConditionalWeakTable[
+        Compilation,
+        HashSet[INamedTypeSymbol]
     ]()
 
     /// Whether [`symbol`](paramref) (a declaration symbol: field / property
@@ -1358,10 +1428,15 @@ internal shared class ObliviousNullabilityAnalyzer {
         )
     }
 
-    func CollectEfEntityTypes(compilation Compilation) HashSet[INamedTypeSymbol] {
+    func CollectEfEntityTypes(compilation Compilation) HashSet[INamedTypeSymbol] -> EfEntities.GetValue(
+        compilation,
+        ComputeEfEntityTypes
+    )
+
+    private func ComputeEfEntityTypes(compilation Compilation) HashSet[INamedTypeSymbol] {
         let entities = HashSet[INamedTypeSymbol](SymbolEqualityComparer.Default)
         for tree in compilation.SyntaxTrees {
-            let model = compilation.GetSemanticModel(tree)
+            let model = TranslationContext.GetSemanticModel(compilation, tree)
             for property in tree.GetRoot().DescendantNodes().OfType[PropertyDeclarationSyntax]() {
                 let dbSet INamedTypeSymbol? = model.GetDeclaredSymbol(property)?.Type as INamedTypeSymbol
                 if dbSet?.Name != "DbSet" ||
@@ -1796,7 +1871,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         symbol ISymbol?,
         siblingCompilations IReadOnlyList[CSharpCompilation]?,
         scalarVisited HashSet[ScalarQuery],
-        tupleVisited HashSet[TupleElementQuery]
+        tupleVisited HashSet[TupleElementQuery],
+        checkSiblings bool = true
     ) bool {
         let query = ScalarQuery(compilation, Canonical(symbol))
         if !scalarVisited.Add(query) {
@@ -1841,32 +1917,35 @@ internal shared class ObliviousNullabilityAnalyzer {
             if result.Tainted.Contains(query.Symbol!!) {
                 return true
             }
-            for (target, source) in result.ScalarTupleEdges {
-                if SymbolEqualityComparer.Default.Equals(target, query.Symbol) &&
-                    IsTupleElementTaintedCore(
-                    compilation,
-                    source.ContractSymbol,
-                    source.ContractPath,
-                    siblingCompilations,
-                    scalarVisited,
-                    tupleVisited
-                ) {
-                    return true
+            if result.ScalarTupleEdgesByTarget.TryGetValue(query.Symbol!!, out var scalarTupleSources) {
+                for source in scalarTupleSources {
+                    if IsTupleElementTaintedCore(
+                        compilation,
+                        source.ContractSymbol,
+                        source.ContractPath,
+                        siblingCompilations,
+                        scalarVisited,
+                        tupleVisited
+                    ) {
+                        return true
+                    }
                 }
             }
-            for (target, source) in result.DelegateReturnEdges {
-                if SymbolEqualityComparer.Default.Equals(target, query.Symbol) &&
-                    IsTaintedCore(compilation, source, siblingCompilations, scalarVisited, tupleVisited) {
-                    return true
+            if result.DelegateReturnEdgesByTarget.TryGetValue(query.Symbol!!, out var delegateSources) {
+                for source in delegateSources {
+                    if IsTaintedCore(compilation, source, siblingCompilations, scalarVisited, tupleVisited) {
+                        return true
+                    }
                 }
             }
         }
-        if siblingCompilations != nil {
+        if checkSiblings && siblingCompilations != nil {
             for sibling in siblingCompilations {
                 if sibling == nil || object.ReferenceEquals(sibling, compilation) ||
                     sibling
                     .Options
-                    .NullableContextOptions != NullableContextOptions.Disable {
+                    .NullableContextOptions != NullableContextOptions.Disable ||
+                    !CanRemapToCompilation(sibling, query.Symbol) {
                     continue
                 }
                 // Remap identical linked-source declarations first, then fall
@@ -1874,7 +1953,14 @@ internal shared class ObliviousNullabilityAnalyzer {
                 // compilation's own cached graph.
                 let remapped ISymbol? = RemapToCompilation(sibling, query.Symbol)
                 if remapped != nil &&
-                    IsTaintedCore(sibling, Canonical(remapped), siblingCompilations, scalarVisited, tupleVisited) {
+                    IsTaintedCore(
+                    sibling,
+                    Canonical(remapped),
+                    siblingCompilations,
+                    scalarVisited,
+                    tupleVisited,
+                    checkSiblings: false
+                ) {
                     return true
                 }
             }
@@ -1888,7 +1974,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         path string,
         siblingCompilations IReadOnlyList[CSharpCompilation]?,
         scalarVisited HashSet[ScalarQuery],
-        tupleVisited HashSet[TupleElementQuery]
+        tupleVisited HashSet[TupleElementQuery],
+        checkSiblings bool = true
     ) bool {
         var symbol = symbol
         symbol = OwningMember(symbol)
@@ -1919,28 +2006,31 @@ internal shared class ObliviousNullabilityAnalyzer {
         if result.TupleTainted.Contains(key) {
             return true
         }
-        for (target, source) in result.TupleScalarEdges {
-            if TupleElementKeyComparer.Instance.Equals(target, key) &&
-                IsTaintedCore(compilation, source, siblingCompilations, scalarVisited, tupleVisited) {
-                return true
+        if result.TupleScalarEdgesByTarget.TryGetValue(key, out var tupleScalarSources) {
+            for source in tupleScalarSources {
+                if IsTaintedCore(compilation, source, siblingCompilations, scalarVisited, tupleVisited) {
+                    return true
+                }
             }
         }
-        for (target, source) in result.TupleEdges {
-            if TupleElementKeyComparer.Instance.Equals(target, key) &&
-                IsTupleElementTaintedCore(
-                compilation,
-                source.ContractSymbol,
-                source.ContractPath,
-                siblingCompilations,
-                scalarVisited,
-                tupleVisited
-            ) {
-                return true
+        if result.TupleEdgesByTarget.TryGetValue(key, out var tupleSources) {
+            for source in tupleSources {
+                if IsTupleElementTaintedCore(
+                    compilation,
+                    source.ContractSymbol,
+                    source.ContractPath,
+                    siblingCompilations,
+                    scalarVisited,
+                    tupleVisited
+                ) {
+                    return true
+                }
             }
         }
-        if siblingCompilations != nil {
+        if checkSiblings && siblingCompilations != nil {
             for sibling in siblingCompilations {
-                if sibling == nil || object.ReferenceEquals(sibling, compilation) {
+                if sibling == nil || object.ReferenceEquals(sibling, compilation) ||
+                    !CanRemapToCompilation(sibling, symbol) {
                     continue
                 }
                 let remapped ISymbol? = RemapToCompilation(sibling, symbol)
@@ -1951,7 +2041,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                     path,
                     siblingCompilations,
                     scalarVisited,
-                    tupleVisited
+                    tupleVisited,
+                    checkSiblings: false
                 ) {
                     return true
                 }
@@ -1983,7 +2074,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         symbol ISymbol?,
         path string,
         siblingCompilations IReadOnlyList[CSharpCompilation]?,
-        visited HashSet[TupleElementQuery]
+        visited HashSet[TupleElementQuery],
+        checkSiblings bool = true
     ) bool {
         var symbol = symbol
         symbol = OwningMember(symbol)
@@ -1998,30 +2090,76 @@ internal shared class ObliviousNullabilityAnalyzer {
         if result.FixedTupleContracts.Contains(key) {
             return true
         }
-        for (target, source) in result.TupleContractEdges {
-            if TupleContractKeyComparer.Instance.Equals(target, key) &&
-                IsTupleContractFixedCore(
-                compilation,
-                source.ContractSymbol,
-                source.ContractPath,
-                siblingCompilations,
-                visited
-            ) {
-                return true
+        if result.TupleContractEdgesByTarget.TryGetValue(key, out var contractSources) {
+            for source in contractSources {
+                if IsTupleContractFixedCore(
+                    compilation,
+                    source.ContractSymbol,
+                    source.ContractPath,
+                    siblingCompilations,
+                    visited
+                ) {
+                    return true
+                }
             }
         }
-        if siblingCompilations != nil {
+        if checkSiblings && siblingCompilations != nil {
             for sibling in siblingCompilations {
-                if sibling == nil || object.ReferenceEquals(sibling, compilation) {
+                if sibling == nil || object.ReferenceEquals(sibling, compilation) ||
+                    !CanRemapToCompilation(sibling, symbol) {
                     continue
                 }
                 let remapped ISymbol? = RemapToCompilation(sibling, symbol)
-                if remapped != nil && IsTupleContractFixedCore(sibling, remapped, path, siblingCompilations, visited) {
+                if remapped != nil &&
+                    IsTupleContractFixedCore(
+                    sibling,
+                    remapped,
+                    path,
+                    siblingCompilations,
+                    visited,
+                    checkSiblings: false
+                ) {
                     return true
                 }
             }
         }
         return false
+    }
+
+    private func CanRemapToCompilation(targetCompilation Compilation, symbol ISymbol?) bool {
+        if symbol == nil {
+            return false
+        }
+        let targetPaths = SourcePaths.GetValue(targetCompilation, ComputeSourcePaths)
+        for declaration in symbol.OriginalDefinition.DeclaringSyntaxReferences {
+            let path = declaration.SyntaxTree.FilePath
+            if !string.IsNullOrEmpty(path) && targetPaths.Contains(path) {
+                return true
+            }
+        }
+        if symbol is ILocalSymbol ||
+            symbol is IMethodSymbol{MethodKind: MethodKind.LocalFunction or MethodKind.AnonymousFunction} ||
+            (
+            symbol is IParameterSymbol parameter &&
+                parameter.ContainingSymbol is IMethodSymbol{
+                MethodKind: MethodKind.LocalFunction or MethodKind.AnonymousFunction
+            }
+        ) {
+            return false
+        }
+        let assembly = (symbol as ITypeSymbol)
+            ?.OriginalDefinition
+            .ContainingAssembly ??
+            symbol
+            .OriginalDefinition
+            .ContainingAssembly
+        if assembly == nil {
+            return true
+        }
+        return SourceAssemblies
+            .GetValue(targetCompilation, (c Compilation) -> SourceAssemblySet(c))
+            .ReferencedNames
+            .Contains(assembly.Identity.GetDisplayName())
     }
 
     /// Finds the symbol in [`targetCompilation`](paramref)'s own symbol
@@ -2154,7 +2292,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                 if node.Span != declaration.Span || node.RawKind != sourceNode.RawKind {
                     continue
                 }
-                let remapped ISymbol? = targetCompilation!!.GetSemanticModel(targetTree).GetDeclaredSymbol(node)
+                let remapped ISymbol? = TranslationContext.GetSemanticModel(targetCompilation!!, targetTree)
+                    .GetDeclaredSymbol(node)
                 if remapped != nil {
                     return remapped
                 }
@@ -2246,7 +2385,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 let Model = func () SemanticModel {
                     return (
                         if model == nil {
-                            (model = compilation.GetSemanticModel(tree))
+                            (model = TranslationContext.GetSemanticModel(compilation, tree))
                         } else {
                             model
                         }
@@ -2530,7 +2669,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                     continue
                 }
                 if indexers && node is ElementAccessExpressionSyntax element {
-                    model = model ?? owner.GetSemanticModel(element.SyntaxTree)
+                    model = model ?? TranslationContext.GetSemanticModel(owner, element.SyntaxTree)
                     CollectNullArgumentRead(element, model, run, candidates, reads)
                     continue
                 }
@@ -2540,7 +2679,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                     name.Parent is NameEqualsSyntax {
                     continue
                 }
-                model = model ?? owner.GetSemanticModel(name.SyntaxTree)
+                model = model ?? TranslationContext.GetSemanticModel(owner, name.SyntaxTree)
                 CollectNullArgumentRead(name, model, run, candidates, reads)
             }
         }
@@ -2627,7 +2766,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         if !isDeconstruction {
             return methods
         }
-        let current = model ?? owner.GetSemanticModel(node.SyntaxTree)
+        let current = model ?? TranslationContext.GetSemanticModel(owner, node.SyntaxTree)
         model = current
         switch node {
             case assignment is AssignmentExpressionSyntax {
@@ -3831,7 +3970,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         let seeds = HashSet[string](StringComparer.Ordinal)
         let symbols = Dictionary[string, ISymbol](StringComparer.Ordinal)
         for tree in compilation.SyntaxTrees {
-            let model = compilation.GetSemanticModel(tree)
+            let model = TranslationContext.GetSemanticModel(compilation, tree)
             for node in tree.GetRoot().DescendantNodes() {
                 let list = CallArgumentList(node)
                 if list == nil || !list.Arguments.Any(
@@ -3898,7 +4037,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
         }
         for tree in owner.SyntaxTrees {
-            let model = owner.GetSemanticModel(tree)
+            let model = TranslationContext.GetSemanticModel(owner, tree)
             for node in tree.GetRoot().DescendantNodes() {
                 if node is AssignmentExpressionSyntax assignment && assignment.IsKind(
                     SyntaxKind.SimpleAssignmentExpression
@@ -4053,7 +4192,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 let Model = func () SemanticModel {
                     return (
                         if model == nil {
-                            (model = compilation.GetSemanticModel(tree))
+                            (model = TranslationContext.GetSemanticModel(compilation, tree))
                         } else {
                             model
                         }
@@ -4638,7 +4777,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         let paramsElementEdges = List[(Target string, Source ISymbol)]()
         let constructedTypes = HashSet[INamedTypeSymbol](SymbolEqualityComparer.Default)
         for tree in compilation.SyntaxTrees {
-            let model = compilation.GetSemanticModel(tree)
+            let model = TranslationContext.GetSemanticModel(compilation, tree)
             let root = tree.GetRoot()
             for node in root.DescendantNodes() {
                 if node is GenericNameSyntax generic && model.GetTypeInfo(generic)
@@ -4756,13 +4895,13 @@ internal shared class ObliviousNullabilityAnalyzer {
                 }
             }
             for (target, source) in scalarTupleEdges {
-                if !tainted.Contains(target) && CanPromote(source) && tupleTainted.Contains(source) {
+                if !tainted.Contains(target) && tupleTainted.Contains(source) && CanPromote(source) {
                     tainted.Add(target)
                     changed = true
                 }
             }
             for (target, source) in tupleEdges {
-                if !tupleTainted.Contains(target) && CanPromote(source) && tupleTainted.Contains(source) {
+                if !tupleTainted.Contains(target) && tupleTainted.Contains(source) && CanPromote(source) {
                     tupleTainted.Add(target)
                     changed = true
                 }
@@ -4799,7 +4938,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
         }
         for tree in compilation.SyntaxTrees {
-            let model = compilation.GetSemanticModel(tree)
+            let model = TranslationContext.GetSemanticModel(compilation, tree)
             for assignment in tree.GetRoot().DescendantNodes().OfType[AssignmentExpressionSyntax]() {
                 if !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) {
                     continue
@@ -4817,7 +4956,7 @@ internal shared class ObliviousNullabilityAnalyzer {
     private func BuildRefArraySources(compilation Compilation) RefArraySourceIndex {
         let slots = Dictionary[ISymbol, Dictionary[int32, RefArraySourceSlot]](SymbolEqualityComparer.Default)
         for tree in compilation.SyntaxTrees {
-            let model = compilation.GetSemanticModel(tree)
+            let model = TranslationContext.GetSemanticModel(compilation, tree)
             for reference in tree.GetRoot().DescendantNodes().OfType[RefExpressionSyntax]() {
                 let target = RefStorageDestination(reference, model)
                 if target == nil {
@@ -4850,7 +4989,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
         }
         for tree in compilation.SyntaxTrees {
-            let model = compilation.GetSemanticModel(tree)
+            let model = TranslationContext.GetSemanticModel(compilation, tree)
             for assignment in tree.GetRoot().DescendantNodes().OfType[AssignmentExpressionSyntax]() {
                 let (owner, depth) = RefArrayStorage(assignment.Left, model)
                 if assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) && owner != nil && slots.TryGetValue(
@@ -5067,7 +5206,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         for reference in local.DeclaringSyntaxReferences {
             let declaration = reference.GetSyntax()
-            let declarationModel = model.Compilation.GetSemanticModel(declaration.SyntaxTree)
+            let declarationModel = TranslationContext.GetSemanticModel(model.Compilation, declaration.SyntaxTree)
             if declaration is SingleVariableDesignationSyntax designation &&
                 GetDeconstructionAliasValue(designation) is {} value &&
                 declarationModel
@@ -7625,7 +7764,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         if symbol is ILocalSymbol{RefKind: not RefKind.None} refLocal && visited.Add(refLocal) {
             for reference in refLocal.DeclaringSyntaxReferences {
                 if reference.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} initializer}} {
-                    let declarationModel = model.Compilation.GetSemanticModel(reference.SyntaxTree)
+                    let declarationModel = TranslationContext.GetSemanticModel(model.Compilation, reference.SyntaxTree)
                     for target in EnumerateTupleContainerSources(
                         initializer,
                         declarationModel,
@@ -7642,7 +7781,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             .DeclaringSyntaxReferences
             .FirstOrDefault()
             ?.GetSyntax() is ForEachStatementSyntax forEach {
-            let forEachModel = model.Compilation.GetSemanticModel(forEach.SyntaxTree)
+            let forEachModel = TranslationContext.GetSemanticModel(model.Compilation, forEach.SyntaxTree)
             if forEachModel.GetForEachStatementInfo(forEach)
                 .ElementType is INamedTypeSymbol{IsTupleType: true} elementTuple &&
                 TryResolveTupleContainerSource(
@@ -7689,23 +7828,44 @@ internal shared class ObliviousNullabilityAnalyzer {
         unwrapSuppressions bool = false
     ) bool {
         if model != nil {
-            var current = UnwrapTupleValue(expression, model)
-            if unwrapSuppressions && current != nil {
-                current = Unwrap(current, unwrapSuppressions: true)
+            var syntacticCurrent = UnwrapTupleValue(expression)
+            if unwrapSuppressions && syntacticCurrent != nil {
+                syntacticCurrent = Unwrap(syntacticCurrent, unwrapSuppressions: true)
             }
-            if current is MemberAccessExpressionSyntax or InvocationExpressionSyntax {
-                for candidate in EnumerateTupleContainerSources(
-                    current,
-                    model,
-                    unwrapSuppressions,
-                    HashSet[ISymbol](SymbolEqualityComparer.Default)
-                ) {
-                    if candidate
-                        .Prefix
-                        .Length > 0 &&
-                        TuplePositionType(candidate.Symbol, candidate.Prefix, requireTuple: true) != nil {
-                        source = TupleElementKey(candidate.Symbol, candidate.Prefix)
-                        return true
+            let syntacticEligible = switch syntacticCurrent {
+                case member is MemberAccessExpressionSyntax: switch model.GetSymbolInfo(member).Symbol {
+                    case field is IFieldSymbol: field.ContainingType.IsTupleType
+                    case property is IPropertySymbol: property.Name == "Value" &&
+                        property
+                        .ContainingType
+                        .OriginalDefinition
+                        .SpecialType == SpecialType.System_Nullable_T
+                    default: false
+                }
+                case invocation is InvocationExpressionSyntax: model.GetSymbolInfo(invocation)
+                    .Symbol is IMethodSymbol method &&
+                    IsRefStorageSymbol(method)
+                default: false
+            }
+            if syntacticEligible {
+                var current = UnwrapTupleValue(expression, model)
+                if unwrapSuppressions && current != nil {
+                    current = Unwrap(current, unwrapSuppressions: true)
+                }
+                if current is MemberAccessExpressionSyntax or InvocationExpressionSyntax {
+                    for candidate in EnumerateTupleContainerSources(
+                        current,
+                        model,
+                        unwrapSuppressions,
+                        HashSet[ISymbol](SymbolEqualityComparer.Default)
+                    ) {
+                        if candidate
+                            .Prefix
+                            .Length > 0 &&
+                            TuplePositionType(candidate.Symbol, candidate.Prefix, requireTuple: true) != nil {
+                            source = TupleElementKey(candidate.Symbol, candidate.Prefix)
+                            return true
+                        }
                     }
                 }
             }
@@ -7819,7 +7979,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             if !compilation.ContainsSyntaxTree(syntax.SyntaxTree) {
                 continue
             }
-            let declarationModel = compilation.GetSemanticModel(syntax.SyntaxTree)
+            let declarationModel = TranslationContext.GetSemanticModel(compilation, syntax.SyntaxTree)
             let arrow ExpressionSyntax? = switch syntax {
                 case methodDecl is MethodDeclarationSyntax: methodDecl.ExpressionBody?.Expression
                 case localFunc is LocalFunctionStatementSyntax: localFunc.ExpressionBody?.Expression
@@ -8435,8 +8595,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                 for reference in partial.DeclaringSyntaxReferences {
                     if reference.GetSyntax() is AnonymousFunctionExpressionSyntax lambda &&
                         compilation!!.ContainsSyntaxTree(lambda.SyntaxTree) &&
-                        compilation!!
-                        .GetSemanticModel(lambda.SyntaxTree)
+                        TranslationContext
+                        .GetSemanticModel(compilation!!, lambda.SyntaxTree)
                         .GetTypeInfo(lambda)
                         .ConvertedType is INamedTypeSymbol{DelegateInvokeMethod: {} invoke} {
                         yield invoke
@@ -9884,7 +10044,7 @@ internal shared class ObliviousNullabilityAnalyzer {
     private func FindPositionalRecordParameter(compilation Compilation, property IPropertySymbol) IParameterSymbol? {
         for reference in property.DeclaringSyntaxReferences {
             if reference.GetSyntax() is ParameterSyntax parameterSyntax {
-                let model = compilation.GetSemanticModel(parameterSyntax.SyntaxTree)
+                let model = TranslationContext.GetSemanticModel(compilation, parameterSyntax.SyntaxTree)
                 if model.GetDeclaredSymbol(parameterSyntax) is IParameterSymbol parameterSymbol {
                     return parameterSymbol
                 }
@@ -10229,7 +10389,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                         CollectScalarValueFlow(
                             target,
                             written,
-                            model.Compilation.GetSemanticModel(written.SyntaxTree),
+                            TranslationContext.GetSemanticModel(model.Compilation, written.SyntaxTree),
                             tainted,
                             edges,
                             scalarTupleEdges,

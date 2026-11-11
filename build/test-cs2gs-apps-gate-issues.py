@@ -211,6 +211,102 @@ def main():
         # Unreadable jobs: nothing is excused, both missing legs are red crashes.
         assert outcome("{not json") == (1, {"gsharp-csharp": "green", "oahu": "red", "code-exploder": "red"})
         assert outcome([]) == (1, {"gsharp-csharp": "green", "oahu": "red", "code-exploder": "red"})
+
+    # Issue #5931 (run 42824310001): a job cancelled at its timeout limit is a
+    # RED timeout failure that files a P0 issue on main for a banked app, never
+    # an excused incomplete cancellation. A short manual cancellation (run
+    # 38908586181) stays incomplete.
+    with tempfile.TemporaryDirectory() as d:
+        Path(d, "b.json").write_text('{"banked": ["gsharp-csharp", "oahu", "code-exploder"]}')
+        legs = ["--leg-job", "oahu=app (oahu)", "--leg-job", "code-exploder=app (code-exploder)",
+                "--leg-job", "gsharp-csharp=gsharp-csharp (aggregate)"]
+        base = ["--results", str(Path(d, "r")), "--banked", str(Path(d, "b.json")), "--ref", "main", "--dry-run",
+                "--expect", "gsharp-csharp,oahu,code-exploder", "--jobs", str(Path(d, "jobs.json"))] + legs
+        Path(d, "r").mkdir()
+        Path(d, "r", "result-oahu.json").write_text(json.dumps({"app": "oahu", "status": "green"}))
+        Path(d, "r", "result-code-exploder.json").write_text(json.dumps({"app": "code-exploder", "status": "green"}))
+        Path(d, "r", "result-gsharp-csharp.json").write_text(json.dumps({
+            "app": "gsharp-csharp",
+            "status": "incomplete",
+            "summary": "leg exited 1; the translate job finished 'cancelled'; the validate shards finished 'skipped'; no migrated tree to validate",
+        }))
+        run_42824310001_jobs = [
+            {"name": "gsharp-csharp (translate)", "conclusion": "cancelled",
+             "started_at": "2026-11-10T13:25:04Z", "completed_at": "2026-11-10T17:25:28Z"},
+            {"name": "app (code-exploder)", "conclusion": "success",
+             "started_at": "2026-11-10T13:25:05Z", "completed_at": "2026-11-10T13:41:43Z"},
+            {"name": "app (oahu)", "conclusion": "success",
+             "started_at": "2026-11-10T13:25:05Z", "completed_at": "2026-11-10T13:44:20Z"},
+            {"name": "gsharp-csharp (validate ${{ matrix.name }})", "conclusion": "skipped",
+             "started_at": "2026-11-10T17:25:28Z", "completed_at": "2026-11-10T17:25:28Z"},
+            {"name": "gsharp-csharp (aggregate)", "conclusion": "success",
+             "started_at": "2026-11-10T17:25:31Z", "completed_at": "2026-11-10T17:25:45Z"},
+        ]
+        Path(d, "jobs.json").write_text(json.dumps({"jobs": run_42824310001_jobs}))
+        fake_gh = FakeGh([])
+        real_gh = gate.Gh
+        gate.Gh = lambda _dry_run: fake_gh
+        try:
+            summary = Path(d, "summary.md")
+            assert gate.main(base + ["--summary", str(summary)]) == 1
+        finally:
+            gate.Gh = real_gh
+        assert len(fake_gh.writes) == 1, fake_gh.writes
+        assert fake_gh.writes[0][:4] == ["issue", "create", "--title", "cs2gs apps nightly: gsharp-csharp is red"], fake_gh.writes
+        assert "P0" in fake_gh.writes[0], fake_gh.writes
+        assert "timed out after 240m" in fake_gh.writes[0][-1], fake_gh.writes[0][-1]
+        assert "| gsharp-csharp | red |" in summary.read_text() and "| incomplete |" not in summary.read_text(), summary.read_text()
+
+        # Validate shard timeout and missing-result app leg timeout also report red and file P0.
+        Path(d, "r", "result-oahu.json").unlink()
+        Path(d, "r", "result-gsharp-csharp.json").write_text(json.dumps({
+            "app": "gsharp-csharp",
+            "status": "incomplete",
+            "summary": "leg exited 1; the validate shards finished 'cancelled'",
+        }))
+        shard_and_app_timeout = [
+            {"name": "gsharp-csharp (translate)", "conclusion": "success",
+             "started_at": "2026-11-10T13:25:04Z", "completed_at": "2026-11-10T14:15:00Z"},
+            {"name": "gsharp-csharp (validate 2)", "conclusion": "cancelled",
+             "started_at": "2026-11-10T14:15:10Z", "completed_at": "2026-11-10T18:15:20Z"},
+            {"name": "gsharp-csharp (aggregate)", "conclusion": "success",
+             "started_at": "2026-11-10T18:15:25Z", "completed_at": "2026-11-10T18:15:40Z"},
+            {"name": "app (oahu)", "conclusion": "cancelled",
+             "started_at": "2026-11-10T13:25:05Z", "completed_at": "2026-11-10T16:25:10Z"},
+            {"name": "app (code-exploder)", "conclusion": "success",
+             "started_at": "2026-11-10T13:25:05Z", "completed_at": "2026-11-10T13:41:43Z"},
+        ]
+        Path(d, "jobs.json").write_text(json.dumps({"jobs": shard_and_app_timeout}))
+        fake_gh = FakeGh([])
+        gate.Gh = lambda _dry_run: fake_gh
+        try:
+            assert gate.main(base) == 1
+        finally:
+            gate.Gh = real_gh
+        titles = [w[3] for w in fake_gh.writes if w[:2] == ["issue", "create"]]
+        assert sorted(titles) == ["cs2gs apps nightly: gsharp-csharp is red", "cs2gs apps nightly: oahu is red"], fake_gh.writes
+
+        # Genuine short user cancellation (run 38908586181, ~28m < 180m/240m) stays incomplete and files nothing.
+        Path(d, "r", "result-code-exploder.json").unlink()
+        Path(d, "r", "result-gsharp-csharp.json").unlink()
+        run_38908586181_jobs = [
+            {"name": "app (code-exploder)", "conclusion": "cancelled",
+             "started_at": "2026-10-16T13:32:11Z", "completed_at": "2026-10-16T14:00:02Z"},
+            {"name": "app (oahu)", "conclusion": "cancelled",
+             "started_at": "2026-10-16T13:32:11Z", "completed_at": "2026-10-16T14:00:03Z"},
+            {"name": "gsharp-csharp (translate)", "conclusion": "cancelled",
+             "started_at": "2026-10-16T13:32:12Z", "completed_at": "2026-10-16T14:00:02Z"},
+            {"name": "gsharp-csharp (aggregate)", "conclusion": "cancelled",
+             "started_at": "2026-10-16T14:00:02Z", "completed_at": "2026-10-16T14:00:03Z"},
+        ]
+        Path(d, "jobs.json").write_text(json.dumps({"jobs": run_38908586181_jobs}))
+        fake_gh = FakeGh([])
+        gate.Gh = lambda _dry_run: fake_gh
+        try:
+            assert gate.main(base) == 1
+        finally:
+            gate.Gh = real_gh
+        assert fake_gh.writes == [], fake_gh.writes
     # process() itself never files an incomplete result.
     g = FakeGh([])
     gate.process([{"app": "oahu", "status": "incomplete", "summary": "cancelled"}], {"oahu"}, "main", g)

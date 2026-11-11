@@ -38,15 +38,19 @@ run.json behind. Two subcommands turn that into what the gate job reads:
               cs2gs-apps-leg.py result --app APP --exit-code N --stats FILE
                                        --out FILE [--log FILE] [--note TEXT]
                                        [--run-url URL] [--incomplete]
+                                       [--timed-out]
 
           --incomplete (a job the leg depends on was cancelled) makes the
           status "incomplete": the run is not green, but no migration failure
-          is claimed, so the gate files no issue for it.
+          is claimed, so the gate files no issue for it. --timed-out (or exit
+          code 124 from `timeout`) overrides --incomplete and reports the leg
+          red with a stable timeout fingerprint.
 """
 
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import json
 import sys
 from pathlib import Path
@@ -177,10 +181,78 @@ def load_stats(path: Path) -> tuple[dict | None, str]:
     return stats, ""
 
 
+def timeout_fingerprint(note: str) -> str:
+    lower = note.lower()
+    if "translate" in lower:
+        return "translate-timeout"
+    if "validate" in lower:
+        return "validate-timeout"
+    return "leg-timeout"
+
+
+def timeout_minutes_for_job(name: str) -> int:
+    if name == "gsharp-csharp (translate)" or name.startswith("gsharp-csharp (validate") or name == "app (gsharp-csharp)":
+        return 240
+    if name == "gsharp-csharp (aggregate)":
+        return 30
+    return 180
+
+
+def job_timed_out_note(app: str, jobs_path: Path | None) -> str:
+    if jobs_path is None:
+        return ""
+    try:
+        jobs = json.loads(jobs_path.read_text(encoding="utf-8")).get("jobs", [])
+    except (OSError, ValueError, AttributeError, TypeError):
+        return ""
+    for job in jobs:
+        if not isinstance(job, dict) or not isinstance(job.get("name"), str):
+            continue
+        name = job["name"]
+        if name != f"app ({app})" and not name.startswith(f"{app} ("):
+            continue
+        limit_minutes = timeout_minutes_for_job(name)
+        conclusion = job.get("conclusion") or job.get("status")
+        if conclusion == "timed_out" or (
+            isinstance(job.get("steps"), list)
+            and any(isinstance(s, dict) and s.get("conclusion") == "timed_out" for s in job["steps"])
+        ):
+            minutes = limit_minutes
+        elif conclusion == "cancelled":
+            started_at, completed_at = job.get("started_at"), job.get("completed_at")
+            if not (isinstance(started_at, str) and isinstance(completed_at, str) and started_at and completed_at):
+                continue
+            try:
+                started = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+                completed = datetime.fromisoformat(completed_at.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            elapsed = (completed - started).total_seconds()
+            if elapsed < max(1, limit_minutes - 5) * 60:
+                continue
+            minutes = max(limit_minutes, int(round(elapsed / 60)))
+        else:
+            continue
+        lower = name.lower()
+        if "translate" in lower:
+            return f"the translate job ({name}) timed out after {minutes}m"
+        if "validate" in lower:
+            return f"the validate job ({name}) timed out after {minutes}m"
+        return f"the leg job ({name}) timed out after {minutes}m"
+    return ""
+
+
 def leg_result(app: str, code: int, stats_path: Path, log: str, note: str, run_url: str,
-               incomplete: bool = False) -> dict:
+               incomplete: bool = False, timed_out: bool = False, jobs_path: Path | None = None) -> dict:
     stats, problem = load_stats(stats_path)
+    jobs_timeout = job_timed_out_note(app, jobs_path)
+    if code == 124 or jobs_timeout:
+        timed_out = True
     notes = [note] if note else []
+    if jobs_timeout and jobs_timeout not in notes:
+        notes.insert(0, jobs_timeout)
+    elif timed_out and "timed out" not in note.lower():
+        notes.insert(0, "the leg timed out")
     if problem:
         notes.append(problem)
     else:
@@ -190,8 +262,8 @@ def leg_result(app: str, code: int, stats_path: Path, log: str, note: str, run_u
             notes.append("the run itself failed (a repository-wide orphan or mirror check; see the log)")
         if stats.get("baseline") == "failed":
             notes.append("the baseline gate failed (see the GATE: lines in the log)")
-    status = "green" if code == 0 and not notes else "red"
-    if incomplete:
+    status = "green" if code == 0 and not notes and not timed_out else "red"
+    if incomplete and not timed_out:
         # A job this leg depends on was cancelled: whatever the stats say, the
         # run did not finish, so it is neither a pass nor a migration failure.
         # The gate reports it red-for-the-run and files no issue for it.
@@ -200,15 +272,18 @@ def leg_result(app: str, code: int, stats_path: Path, log: str, note: str, run_u
     if stats and not problem:
         headline += f"; {stats['green']}/{stats['total']} apps green (floor {stats.get('floor', stats['total'])})"
     summary = "; ".join([headline, *notes])
-    return {"app": app, "gate": GATE, "status": status, "summary": summary, "stats": stats,
-            "log_tail": log[-LOG_TAIL_CHARS:], "run_url": run_url}
+    result = {"app": app, "gate": GATE, "status": status, "summary": summary, "stats": stats,
+              "log_tail": log[-LOG_TAIL_CHARS:], "run_url": run_url}
+    if timed_out:
+        result["fingerprint"] = timeout_fingerprint(jobs_timeout or summary)
+    return result
 
 
 def cmd_result(a: argparse.Namespace) -> int:
     log = ""
     if a.log and a.log.is_file():
         log = a.log.read_text(encoding="utf-8", errors="replace")
-    result = leg_result(a.app, a.exit_code, a.stats, log, a.note, a.run_url, a.incomplete)
+    result = leg_result(a.app, a.exit_code, a.stats, log, a.note, a.run_url, a.incomplete, a.timed_out, a.jobs)
     a.out.parent.mkdir(parents=True, exist_ok=True)
     a.out.write_text(json.dumps(result), encoding="utf-8")
     print(f"cs2gs-apps-leg result: {a.app} is {result['status']}: {result['summary']}")
@@ -235,6 +310,10 @@ def main(argv: list[str]) -> int:
     r.add_argument("--run-url", default="(see the workflow run)")
     r.add_argument("--incomplete", action="store_true",
                    help="a job the leg depends on was cancelled: report the leg incomplete, not green or red")
+    r.add_argument("--timed-out", action="store_true",
+                   help="a job or step of the leg timed out: report the leg red, never incomplete")
+    r.add_argument("--jobs", type=Path,
+                   help="the run's jobs from the Actions API; promotes cancelled jobs that reached their timeout")
     a = ap.parse_args(argv)
     return cmd_stats(a) if a.cmd == "stats" else cmd_result(a)
 

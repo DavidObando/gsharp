@@ -37,10 +37,19 @@ partial class CSharpToGSharpTranslator {
         private var repositorySharedDocumentPaths HashSet[string]?
         private var refStorageSlots Dictionary[ISymbol, Dictionary[int32, RefStorageSlot]]?
         private var frozenRefStorageContracts Dictionary[ISymbol, HashSet[int32]]?
-        private let linkedRefStoragePromotions Dictionary[ISymbol, HashSet[int32]] = Dictionary[
+        private var linkedRefStoragePromotions Dictionary[ISymbol, HashSet[int32]] = Dictionary[
             ISymbol,
             HashSet[int32]
         ](SymbolEqualityComparer.Default)
+
+        private class RefStorageCompilationCache {
+            var Slots Dictionary[ISymbol, Dictionary[int32, RefStorageSlot]]? = nil
+            var FrozenContracts Dictionary[ISymbol, HashSet[int32]]? = nil
+            let LinkedPromotions Dictionary[ISymbol, HashSet[int32]] = Dictionary[ISymbol, HashSet[int32]](
+                SymbolEqualityComparer.Default
+            )
+            var ReconciledRepository object? = nil
+        }
 
         private class RefStorageSlot {
             let Symbol ISymbol
@@ -230,7 +239,11 @@ partial class CSharpToGSharpTranslator {
             )
                 .GetOrAdd(
                 source!!,
-                (member ISymbol) -> ScopeUsesAsNullable(owner!!.GetSemanticModel(scope_.SyntaxTree), member, scope_)
+                (member ISymbol) -> ScopeUsesAsNullable(
+                    TranslationContext.GetSemanticModel(owner!!, scope_.SyntaxTree),
+                    member,
+                    scope_
+                )
             )
         }
 
@@ -1044,7 +1057,7 @@ partial class CSharpToGSharpTranslator {
             }
             let delegateMetadataName = GetMetadataTypeName(delegateType.OriginalDefinition)
             for tree in this.context.Compilation.SyntaxTrees {
-                let model = this.context.Compilation.GetSemanticModel(tree)
+                let model = TranslationContext.GetSemanticModel(this.context.Compilation, tree)
                 for declaration in tree.GetRoot().DescendantNodes().OfType[DelegateDeclarationSyntax]() {
                     if model.GetDeclaredSymbol(declaration) is not INamedTypeSymbol declarationSymbol ||
                         GetMetadataTypeName(declarationSymbol) != delegateMetadataName {
@@ -2262,14 +2275,21 @@ partial class CSharpToGSharpTranslator {
             if checkRefStorage && this.TryGetRefStorageSlot(symbol, 0) is {} slot {
                 return this.RefStorageIsNullable(slot, includeArrays: true)
             }
-            if this.RefStorageContractIsFrozen(symbol, 0) || ObliviousNullabilityAnalyzer.IsTupleContractFixed(
+            if this.RefStorageContractIsFrozen(symbol, 0) || !this.ShouldPromoteToNullableReferenceCandidate(
+                symbol,
+                declared
+            ) {
+                return false
+            }
+            return !ObliviousNullabilityAnalyzer.IsTupleContractFixed(
                 this.context.Compilation,
                 symbol,
                 string.Empty,
                 this.context.RepositoryCompilations ?? this.context.SiblingCompilations
-            ) {
-                return false
-            }
+            )
+        }
+
+        private func ShouldPromoteToNullableReferenceCandidate(symbol ISymbol?, declared ITypeSymbol) bool {
             // Issue #4356 follow-up: a field or property declared in ANOTHER
             // project of this migration is seen here through that project's
             // reference assembly (repository mode loads siblings as metadata),
@@ -2600,13 +2620,23 @@ partial class CSharpToGSharpTranslator {
             if this.refStorageSlots != nil {
                 return
             }
+            let compilation = this.context.Compilation
+            let cache = RefStorageCaches.GetOrCreateValue(compilation)
+            if cache.Slots != nil {
+                this.refStorageSlots = cache.Slots
+                this.frozenRefStorageContracts = cache.FrozenContracts
+                this.linkedRefStoragePromotions = cache.LinkedPromotions
+                this.ReconcileLinkedRefStorageContracts(cache)
+                return
+            }
             this.refStorageSlots = Dictionary[ISymbol, Dictionary[int32, RefStorageSlot]](
                 SymbolEqualityComparer.IncludeNullability
             )
             // Constructed slots retain nullable arguments. Declaration constraints use the original symbol.
             this.frozenRefStorageContracts = Dictionary[ISymbol, HashSet[int32]](SymbolEqualityComparer.Default)
-            for tree in this.context.Compilation.SyntaxTrees {
-                let model = this.context.Compilation.GetSemanticModel(tree)
+            this.linkedRefStoragePromotions = cache.LinkedPromotions
+            for tree in compilation.SyntaxTrees {
+                let model = TranslationContext.GetSemanticModel(compilation, tree)
                 using let modelScope = this.context.UseSemanticModelFor(tree)
                 for reference in tree.GetRoot().DescendantNodes().OfType[RefExpressionSyntax]() {
                     if this.RefStorageDestination(reference, model) is {} destination {
@@ -2643,17 +2673,29 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             this.FreezeRefStorageContracts()
-            this.ReconcileLinkedRefStorageContracts()
+            cache.Slots = this.refStorageSlots
+            cache.FrozenContracts = this.frozenRefStorageContracts
+            this.ReconcileLinkedRefStorageContracts(cache)
         }
 
-        private func ReconcileLinkedRefStorageContracts() {
-            if this.context.RepositoryCompilations is not{Count: > 1} repository {
+        private func ReconcileLinkedRefStorageContracts(cache RefStorageCompilationCache) {
+            if this.context.RepositoryCompilations is not{Count: > 1} repository || object.ReferenceEquals(
+                cache.ReconciledRepository,
+                repository
+            ) {
                 return
             }
             this.EnsureRepositorySharedDocumentPaths()
-            if this.repositorySharedDocumentPaths!!.Count == 0 {
+            if this.repositorySharedDocumentPaths!!.Count == 0 ||
+                !this
+                .context
+                .Compilation
+                .SyntaxTrees
+                .Any((candidate SyntaxTree) -> this.repositorySharedDocumentPaths!!.Contains(candidate.FilePath)) {
+                cache.ReconciledRepository = repository
                 return
             }
+            cache.ReconciledRepository = repository
             let visitors = List[DeclarationVisitor](){this}
             for owner in repository {
                 if owner == this.context.Compilation {
@@ -2665,8 +2707,14 @@ partial class CSharpToGSharpTranslator {
                 if tree == nil {
                     continue
                 }
+                let ownerCache = RefStorageCaches.GetOrCreateValue(owner)
+                ownerCache.ReconciledRepository = repository
                 // Foreign visitors compute local constraints without repository recursion.
-                let ownerContext = TranslationContext(owner, owner.GetSemanticModel(tree), tree.FilePath)
+                let ownerContext = TranslationContext(
+                    owner,
+                    TranslationContext.GetSemanticModel(owner, tree),
+                    tree.FilePath
+                )
                 let ownerVisitor = DeclarationVisitor(
                     ownerContext,
                     this.typeMapper,
@@ -2753,10 +2801,8 @@ partial class CSharpToGSharpTranslator {
                                 if node.RawKind != declaration.RawKind || node.ToString() != declaration.ToString() {
                                     continue
                                 }
-                                let symbol = target
-                                    .context
-                                    .Compilation
-                                    .GetSemanticModel(tree)
+                                let symbol = TranslationContext
+                                    .GetSemanticModel(target.context.Compilation, tree)
                                     .GetDeclaredSymbol(node)
                                     ?.OriginalDefinition
                                 if symbol == nil {
@@ -2867,14 +2913,6 @@ partial class CSharpToGSharpTranslator {
             }
             if this.RefStorageContractIsFrozen(slot.Symbol, slot.Depth) ||
                 (
-                slot.Depth == 0 && ObliviousNullabilityAnalyzer.IsTupleContractFixed(
-                    this.context.Compilation,
-                    slot.Symbol,
-                    string.Empty,
-                    this.context.RepositoryCompilations ?? this.context.SiblingCompilations
-                )
-            ) ||
-                (
                 this.RefStoragePositionType(slot.Symbol.OriginalDefinition, slot.Depth)
                     ?.IsReferenceType != true &&
                     !(
@@ -2886,11 +2924,19 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return true
             }
+            if slot.Depth == 0 && type?.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated {
+                return !this.ShouldPromoteToNullableReference(slot.Symbol, checkRefStorage: false)
+            }
+            if slot.Depth == 0 && ObliviousNullabilityAnalyzer.IsTupleContractFixed(
+                this.context.Compilation,
+                slot.Symbol,
+                string.Empty,
+                this.context.RepositoryCompilations ?? this.context.SiblingCompilations
+            ) {
+                return true
+            }
             if type?.NullableAnnotation != Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated {
                 return false
-            }
-            if slot.Depth == 0 {
-                return !this.ShouldPromoteToNullableReference(slot.Symbol, checkRefStorage: false)
             }
             if slot.Symbol is ILocalSymbol local &&
                 local
@@ -2899,10 +2945,8 @@ partial class CSharpToGSharpTranslator {
                 ?.GetSyntax() is VariableDeclaratorSyntax{
                 Parent: VariableDeclarationSyntax{Type: {IsVar: true}}
             } declaration &&
-                !this
-                .context
-                .Compilation
-                .GetSemanticModel(declaration.SyntaxTree)
+                !TranslationContext
+                .GetSemanticModel(this.context.Compilation, declaration.SyntaxTree)
                 .GetNullableContext(declaration.SpanStart)
                 .HasFlag(NullableContext.AnnotationsEnabled) {
                 return false
@@ -3021,24 +3065,34 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func EnsureRepositorySharedDocumentPaths() {
-            if this.repositorySharedDocumentPaths == nil {
-                let counts = Dictionary[string, int32](StringComparer.OrdinalIgnoreCase)
-                for compilation in this.context.RepositoryCompilations ?? Array.Empty[CSharpCompilation]() {
-                    for tree in compilation.SyntaxTrees {
-                        if !string.IsNullOrEmpty(tree.FilePath) {
-                            counts[tree.FilePath] = if counts.TryGetValue(tree.FilePath, out var n) {
-                                n + 1
-                            } else {
-                                1
+            if this.repositorySharedDocumentPaths != nil {
+                return
+            }
+            if this.context.RepositoryCompilations is not{} repository {
+                this.repositorySharedDocumentPaths = HashSet[string](StringComparer.OrdinalIgnoreCase)
+                return
+            }
+            this.repositorySharedDocumentPaths = RepositorySharedDocumentPathsCache.GetValue(
+                repository,
+                (key object) -> {
+                    let counts = Dictionary[string, int32](StringComparer.OrdinalIgnoreCase)
+                    for compilation in cast[IReadOnlyList[CSharpCompilation]](key) {
+                        for tree in compilation.SyntaxTrees {
+                            if !string.IsNullOrEmpty(tree.FilePath) {
+                                counts[tree.FilePath] = if counts.TryGetValue(tree.FilePath, out var n) {
+                                    n + 1
+                                } else {
+                                    1
+                                }
                             }
                         }
                     }
+                    return counts
+                        .Where((kv KeyValuePair[string, int32]) -> kv.Value > 1)
+                        .Select((kv KeyValuePair[string, int32]) -> kv.Key)
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase)
                 }
-                this.repositorySharedDocumentPaths = counts
-                    .Where((kv KeyValuePair[string, int32]) -> kv.Value > 1)
-                    .Select((kv KeyValuePair[string, int32]) -> kv.Key)
-                    .ToHashSet(StringComparer.OrdinalIgnoreCase)
-            }
+            )
         }
 
         // Issue #2521: sink lowering must use the target contract that G# will
@@ -3498,6 +3552,16 @@ partial class CSharpToGSharpTranslator {
                 CSharpCompilation,
                 ConcurrentDictionary[ISymbol, bool]
             ] = ConditionalWeakTable[CSharpCompilation, ConcurrentDictionary[ISymbol, bool]]()
+
+            private let RefStorageCaches ConditionalWeakTable[
+                CSharpCompilation,
+                RefStorageCompilationCache
+            ] = ConditionalWeakTable[CSharpCompilation, RefStorageCompilationCache]()
+
+            private let RepositorySharedDocumentPathsCache ConditionalWeakTable[
+                object,
+                HashSet[string]
+            ] = ConditionalWeakTable[object, HashSet[string]]()
 
             private func EffectiveDefaultParameter(parameter IParameterSymbol) IParameterSymbol -> switch parameter
                 .ContainingSymbol {
