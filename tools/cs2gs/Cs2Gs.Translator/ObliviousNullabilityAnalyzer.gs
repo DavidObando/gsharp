@@ -3848,7 +3848,12 @@ internal shared class ObliviousNullabilityAnalyzer {
     }
 
     private func ComputeSourcePaths(compilation Compilation) HashSet[string] {
-        let paths = HashSet[string](StringComparer.Ordinal)
+        let pathComparer = if OperatingSystem.IsWindows() {
+            StringComparer.OrdinalIgnoreCase
+        } else {
+            StringComparer.Ordinal
+        }
+        let paths = HashSet[string](pathComparer)
         for tree in compilation.SyntaxTrees {
             if !string.IsNullOrEmpty(tree.FilePath) {
                 paths.Add(tree.FilePath)

@@ -362,11 +362,12 @@ def main(argv: list[str]) -> int:
             r["run_url"] = a.run_url
     timed_out = timed_out_legs(a.jobs, a.leg_job)
     for r in results:
-        if r.get("app") in timed_out and r.get("status") == "incomplete":
+        if r.get("app") in timed_out:
             timeout_summary, timeout_fp = timed_out[r["app"]]
             r["status"] = "red"
             existing_summary = r.get("summary", "")
-            r["summary"] = f"{timeout_summary}; {existing_summary}" if existing_summary else timeout_summary
+            if timeout_summary not in existing_summary:
+                r["summary"] = f"{timeout_summary}; {existing_summary}" if existing_summary else timeout_summary
             if not r.get("fingerprint"):
                 r["fingerprint"] = timeout_fp
     incomplete = (set(filter(None, a.incomplete.split(","))) | cancelled_legs(a.jobs, a.leg_job)) - set(timed_out)

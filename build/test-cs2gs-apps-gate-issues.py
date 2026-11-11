@@ -257,8 +257,15 @@ def main():
         assert "timed out after 240m" in fake_gh.writes[0][-1], fake_gh.writes[0][-1]
         assert "| gsharp-csharp | red |" in summary.read_text() and "| incomplete |" not in summary.read_text(), summary.read_text()
 
-        # Validate shard timeout and missing-result app leg timeout also report red and file P0.
+        # Validate shard timeout, missing-result app leg timeout, and an app leg
+        # that timed out after uploading a green result (e.g. during report upload)
+        # all report red and file P0.
         Path(d, "r", "result-oahu.json").unlink()
+        Path(d, "r", "result-code-exploder.json").write_text(json.dumps({
+            "app": "code-exploder",
+            "status": "green",
+            "summary": "leg exited 0; 1/1 apps green (floor 1)",
+        }))
         Path(d, "r", "result-gsharp-csharp.json").write_text(json.dumps({
             "app": "gsharp-csharp",
             "status": "incomplete",
@@ -273,8 +280,8 @@ def main():
              "started_at": "2026-11-10T18:15:25Z", "completed_at": "2026-11-10T18:15:40Z"},
             {"name": "app (oahu)", "conclusion": "cancelled",
              "started_at": "2026-11-10T13:25:05Z", "completed_at": "2026-11-10T16:25:10Z"},
-            {"name": "app (code-exploder)", "conclusion": "success",
-             "started_at": "2026-11-10T13:25:05Z", "completed_at": "2026-11-10T13:41:43Z"},
+            {"name": "app (code-exploder)", "conclusion": "cancelled",
+             "started_at": "2026-11-10T13:25:05Z", "completed_at": "2026-11-10T16:25:30Z"},
         ]
         Path(d, "jobs.json").write_text(json.dumps({"jobs": shard_and_app_timeout}))
         fake_gh = FakeGh([])
@@ -284,7 +291,11 @@ def main():
         finally:
             gate.Gh = real_gh
         titles = [w[3] for w in fake_gh.writes if w[:2] == ["issue", "create"]]
-        assert sorted(titles) == ["cs2gs apps nightly: gsharp-csharp is red", "cs2gs apps nightly: oahu is red"], fake_gh.writes
+        assert sorted(titles) == [
+            "cs2gs apps nightly: code-exploder is red",
+            "cs2gs apps nightly: gsharp-csharp is red",
+            "cs2gs apps nightly: oahu is red",
+        ], fake_gh.writes
 
         # Genuine short user cancellation (run 38908586181, ~28m < 180m/240m) stays incomplete and files nothing.
         Path(d, "r", "result-code-exploder.json").unlink()
