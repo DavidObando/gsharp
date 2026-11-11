@@ -79,7 +79,7 @@ internal class DocumentTranslationState {
         NilableOnlyInEmittedGSharpNodes = Dictionary[Microsoft.CodeAnalysis.SyntaxNode, bool]()
         NilableOnlySlotChainNodes = Dictionary[
             Microsoft.CodeAnalysis.SyntaxNode,
-            List[(Chain IReadOnlyList[ITypeParameterSymbol], CallableReturn bool, Result bool)]
+            List[(Chain IReadOnlyList[ITypeParameterSymbol], PathKey string, Result bool)]
         ]()
         LocalsMentioningNilableOnlyValues = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         ConditionalElementReceivers = Dictionary[ElementBindingExpressionSyntax, GExpression]()
@@ -479,7 +479,7 @@ internal class DocumentTranslationState {
     // only in the emitted G#.
     prop NilableOnlySlotChainNodes Dictionary[
         Microsoft.CodeAnalysis.SyntaxNode,
-        List[(Chain IReadOnlyList[ITypeParameterSymbol], CallableReturn bool, Result bool)]
+        List[(Chain IReadOnlyList[ITypeParameterSymbol], PathKey string, Result bool)]
     ] {
         get;
     }

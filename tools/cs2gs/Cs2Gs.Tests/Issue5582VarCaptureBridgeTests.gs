@@ -476,8 +476,11 @@ namespace Demo
     {
         private static Dictionary<string, int>? cache = new Dictionary<string, int> { ["a"] = 1 };
         static T Id<T>(T x) => x;
+        static T Echo<T>(this T x) => x;
         static T Call<T>(System.Func<T> f) => f();
+        static T Head<T>(System.Func<(T, int)> f) => f().Item1;
         static Box<T> Wrap<T>(T value) => new Box<T>(value);
+        static (Box<T>, int) Pack<T>(T x) => (new Box<T>(x), 0);
         static T Unwrap<T>((T Value, int Tag) p) => p.Value;
         static int LocalResult()
         {
@@ -517,6 +520,7 @@ namespace Demo
         static int IndexerAndDelegate()
         {
             var read = () => Volatile.Read(ref cache!);
+            System.Func<Dictionary<string, int>> alias = read;
             var f1 = true ? read : read;
             var f2 = true ? f1 : f1;
             var pair = (Volatile.Read(ref cache!), 0);
@@ -524,11 +528,19 @@ namespace Demo
                 (Wrap(Volatile.Read(ref cache!))[0] switch { var idxArm => idxArm.Count }) +
                 (Wrap(Volatile.Read(ref cache!)).Items[0] switch { var itemArm => itemArm.Count }) +
                 (Wrap(Volatile.Read(ref cache!)).Items[0] is var itemIs ? itemIs.Count : -1) +
+                (Wrap(Volatile.Read(ref cache!)).Items.Echo()[0] switch { var echoArm => echoArm.Count }) +
+                (Wrap(Volatile.Read(ref cache!)).Items.Echo()[0] is var echoIs ? echoIs.Count : -1) +
+                (Pack(Volatile.Read(ref cache!)).Item1.Value switch { var packArm => packArm.Count }) +
+                (Pack(Volatile.Read(ref cache!)).Item1.Value is var packIs ? packIs.Count : -1) +
+                (Head(() => (Volatile.Read(ref cache!), 0)) switch { var headArm => headArm.Count }) +
+                (Head(() => (Volatile.Read(ref cache!), 0)) is var headIs ? headIs.Count : -1) +
                 (Unwrap(pair) switch { var tupArm => tupArm.Count }) +
                 (Unwrap(pair) is var tupIs ? tupIs.Count : -1) +
                 (read() is var invoked ? invoked.Count : -1) +
+                (alias() is var aliasedInvoked ? aliasedInvoked.Count : -1) +
+                (alias() switch { var aliasedArm => aliasedArm.Count }) +
                 (f2() is var branchedInvoked ? branchedInvoked.Count : -1) +
-                (read() switch { var invokedArm => invokedArm.Count }) - 8;
+                (read() switch { var invokedArm => invokedArm.Count }) - 16;
         }
         static int Nested() => (` + nested + ` switch { var n => n.Count }) + (` + nested + ` is var p ? p.Count : -1) - 1;
         public static string Run() =>
@@ -560,9 +572,17 @@ namespace Demo
         Assert.Contains("case var idxArm: idxArm!!.Count", printed)
         Assert.Contains("case var itemArm: itemArm!!.Count", printed)
         Assert.Contains("is var itemIs { itemIs!!.Count }", printed)
+        Assert.Contains("case var echoArm: echoArm!!.Count", printed)
+        Assert.Contains("is var echoIs { echoIs!!.Count }", printed)
+        Assert.Contains("case var packArm: packArm!!.Count", printed)
+        Assert.Contains("is var packIs { packIs!!.Count }", printed)
+        Assert.Contains("case var headArm: headArm!!.Count", printed)
+        Assert.Contains("is var headIs { headIs!!.Count }", printed)
         Assert.Contains("case var tupArm: tupArm!!.Count", printed)
         Assert.Contains("is var tupIs { tupIs!!.Count }", printed)
         Assert.Contains("is var invoked { invoked!!.Count }", printed)
+        Assert.Contains("is var aliasedInvoked { aliasedInvoked!!.Count }", printed)
+        Assert.Contains("case var aliasedArm: aliasedArm!!.Count", printed)
         Assert.Contains("case var invokedArm: invokedArm!!.Count", printed)
         Assert.Contains("awRes!!.Count", printed)
         RunsAs(printed, "1 1 1 1 1 1 1 1 1 1 1 1 1")
@@ -784,9 +804,15 @@ namespace Demo
         }
         static string SecondMemberArm() =>
             Id(MakePair(Volatile.Read(ref cache!), new Holder(default(Node)!).Child).Second) switch { var s => new Sink().Take(s) };
+        static string FixedLambdaAliasIs()
+        {
+            System.Func<Node> fixedRead = () => new Holder(default(Node)!).Child;
+            var alias = fixedRead;
+            return alias() is var fa ? new Sink().Take(fa) : "none";
+        }
         public static string Run() =>
             PairIs() + " " + PairArm() + " " + NameIs() + " " + NameArm() + " " + KeepIs() + " " + KeepArm() + " " +
-            PickIs() + " " + PickArm() + " " + TupleWrapperIs() + " " + SecondMemberArm();
+            PickIs() + " " + PickArm() + " " + TupleWrapperIs() + " " + SecondMemberArm() + " " + FixedLambdaAliasIs();
     }
 }`)
         Assert.Contains("is var c { Sink().Take(c) }", printed)
@@ -799,7 +825,8 @@ namespace Demo
         Assert.Contains("case var q: Sink().Take(q)\n", printed)
         Assert.Contains("is var tw { Sink().Take(tw) }", printed)
         Assert.Contains("case var s: Sink().Take(s)\n", printed)
-        RunsAs(printed, "taken taken taken taken taken taken taken taken taken taken")
+        Assert.Contains("is var fa { Sink().Take(fa) }", printed)
+        RunsAs(printed, "taken taken taken taken taken taken taken taken taken taken taken")
     }
 
     /// G# infers `Volatile.Read(ref h.Value)` from the emitted storage of `h.Value`, which `[AllowNull]` widens
@@ -906,10 +933,42 @@ namespace Demo
     /// time (#5652).
     @Fact
     func ADeepNestOfGenericCalls_IsDecidedOncePerCall() {
-        let chain = String.Concat(
+        let callableLocalChain = String.Concat(
+            Enumerable.Range(1, 24).Select(
+                (i int32) -> "var f" + i.ToString() + " = flag ? f" + (i - 1).ToString() + " : f" + (i - 1).ToString() +
+                    "; "
+            )
+        )
+        let callableCaptureChain = String.Concat(
             Enumerable.Range(1, 24).Select(
                 (i int32) -> "(flag ? f" + (i - 1).ToString() + " : f" + (i - 1).ToString() +
                     ") is var f" +
+                    i.ToString() + " && "
+            )
+        )
+        let arrayLocalChain = String.Concat(
+            Enumerable.Range(1, 24).Select(
+                (i int32) -> "var a" + i.ToString() + " = flag ? a" + (i - 1).ToString() + " : a" + (i - 1).ToString() +
+                    "; "
+            )
+        )
+        let arrayCaptureChain = String.Concat(
+            Enumerable.Range(1, 24).Select(
+                (i int32) -> "(flag ? a" + (i - 1).ToString() + " : a" + (i - 1).ToString() +
+                    ") is var a" +
+                    i.ToString() + " && "
+            )
+        )
+        let tupleLocalChain = String.Concat(
+            Enumerable.Range(1, 24).Select(
+                (i int32) -> "var t" + i.ToString() + " = flag ? t" + (i - 1).ToString() + " : t" + (i - 1).ToString() +
+                    "; "
+            )
+        )
+        let tupleCaptureChain = String.Concat(
+            Enumerable.Range(1, 24).Select(
+                (i int32) -> "(flag ? t" + (i - 1).ToString() + " : t" + (i - 1).ToString() +
+                    ") is var t" +
                     i.ToString() + " && "
             )
         )
@@ -925,15 +984,45 @@ namespace Demo
         private static Dictionary<string, int>? cache;
         static T Id<T>(T x) => x;
         static int Nested() => ` + Nest(24, "new Dictionary<string, int>()") + ` switch { var n => n.Count };
-        static int CallableChain(bool flag)
+        static int CallableLocalChain(bool flag)
         {
             Func<Dictionary<string, int>> f0 = () => new Dictionary<string, int>();
-            return ` + chain + `f24() is var c ? c.Count : -1;
+            ` + callableLocalChain + `return f24() is var cl ? cl.Count : -1;
+        }
+        static int CallableCaptureChain(bool flag)
+        {
+            Func<Dictionary<string, int>> f0 = () => new Dictionary<string, int>();
+            return ` + callableCaptureChain + `f24() is var cc ? cc.Count : -1;
+        }
+        static int ArrayLocalChain(bool flag)
+        {
+            var a0 = new[] { new Dictionary<string, int>() };
+            ` + arrayLocalChain + `return a24[0] is var al ? al.Count : -1;
+        }
+        static int ArrayCaptureChain(bool flag)
+        {
+            var a0 = new[] { new Dictionary<string, int>() };
+            return ` + arrayCaptureChain + `a24[0] is var ac ? ac.Count : -1;
+        }
+        static int TupleLocalChain(bool flag)
+        {
+            var t0 = (new Dictionary<string, int>(), 0);
+            ` + tupleLocalChain + `return t24.Item1 is var tl ? tl.Count : -1;
+        }
+        static int TupleCaptureChain(bool flag)
+        {
+            var t0 = (new Dictionary<string, int>(), 0);
+            return ` + tupleCaptureChain + `t24.Item1 is var tc ? tc.Count : -1;
         }
     }
 }`)
         Assert.Contains("case var n: n.Count", printed)
-        Assert.Contains("is var c { c.Count }", printed)
+        Assert.Contains("is var cl { cl.Count }", printed)
+        Assert.Contains("is var cc { cc.Count }", printed)
+        Assert.Contains("is var al { al.Count }", printed)
+        Assert.Contains("is var ac { ac.Count }", printed)
+        Assert.Contains("is var tl { tl.Count }", printed)
+        Assert.Contains("is var tc { tc.Count }", printed)
     }
 
     /// With #5651's by-reference narrowing (#5617): a narrowed `ref` parameter read after an accessor that

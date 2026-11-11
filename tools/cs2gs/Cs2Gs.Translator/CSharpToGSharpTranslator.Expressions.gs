@@ -6757,7 +6757,9 @@ partial class CSharpToGSharpTranslator {
             let paths = List[List[int32]]()
             let unwrapped = this.UnwrapNullableValueTupleType(parameterType)
             if SymbolEqualityComparer.Default.Equals(unwrapped, targetTp) {
-                paths.Add(List[int32]())
+                if unwrapped?.NullableAnnotation != Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
+                    paths.Add(List[int32]())
+                }
                 return paths
             }
             if unwrapped is INamedTypeSymbol tupleType && tupleType.IsTupleType {
@@ -7565,7 +7567,7 @@ partial class CSharpToGSharpTranslator {
                     ?.GetSyntax() is VariableDeclaratorSyntax{
                     Initializer: {Value: {} initializer},
                     Parent: Microsoft.CodeAnalysis.CSharp.Syntax.VariableDeclarationSyntax declaration
-                }
+                } declarator
             ) {
                 return false
             }
@@ -7589,7 +7591,13 @@ partial class CSharpToGSharpTranslator {
                     return false
                 }
             }
+            let emptyChain = Array.Empty[ITypeParameterSymbol]()
+            if this.TryGetSlotChainNodeMemo(declarator, emptyChain, out isNonNull, pathKey: "@inferred-nonnull") {
+                return true
+            }
+            this.SetSlotChainNodeMemo(declarator, emptyChain, false, pathKey: "@inferred-nonnull")
             isNonNull = this.GSharpExpressionIsStaticallyNonNull(initializer)
+            this.SetSlotChainNodeMemo(declarator, emptyChain, isNonNull, pathKey: "@inferred-nonnull")
             return true
         }
 
@@ -7715,12 +7723,12 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return false
             }
-            if this.TryGetSlotChainNodeMemo(designation, initialChain, out var nodeDecided) {
+            if this.TryGetSlotChainNodeMemo(designation, initialChain, out var nodeDecided, pathKey: "@sub") {
                 return nodeDecided
             }
-            this.SetSlotChainNodeMemo(designation, initialChain, false)
+            this.SetSlotChainNodeMemo(designation, initialChain, false, pathKey: "@sub")
             let answer = this.ComputeSubpatternMemberCarriesNilableOnlyAtSlotChain(designation, initialChain, localMemo)
-            this.SetSlotChainNodeMemo(designation, initialChain, answer)
+            this.SetSlotChainNodeMemo(designation, initialChain, answer, pathKey: "@sub")
             return answer
         }
 
@@ -7922,13 +7930,19 @@ partial class CSharpToGSharpTranslator {
             slotChain IReadOnlyList[ITypeParameterSymbol],
             localMemo List[(Local ILocalSymbol, Chain IReadOnlyList[ITypeParameterSymbol], Result bool)]?
         ) bool {
+            let declaration = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+            if declaration != nil && this.TryGetSlotChainNodeMemo(declaration, slotChain, out var declDecided) {
+                return declDecided
+            }
             if TryGetSlotChainLocalMemo(localMemo, local, slotChain, out var cached) {
                 return cached
             }
             let activeMemo = localMemo ??
                 List[(Local ILocalSymbol, Chain IReadOnlyList[ITypeParameterSymbol], Result bool)]()
             SetSlotChainLocalMemo(activeMemo, local, slotChain, false)
-            let declaration = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+            if declaration != nil {
+                this.SetSlotChainNodeMemo(declaration, slotChain, false)
+            }
             var result = false
             if declaration is VariableDeclaratorSyntax{Initializer: {Value: {} initializer}} &&
                 !this
@@ -7950,13 +7964,17 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             SetSlotChainLocalMemo(activeMemo, local, slotChain, result)
+            if declaration != nil {
+                this.SetSlotChainNodeMemo(declaration, slotChain, result)
+            }
             return result
         }
 
         private func CallableReturnCarriesNilableOnlyAtSlotChain(
             callable Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
             slotChain IReadOnlyList[ITypeParameterSymbol],
-            localMemo List[(Local ILocalSymbol, Chain IReadOnlyList[ITypeParameterSymbol], Result bool)]?
+            localMemo List[(Local ILocalSymbol, Chain IReadOnlyList[ITypeParameterSymbol], Result bool)]?,
+            tuplePath List[int32]? = nil
         ) bool {
             var unwrapped = Unparenthesize(callable)
             while unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax checkedExpr {
@@ -7965,33 +7983,57 @@ partial class CSharpToGSharpTranslator {
             if unwrapped == nil {
                 return false
             }
-            if this.TryGetSlotChainNodeMemo(unwrapped, slotChain, out var nodeDecided, callableReturn: true) {
+            let pathKey = if tuplePath == nil || tuplePath.Count == 0 {
+                "@call"
+            } else {
+                "@call" + FormatTupleProjection(tuplePath)
+            }
+            if this.TryGetSlotChainNodeMemo(unwrapped, slotChain, out var nodeDecided, pathKey: pathKey) {
                 return nodeDecided
             }
-            this.SetSlotChainNodeMemo(unwrapped, slotChain, false, callableReturn: true)
-            let answer = this.ComputeCallableReturnCarriesNilableOnlyAtSlotChain(unwrapped, slotChain, localMemo)
-            this.SetSlotChainNodeMemo(unwrapped, slotChain, answer, callableReturn: true)
+            this.SetSlotChainNodeMemo(unwrapped, slotChain, false, pathKey: pathKey)
+            let answer = this.ComputeCallableReturnCarriesNilableOnlyAtSlotChain(
+                unwrapped,
+                slotChain,
+                localMemo,
+                tuplePath,
+                pathKey
+            )
+            this.SetSlotChainNodeMemo(unwrapped, slotChain, answer, pathKey: pathKey)
             return answer
         }
 
         private func ComputeCallableReturnCarriesNilableOnlyAtSlotChain(
             unwrapped Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
             slotChain IReadOnlyList[ITypeParameterSymbol],
-            localMemo List[(Local ILocalSymbol, Chain IReadOnlyList[ITypeParameterSymbol], Result bool)]?
+            localMemo List[(Local ILocalSymbol, Chain IReadOnlyList[ITypeParameterSymbol], Result bool)]?,
+            tuplePath List[int32]?,
+            pathKey string
         ) bool {
             if unwrapped is AnonymousFunctionExpressionSyntax lambda {
                 if this.LambdaHasExplicitDelegateCast(lambda) {
                     return false
                 }
+                if slotChain.Count == 0 &&
+                    (tuplePath == nil || tuplePath.Count == 0) &&
+                    this.LambdaResultSlotIsDeclared(lambda, lambda) {
+                    return false
+                }
                 var bodyChain IReadOnlyList[ITypeParameterSymbol] = slotChain
                 if lambda.AsyncKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AsyncKeyword) {
-                    if bodyChain.Count == 0 {
-                        return false
+                    if tuplePath == nil || tuplePath.Count == 0 {
+                        if bodyChain.Count == 0 {
+                            return false
+                        }
+                        bodyChain = bodyChain.Take(bodyChain.Count - 1).ToList()
                     }
-                    bodyChain = bodyChain.Take(bodyChain.Count - 1).ToList()
                 }
                 for resultExpr in GetLambdaResultExpressions(lambda) {
-                    if this.ExpressionCarriesNilableOnlyAtSlotChain(resultExpr, bodyChain, localMemo) {
+                    if tuplePath != nil && tuplePath.Count > 0 {
+                        if this.TupleElementCarriesNilableOnlyAtSlotChain(resultExpr, tuplePath, bodyChain, localMemo) {
+                            return true
+                        }
+                    } else if this.ExpressionCarriesNilableOnlyAtSlotChain(resultExpr, bodyChain, localMemo) {
                         return true
                     }
                 }
@@ -8001,20 +8043,35 @@ partial class CSharpToGSharpTranslator {
                 return operands.Any(
                     (
                         operand Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
-                    ) -> this.CallableReturnCarriesNilableOnlyAtSlotChain(operand, slotChain, localMemo)
+                    ) -> this.CallableReturnCarriesNilableOnlyAtSlotChain(operand, slotChain, localMemo, tuplePath)
                 )
             }
             if this.context.GetSymbolInfo(unwrapped).Symbol is ILocalSymbol local {
                 let declaration = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                if declaration != nil && this.TryGetSlotChainNodeMemo(
+                    declaration,
+                    slotChain,
+                    out var localDecided,
+                    pathKey: pathKey
+                ) {
+                    return localDecided
+                }
+                if declaration != nil {
+                    this.SetSlotChainNodeMemo(declaration, slotChain, false, pathKey: pathKey)
+                }
+                var localAnswer = false
                 if declaration is VariableDeclaratorSyntax{Initializer: {Value: {} initializer}} &&
-                    IsImplicitlyTypedLocal(local) &&
                     !this
                     .state
                     .EmittedLocalTypeClauses
                     .Contains(local) {
-                    return this.CallableReturnCarriesNilableOnlyAtSlotChain(initializer, slotChain, localMemo)
-                }
-                if declaration is SingleVariableDesignationSyntax && this.TryGetVarCaptureInput(
+                    localAnswer = this.CallableReturnCarriesNilableOnlyAtSlotChain(
+                        initializer,
+                        slotChain,
+                        localMemo,
+                        tuplePath
+                    )
+                } else if declaration is SingleVariableDesignationSyntax && this.TryGetVarCaptureInput(
                     local,
                     out var captureInput,
                     out var captureMember,
@@ -8022,26 +8079,40 @@ partial class CSharpToGSharpTranslator {
                 ) &&
                     !narrowed {
                     if captureInput != nil {
-                        return this.CallableReturnCarriesNilableOnlyAtSlotChain(captureInput, slotChain, localMemo)
-                    }
-                    if captureMember != nil &&
+                        localAnswer = this.CallableReturnCarriesNilableOnlyAtSlotChain(
+                            captureInput,
+                            slotChain,
+                            localMemo,
+                            tuplePath
+                        )
+                    } else if (tuplePath == nil || tuplePath.Count == 0) &&
+                        captureMember != nil &&
                         UnwrapExpressionTreeDelegateType(local.Type) is INamedTypeSymbol{
                         OriginalDefinition: {DelegateInvokeMethod: {ReturnType: ITypeParameterSymbol captureInvokeTp}}
                     } {
                         let extendedChain = List[ITypeParameterSymbol](slotChain)
                         extendedChain.Add(captureInvokeTp)
-                        return this.SubpatternMemberCarriesNilableOnlyAtSlotChain(local, extendedChain, localMemo)
+                        localAnswer = this.SubpatternMemberCarriesNilableOnlyAtSlotChain(
+                            local,
+                            extendedChain,
+                            localMemo
+                        )
                     }
                 }
-                return false
+                if declaration != nil {
+                    this.SetSlotChainNodeMemo(declaration, slotChain, localAnswer, pathKey: pathKey)
+                }
+                return localAnswer
             }
-            let callableType = UnwrapExpressionTreeDelegateType(
-                this.context.GetTypeInfo(unwrapped).Type
-            ) as INamedTypeSymbol
-            if callableType?.OriginalDefinition.DelegateInvokeMethod?.ReturnType is ITypeParameterSymbol invokeTp {
-                let extendedChain = List[ITypeParameterSymbol](slotChain)
-                extendedChain.Add(invokeTp)
-                return this.ExpressionCarriesNilableOnlyAtSlotChain(unwrapped, extendedChain, localMemo)
+            if tuplePath == nil || tuplePath.Count == 0 {
+                let callableType = UnwrapExpressionTreeDelegateType(
+                    this.context.GetTypeInfo(unwrapped).Type
+                ) as INamedTypeSymbol
+                if callableType?.OriginalDefinition.DelegateInvokeMethod?.ReturnType is ITypeParameterSymbol invokeTp {
+                    let extendedChain = List[ITypeParameterSymbol](slotChain)
+                    extendedChain.Add(invokeTp)
+                    return this.ExpressionCarriesNilableOnlyAtSlotChain(unwrapped, extendedChain, localMemo)
+                }
             }
             return false
         }
@@ -8301,24 +8372,31 @@ partial class CSharpToGSharpTranslator {
                     this.ExpressionCarriesNilableOnlyAtSlotChain(argExpr, remainingChain, localMemo)
             }
             if declaredType is IArrayTypeSymbol arrayParam {
-                return SymbolEqualityComparer.Default.Equals(arrayParam.ElementType, targetTp) &&
-                    arrayParam.ElementNullableAnnotation != Microsoft
+                return arrayParam.ElementNullableAnnotation != Microsoft
                     .CodeAnalysis
                     .NullableAnnotation
                     .Annotated &&
-                    this.ArrayExpressionElementsCarryNilableOnlyAtSlotChain(argExpr, remainingChain, localMemo)
+                    this
+                    .TryAppendTypeParameterPathToMethodTypeParameter(
+                    arrayParam.ElementType,
+                    targetTp,
+                    remainingChain,
+                    out var arrayElemChain
+                ) &&
+                    this.ArrayExpressionElementsCarryNilableOnlyAtSlotChain(argExpr, arrayElemChain, localMemo)
             }
             if UnwrapExpressionTreeDelegateType(declaredType) is INamedTypeSymbol{
                 TypeKind: TypeKind.Delegate,
                 DelegateInvokeMethod: {} paramInvoke
             } {
-                return this.TryAppendTypeParameterPathToMethodTypeParameter(
+                return this.DelegateReturnTypeSuppliesMethodTypeParameter(
+                    argExpr,
                     paramInvoke.ReturnType,
+                    List[int32](),
                     targetTp,
                     remainingChain,
-                    out var callbackChain
-                ) &&
-                    this.CallableReturnCarriesNilableOnlyAtSlotChain(argExpr, callbackChain, localMemo)
+                    localMemo
+                )
             }
             if declaredType is INamedTypeSymbol namedParam {
                 if namedParam.IsTupleType {
@@ -8353,6 +8431,67 @@ partial class CSharpToGSharpTranslator {
             return false
         }
 
+        private func DelegateReturnTypeSuppliesMethodTypeParameter(
+            argExpr Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            returnType ITypeSymbol?,
+            tuplePath List[int32],
+            targetTp ITypeParameterSymbol,
+            remainingChain IReadOnlyList[ITypeParameterSymbol],
+            localMemo List[(Local ILocalSymbol, Chain IReadOnlyList[ITypeParameterSymbol], Result bool)]?
+        ) bool {
+            if returnType == nil {
+                return false
+            }
+            if tuplePath.Count == 0 && this.TryAppendTypeParameterPathToMethodTypeParameter(
+                returnType,
+                targetTp,
+                remainingChain,
+                out var callbackChain
+            ) &&
+                this.CallableReturnCarriesNilableOnlyAtSlotChain(argExpr, callbackChain, localMemo) {
+                return true
+            }
+            let effectiveReturn = if tuplePath.Count == 0 && this.ExpressionHasAsyncLambdaOperand(argExpr, nil) {
+                GetEffectiveReturnType(returnType, isAsync: true)
+            } else {
+                returnType
+            }
+            if this.UnwrapNullableValueTupleType(effectiveReturn) is INamedTypeSymbol tupleReturn &&
+                tupleReturn
+                .IsTupleType {
+                for var i = 0; i < tupleReturn.TupleElements.Length; i++ {
+                    let elemType = tupleReturn.TupleElements[i].Type
+                    let childPath = List[int32](tuplePath)
+                    childPath.Add(i)
+                    if this.UnwrapNullableValueTupleType(elemType) is INamedTypeSymbol nestedTuple &&
+                        nestedTuple
+                        .IsTupleType {
+                        if this.DelegateReturnTypeSuppliesMethodTypeParameter(
+                            argExpr,
+                            nestedTuple,
+                            childPath,
+                            targetTp,
+                            remainingChain,
+                            localMemo
+                        ) {
+                            return true
+                        }
+                        continue
+                    }
+                    if this.TryAppendTypeParameterPathToMethodTypeParameter(
+                        elemType,
+                        targetTp,
+                        remainingChain,
+                        out var elemChain
+                    ) &&
+                        this.CallableReturnCarriesNilableOnlyAtSlotChain(argExpr, elemChain, localMemo, childPath) {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+
         private func TupleTypeSuppliesMethodTypeParameter(
             argExpr Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
             tupleType INamedTypeSymbol,
@@ -8380,40 +8519,14 @@ partial class CSharpToGSharpTranslator {
                     }
                     continue
                 }
-                if SymbolEqualityComparer.Default.Equals(elemType, targetTp) {
-                    if elemType.NullableAnnotation != Microsoft
-                        .CodeAnalysis
-                        .NullableAnnotation
-                        .Annotated &&
-                        this.TupleElementCarriesNilableOnlyAtSlotChain(argExpr, childPath, remainingChain, localMemo) {
-                        return true
-                    }
-                    continue
-                }
-                if elemType is INamedTypeSymbol namedElem && !namedElem.IsTupleType {
-                    var owner INamedTypeSymbol? = namedElem
-                    while owner != nil {
-                        for var j = 0; j < owner.TypeArguments.Length; j++ {
-                            if this.TryAppendTypeParameterPathToMethodTypeParameter(
-                                owner.TypeArguments[j],
-                                targetTp,
-                                remainingChain,
-                                out var subChain
-                            ) {
-                                let extendedChain = List[ITypeParameterSymbol](subChain)
-                                extendedChain.Add(owner.OriginalDefinition.TypeParameters[j])
-                                if this.TupleElementCarriesNilableOnlyAtSlotChain(
-                                    argExpr,
-                                    childPath,
-                                    extendedChain,
-                                    localMemo
-                                ) {
-                                    return true
-                                }
-                            }
-                        }
-                        owner = owner.ContainingType
-                    }
+                if this.TryAppendTypeParameterPathToMethodTypeParameter(
+                    elemType,
+                    targetTp,
+                    remainingChain,
+                    out var elemChain
+                ) &&
+                    this.TupleElementCarriesNilableOnlyAtSlotChain(argExpr, childPath, elemChain, localMemo) {
+                    return true
                 }
             }
             return false
@@ -8469,6 +8582,20 @@ partial class CSharpToGSharpTranslator {
             if unwrapped == nil {
                 return false
             }
+            if this.TryGetSlotChainNodeMemo(unwrapped, slotChain, out var nodeDecided, pathKey: "@elem") {
+                return nodeDecided
+            }
+            this.SetSlotChainNodeMemo(unwrapped, slotChain, false, pathKey: "@elem")
+            let answer = this.ComputeArrayExpressionElementsCarryNilableOnlyAtSlotChain(unwrapped, slotChain, localMemo)
+            this.SetSlotChainNodeMemo(unwrapped, slotChain, answer, pathKey: "@elem")
+            return answer
+        }
+
+        private func ComputeArrayExpressionElementsCarryNilableOnlyAtSlotChain(
+            unwrapped Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            slotChain IReadOnlyList[ITypeParameterSymbol],
+            localMemo List[(Local ILocalSymbol, Chain IReadOnlyList[ITypeParameterSymbol], Result bool)]?
+        ) bool {
             if unwrapped is ImplicitArrayCreationExpressionSyntax implicitArray {
                 let leaves = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
                 this.CollectArrayInitializerLeaves(implicitArray.Initializer, leaves)
@@ -8507,14 +8634,29 @@ partial class CSharpToGSharpTranslator {
             }
             if this.context.GetSymbolInfo(unwrapped).Symbol is ILocalSymbol local {
                 let declaration = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                if declaration != nil && this.TryGetSlotChainNodeMemo(
+                    declaration,
+                    slotChain,
+                    out var localDecided,
+                    pathKey: "@elem"
+                ) {
+                    return localDecided
+                }
+                if declaration != nil {
+                    this.SetSlotChainNodeMemo(declaration, slotChain, false, pathKey: "@elem")
+                }
+                var localAnswer = false
                 if declaration is VariableDeclaratorSyntax{Initializer: {Value: {} initializer}} &&
                     !this
                     .state
                     .EmittedLocalTypeClauses
                     .Contains(local) {
-                    return this.ArrayExpressionElementsCarryNilableOnlyAtSlotChain(initializer, slotChain, localMemo)
-                }
-                if declaration is SingleVariableDesignationSyntax && this.TryGetVarCaptureInput(
+                    localAnswer = this.ArrayExpressionElementsCarryNilableOnlyAtSlotChain(
+                        initializer,
+                        slotChain,
+                        localMemo
+                    )
+                } else if declaration is SingleVariableDesignationSyntax && this.TryGetVarCaptureInput(
                     local,
                     out var captureInput,
                     out var captureMember,
@@ -8522,50 +8664,60 @@ partial class CSharpToGSharpTranslator {
                 ) &&
                     !narrowed {
                     if captureInput != nil {
-                        return this.ArrayExpressionElementsCarryNilableOnlyAtSlotChain(
+                        localAnswer = this.ArrayExpressionElementsCarryNilableOnlyAtSlotChain(
                             captureInput,
                             slotChain,
                             localMemo
                         )
-                    }
-                    let declaredCaptureMemberType = (captureMember?.OriginalDefinition as IFieldSymbol)?.Type ??
-                        (captureMember?.OriginalDefinition as IPropertySymbol)?.Type
-                    if declaredCaptureMemberType is IArrayTypeSymbol captureArray &&
-                        this.TryResolveSlotChainThroughDeclaredType(
-                        captureArray.ElementType,
-                        slotChain,
-                        out var captureElemChain
-                    ) &&
-                        captureElemChain[captureElemChain.Count - 1].TypeParameterKind == TypeParameterKind.Type &&
-                        declaration
-                        .Parent
-                        ?.Parent is SubpatternSyntax{
-                        Parent: PropertyPatternClauseSyntax{Parent: RecursivePatternSyntax outerRecursive}
-                    } {
-                        if outerRecursive.Type != nil {
-                            let testedType = this.context.GetTypeInfo(outerRecursive.Type).Type
-                            if !this.TryResolveSlotChainThroughDeclaredType(
-                                testedType,
-                                captureElemChain,
-                                out captureElemChain
-                            ) {
-                                return false
+                    } else {
+                        let declaredCaptureMemberType = (captureMember?.OriginalDefinition as IFieldSymbol)?.Type ??
+                            (captureMember?.OriginalDefinition as IPropertySymbol)?.Type
+                        if declaredCaptureMemberType is IArrayTypeSymbol captureArray &&
+                            this.TryResolveSlotChainThroughDeclaredType(
+                            captureArray.ElementType,
+                            slotChain,
+                            out var captureElemChain
+                        ) &&
+                            captureElemChain[captureElemChain.Count - 1].TypeParameterKind == TypeParameterKind.Type &&
+                            declaration
+                            .Parent
+                            ?.Parent is SubpatternSyntax{
+                            Parent: PropertyPatternClauseSyntax{Parent: RecursivePatternSyntax outerRecursive}
+                        } {
+                            var resolvedCaptureChain = true
+                            if outerRecursive.Type != nil {
+                                let testedType = this.context.GetTypeInfo(outerRecursive.Type).Type
+                                if !this.TryResolveSlotChainThroughDeclaredType(
+                                    testedType,
+                                    captureElemChain,
+                                    out captureElemChain
+                                ) {
+                                    resolvedCaptureChain = false
+                                }
                             }
-                        }
-                        if this.PatternScrutinee(local) is {} scrutinee &&
-                            outerRecursive.Parent is (
-                            IsPatternExpressionSyntax or
-                                Microsoft
-                                .CodeAnalysis
-                                .CSharp
-                                .Syntax
-                                .SwitchExpressionArmSyntax or
-                                CasePatternSwitchLabelSyntax
-                        ) {
-                            return this.ExpressionCarriesNilableOnlyAtSlotChain(scrutinee, captureElemChain, localMemo)
+                            if resolvedCaptureChain && this.PatternScrutinee(local) is {} scrutinee &&
+                                outerRecursive.Parent is (
+                                IsPatternExpressionSyntax or
+                                    Microsoft
+                                    .CodeAnalysis
+                                    .CSharp
+                                    .Syntax
+                                    .SwitchExpressionArmSyntax or
+                                    CasePatternSwitchLabelSyntax
+                            ) {
+                                localAnswer = this.ExpressionCarriesNilableOnlyAtSlotChain(
+                                    scrutinee,
+                                    captureElemChain,
+                                    localMemo
+                                )
+                            }
                         }
                     }
                 }
+                if declaration != nil {
+                    this.SetSlotChainNodeMemo(declaration, slotChain, localAnswer, pathKey: "@elem")
+                }
+                return localAnswer
             }
             let memberReceiver Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = switch unwrapped {
                 case memberAccess is MemberAccessExpressionSyntax: memberAccess.Expression
@@ -8633,6 +8785,25 @@ partial class CSharpToGSharpTranslator {
                     TypeParameterKind: TypeParameterKind.Method,
                     NullableAnnotation: not Microsoft.CodeAnalysis.NullableAnnotation.Annotated
                 } returnTp {
+                    if method.ReducedFrom != nil &&
+                        definition
+                        .Parameters
+                        .Length > 0 &&
+                        invocation.Expression is MemberAccessExpressionSyntax{Expression: {} extReceiver} &&
+                        !this.IsTranslatorWidenedDeclaration(definition.Parameters[0]) &&
+                        SymbolEqualityComparer
+                        .Default
+                        .Equals(definition.Parameters[0].Type, returnTp) &&
+                        definition
+                        .Parameters[0]
+                        .Type
+                        .NullableAnnotation != Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated &&
+                        this.ArrayExpressionElementsCarryNilableOnlyAtSlotChain(extReceiver, slotChain, localMemo) {
+                        return true
+                    }
                     let offset = if method.ReducedFrom != nil {
                         1
                     } else {
@@ -8676,15 +8847,44 @@ partial class CSharpToGSharpTranslator {
             slotChain IReadOnlyList[ITypeParameterSymbol],
             localMemo List[(Local ILocalSymbol, Chain IReadOnlyList[ITypeParameterSymbol], Result bool)]?
         ) bool {
-            if slotChain.Count == 0 && this.TupleElementYieldsNilableBeyondItsCSharpType(tupleReceiver, accessPath) {
-                return true
-            }
             var unwrapped = Unparenthesize(tupleReceiver)
             while unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax checkedExpr {
                 unwrapped = Unparenthesize(checkedExpr.Expression)
             }
             if unwrapped == nil || accessPath.Count == 0 {
                 return false
+            }
+            let pathKey = FormatTupleProjection(accessPath)
+            if this.TryGetSlotChainNodeMemo(unwrapped, slotChain, out var nodeDecided, pathKey: pathKey) {
+                return nodeDecided
+            }
+            this.SetSlotChainNodeMemo(unwrapped, slotChain, false, pathKey: pathKey)
+            let answer = this.ComputeTupleElementCarriesNilableOnlyAtSlotChain(
+                unwrapped,
+                accessPath,
+                pathKey,
+                slotChain,
+                localMemo
+            )
+            this.SetSlotChainNodeMemo(unwrapped, slotChain, answer, pathKey: pathKey)
+            return answer
+        }
+
+        private func ComputeTupleElementCarriesNilableOnlyAtSlotChain(
+            unwrapped Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            accessPath List[int32],
+            pathKey string,
+            slotChain IReadOnlyList[ITypeParameterSymbol],
+            localMemo List[(Local ILocalSymbol, Chain IReadOnlyList[ITypeParameterSymbol], Result bool)]?
+        ) bool {
+            if slotChain.Count == 0 && ObliviousNullabilityAnalyzer.IsTupleElementTainted(
+                this.context.Compilation,
+                unwrapped,
+                this.context.SemanticModel,
+                this.context.SiblingCompilations,
+                accessPath
+            ) {
+                return true
             }
             if unwrapped is MemberAccessExpressionSyntax tupleAccess && this.TryGetTupleElementAccess(
                 tupleAccess,
@@ -8737,14 +8937,30 @@ partial class CSharpToGSharpTranslator {
             }
             if this.context.GetSymbolInfo(unwrapped).Symbol is ILocalSymbol local {
                 let declaration = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                if declaration != nil && this.TryGetSlotChainNodeMemo(
+                    declaration,
+                    slotChain,
+                    out var localDecided,
+                    pathKey: pathKey
+                ) {
+                    return localDecided
+                }
+                if declaration != nil {
+                    this.SetSlotChainNodeMemo(declaration, slotChain, false, pathKey: pathKey)
+                }
+                var localAnswer = false
                 if declaration is VariableDeclaratorSyntax{Initializer: {Value: {} initializer}} &&
                     !this
                     .state
                     .EmittedLocalTypeClauses
                     .Contains(local) {
-                    return this.TupleElementCarriesNilableOnlyAtSlotChain(initializer, accessPath, slotChain, localMemo)
-                }
-                if declaration is SingleVariableDesignationSyntax && this.TryGetVarCaptureInput(
+                    localAnswer = this.TupleElementCarriesNilableOnlyAtSlotChain(
+                        initializer,
+                        accessPath,
+                        slotChain,
+                        localMemo
+                    )
+                } else if declaration is SingleVariableDesignationSyntax && this.TryGetVarCaptureInput(
                     local,
                     out var captureInput,
                     out _,
@@ -8752,12 +8968,197 @@ partial class CSharpToGSharpTranslator {
                 ) &&
                     !narrowed &&
                     captureInput != nil {
-                    return this.TupleElementCarriesNilableOnlyAtSlotChain(
+                    localAnswer = this.TupleElementCarriesNilableOnlyAtSlotChain(
                         captureInput,
                         accessPath,
                         slotChain,
                         localMemo
                     )
+                }
+                if declaration != nil {
+                    this.SetSlotChainNodeMemo(declaration, slotChain, localAnswer, pathKey: pathKey)
+                }
+                return localAnswer
+            }
+            let memberReceiver Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = switch unwrapped {
+                case memberAccess is MemberAccessExpressionSyntax: memberAccess.Expression
+                case elementAccess is ElementAccessExpressionSyntax: elementAccess.Expression
+                default: default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
+            }
+            if memberReceiver != nil {
+                let symbol = this.context.GetSymbolInfo(unwrapped).Symbol
+                var currentMemberType ITypeSymbol? = this.UnwrapNullableValueTupleType(
+                    (symbol?.OriginalDefinition as IFieldSymbol)?.Type ??
+                        (symbol?.OriginalDefinition as IPropertySymbol)?.Type
+                )
+                var remainingMemberPath = accessPath
+                while remainingMemberPath.Count > 0 &&
+                    currentMemberType is INamedTypeSymbol tupleMember &&
+                    tupleMember
+                    .IsTupleType {
+                    let idx = remainingMemberPath[0]
+                    if idx < 0 || idx >= tupleMember.TupleElements.Length {
+                        currentMemberType = nil
+                        break
+                    }
+                    currentMemberType = this.UnwrapNullableValueTupleType(tupleMember.TupleElements[idx].Type)
+                    remainingMemberPath = remainingMemberPath.Skip(1).ToList()
+                }
+                if remainingMemberPath.Count == 0 &&
+                    currentMemberType != nil &&
+                    this.TryResolveSlotChainThroughDeclaredType(currentMemberType, slotChain, out var memberChain) &&
+                    memberChain[memberChain.Count - 1].TypeParameterKind == TypeParameterKind
+                    .Type {
+                    let receiverType = this.context.GetTypeInfo(memberReceiver).Type
+                    if receiverType == nil ||
+                        ContainsTypeParameter(
+                        this.ProjectSlotThroughReceiverType(
+                            memberChain[memberChain.Count - 1],
+                            receiverType.OriginalDefinition
+                        )
+                    ) {
+                        return this.ExpressionCarriesNilableOnlyAtSlotChain(memberReceiver, memberChain, localMemo)
+                    }
+                }
+            }
+            if unwrapped is InvocationExpressionSyntax invocation &&
+                this
+                .context
+                .GetSymbolInfo(invocation)
+                .Symbol is IMethodSymbol method {
+                if method.MethodKind == MethodKind.DelegateInvoke ||
+                    method
+                    .ContainingType
+                    ?.TypeKind == TypeKind
+                    .Delegate {
+                    let callable = if invocation.Expression is MemberAccessExpressionSyntax{
+                        Name: {Identifier: {ValueText: "Invoke"}}
+                    } invokeAccess {
+                        invokeAccess.Expression
+                    } else {
+                        invocation.Expression
+                    }
+                    return this.CallableReturnCarriesNilableOnlyAtSlotChain(callable, slotChain, localMemo, accessPath)
+                }
+                let definition = (method.ReducedFrom ?? method).OriginalDefinition
+                if this.IsTranslatorWidenedDeclaration(definition) {
+                    return false
+                }
+                var currentReturnType ITypeSymbol? = this.UnwrapNullableValueTupleType(definition.ReturnType)
+                var remainingPath = accessPath
+                while remainingPath.Count > 0 &&
+                    currentReturnType is INamedTypeSymbol tupleReturn &&
+                    tupleReturn
+                    .IsTupleType {
+                    let idx = remainingPath[0]
+                    if idx < 0 || idx >= tupleReturn.TupleElements.Length {
+                        return false
+                    }
+                    currentReturnType = this.UnwrapNullableValueTupleType(tupleReturn.TupleElements[idx].Type)
+                    remainingPath = remainingPath.Skip(1).ToList()
+                }
+                if remainingPath.Count == 0 {
+                    if !this.TryResolveSlotChainThroughDeclaredType(currentReturnType, slotChain, out var nextChain) {
+                        return false
+                    }
+                    let targetTp = nextChain[nextChain.Count - 1]
+                    if targetTp.TypeParameterKind == TypeParameterKind.Type &&
+                        invocation.Expression is MemberAccessExpressionSyntax{Expression: {} callReceiver} {
+                        let receiverType = this.context.GetTypeInfo(callReceiver).Type
+                        if receiverType == nil ||
+                            ContainsTypeParameter(
+                            this.ProjectSlotThroughReceiverType(targetTp, receiverType.OriginalDefinition)
+                        ) {
+                            return this.ExpressionCarriesNilableOnlyAtSlotChain(callReceiver, nextChain, localMemo)
+                        }
+                    }
+                    if targetTp.TypeParameterKind == TypeParameterKind.Method {
+                        return this.InvocationInfersNilableOnlyForMethodTypeParameter(
+                            invocation,
+                            method,
+                            definition,
+                            targetTp,
+                            nextChain.Take(nextChain.Count - 1).ToList(),
+                            localMemo
+                        )
+                    }
+                    return false
+                }
+                if !HasExplicitTypeArguments(invocation.Expression) &&
+                    currentReturnType is ITypeParameterSymbol{
+                    TypeParameterKind: TypeParameterKind.Method,
+                    NullableAnnotation: not Microsoft.CodeAnalysis.NullableAnnotation.Annotated
+                } returnTp {
+                    if method.ReducedFrom != nil &&
+                        definition
+                        .Parameters
+                        .Length > 0 &&
+                        invocation.Expression is MemberAccessExpressionSyntax{Expression: {} extReceiver} &&
+                        !this
+                        .IsTranslatorWidenedDeclaration(definition.Parameters[0]) {
+                        for paramPath in this.FindParameterTypeParameterPaths(definition.Parameters[0].Type, returnTp) {
+                            let combinedPath = List[int32](paramPath)
+                            combinedPath.AddRange(remainingPath)
+                            if this.TupleElementCarriesNilableOnlyAtSlotChain(
+                                extReceiver,
+                                combinedPath,
+                                slotChain,
+                                localMemo
+                            ) {
+                                return true
+                            }
+                        }
+                    }
+                    let offset = if method.ReducedFrom != nil {
+                        1
+                    } else {
+                        0
+                    }
+                    for argument in invocation.ArgumentList.Arguments {
+                        if argument.Expression == nil {
+                            continue
+                        }
+                        let parameter = DetermineParameter(argument, this.context)
+                        if parameter == nil || parameter.Ordinal + offset >= definition.Parameters.Length {
+                            continue
+                        }
+                        let declaredParam = definition.Parameters[parameter.Ordinal + offset]
+                        if this.IsTranslatorWidenedDeclaration(declaredParam) {
+                            continue
+                        }
+                        for paramPath in this.FindParameterTypeParameterPaths(declaredParam.Type, returnTp) {
+                            let combinedPath = List[int32](paramPath)
+                            combinedPath.AddRange(remainingPath)
+                            if this.TupleElementCarriesNilableOnlyAtSlotChain(
+                                argument.Expression,
+                                combinedPath,
+                                slotChain,
+                                localMemo
+                            ) {
+                                return true
+                            }
+                        }
+                        if UnwrapExpressionTreeDelegateType(declaredParam.Type) is INamedTypeSymbol{
+                            DelegateInvokeMethod: {} invoke
+                        } {
+                            let effectiveInvokeReturn = GetEffectiveReturnType(
+                                invoke.ReturnType,
+                                this.ExpressionHasAsyncLambdaOperand(argument.Expression, nil)
+                            )
+                            for callbackPath in this.FindParameterTypeParameterPaths(effectiveInvokeReturn, returnTp) {
+                                let combinedPath = List[int32](callbackPath)
+                                combinedPath.AddRange(remainingPath)
+                                if this.CallableReturnCarriesNilableOnlyAtSlotChain(
+                                    argument.Expression,
+                                    slotChain,
+                                    localMemo,
+                                    combinedPath
+                                ) {
+                                    return true
+                                }
+                            }
+                        }
+                    }
                 }
             }
             return false
@@ -8814,14 +9215,14 @@ partial class CSharpToGSharpTranslator {
             node Microsoft.CodeAnalysis.SyntaxNode,
             slotChain IReadOnlyList[ITypeParameterSymbol],
             out result bool,
-            callableReturn bool = false
+            pathKey string = ""
         ) bool {
             result = false
             if !this.state.NilableOnlySlotChainNodes.TryGetValue(node, out var entries) {
                 return false
             }
             for entry in entries {
-                if entry.CallableReturn == callableReturn && SlotChainsEqual(entry.Chain, slotChain) {
+                if entry.PathKey == pathKey && SlotChainsEqual(entry.Chain, slotChain) {
                     result = entry.Result
                     return true
                 }
@@ -8833,20 +9234,20 @@ partial class CSharpToGSharpTranslator {
             node Microsoft.CodeAnalysis.SyntaxNode,
             slotChain IReadOnlyList[ITypeParameterSymbol],
             result bool,
-            callableReturn bool = false
+            pathKey string = ""
         ) {
             if !this.state.NilableOnlySlotChainNodes.TryGetValue(node, out var entries) {
-                entries = List[(Chain IReadOnlyList[ITypeParameterSymbol], CallableReturn bool, Result bool)]()
+                entries = List[(Chain IReadOnlyList[ITypeParameterSymbol], PathKey string, Result bool)]()
                 this.state.NilableOnlySlotChainNodes[node] = entries
             } else {
                 for var i = 0; i < entries.Count; i++ {
-                    if entries[i].CallableReturn == callableReturn && SlotChainsEqual(entries[i].Chain, slotChain) {
-                        entries[i] = (slotChain, callableReturn, result)
+                    if entries[i].PathKey == pathKey && SlotChainsEqual(entries[i].Chain, slotChain) {
+                        entries[i] = (slotChain, pathKey, result)
                         return
                     }
                 }
             }
-            entries.Add((slotChain, callableReturn, result))
+            entries.Add((slotChain, pathKey, result))
         }
 
         private func TryGetSlotChainLocalMemo(
