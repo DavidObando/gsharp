@@ -19281,7 +19281,7 @@ partial class CSharpToGSharpTranslator {
             } else {
                 this.GetLoopCondition(exitedLoop)
             }
-            if $scope.DescendantNodes(OutsideNestedFunctions).Any(
+            if $scope.DescendantNodesAndSelf(OutsideNestedFunctions).Any(
                 (node Microsoft.CodeAnalysis.SyntaxNode) -> (
                     if exitedLoop != nil {
                         (
@@ -19314,9 +19314,12 @@ partial class CSharpToGSharpTranslator {
                                 !this.IsInSiblingBranchOfRead(node, use, $scope)
                         )
                     } else {
-                        node.SpanStart >= narrowingGuard
-                            .Span
-                            .End &&
+                        (
+                            node.SpanStart >= narrowingGuard.Span.End || this.AssignmentStoreCompletesAfterProof(
+                                node,
+                                narrowingGuard
+                            )
+                        ) &&
                             node
                             .Span
                             .End <= use.SpanStart &&
@@ -19979,7 +19982,7 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return true
             }
-            if $scope.DescendantNodes(OutsideNestedFunctions).Any(
+            if $scope.DescendantNodesAndSelf(OutsideNestedFunctions).Any(
                 (node Microsoft.CodeAnalysis.SyntaxNode) -> (
                     if exitedLoop != nil {
                         (exitedCondition != nil && exitedCondition.Span.Contains(node.Span)) ||
@@ -19993,9 +19996,22 @@ partial class CSharpToGSharpTranslator {
                                 !this.IsInSiblingBranchOfRead(node, use!!, $scope)
                         )
                     } else {
-                        node.SpanStart > start
-                            .Span
-                            .End &&
+                        (
+                            node.SpanStart > start
+                                .Span
+                                .End ||
+                                (
+                                node is Microsoft
+                                    .CodeAnalysis
+                                    .CSharp
+                                    .Syntax
+                                    .AssignmentExpressionSyntax assigned &&
+                                    assigned
+                                    .Right
+                                    .Span
+                                    .Contains(start.Span)
+                            )
+                        ) &&
                             node
                             .Span
                             .End <= use!!.SpanStart &&
@@ -20041,7 +20057,17 @@ partial class CSharpToGSharpTranslator {
                     .DescendantNodes(OutsideNestedFunctions)
                     .Any(
                     (node Microsoft.CodeAnalysis.SyntaxNode) -> (
-                        (node.SpanStart >= effectiveStartEnd && node.Span.End <= use!!.SpanStart) ||
+                        (
+                            (
+                                node.SpanStart >= effectiveStartEnd || this.AssignmentStoreCompletesAfterProof(
+                                    node,
+                                    start
+                                )
+                            ) &&
+                                node
+                                .Span
+                                .End <= use!!.SpanStart
+                        ) ||
                             (
                             node is Microsoft
                                 .CodeAnalysis

@@ -13,6 +13,11 @@ import System.Linq
 
 partial class CSharpToGSharpTranslator {
     private partial class DeclarationVisitor : CSharpSyntaxVisitor[GMember] {
+        private var assignmentNarrowingQueries Dictionary[
+            (ExpressionSyntax, SyntaxNode, ISymbol, SyntaxNode, bool),
+            bool
+        ]?
+
         // Issue #5936: gsc records assignment postconditions, not Roslyn's nullable flow state or declaration initializers.
         private func IsGSharpAssignmentNarrowedLocal(
             expression ExpressionSyntax,
@@ -34,6 +39,39 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return false
             }
+            // Share completed queries only within one analysis pass. Emission state can change before the next pass.
+            let rootQuery = this.assignmentNarrowingQueries == nil
+            let queries = this.assignmentNarrowingQueries ??
+                Dictionary[(ExpressionSyntax, SyntaxNode, ISymbol, SyntaxNode, bool), bool]()
+            this.assignmentNarrowingQueries = queries
+            let key = (expression, effectiveTarget, symbol, $scope, requireRuntimeNonNullProof)
+            try {
+                if queries.TryGetValue(key, out var cached) {
+                    return cached
+                }
+                let result = this.ComputeGSharpAssignmentNarrowedLocal(
+                    expression,
+                    effectiveTarget,
+                    symbol,
+                    $scope,
+                    requireRuntimeNonNullProof
+                )
+                queries[key] = result
+                return result
+            } finally {
+                if rootQuery {
+                    this.assignmentNarrowingQueries = nil
+                }
+            }
+        }
+
+        private func ComputeGSharpAssignmentNarrowedLocal(
+            expression ExpressionSyntax,
+            effectiveTarget SyntaxNode,
+            symbol ISymbol,
+            $scope SyntaxNode,
+            requireRuntimeNonNullProof bool
+        ) bool {
             var proof SyntaxNode? = nil
             for step in this.GetStatementSteps(effectiveTarget, $scope) {
                 let statements IEnumerable[StatementSyntax] = switch step.Owner {
@@ -186,20 +224,74 @@ partial class CSharpToGSharpTranslator {
                 case assigned is AssignmentExpressionSyntax: assigned
                 default: default(AssignmentExpressionSyntax?)
             }
-            if assignment != nil && this.BindsTo(assignment.Left, symbol) &&
+            if assignment != nil &&
                 (
                 assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) || assignment.IsKind(
                     SyntaxKind.CoalesceAssignmentExpression
                 )
             ) {
-                return if this.GSharpAssignmentValueIsStaticallyNonNull(
-                    assignment.Right,
-                    requireRuntimeNonNullProof,
-                    allowPlatform: assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
-                ) {
-                    cast[SyntaxNode](statement)
-                } else {
-                    default(SyntaxNode?)
+                if this.BindsTo(assignment.Left, symbol) {
+                    if assignment.IsKind(SyntaxKind.CoalesceAssignmentExpression) &&
+                        inherited != nil &&
+                        this.AssignmentNarrowingSurvivesToRead(
+                        symbol,
+                        inherited,
+                        assignment.Left,
+                        assignment.Left,
+                        $scope
+                    ) &&
+                        !this
+                        .AssignmentRegionInvalidatesNarrowing(
+                        symbol,
+                        assignment.Right,
+                        assignment.Right.SpanStart,
+                        assignment.Right.Span.End
+                    ) {
+                        return statement
+                    }
+                    return if !this.AssignmentHasNullableTargetTypedRhs(assignment) &&
+                        this
+                        .GSharpAssignmentValueIsStaticallyNonNull(
+                        assignment.Right,
+                        requireRuntimeNonNullProof,
+                        allowPlatform: assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
+                    ) {
+                        cast[SyntaxNode](statement)
+                    } else {
+                        default(SyntaxNode?)
+                    }
+                }
+                if assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
+                    Unparenthesize(assignment.Right) is AssignmentExpressionSyntax nested {
+                    let entry = if inherited != nil && !this.AssignmentRegionInvalidatesNarrowing(
+                        symbol,
+                        assignment.Left,
+                        assignment.Left.SpanStart,
+                        assignment.Left.Span.End
+                    ) {
+                        inherited
+                    } else {
+                        default(SyntaxNode?)
+                    }
+                    let proof = this.GetGSharpAssignmentNarrowingProof(
+                        nested,
+                        symbol,
+                        use,
+                        $scope,
+                        entry,
+                        requireRuntimeNonNullProof
+                    )
+                    return if proof != nil && this.AssignmentNarrowingSurvivesToRead(
+                        symbol,
+                        proof,
+                        use,
+                        use,
+                        statement
+                    ) {
+                        cast[SyntaxNode](statement)
+                    } else {
+                        default(SyntaxNode?)
+                    }
                 }
             }
             // Reuse guard invalidation for writes, escaped closures, by-reference storage and enclosing filters.
@@ -290,7 +382,7 @@ partial class CSharpToGSharpTranslator {
         ) bool {
             let closureAssigned = this.IsClosureAssignedVariable(symbol)
             let byReference = this.IsByReferenceVariable(symbol)
-            return $scope.DescendantNodes(
+            return $scope.DescendantNodesAndSelf(
                 (node SyntaxNode) -> !this.IsClosureBoundary(node) && !this.IsDroppedStatementOrLoopClause(node)
             )
                 .Any(
@@ -309,6 +401,39 @@ partial class CSharpToGSharpTranslator {
             )
         }
 
+        // A chained store converts its value and calls its setter after the inner assignment establishes a fact.
+        private func AssignmentStoreCompletesAfterProof(node SyntaxNode, proof SyntaxNode) bool ->
+        node is AssignmentExpressionSyntax assignment &&
+            assignment
+            .Right
+            .Span
+            .Contains(proof.Span) &&
+            (
+            this
+                .context
+                .GetSymbolInfo(assignment.Left)
+                .Symbol is IPropertySymbol ||
+                this
+                .context
+                .SemanticModel
+                .GetConversion(assignment.Right)
+                .IsUserDefined ||
+                this.NodeRunsStaticTypeInitializer(assignment.Left)
+        )
+
+        private func AssignmentHasNullableTargetTypedRhs(assignment AssignmentExpressionSyntax) bool {
+            if assignment.Right is not ConditionalExpressionSyntax && assignment.Right is not SwitchExpressionSyntax {
+                return false
+            }
+            let target = this.context.GetSymbolInfo(assignment.Left).Symbol
+            let type = this.GetAssignmentTargetType(assignment.Left, target)
+            // gsc target-types bare conditionals and switches, but binds parenthesized values without the assignment target.
+            return type?.NullableAnnotation == NullableAnnotation.Annotated || this.IsTranslatorWidenedDeclaration(
+                target
+            ) ||
+                this.PatternLocalUsesNullableStorage(assignment.Left)
+        }
+
         private func GSharpAssignmentValueIsStaticallyNonNull(
             value ExpressionSyntax,
             requireRuntimeNonNullProof bool,
@@ -322,10 +447,36 @@ partial class CSharpToGSharpTranslator {
             if unwrapped is AssignmentExpressionSyntax assigned && assigned.IsKind(
                 SyntaxKind.SimpleAssignmentExpression
             ) {
-                return this.GSharpAssignmentValueIsStaticallyNonNull(
+                // gsc does not recover an inner assignment's non-null type through a nullable property store.
+                if this
+                    .context
+                    .GetSymbolInfo(assigned.Left)
+                    .Symbol is IPropertySymbol &&
+                    !this.AssignmentResultHasNonNullStaticType(assigned) {
+                    return false
+                }
+                return !this.AssignmentHasNullableTargetTypedRhs(assigned) &&
+                    this.GSharpAssignmentValueIsStaticallyNonNull(
                     assigned.Right,
                     requireRuntimeNonNullProof,
                     allowPlatform
+                )
+            }
+            if unwrapped is AssignmentExpressionSyntax coalescing && coalescing.IsKind(
+                SyntaxKind.CoalesceAssignmentExpression
+            ) {
+                return this.GSharpAssignmentValueIsStaticallyNonNull(
+                    coalescing.Left,
+                    requireRuntimeNonNullProof,
+                    allowPlatform: false
+                ) ||
+                    (
+                    !this.AssignmentHasNullableTargetTypedRhs(coalescing) &&
+                        this.GSharpAssignmentValueIsStaticallyNonNull(
+                        coalescing.Right,
+                        requireRuntimeNonNullProof,
+                        allowPlatform: false
+                    )
                 )
             }
             if unwrapped is PostfixUnaryExpressionSyntax suppression && suppression.IsKind(

@@ -7,6 +7,7 @@ package Cs2Gs.Tests
 import Cs2Gs.Pipeline
 import System
 import System.IO
+import System.Linq
 import Xunit
 
 /// Issue #5706: preserve nullable results without conditional indexing on a non-null receiver.
@@ -14,10 +15,201 @@ import Xunit
 /// On 14f1e3aa2, cast receivers throw on nil, and named constant guards cause nullable indexing errors.
 /// On 39fcd66c7, void lambda and nested continuation tests fail with invalid nullable System.Void output.
 /// On a6ffd4673, mutable captures in nested lambdas fail to bind after an outer guard.
-/// Issue #5936: disabling assignment postconditions makes all five assignment regressions report GS0300.
+/// Issue #5936: disabling assignment postconditions makes the initial five assignment regressions report GS0300.
+/// On 064897012, four review regressions fail, and the 24-step prefix chain exceeds a 30-second test-host limit.
 /// The C# output oracle also rejects erased null guards and throwing bridges on nullable stores.
 /// Each test also compares the translated program's output with C#.
 open class Issue5706NarrowedConditionalIndexTests {
+    @Fact
+    func RepeatedAssignmentPrefixes_ReuseCompletedNarrowingQueries() {
+        let assignments = String.Concat(Enumerable.Repeat("s = flag ? s : \"b\";\n", 24))
+        let parenthesized = String.Concat(Enumerable.Repeat("s = (flag ? s : \"b\");\n", 24))
+        let printed = AssertRunsWithoutConditionalIndexWarning(`
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        static char? Read(bool flag, string? seed)
+        {
+            string? s = seed;
+            s = "a";
+` + assignments + `
+            return s?[0];
+        }
+        static char? Parenthesized(bool flag, string? seed)
+        {
+            string? s = seed;
+            s = "a";
+` + parenthesized + `
+            return s?[0];
+        }
+        static char? Switched(bool flag)
+        {
+            string? s = null;
+            s = flag switch { true => "t", false => "f" };
+            return s?[0];
+        }
+        public static string Run() => Read(true, null) + "|" + Read(false, null) + "|" + Parenthesized(true, null) + "|" + Parenthesized(false, null) + "|" + Switched(true) + "|" + Switched(false);
+    }
+}`)
+        Assert.Contains("cast[char?](s[0])", printed)
+        Assert.Contains("s?[0]", printed)
+    }
+
+    @Fact
+    func AssignmentJoins_InvalidateEffectsAtTheConditionRoot() {
+        let printed = AssertRunsWithoutConditionalIndexWarning(`
+#nullable enable
+using System;
+namespace Demo
+{
+    public static class P
+    {
+        static bool Invoke(Action clear) { clear(); return true; }
+        static char? Read()
+        {
+            string? s = null;
+            Action clear = () => s = null;
+            s = "a";
+            if (Invoke(clear)) {}
+            return s?[0];
+        }
+        public static string Run() => Read() + "|end";
+    }
+}`)
+        Assert.Contains("s?[0]", printed)
+        Assert.DoesNotContain("cast[char?](s[0])", printed)
+    }
+
+    @Fact
+    func ChainedAssignments_NarrowInnerTargetsBeforeLaterStoreEffects() {
+        let printed = AssertRunsWithoutConditionalIndexWarning(`
+#nullable enable
+using System;
+namespace Demo
+{
+    public static class P
+    {
+        static Action? clear;
+        sealed class Holder { public string? Value { set { clear?.Invoke(); } } }
+        sealed class Token
+        {
+            public static implicit operator Token(string? value) { clear?.Invoke(); return new Token(); }
+        }
+        static string Both(string? seed)
+        {
+            string? s = seed, other = seed;
+            s = other = "j";
+            return s?[0] + ":" + other?[0];
+        }
+        static char? Setter()
+        {
+            string? s = null;
+            clear = () => s = null;
+            var holder = new Holder();
+            holder.Value = s = "j";
+            return s?[0];
+        }
+        static char? Conversion()
+        {
+            string? s = null;
+            clear = () => s = null;
+            Token token;
+            token = s = "j";
+            return s?[0];
+        }
+        static char? OuterAfterSetter()
+        {
+            string? s = null;
+            clear = () => s = null;
+            var holder = new Holder();
+            s = holder.Value = (s = "j");
+            return s?[0];
+        }
+        static char? FilteredSetter()
+        {
+            string? s = null;
+            var holder = new Holder();
+            try { holder.Value = s = "j"; return s?[0]; }
+            catch (Exception) when ((s = null) != null) { return null; }
+        }
+        public static string Run() => Both(null) + "|" + Setter() + "|" + Conversion() + "|" + OuterAfterSetter() + "|" + FilteredSetter() + "|end";
+    }
+}`)
+        Assert.Contains("cast[char?](other[0])", printed)
+        Assert.Contains("s?[0]", printed)
+    }
+
+    @Fact
+    func CoalescingWrites_PreserveIncomingFactsWithNullableAndPlatformFallbacks() {
+        let printed = Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using ObLib5936;
+public static class Demo
+{
+    static char? Nullable(string? seed)
+    {
+        string? s = null;
+        s = "a";
+        s ??= seed;
+        return s?[0];
+    }
+    static char? Platform(bool nil)
+    {
+        string? s = null;
+        s = "p";
+        s ??= Lib.Value(nil);
+        return s?[0];
+    }
+    public static string Run() => Nullable(null) + "|" + Nullable("n") + "|" + Platform(true) + "|" + Platform(false) + ":" + Lib.Calls;
+}`, `
+#nullable disable
+namespace ObLib5936;
+public static class Lib
+{
+    public static int Calls;
+    public static string Value(bool nil) { Calls++; return nil ? null : "q"; }
+}`, rejectConditionalIndexWarnings: true)
+        Assert.Contains("cast[char?](s[0])", printed)
+        Assert.DoesNotContain("s?[0]", printed)
+    }
+
+    @Fact
+    func CoalescingAssignmentValues_RequireALeftOrRightRuntimeProof() {
+        let printed = AssertRunsWithoutConditionalIndexWarning(`
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        static string Contract(string? value) => (string)value;
+        static char? Unknown(string? seed)
+        {
+            string? other = seed, s = null;
+            s = (other ??= Contract(null));
+            return s?[0];
+        }
+        static char? Known()
+        {
+            string? other = null, s = null;
+            other = "k";
+            s = (other ??= Contract(null));
+            return s?[0];
+        }
+        static char? Fallback()
+        {
+            string? other = null, s = null;
+            s = (other ??= "f");
+            return s?[0];
+        }
+        public static string Run() => Unknown(null) + "|" + Unknown("u") + "|" + Known() + "|" + Fallback() + "|end";
+    }
+}`)
+        Assert.Contains("object.ReferenceEquals", printed)
+        Assert.Contains("cast[char?](s[0])", printed)
+    }
+
     @Fact
     func AssignmentsAndBranchJoins_NarrowOnlyAfterTheWrite() {
         let printed = AssertRunsWithoutConditionalIndexWarning(`
