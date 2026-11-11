@@ -33,6 +33,27 @@ class BoundListPattern : BoundPattern {
         LengthProperty = lengthProperty
         IndexerProperty = indexerProperty
         InputVariable = inputVariable
+        let values = ImmutableArray.CreateBuilder[LocalVariableSymbol?](elements.Length)
+        let loaded = ImmutableArray.CreateBuilder[LocalVariableSymbol?](elements.Length)
+        for element in elements {
+            let needsCache = indexerProperty != nil && element.InputReadCount > 1
+            values.Add(
+                if needsCache {
+                    LocalVariableSymbol("<list-element>", isReadOnly: false, elementType)
+                } else {
+                    nil
+                }
+            )
+            loaded.Add(
+                if needsCache {
+                    LocalVariableSymbol("<list-element-loaded>", isReadOnly: false, TypeSymbol.Bool)
+                } else {
+                    nil
+                }
+            )
+        }
+        ElementVariables = values.MoveToImmutable()
+        ElementLoadedVariables = loaded.MoveToImmutable()
     }
 
     /// ```xmldoc
@@ -64,6 +85,16 @@ class BoundListPattern : BoundPattern {
 
     /// Gets the synthesized spill local for an indexable discriminant.
     prop InputVariable LocalVariableSymbol? {
+        get;
+    }
+
+    /// Gets the lazy element caches for compound indexable element patterns.
+    internal prop ElementVariables ImmutableArray[LocalVariableSymbol?] {
+        get;
+    }
+
+    /// Gets the flags that guard element caches across short-circuit branches.
+    internal prop ElementLoadedVariables ImmutableArray[LocalVariableSymbol?] {
         get;
     }
 }

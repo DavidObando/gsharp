@@ -577,6 +577,12 @@ internal class SlotPlanner {
                         if lp.InputVariable != nil {
                             AllocatePatternLocal(lp.InputVariable, locals, localTypes)
                         }
+                        for var i = 0; i < lp.Elements.Length; i++ {
+                            if lp.ElementVariables[i] is {} value {
+                                AllocatePatternLocal(value, locals, localTypes)
+                                AllocatePatternLocal(lp.ElementLoadedVariables[i]!!, locals, localTypes)
+                            }
+                        }
                         for elem in lp.Elements {
                             AllocatePatternBindings(elem, locals, localTypes, typePatternScratchSlots)
                         }
