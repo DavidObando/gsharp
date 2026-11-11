@@ -4027,14 +4027,14 @@ partial class CSharpToGSharpTranslator {
             // Issue #5537: an array stored in oblivious container storage has its
             // element type, nested positions included (#5541).
             elementType = this.PromoteObliviousArrayElement(elementType, elementTypeSymbol, creation)
-            if this.TryGetAssignedInferredArrayInitializer(creation) is {} assignedInitArray {
+            if this.TryGetAssignedInferredArrayInitializer(creation, out var lhsDepthOffset) is {} assignedInitArray {
                 let initComponent = this.GetImplicitArrayComponent(assignedInitArray)
                 elementType = this.PromoteImplicitArrayLevel(
                     elementType,
                     elementTypeSymbol,
                     assignedInitArray,
                     initComponent.Levels,
-                    initComponent.Depth
+                    initComponent.Depth + lhsDepthOffset
                 )
             }
             return ArrayAllocationExpression(elementType, length)
