@@ -5923,7 +5923,10 @@ partial class CSharpToGSharpTranslator {
                 GetReferencedLocal(this.context.SemanticModel.GetOperation(unwrappedValue!!))
             let isFlowNarrowedLocal = valueLocal != nil &&
                 (
-                this.IsDominatedByNullCheckGuard(unwrappedValue, valueLocal) ||
+                this.IsGSharpFlowNarrowedLocal(unwrappedValue) || this.IsDominatedByNullCheckGuard(
+                    unwrappedValue,
+                    valueLocal
+                ) ||
                     (
                     !this.IsObliviousCompilation() &&
                         this
@@ -9617,32 +9620,128 @@ partial class CSharpToGSharpTranslator {
                 expression = parenthesized.Expression
             }
             let symbol ISymbol? = this.context.GetSymbolInfo(expression).Symbol
-            if !(expression is IdentifierNameSyntax) ||
-                !((symbol is ILocalSymbol || symbol is IParameterSymbol)) ||
-                (
-                requireRoslynFlowNotNull &&
-                    this
-                    .context
-                    .GetTypeInfo(expression)
-                    .Nullability
-                    .FlowState != Microsoft
-                    .CodeAnalysis
-                    .NullableFlowState
-                    .NotNull
-            ) {
+            if !(expression is IdentifierNameSyntax) || !((symbol is ILocalSymbol || symbol is IParameterSymbol)) {
                 return false
             }
-            let scope_ Microsoft.CodeAnalysis.SyntaxNode? = this.state.CurrentBodyScope ?? expression.Ancestors()
-                .FirstOrDefault(
+            let flowState = this.context.GetTypeInfo(expression).Nullability.FlowState
+            if requireRoslynFlowNotNull &&
+                flowState != Microsoft
+                .CodeAnalysis
+                .NullableFlowState
+                .NotNull &&
+                flowState != Microsoft
+                .CodeAnalysis
+                .NullableFlowState
+                .None {
+                return false
+            }
+            let requireJumpFreeScope = requireRoslynFlowNotNull &&
+                flowState != Microsoft
+                .CodeAnalysis
+                .NullableFlowState
+                .NotNull
+            let nearestCallable = expression.Ancestors().FirstOrDefault(
                 (node Microsoft.CodeAnalysis.SyntaxNode) -> node is BaseMethodDeclarationSyntax ||
                     node is AccessorDeclarationSyntax ||
+                    node is BasePropertyDeclarationSyntax ||
                     node is LocalFunctionStatementSyntax ||
                     node is AnonymousFunctionExpressionSyntax
             )
+            let scope_ Microsoft
+                .CodeAnalysis
+                .SyntaxNode? = if nearestCallable is LocalFunctionStatementSyntax ||
+                nearestCallable is AnonymousFunctionExpressionSyntax {
+                nearestCallable
+            } else {
+                this.state.CurrentBodyScope ?? nearestCallable ?? expression.SyntaxTree.GetRoot()
+            }
             if scope_ == nil {
                 return false
             }
-            for isPattern in scope_.DescendantNodes(
+            if this.IsGSharpFlowNarrowedLocalInScope(expression, symbol, scope_, requireJumpFreeScope) {
+                return true
+            }
+            if !(scope_ is LocalFunctionStatementSyntax || scope_ is AnonymousFunctionExpressionSyntax) {
+                return false
+            }
+            let declaration Microsoft
+                .CodeAnalysis
+                .SyntaxNode? = symbol!!
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax()
+            let declaringScope Microsoft.CodeAnalysis.SyntaxNode? = if declaration == nil {
+                default(Microsoft.CodeAnalysis.SyntaxNode?)
+            } else {
+                declaration.Ancestors().FirstOrDefault(
+                    (node Microsoft.CodeAnalysis.SyntaxNode) -> node is BaseMethodDeclarationSyntax ||
+                        node is AccessorDeclarationSyntax ||
+                        node is BasePropertyDeclarationSyntax ||
+                        node is LocalFunctionStatementSyntax ||
+                        node is AnonymousFunctionExpressionSyntax
+                ) ??
+                    declaration
+                    .SyntaxTree
+                    .GetRoot()
+            }
+            if declaringScope == nil || object.ReferenceEquals(scope_, declaringScope) || !declaringScope.Span.Contains(
+                scope_.Span
+            ) ||
+                !this.IsEmittedReadOnlyCapture(symbol!!, declaration, declaringScope) {
+                return false
+            }
+            var currentScope Microsoft.CodeAnalysis.SyntaxNode? = scope_
+            while currentScope != nil && !object.ReferenceEquals(currentScope, declaringScope) {
+                if !this.ClosurePreservesEnclosingReadOnlyNarrowing(currentScope) {
+                    return false
+                }
+                let parentScope Microsoft.CodeAnalysis.SyntaxNode? = currentScope.Ancestors().FirstOrDefault(
+                    (node Microsoft.CodeAnalysis.SyntaxNode) -> node is BaseMethodDeclarationSyntax ||
+                        node is AccessorDeclarationSyntax ||
+                        node is BasePropertyDeclarationSyntax ||
+                        node is LocalFunctionStatementSyntax ||
+                        node is AnonymousFunctionExpressionSyntax
+                ) ??
+                    currentScope
+                    .SyntaxTree
+                    .GetRoot()
+                if parentScope == nil || object.ReferenceEquals(parentScope, currentScope) {
+                    return false
+                }
+                if this.IsGSharpFlowNarrowedLocalInScope(expression, symbol, parentScope, requireJumpFreeScope) {
+                    return true
+                }
+                currentScope = parentScope
+            }
+            return false
+        }
+
+        private func IsGSharpFlowNarrowedLocalInScope(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            symbol ISymbol?,
+            $scope Microsoft.CodeAnalysis.SyntaxNode,
+            requireJumpFreeScope bool
+        ) bool {
+            if requireJumpFreeScope &&
+                (
+                this.GetScopeGotoIndex($scope).Jumps.Count > 0 || this.ScopeSynthesizesLoopContinueLabel($scope) ||
+                    $scope
+                    .DescendantNodes(
+                    (node Microsoft.CodeAnalysis.SyntaxNode) -> !(
+                        node is LocalFunctionStatementSyntax || node is AnonymousFunctionExpressionSyntax
+                    )
+                )
+                    .Any(
+                    (node Microsoft.CodeAnalysis.SyntaxNode) -> node is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .LabeledStatementSyntax
+                )
+            ) {
+                return false
+            }
+            for isPattern in $scope.DescendantNodes(
                 (node Microsoft.CodeAnalysis.SyntaxNode) -> !(
                     (node is LocalFunctionStatementSyntax || node is AnonymousFunctionExpressionSyntax)
                 )
@@ -9662,20 +9761,20 @@ partial class CSharpToGSharpTranslator {
                 ) ||
                     !this
                     .ComputePatternFlowRegions(isPattern, whenTrue, includeWhenClauseRegion: false).Any(
-                    (region Microsoft.CodeAnalysis.SyntaxNode) -> region.Span.Contains(expression!!.Span)
+                    (region Microsoft.CodeAnalysis.SyntaxNode) -> region.Span.Contains(expression.Span)
                 ) ||
-                    this.ClosureAssignedLocalLosesNarrowing(symbol, isPattern, expression, scope_) ||
-                    this.SymbolIsWrittenBetween(symbol, isPattern, expression, scope_) || this.HasLoopCarriedWrite(
+                    this.ClosureAssignedLocalLosesNarrowing(symbol, isPattern, expression, $scope) ||
+                    this.SymbolIsWrittenBetween(symbol, isPattern, expression, $scope) || this.HasLoopCarriedWrite(
                     expression,
                     symbol,
-                    scope_,
+                    $scope,
                     isPattern
                 ) {
                     continue
                 }
                 return true
             }
-            for nullCheck in scope_.DescendantNodes(
+            for nullCheck in $scope.DescendantNodes(
                 (node Microsoft.CodeAnalysis.SyntaxNode) -> !(
                     (node is LocalFunctionStatementSyntax || node is AnonymousFunctionExpressionSyntax)
                 )
@@ -9688,20 +9787,116 @@ partial class CSharpToGSharpTranslator {
                 ) ||
                     !this
                     .ComputeBooleanFlowRegions(nullCheck, whenTrue, includeWhenClauseRegion: false).Any(
-                    (region Microsoft.CodeAnalysis.SyntaxNode) -> region.Span.Contains(expression!!.Span)
+                    (region Microsoft.CodeAnalysis.SyntaxNode) -> region.Span.Contains(expression.Span)
                 ) ||
-                    this.ClosureAssignedLocalLosesNarrowing(symbol, nullCheck, expression, scope_) ||
-                    this.SymbolIsWrittenBetween(symbol, nullCheck, expression, scope_) || this.HasLoopCarriedWrite(
+                    this.ClosureAssignedLocalLosesNarrowing(symbol, nullCheck, expression, $scope) ||
+                    this.SymbolIsWrittenBetween(symbol, nullCheck, expression, $scope) || this.HasLoopCarriedWrite(
                     expression,
                     symbol,
-                    scope_,
+                    $scope,
                     nullCheck
                 ) {
                     continue
                 }
                 return true
             }
-            return this.IsGSharpSwitchNarrowedLocal(expression, symbol, scope_)
+            return this.IsGSharpSwitchNarrowedLocal(expression, symbol, $scope)
+        }
+
+        private func IsEmittedReadOnlyCapture(
+            symbol ISymbol,
+            declaration Microsoft.CodeAnalysis.SyntaxNode?,
+            declaringScope Microsoft.CodeAnalysis.SyntaxNode
+        ) bool {
+            if this.IsByReferenceVariable(symbol) || this.IsSymbolReassigned(symbol, declaringScope) ||
+                this.IsClosureAssignedVariable(symbol) || this.state.HoistedNullableGuardLocals.Contains(symbol) {
+                return false
+            }
+            if symbol is IParameterSymbol {
+                return true
+            }
+            if symbol is not ILocalSymbol local {
+                return false
+            }
+            if this
+                .state
+                .PatternBindings
+                .TryGetValue(local, out var boundReplacement) &&
+                this
+                .state
+                .StoredPatternCaptures
+                .Contains(boundReplacement) {
+                return false
+            }
+            return switch declaration {
+                case SingleVariableDesignationSyntax: declaration.Ancestors().Any(
+                    (node Microsoft.CodeAnalysis.SyntaxNode) -> node is ForEachVariableStatementSyntax forEach &&
+                        forEach
+                        .Variable
+                        .Span
+                        .Contains(declaration.Span)
+                )
+                case declarator is VariableDeclaratorSyntax: (declarator.Initializer != nil || local.IsConst) &&
+                    declarator.Parent is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .VariableDeclarationSyntax{
+                    Parent: Microsoft.CodeAnalysis.CSharp.Syntax.LocalDeclarationStatementSyntax
+                }
+                default: false
+            }
+        }
+
+        private func ClosurePreservesEnclosingReadOnlyNarrowing(closure Microsoft.CodeAnalysis.SyntaxNode) bool {
+            if closure is AnonymousFunctionExpressionSyntax {
+                return true
+            }
+            if closure is not LocalFunctionStatementSyntax localFunction || localFunction.Modifiers.Any(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.StaticKeyword
+            ) ||
+                this
+                .context
+                .GetDeclaredSymbol(localFunction) is not IMethodSymbol localMethod ||
+                this
+                .state
+                .LiftedRecursiveLocalFunctions
+                .ContainsKey(localMethod) ||
+                this
+                .state
+                .LiftedStaticLocalFunctions
+                .ContainsKey(localMethod) {
+                return false
+            }
+            let statements IReadOnlyList[Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax]? = switch localFunction
+                .Parent {
+                case block is BlockSyntax: block.Statements
+                case section is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchSectionSyntax: section.Statements
+                default: default(IReadOnlyList[Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax]?)
+            }
+            if statements != nil {
+                for statement in statements {
+                    if object.ReferenceEquals(statement, localFunction) {
+                        break
+                    }
+                    if statement
+                        .DescendantNodes()
+                        .OfType[SimpleNameSyntax]()
+                        .Any(
+                        (id SimpleNameSyntax) -> id
+                            .Identifier
+                            .ValueText == localFunction
+                            .Identifier
+                            .ValueText &&
+                            SymbolEqualityComparer
+                            .Default
+                            .Equals(this.context.GetSymbolInfo(id).Symbol?.OriginalDefinition, localMethod)
+                    ) {
+                        return false
+                    }
+                }
+            }
+            return true
         }
 
         // A `goto case` or `goto default` enters a section without its case test, and gsc does not narrow there.
@@ -9793,9 +9988,6 @@ partial class CSharpToGSharpTranslator {
                 node != $scope;
                 node = node!!
                 .Parent {
-                if node is LocalFunctionStatementSyntax || node is AnonymousFunctionExpressionSyntax {
-                    return false
-                }
                 var guard_ Microsoft.CodeAnalysis.SyntaxNode? = nil
                 var governing Microsoft.CodeAnalysis.SyntaxNode? = nil
                 switch node {
@@ -16824,10 +17016,8 @@ partial class CSharpToGSharpTranslator {
             // (GS0155). Scope the suppression to the symbol kinds gsc narrows
             // and let the field/property case fall through to the shared rules.
             let valueSymbol ISymbol? = this.context.GetSymbolInfo(value).Symbol
-            if (valueSymbol is ILocalSymbol || valueSymbol is IParameterSymbol) && this.IsDominatedByNullCheckGuard(
-                value,
-                valueSymbol
-            ) {
+            if (valueSymbol is ILocalSymbol || valueSymbol is IParameterSymbol) &&
+                (this.IsGSharpFlowNarrowedLocal(value) || this.IsDominatedByNullCheckGuard(value, valueSymbol)) {
                 return false
             }
             // The caller proved that the indexer key stays non-null (issue #5254).
@@ -18048,9 +18238,10 @@ partial class CSharpToGSharpTranslator {
             // non-null arguments: the migrated Cs2Gs.Pipeline
             // `PrepareTemporaryBuildProps` GS0154 walls).
             if IsNullOrSuppressedNull(use) || this.IsSyntacticallyNullableResultShape(use) ||
-                !this.IsObliviousCompilation() || this.IsWithinExpressionTreeLambda(use) ||
-                this.LambdaResultFeedsNullableObservedInvocation(use) || this.FindResultLambda(use) is not{} lambda ||
-                this.LambdaResultFlowsToNullableSink(lambda) || this.LambdaResultFeedsUnobservedTaskRun(use) ||
+                this.IsGSharpFlowNarrowedLocal(use) || !this.IsObliviousCompilation() ||
+                this.IsWithinExpressionTreeLambda(use) || this.LambdaResultFeedsNullableObservedInvocation(use) ||
+                this.FindResultLambda(use) is not{} lambda || this.LambdaResultFlowsToNullableSink(lambda) ||
+                this.LambdaResultFeedsUnobservedTaskRun(use) ||
                 !(this.GetLambdaTargetDelegateType(lambda) is {DelegateInvokeMethod: {} invoke}) ||
                 GetEffectiveReturnType(
                 invoke.ReturnType,
