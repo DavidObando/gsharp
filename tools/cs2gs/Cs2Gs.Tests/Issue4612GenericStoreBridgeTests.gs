@@ -1352,6 +1352,29 @@ public static class C
     }
 
     @Theory
+    @InlineData("new string?[] { slot = value }")
+    @InlineData("new string?[] { true ? slot = value : \"safe\" }")
+    @InlineData("new string?[] { 0 switch { _ => slot = value } }")
+    func NestedAssignment_PreservesTheIntermediateNonNullContract(expression string) {
+        let source = `#nullable enable
+public static class C
+{
+    public static void Store(string? value, string safe)
+    {
+        string slot = "";
+        var result = ` + expression + `;
+        string? nullableSlot = "";
+        var controls = new string?[] { nullableSlot = value, slot = safe };
+    }
+}`
+        let (printed, _) = Translate(source, nullableContext: NullableContextOptions.Enable)
+        TranslationTestValidation.AssertBinds(printed)
+        Assert.Contains("slot = value!!", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("nullableSlot = value!!", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("safe!!", printed, StringComparison.Ordinal)
+    }
+
+    @Theory
     @InlineData("=")
     @InlineData("??=")
     func OrdinaryAssignmentResults_ResolveOuterGenericStoresAndPreserveConcreteControls(assignment string) {

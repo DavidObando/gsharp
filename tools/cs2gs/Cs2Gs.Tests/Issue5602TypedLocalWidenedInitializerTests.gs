@@ -258,6 +258,171 @@ namespace Demo
         Assert.Contains("        var n = (n = SystemObject())\n        return n.ToString()\n", printed)
     }
 
+    /// Issue #5645: both the typed promoted local and its inferred source keep the conditional's narrowing.
+    @Fact
+    func Issue5645_PromotedLocalInItsOwnNullTestArm_DoesNotAssert() {
+        let (printed, compilation) = Translate(`
+namespace Demo
+{
+    public class Node
+    {
+        public Node Child { get; }
+        public bool IsValid { get; }
+        public override string ToString() => "node";
+    }
+    public record Entry(Node Item, int Id);
+    public static class Use
+    {
+        public static Entry Empty() => new Entry(null, 0);
+        public static string Tested(Entry entry) { var item = entry.Item; object o = item; return o == null ? "null" : o.ToString(); }
+        public static string Inferred(Entry entry) { var item = entry.Item; return item == null ? "null" : item.ToString(); }
+        public static string StablePath(Entry entry)
+        {
+            var item = entry.Item;
+            if (item == null) return "null";
+            return item.Child == null || !item.Child.IsValid ? "node" : "bad";
+        }
+        public static string Run() => Tested(Empty()) + " " + Tested(new Entry(new Node(), 1)) + " " +
+            Inferred(Empty()) + " " + Inferred(new Entry(new Node(), 1)) + " " +
+            StablePath(Empty()) + " " + StablePath(new Entry(new Node(), 1));
+    }
+}`)
+        Assert.Equal("null node null node null node", RunCSharp(compilation).Trim())
+        Assert.Equal("null node null node null node", CompileAndRun(printed).Trim())
+        Assert.Contains("let o object? = item\n", printed)
+        Assert.DoesNotContain("!!", printed)
+    }
+
+    /// Issue #5645: receiver and argument reads share G#'s guard regions even without Roslyn flow analysis.
+    @Fact
+    func Issue5645_PromotedLocalGuardRegions_NarrowReceiverAndArgumentReads() {
+        let source = StringBuilder(`
+namespace Demo
+{
+    public class Node { public override string ToString() => "node"; }
+    public record Entry(Node Item, int Id);
+    public static class Use
+    {
+        public static Entry Empty() => new Entry(null, 0);
+        public static Entry Full() => new Entry(new Node(), 1);
+#nullable enable
+        public static bool TakeNonNull(object value) => value.GetType().Name == "Node";
+#nullable disable
+`)
+        let calls = List[string]()
+        for initializer in[]string{"var item = entry.Item; object o = item;", "var o = entry.Item;"} {
+            for read in[]string{"o.ToString() == \"node\"", "TakeNonNull(o)"} {
+                for guard_ in[]string{
+                    "return o == null ? false : READ;",
+                    "return o != null ? READ : false;",
+                    "return o is null ? false : READ;",
+                    "return o is not null ? READ : false;",
+                    "return o != null && READ;",
+                    "return !(o == null || !(READ));",
+                    "if (o != null) return READ; return false;",
+                    "if (o == null) return false; else return READ;",
+                    "if (o == null) return false; return READ;",
+                    "if (o is null) return false; return READ;"
+                } {
+                    let name = "Test${calls.Count}"
+                    source.Append("public static bool $name(Entry entry) { $initializer ")
+                    source.Append(guard_.Replace("READ", read))
+                    source.Append(" }\n")
+                    calls.Add("$name(Empty())")
+                    calls.Add("$name(Full())")
+                }
+            }
+        }
+        source.Append("public static string Run() => " + string.Join(" + \" \" + ", calls) + "; } }")
+        let (printed, compilation) = Translate(source.ToString())
+        let expected = string.Join(" ", Enumerable.Repeat("False True", calls.Count / 2))
+        Assert.Equal(expected, RunCSharp(compilation).Trim())
+        Assert.Equal(expected, CompileAndRun(printed).Trim())
+        Assert.Contains("func TakeNonNull(value object) bool", printed)
+        Assert.DoesNotContain("o!!", printed)
+    }
+
+    /// Issue #5645: writes and escaped closure calls end narrowing; mutable captures do not inherit an outer guard.
+    @Fact
+    func Issue5645_PromotedLocalInvalidatedGuards_KeepRequiredAssertions() {
+        let (printed, compilation) = Translate(`
+namespace Demo
+{
+    public class Node { public override string ToString() => "node"; }
+    public record Entry(Node Item, int Id);
+    public static class Use
+    {
+        public static Entry Empty() => new Entry(null, 0);
+        public static bool SideEffect(System.Action write) { write(); return true; }
+#nullable enable
+        public static string TakeNonNull(object value) => value.GetType().Name;
+#nullable disable
+        public static string Conditional(Entry entry)
+        {
+            object o = entry.Item;
+            System.Action write = () => { o = null; };
+            return o != null && SideEffect(write) ? o.ToString() : "null";
+        }
+        public static string ConditionalArgument(Entry entry)
+        {
+            object o = entry.Item;
+            System.Action write = () => { o = null; };
+            return o != null && SideEffect(write) ? TakeNonNull(o) : "null";
+        }
+        public static string Arm(Entry entry)
+        {
+            object o = entry.Item;
+            System.Action write = () => { o = null; };
+            return o == null ? "null" : SideEffect(write) ? TakeNonNull(o) : "bad";
+        }
+        public static string IfArm(Entry entry)
+        {
+            object o = entry.Item;
+            System.Action write = () => { o = null; };
+            if (o != null) { SideEffect(write); return TakeNonNull(o); }
+            return "null";
+        }
+        public static string Reassigned(Entry entry)
+        {
+            object o = entry.Item;
+            if (o == null) return "null";
+            o = Empty().Item;
+            return o.ToString();
+        }
+        public static string Captured(Entry entry)
+        {
+            object o = entry.Item;
+            if (o == null) return "null";
+            System.Func<string> read = () => o.ToString();
+            o = Empty().Item;
+            return read();
+        }
+        public static string AssignedCondition(Entry entry)
+        {
+            object o = null;
+            return (o = entry.Item) != null ? o.ToString() : "null";
+        }
+        public static string Guard(Entry entry, int shape)
+        {
+            try { return shape == 0 ? Conditional(entry) : shape == 1 ? ConditionalArgument(entry) :
+                shape == 2 ? Arm(entry) : shape == 3 ? Reassigned(entry) : shape == 4 ? Captured(entry) : IfArm(entry); }
+            catch (System.NullReferenceException) { return "nre"; }
+        }
+        public static string Run()
+        {
+            var full = new Entry(new Node(), 1);
+            return Guard(Empty(), 0) + " " + Guard(full, 0) + " " + Guard(full, 1) + " " +
+                Guard(full, 2) + " " + Guard(full, 3) + " " + Guard(full, 4) + " " + Guard(full, 5) + " " +
+                AssignedCondition(Empty()) + " " + AssignedCondition(full);
+        }
+    }
+}`)
+        Assert.Equal("null nre nre nre nre nre nre null node", RunCSharp(compilation).Trim())
+        Assert.Equal("null nre nre nre nre nre nre null node", CompileAndRun(printed).Trim())
+        Assert.Contains("o!!.ToString()", printed)
+        Assert.Contains("TakeNonNull(o!!)", printed)
+    }
+
     shared {
         private func Translate(source string)(Printed string, Compilation CSharpCompilation) {
             let tree = CSharpSyntaxTree.ParseText(
@@ -332,7 +497,10 @@ Translated G#:
 ` + printed
                 )
                 let (runExit, runOutput) = RunDotnet(dllPath)
-                Assert.True(runExit == 0, "Translated snippet must run successfully. Output:\n" + runOutput)
+                Assert.True(
+                    runExit == 0,
+                    "Translated snippet must run successfully. Output:\n" + runOutput + "\nTranslated G#:\n" + printed
+                )
                 return runOutput
             } finally {
                 Directory.Delete(workDir, recursive: true)
