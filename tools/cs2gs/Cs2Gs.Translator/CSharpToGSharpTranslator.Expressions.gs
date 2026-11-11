@@ -13826,23 +13826,34 @@ partial class CSharpToGSharpTranslator {
                 this.IsPrimaryConstructorFieldRead(symbol!!, expression) {
                 return false
             }
+            let declaration Microsoft
+                .CodeAnalysis
+                .SyntaxNode? = symbol!!
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax()
+            let declaringScope Microsoft.CodeAnalysis.SyntaxNode? = if declaration == nil {
+                default(Microsoft.CodeAnalysis.SyntaxNode?)
+            } else {
+                this.EnclosingFlowScope(declaration) ?? declaration.SyntaxTree.GetRoot()
+            }
             let flowState = this.context.GetTypeInfo(expression).Nullability.FlowState
             if requireRoslynFlowNotNull &&
                 flowState != Microsoft
                 .CodeAnalysis
                 .NullableFlowState
                 .NotNull &&
-                flowState != Microsoft
-                .CodeAnalysis
-                .NullableFlowState
-                .None {
+                !(
+                flowState == Microsoft
+                    .CodeAnalysis
+                    .NullableFlowState
+                    .None &&
+                    declaringScope != nil &&
+                    this.IsEmittedReadOnlyCapture(symbol!!, declaration, declaringScope)
+            ) {
                 return false
             }
-            let requireJumpFreeScope = requireRoslynFlowNotNull &&
-                flowState != Microsoft
-                .CodeAnalysis
-                .NullableFlowState
-                .NotNull
+            let requireJumpFreeScope = flowState != Microsoft.CodeAnalysis.NullableFlowState.NotNull
             let nearestCallable = expression.AncestorsAndSelf().FirstOrDefault(
                 (ancestor Microsoft.CodeAnalysis.SyntaxNode) -> ancestor is BaseMethodDeclarationSyntax ||
                     ancestor is AccessorDeclarationSyntax ||
@@ -13863,24 +13874,13 @@ partial class CSharpToGSharpTranslator {
             if this.IsGSharpFlowNarrowedLocalInScope(expression, expression, symbol, scope_, requireJumpFreeScope) {
                 return true
             }
-            if !this.IsClosureBoundary(scope_) {
-                return false
-            }
-            let declaration Microsoft
-                .CodeAnalysis
-                .SyntaxNode? = symbol!!
-                .DeclaringSyntaxReferences
-                .FirstOrDefault()
-                ?.GetSyntax()
-            let declaringScope Microsoft.CodeAnalysis.SyntaxNode? = if declaration == nil {
-                default(Microsoft.CodeAnalysis.SyntaxNode?)
-            } else {
-                this.EnclosingFlowScope(declaration) ?? declaration.SyntaxTree.GetRoot()
-            }
-            if declaringScope == nil || object.ReferenceEquals(scope_, declaringScope) || !declaringScope.Span.Contains(
-                scope_.Span
+            if !this.IsClosureBoundary(scope_) || declaringScope == nil || object.ReferenceEquals(
+                scope_,
+                declaringScope
             ) ||
-                !this.IsEmittedReadOnlyCapture(symbol!!, declaration, declaringScope) {
+                !declaringScope
+                .Span
+                .Contains(scope_.Span) || !this.IsEmittedReadOnlyCapture(symbol!!, declaration, declaringScope) {
                 return false
             }
             var currentScope Microsoft.CodeAnalysis.SyntaxNode? = scope_

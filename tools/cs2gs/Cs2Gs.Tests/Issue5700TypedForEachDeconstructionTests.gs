@@ -460,13 +460,13 @@ namespace TypedForEach {
              }`
             case "in-closure local reassignment":
             `callbacks.Add(() => {
-                 string a = GetMaybe(true);
+                 string? a = GetMaybe(true);
                  if (a is null) return 0;
                  a = GetMaybe(true);
                  return a.Length;
              });`
             case "query clause assignment invalidates guard":
-            `string a = GetMaybe(true);
+            `string? a = GetMaybe(true);
              var q = from n in new[] { 0 } let unused = a = GetMaybe(true) select n;
              if (a is null) return "0";
              _ = q.ToArray();
