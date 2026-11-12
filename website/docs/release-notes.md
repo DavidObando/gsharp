@@ -16,6 +16,11 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Infer inline `out` locals from substituted generic function parameters, preserving closed reference and value types and caller type parameters. (Fixes #5971)
+- Accept return-target attributes on delegates and emit them on `Invoke` return parameters. Preserve type and parameter attributes. Reject unsupported delegate return `MarshalAs` with `GS0360` instead of omitting required marshalling metadata. (Fixes #5967)
+
+- Share local default-value and deconstruction reachability through sparse alias dependencies and finite tuple-index summaries, including reassigned locals, split aliases, loop-carried cycles and tuple-unboxing cycles. (Fixes #5633)
+
 - Preserve nullable tuple leaves in generic indexer writes in `cs2gs`, instead of inserting runtime null assertions. (Part of #5948)
 - **Preserve promoted-local null-guard narrowing in `cs2gs`** (Fixes #5645). Nullable-oblivious translations omit redundant `!!` assertions on guarded immutable-local receiver and argument reads. Mutable receivers, intervening escaped-closure calls, and mutable capture boundaries retain required assertions. Promoted nullable tuple destinations accept values changed through ref aliases without asserting the yielded value. Destination projection preserves intermediate assignment contracts before following assignment results into nullable arrays.
 - Preserve imported nullable tuple leaf contracts during generic identity and hierarchy conversions. Resolve CLR nullable members on symbolic optional tuples; a nil tuple's `ToString()` returns an empty string. (Fixes #5956)
