@@ -114,6 +114,72 @@ AddressEffects.Dump()`, "I0;I1;CPair;Lp;Hx;Fx;WPairFalse/True;AFalse/True/True/T
         )
     }
 
+    @Theory
+    @InlineData(false, "E;VTrue;Lp;Hx;Fx;WValueTrue;|1/1/2/0/0")
+    @InlineData(true, "N;V7;Lp;Hx;Fx;WValue7;|0/1/2/0/0")
+    func InArguments_ForwardValuesAndConversions_ToSelectedConstructor(widen bool, expected string) {
+        let value = if widen {
+            "BoundaryEffects.Number()"
+        } else {
+            `Effects.Flag("E", true)`
+        }
+        let method = if widen {
+            "WriteWide"
+        } else {
+            "WriteValue"
+        }
+        let handler = if widen {
+            "WideHandler"
+        } else {
+            "ValueHandler"
+        }
+        AssertParity(
+            "BoundaryEffects." + method + "(" + value + `, "p${Effects.Hole("x")}")`,
+            "var value = " + value + ";\nvar handler = new " + handler + `(1, 1, value, out bool gate);
+if (gate) { handler.AppendLiteral("p"); handler.AppendFormatted(Effects.Hole("x")); }
+BoundaryEffects.` + method + "(in value, handler)",
+            expected,
+            ReferenceLibrary + AddressLibrary + BoundaryLibrary
+        )
+    }
+
+    @Theory
+    @InlineData("values[99]", "AddressEffects.WriteTagged", "IndexOutOfRangeException")
+    @InlineData("BoundaryEffects.NullValues[0]", "AddressEffects.WriteTagged", "NullReferenceException")
+    @InlineData("BoundaryEffects.CovariantValues[0]", "BoundaryEffects.WriteObject", "ArrayTypeMismatchException")
+    func CapturedAddresses_ValidateBeforeFollowingArgumentEffects(target string, method string, exception string) {
+        let arguments = "(value: ref " + target + `, tag: AddressEffects.Tag(), handler: `
+        AssertParity("var values = AddressEffects.Values\ntry {\n" + method + arguments + `"p${Effects.Hole("x")}")
+} catch (ex Exception) { Effects.Trace += ex.GetType().Name + ";" }
+BoundaryEffects.DumpTags()
+AddressEffects.Dump()`, "var values = AddressEffects.Values;\ntry {\n" + method + arguments + `$"p{Effects.Hole("x")}");
+} catch (System.Exception ex) { Effects.Trace += ex.GetType().Name + ";"; }
+BoundaryEffects.DumpTags();
+AddressEffects.Dump()`, exception +
+                ";Tags0;ATrue/True/True/True;N0;R0;BTrue/True;|0/0/0/0/0", ReferenceLibrary +
+                AddressLibrary +
+                BoundaryLibrary)
+    }
+
+    @Theory
+    @InlineData("false", "LongFalse/False;WriteFalse/False;CallerFalse;|0/0/0/0/0")
+    @InlineData("true", "LongTrue/False;Lp;Hx;Fx;WriteTrue/False;CallerFalse;|0/1/2/0/0")
+    func ForwardedRefKind_SelectsRefOverload_NotCompetingOutGate(enabled string, expected string) {
+        AssertParity("var append = true\nBoundaryEffects.WriteChoice(" + enabled + `, ref append, "p${Effects.Hole("x")}")
+BoundaryEffects.DumpCaller(append)`, "bool append = true;\nBoundaryEffects.WriteChoice(" + enabled + `, ref append, $"p{Effects.Hole("x")}");
+BoundaryEffects.DumpCaller(append)`, expected, ReferenceLibrary + AddressLibrary + BoundaryLibrary)
+    }
+
+    @Fact
+    func CapturedReadOnlyRefReturn_KeepsCallerAlias_WhenHoleChangesStorage() {
+        AssertParity(
+            `RefApi.WriteIn(in BoundaryEffects.Borrow(), "p${BoundaryEffects.Flip()}")`,
+            `RefApi.WriteIn(in BoundaryEffects.Borrow(), $"p{BoundaryEffects.Flip()}")`,
+            "CInTrue;Lp;M;Hx;Fx;WInFalse;|0/1/2/0/0",
+            ReferenceLibrary + AddressLibrary + BoundaryLibrary
+        )
+    }
+
     shared {
         private func AssertParity(gsharp string, csharp string, expected string, additionalLibrary string = "") {
             using let fixture = NativeSliceLanguageTests.Fixture()
@@ -232,10 +298,10 @@ public struct PairRefHandler {
 public static class AddressEffects {
     public static bool[] Values = { true, true, true, true };
     public static AddressCell[] Cells = { new AddressCell(), new AddressCell() };
-    public static int Indices, Receivers;
+    public static int Indices, Receivers, Tags;
     public static int NextIndex() { Effects.Trace += $"I{Indices};"; return Indices++; }
     public static AddressCell NextCell() { Effects.Trace += $"R{Receivers};"; return Cells[Receivers++]; }
-    public static int Tag() { Effects.Trace += "T;"; return 7; }
+    public static int Tag() { Tags++; Effects.Trace += "T;"; return 7; }
     public static void WriteTagged(int tag, ref bool value,
         [InterpolatedStringHandlerArgument("value")] RefHandler handler) { Effects.Trace += $"WTag{tag}/{value};"; }
     public static void WritePair(ref bool first, ref bool second,
@@ -245,6 +311,63 @@ public static class AddressEffects {
     public static void Dump() {
         Effects.Trace += $"A{Values[0]}/{Values[1]}/{Values[2]}/{Values[3]};N{Indices};R{Receivers};B{Cells[0].Value}/{Cells[1].Value};";
     }
+}`
+
+        private const BoundaryLibrary string = `
+[InterpolatedStringHandler]
+public struct ValueHandler {
+    public ValueHandler(int literalLength, int formattedCount, bool value, out bool shouldAppend) {
+        shouldAppend = value; Effects.Trace += $"V{value};";
+    }
+    public void AppendLiteral(string value) { Effects.Appends++; Effects.Trace += "L" + value + ";"; }
+    public void AppendFormatted(string value) { Effects.Appends++; Effects.Trace += "F" + value + ";"; }
+}
+[InterpolatedStringHandler]
+public struct WideHandler {
+    public WideHandler(int literalLength, int formattedCount, long value, out bool shouldAppend) {
+        shouldAppend = true; Effects.Trace += $"V{value};";
+    }
+    public void AppendLiteral(string value) { Effects.Appends++; Effects.Trace += "L" + value + ";"; }
+    public void AppendFormatted(string value) { Effects.Appends++; Effects.Trace += "F" + value + ";"; }
+}
+[InterpolatedStringHandler]
+public struct ObjectRefHandler {
+    public ObjectRefHandler(int literalLength, int formattedCount, ref object value, out bool shouldAppend) {
+        value = new object(); shouldAppend = true;
+    }
+    public void AppendLiteral(string value) { }
+    public void AppendFormatted(string value) { }
+}
+[InterpolatedStringHandler]
+public struct ChoiceHandler {
+    public ChoiceHandler(int literalLength, int formattedCount, bool enabled, out bool shouldAppend) {
+        shouldAppend = true; Effects.Trace += "Short;";
+    }
+    public ChoiceHandler(int literalLength, int formattedCount, bool enabled, ref bool append, out bool shouldAppend) {
+        append = false; shouldAppend = enabled; Effects.Trace += $"Long{enabled}/{append};";
+    }
+    public void AppendLiteral(string value) { Effects.Appends++; Effects.Trace += "L" + value + ";"; }
+    public void AppendFormatted(string value) { Effects.Appends++; Effects.Trace += "F" + value + ";"; }
+}
+public static class BoundaryEffects {
+    public static bool Shared = true;
+    public static ref readonly bool Borrow() => ref Shared;
+    public static string Flip() { Shared = false; Effects.Trace += "M;"; return Effects.Hole("x"); }
+    public static bool[] NullValues => null!;
+    public static object[] CovariantValues = new string[] { "x" };
+    public static int Number() { Effects.Trace += "N;"; return 7; }
+    public static void WriteValue(in bool value,
+        [InterpolatedStringHandlerArgument("value")] ValueHandler handler) { Effects.Trace += $"WValue{value};"; }
+    public static void WriteWide(in int value,
+        [InterpolatedStringHandlerArgument("value")] WideHandler handler) { Effects.Trace += $"WValue{value};"; }
+    public static void WriteObject(int tag, ref object value,
+        [InterpolatedStringHandlerArgument("value")] ObjectRefHandler handler) { }
+    public static void WriteChoice(bool enabled, ref bool append,
+        [InterpolatedStringHandlerArgument("enabled", "append")] ChoiceHandler handler) {
+        Effects.Trace += $"Write{enabled}/{append};";
+    }
+    public static void DumpCaller(bool append) { Effects.Trace += $"Caller{append};"; }
+    public static void DumpTags() { Effects.Trace += $"Tags{AddressEffects.Tags};"; }
 }`
     }
 }

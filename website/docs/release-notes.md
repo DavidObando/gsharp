@@ -16,7 +16,7 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
-- Match forwarded handler constructor arguments without treating an `out bool` gate as a bool value. Reject readonly forwarded addresses for writable constructor slots. Reuse captured call addresses for handler forwarding, so side-effecting address inputs run once and implicit-in arguments remain addresses. Overloaded handlers preserve constructor gating and emit valid IL. (Fixes #5966)
+- Match forwarded handler constructor arguments without treating an `out bool` gate as a bool value. Match forwarded ref kinds and reject readonly addresses for writable constructor slots. Capture managed call addresses in source order, preserving null, bounds, and array-type checks. Adapt captured addresses to selected constructor value parameters without repeating source evaluations. Overloaded handlers preserve constructor gating and emit valid IL. (Fixes #5966)
 
 - Share local default-value and deconstruction reachability through sparse alias dependencies and finite tuple-index summaries, including reassigned locals, split aliases, loop-carried cycles and tuple-unboxing cycles. (Fixes #5633)
 
