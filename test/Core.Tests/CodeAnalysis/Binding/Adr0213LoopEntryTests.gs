@@ -161,6 +161,43 @@ func Run(ref a C?, ref b C?, ref c C?, keys List[int32]) int32 {
         Assert.Equal(1L, measurements.GetCounter("narrowing.comparer-factory-indexes"))
     }
 
+    @Theory
+    @InlineData("1", "byte")
+    @InlineData("cast[int64](1)", "long")
+    func ImportedOverloadSelection_PreservesInstancePrecedenceAndConstantNarrowing(argument string, expected string) {
+        using let fixture = CSharpFixture(`namespace SelectionLib;
+public class Result { public string Run() => "instance-chain"; }
+public class S {
+    public string Use(string value) => "instance";
+    public Result Create(string value) => new Result();
+    public string Take(byte value) => "byte";
+    public string Take(long value) => "long";
+}
+public static class Extensions {
+    public static string Use(this S value, object argument) => "extension";
+    public static Result Create(this S value, object argument) => throw new System.Exception("wrong overload");
+}`)
+        let result = EmittedOracle.Evaluate([]string{`package T
+import System
+import SelectionLib
+func Main() {
+    let s = S()
+    Console.WriteLine(s.Use("ab"))
+    Console.WriteLine(s.Create("ab").Run())
+    Console.WriteLine(s.Take(` + argument + `))
+}`}, EmittedOracleOptions{References: []string{fixture.AssemblyPath}})
+        Assert.Empty(result.Diagnostics.Where((d Diagnostic) -> d.IsError))
+        Assert.Equal(0, result.ExitCode)
+        Assert.Equal(
+            System
+                .Text
+                .Encoding
+                .UTF8
+                .GetBytes(string.Join(Environment.NewLine, []string{"instance", "instance-chain", expected, ""})),
+            System.Text.Encoding.UTF8.GetBytes(result.Output)
+        )
+    }
+
     @Fact
     func StatementDeconstructionOfAnImportedType_IsACall() {
         // Rule W4: `let (a, b) = pair` calls an imported `Deconstruct`, which can run user code.

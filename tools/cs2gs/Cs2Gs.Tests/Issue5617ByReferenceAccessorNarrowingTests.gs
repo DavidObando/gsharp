@@ -2051,10 +2051,10 @@ namespace OtherNs
         Assert.Contains("return s.Length + 15", printed)
         Assert.Contains("return s.Length + total + 16", printed)
         Assert.Contains("return s.Length + total + 1", printed)
-        Assert.Contains("return s.Length + total + 2", printed)
+        Assert.Contains("return s!!.Length + total + 2", printed)
         Assert.Contains("return s.Length + total + 4", printed)
         Assert.Contains("return s!!.Length + total + 23", printed)
-        Assert.Equal(12, Regex.Matches(printed, `s!!`).Count)
+        Assert.Equal(13, Regex.Matches(printed, `s!!`).Count)
     }
 
     /// Issue #5697: gsc narrows after a `do ... while`, `while`, or `for` loop whose exit condition proves non-null

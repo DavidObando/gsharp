@@ -14,10 +14,9 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ## Unreleased (0.5 line)
 
-- **Callback-aware call-effect summaries** (#5326). Include interpolated-string handlers, imported getters, deferred LINQ comparers, recursive tuple formatting, and set/ordering callbacks. Resolve package-qualified storage types conservatively, inspect private imported comparers, and cache call summaries and comparer-factory indexes per compilation.
-
 ### Bug Fixes
 
+- **Callback-aware call-effect summaries** (#5326). Include interpolated-string handlers, imported getters, deferred LINQ comparers, recursive tuple formatting, and set/ordering callbacks. Resolve package-qualified storage types conservatively, inspect private imported comparers, and cache call summaries and comparer-factory indexes per compilation. `cs2gs` shares the verified imported-assembly identity rule and restores required assertions after unmodeled imported loop calls.
 - Preserve nullable tuple leaves in generic indexer writes in `cs2gs`, instead of inserting runtime null assertions. (Part of #5948)
 - **Preserve promoted-local null-guard narrowing in `cs2gs`** (Fixes #5645). Nullable-oblivious translations omit redundant `!!` assertions on guarded immutable-local receiver and argument reads. Mutable receivers, intervening escaped-closure calls, and mutable capture boundaries retain required assertions. Promoted nullable tuple destinations accept values changed through ref aliases without asserting the yielded value. Destination projection preserves intermediate assignment contracts before following assignment results into nullable arrays.
 - Reuse inferred generic call arguments during implicit static dispatch, so deeply nested calls bind in linear work. (Fixes #5652)

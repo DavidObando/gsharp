@@ -349,6 +349,15 @@ element in `xs`). Corpus rows `h2` (`h2_limitation_call_with_container_operand`)
 and `h3` (`h3_limitation_call_writes_global`) are therefore rejected with
 `GS0158`.
 
+Imported methods without a trusted effect model have unknown writes. Resolving an
+overload does not establish that its body is effect-free. Imported getter reads
+skip effects only under the verified assembly identity and stable-accessor policy.
+`Lazy<T>.Value`, for example, can invoke its factory. `cs2gs` uses the same
+assembly-identity rule when an imported call removes a by-reference loop fact.
+Its translation retains a runtime assertion unless the program re-proves the fact.
+Unknown-effect imported calls do not change overload selection; execution tests
+separately pin instance precedence and constant-narrowing overloads.
+
 **The conservative default.** The lists above and the proof rules of
 section 8 are closed. A fact survives a program point only when one of the
 listed proof rules shows that it does; a construct, statement kind, call,

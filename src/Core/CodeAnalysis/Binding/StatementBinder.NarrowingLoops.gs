@@ -8190,47 +8190,13 @@ internal partial class StatementBinder {
         }
     }
 
-    private func IsTrustedFrameworkPublicKeyToken(pkt([]uint8)?) bool {
-        if pkt == nil || pkt.Length != 8 {
-            return false
-        }
-        let hex = Convert.ToHexString(pkt)
-        return hex is "7CEC85D7BEA7798E" or
-            "B03F5F7F11D50A3A" or
-            "CC7B13FFCD2DDD51" or
-            "B77A5C561934E089" or
-            "31BF3856AD364E35"
-    }
-
     private func IsTrustedFrameworkAssembly(asm Assembly) bool {
         let cache = binderCtx.Services.CachedTrustedFrameworkAssemblies
         if cache.TryGetValue(asm, out var cached) {
             return cached
         }
-        let asmName = asm.GetName()
-        let simpleAsmName = asmName.Name ?? ""
-        let isSignedFramework = IsTrustedFrameworkPublicKeyToken(asmName.GetPublicKeyToken())
-        var trusted = false
-        for path in ReferenceResolver.HostTrustedPlatformAssemblyPaths() {
-            if !string.Equals(
-                Path.GetFileNameWithoutExtension(path),
-                simpleAsmName,
-                StringComparison.OrdinalIgnoreCase
-            ) {
-                continue
-            }
-            try {
-                if AssemblyName.GetAssemblyName(path).FullName == asmName.FullName {
-                    trusted = isSignedFramework ||
-                        (
-                        ReferenceResolver.TryGetAssemblyPath(asm, out var originalPath) && Path.GetFullPath(
-                            originalPath
-                        ) == Path.GetFullPath(path)
-                    )
-                }
-            } catch (error IOException) { } catch (error BadImageFormatException) { }
-            break
-        }
+        ReferenceResolver.TryGetAssemblyPath(asm, out var originalPath)
+        let trusted = ReferenceResolver.IsTrustedHostAssemblyIdentity(asm.GetName(), originalPath)
         cache[asm] = trusted
         return trusted
     }

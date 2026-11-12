@@ -15827,6 +15827,13 @@ partial class CSharpToGSharpTranslator {
         /// is, and a conversion emitted as `T(x)` counts as a construction call (`CallIsIndirect`). The loop then
         /// removes the fact at its entry, and the fact stays removed after the loop.
         private func LoopRegionLosesByReferenceNarrowing(loop Microsoft.CodeAnalysis.SyntaxNode) bool {
+            if loop is CommonForEachStatementSyntax iteration &&
+                iteration
+                .Expression
+                .DescendantNodesAndSelf()
+                .Any((node Microsoft.CodeAnalysis.SyntaxNode) -> this.NodeIsUnresolvedRegionCall(node, loop)) {
+                return true
+            }
             if loop is ForEachVariableStatementSyntax deconstructing && this.ForEachLeafConversionsRunUserCode(
                 deconstructing
             ) {
@@ -18560,6 +18567,12 @@ partial class CSharpToGSharpTranslator {
                 .Symbol is not IMethodSymbol method {
                 return false
             }
+            if (method.ReducedFrom ?? method)
+                .DeclaringSyntaxReferences
+                .IsDefaultOrEmpty &&
+                !this.ImportedAssemblyHasTrustedEffectModel(method.ContainingAssembly) {
+                return true
+            }
             if method.MethodKind == MethodKind.DelegateInvoke ||
                 (
                 method
@@ -18631,6 +18644,32 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             return !this.BareStaticCallIsQualifiedByTranslator(cast[SimpleNameSyntax](invocation.Expression), method)
+        }
+
+        private let importedEffectTrust Dictionary[IAssemblySymbol, bool] = Dictionary[IAssemblySymbol, bool](
+            SymbolEqualityComparer.Default
+        )
+
+        private func ImportedAssemblyHasTrustedEffectModel(assembly IAssemblySymbol) bool {
+            if this.importedEffectTrust.TryGetValue(assembly, out var cached) {
+                return cached
+            }
+            let compilation = this.context.SemanticModel.Compilation
+            var path string? = nil
+            for reference in compilation.References {
+                if SymbolEqualityComparer.Default.Equals(compilation.GetAssemblyOrModuleSymbol(reference), assembly) {
+                    path = (reference as PortableExecutableReference)?.FilePath
+                    break
+                }
+            }
+            let trusted = GSharp
+                .Core
+                .CodeAnalysis
+                .Symbols
+                .ReferenceResolver
+                .IsTrustedHostAssemblyIdentity(System.Reflection.AssemblyName(assembly.Identity.GetDisplayName()), path)
+            this.importedEffectTrust[assembly] = trusted
+            return trusted
         }
 
         private func InvocationHasEmittedNamedArgument(

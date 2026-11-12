@@ -1589,6 +1589,40 @@ class ReferenceResolver : IDisposable {
         /// @returns The host's trusted-platform assembly paths.
         func HostTrustedPlatformAssemblyPaths() IReadOnlyList[string] -> GetHostTrustedPlatformAssemblies()
 
+        /// Verifies host identity for imported effect models. Unsigned identities also require the host's exact path.
+        internal func IsTrustedHostAssemblyIdentity(name AssemblyName, originalPath string?) bool {
+            let token = name.GetPublicKeyToken()
+            let signedFramework = token != nil && token.Length == 8 && Convert.ToHexString(
+                token
+            ) is "7CEC85D7BEA7798E" or
+                "B03F5F7F11D50A3A" or
+                "CC7B13FFCD2DDD51" or
+                "B77A5C561934E089" or
+                "31BF3856AD364E35"
+            for path in HostTrustedPlatformAssemblyPaths() {
+                if !string.Equals(
+                    Path.GetFileNameWithoutExtension(path),
+                    name.Name,
+                    StringComparison.OrdinalIgnoreCase
+                ) {
+                    continue
+                }
+                try {
+                    return AssemblyName.GetAssemblyName(path)
+                        .FullName == name.FullName &&
+                        (
+                        signedFramework ||
+                            (originalPath != nil && Path.GetFullPath(originalPath) == Path.GetFullPath(path))
+                    )
+                } catch (error IOException) {
+                    return false
+                } catch (error BadImageFormatException) {
+                    return false
+                }
+            }
+            return false
+        }
+
         /// Gets a resolver that searches only the assemblies referenced by file
         /// path. The supplied paths are loaded into an isolated
         /// (cref:MetadataLoadContext) so callers see types whose

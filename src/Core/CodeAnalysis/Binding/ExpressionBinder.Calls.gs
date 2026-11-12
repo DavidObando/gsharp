@@ -3606,7 +3606,8 @@ internal partial class ExpressionBinder {
                 if nominalTargetsAgree {
                     if nominalTarget == nil {
                         nominalTarget = nominalCandidate
-                    } else if let previousNominalTarget = nominalTarget {
+                    } else {
+                        let previousNominalTarget = nominalTarget
                         if MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(previousNominalTarget, out _) !=
                         MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(nominalCandidate, out _) ||
                             !SameDelegateIdentity(previousNominalTarget, nominalCandidate) {
@@ -3693,11 +3694,14 @@ internal partial class ExpressionBinder {
                 }
                 if target == nil {
                     target = SymbolicDelegateTarget(mappedDelegate, candidate)
-                } else if let previousTarget = target {
+                } else {
+                    let previousTarget = target
                     if !SameDelegateIdentity(previousTarget.DelegateType, mappedDelegate) ||
                         (
                         !object.ReferenceEquals(previousTarget.FunctionType, candidate) &&
-                            !previousTarget.FunctionType.Equals(candidate)
+                            !previousTarget
+                            .FunctionType
+                            .Equals(candidate)
                     ) {
                         target = nil
                         return false
