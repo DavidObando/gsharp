@@ -1530,6 +1530,27 @@ internal partial class OverloadResolver {
             return false
         }
 
+        internal func IsFixedStorageAddress(argument BoundExpression) bool -> argument is BoundAddressOfExpression{
+            IsUnmanaged: false
+        } address &&
+            IsFixedStorage(address.Operand, allowStaticFields: true)
+
+        // A fixed location is not effect-free: taking a static-field address can initialize its type.
+        private func CanDeferAddressEvaluation(argument BoundExpression) bool -> argument is BoundAddressOfExpression{
+            IsUnmanaged: false
+        } address &&
+            IsFixedStorage(address.Operand, allowStaticFields: false)
+
+        private func IsFixedStorage(operand BoundExpression, allowStaticFields bool) bool -> switch operand {
+            case _ is BoundVariableExpression: true
+            case BoundFieldAccessExpression{Receiver: nil}: allowStaticFields
+            case BoundClrPropertyAccessExpression{Member: FieldInfo field} when field.IsStatic: allowStaticFields
+            case BoundFieldAccessExpression{Receiver: {} receiver} when !Binder.IsReferenceTypeForConstraint(
+                receiver.Type
+            ): IsFixedStorage(receiver, allowStaticFields)
+            default: false
+        }
+
         // Issue #4400: the inputs that select an address's storage — a reference
         // receiver (`h` in `h.F`) or an array and its index (`xs[i]`). Capturing
         // them in source order and re-taking the address from the captured values
@@ -1598,6 +1619,15 @@ internal partial class OverloadResolver {
                     return parameterOrderedArguments
                 }
                 reordered |= parameterIndex != sourceIndex
+                if !hasHandlerSourceForwarding &&
+                    (
+                    parameterOrderedArguments[slot] is BoundAddressOfExpression or BoundConditionalAddressExpression
+                ) &&
+                    !RefCapabilities.IsReadOnlyStorage(parameterOrderedArguments[slot]) &&
+                    !IsFixedStorageAddress(parameterOrderedArguments[slot]) &&
+                    !TryGetAddressInputs(parameterOrderedArguments[slot], out _, out _) {
+                    return parameterOrderedArguments
+                }
             }
             if !reordered && !hasHandlerSourceForwarding {
                 return parameterOrderedArguments
@@ -1623,6 +1653,10 @@ internal partial class OverloadResolver {
                     }
                     argument = spilledValue
                     implicitInSpill = true
+                } else if CanDeferAddressEvaluation(argument) {
+                    replacements[slot] = argument
+                    sourceCaptures[sourceIndex] = argument
+                    continue
                 } else if TryGetAddressInputs(argument, out var inputAddress, out var inputs) {
                     let inputTemps = Dictionary[BoundExpression, BoundExpression](ReferenceEqualityComparer.Instance)
                     for var inputIndex = 0; inputIndex < inputs.Length; inputIndex++ {
