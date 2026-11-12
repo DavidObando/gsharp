@@ -413,9 +413,13 @@ partial class CSharpToGSharpTranslator {
         private func PromoteAwaitedReturnIfTainted(
             type GTypeReference?,
             awaitedType ITypeSymbol,
-            symbol IMethodSymbol?
+            symbol ISymbol?
         ) GTypeReference? {
-            var type = this.PromoteObliviousAwaitedResult(type, awaitedType, symbol)
+            var type = if symbol is IMethodSymbol method {
+                this.PromoteObliviousAwaitedResult(type, awaitedType, method)
+            } else {
+                type
+            }
             if type == nil || type.IsNullable || symbol == nil {
                 return type
             }
@@ -431,7 +435,7 @@ partial class CSharpToGSharpTranslator {
         // iterator's `sequence[T]` element). Issue #4578: a `foreach` over a
         // source iterator call asks this same question, so the loop binding and
         // the iterator's rendered element cannot disagree.
-        private func AwaitedReturnIsTainted(awaitedType ITypeSymbol?, symbol IMethodSymbol?) bool {
+        private func AwaitedReturnIsTainted(awaitedType ITypeSymbol?, symbol ISymbol?) bool {
             if !(awaitedType != nil && awaitedType.IsReferenceType == true) ||
                 awaitedType.NullableAnnotation == Microsoft
                 .CodeAnalysis
@@ -458,10 +462,20 @@ partial class CSharpToGSharpTranslator {
                 .CodeAnalysis
                 .NullableAnnotation
                 .None &&
-                ObliviousNullabilityAnalyzer.IsTainted(
-                this.context.Compilation,
-                symbol,
-                this.context.SiblingCompilations
+                (
+                if symbol is IMethodSymbol {
+                    ObliviousNullabilityAnalyzer.IsTainted(
+                        this.context.Compilation,
+                        symbol,
+                        this.context.SiblingCompilations
+                    )
+                } else {
+                    symbol != nil && ObliviousNullabilityAnalyzer.StoredAwaitedResultIsTainted(
+                        this.context.Compilation,
+                        symbol,
+                        this.context.SiblingCompilations
+                    )
+                }
             )
         }
 
@@ -520,7 +534,7 @@ partial class CSharpToGSharpTranslator {
         private func PromoteTaskEnvelopeReturnIfTainted(
             envelope GTypeReference?,
             awaitedType ITypeSymbol,
-            symbol IMethodSymbol?
+            symbol ISymbol?
         ) GTypeReference? {
             if envelope is not NamedTypeReference{TypeArguments: {Count: 1}} named {
                 return envelope
@@ -539,7 +553,7 @@ partial class CSharpToGSharpTranslator {
                 )
             }
             // MaybeNull describes the declared envelope, independently of its result.
-            return if symbol != nil && ObliviousNullabilityAnalyzer.ReturnContractIsPromoted(
+            return if symbol != nil && ObliviousNullabilityAnalyzer.ValueContractIsPromoted(
                 this.context.Compilation,
                 symbol
             ) &&
@@ -548,6 +562,15 @@ partial class CSharpToGSharpTranslator {
             } else {
                 promoted
             }
+        }
+
+        private func PromoteStoredValueContract(type GTypeReference?, symbol ILocalSymbol) GTypeReference? {
+            if type != nil &&
+                symbol.Type is INamedTypeSymbol{TypeArguments: {Length: 1}} envelope &&
+                IsTaskLikeEnvelope(envelope) {
+                return this.PromoteTaskEnvelopeReturnIfTainted(type, envelope.TypeArguments[0], symbol)
+            }
+            return type
         }
 
         // Issue #2469/#2490: tuple leaves are independent declaration sinks.

@@ -546,6 +546,9 @@ partial class CSharpToGSharpTranslator {
                 }
                 // Issue #4356: record the emitted G# nullability of this local
                 // (analyzer mode), for every later read of it.
+                if this.context.GetDeclaredSymbol(declarator) is ILocalSymbol storedLocal {
+                    type = this.PromoteStoredValueContract(type, storedLocal)
+                }
                 this.RecordEmittedLocalNullability(
                     this.context.GetDeclaredSymbol(declarator) as ILocalSymbol,
                     type,

@@ -12,6 +12,183 @@ import System.Text
 import Xunit
 
 class Issue5951SourceMaybeNullReturnTests {
+    @Theory
+    @InlineData("assignment")
+    @InlineData("delegate")
+    @InlineData("argument")
+    @InlineData("interface-argument")
+    func ComposedValueFlows_ForwardNullWithoutAssertions(shape string) {
+        let members = switch shape {
+            case "assignment": "static Task<int> Forward() { var task = Task.FromResult(1); return task = Empty(); }"
+            case "delegate": "static Task<int> Invoke(Reader reader) => reader(); static Task<int> Forward() => Invoke(Empty);"
+            case "interface-argument":
+            "interface I { Task<int> Id(Task<int> value); } sealed class Echo : I { public Task<int> Id(Task<int> value) => value; } static Task<int> Forward() { I echo = new Echo(); return echo.Id(Empty()); }"
+            default: "static Task<int> Id(Task<int> value) => value; static Task<int> Forward() => Id(Empty());"
+        }
+        LiteralConstructionRuntimeParity.AssertMatches(`
+#nullable enable
+using System;
+using System.Diagnostics.CodeAnalysis;
+using System.Threading.Tasks;
+delegate Task<int>? Reader();
+#nullable disable
+public static class P
+{
+    static int calls;
+    [return: MaybeNull]
+    static Task<int> Empty() { calls++; return null; }
+` + members + `
+    public static void Main()
+    {
+        Console.WriteLine(Forward() == null);
+        Console.WriteLine(calls);
+    }
+}`, nullableContext: NullableContextOptions.Disable, expectedOutput: string.Join(
+                Environment.NewLine,
+                []string{"True", "1"}
+            ) +
+                Environment.NewLine)
+    }
+
+    @Fact
+    func StoredEnvelopeAndResult_PreserveIndependentContracts() {
+        LiteralConstructionRuntimeParity.AssertMatches(`
+#nullable disable
+using System;
+using System.Diagnostics.CodeAnalysis;
+using System.Threading.Tasks;
+public static class P
+{
+    static int calls;
+    static async Task<string> Inner() { calls++; await Task.Yield(); return null; }
+    [return: MaybeNull]
+    static Task<string> Outer() { calls++; return Inner(); }
+    public static void Main()
+    {
+        var saved = Outer();
+        var alias = saved;
+        Console.WriteLine(alias.GetAwaiter().GetResult() == null);
+        Console.WriteLine(calls);
+    }
+}`, nullableContext: NullableContextOptions.Disable, expectedOutput: string.Join(
+                Environment.NewLine,
+                []string{"True", "2"}
+            ) +
+                Environment.NewLine)
+    }
+
+    @Fact
+    func PropertyValueFlows_PreserveNullEnvelopes() {
+        LiteralConstructionRuntimeParity.AssertMatches(`
+#nullable disable
+using System;
+using System.Diagnostics.CodeAnalysis;
+using System.Threading.Tasks;
+public static class P
+{
+    static int calls;
+    static P() { }
+    [return: MaybeNull]
+    static Task<int> Empty() { calls++; return null; }
+    static Task<int> Pending => Empty();
+    static Task<int> Initialized { get; } = Empty();
+    static Task<int> Getter { get { return Empty(); } }
+    static Task<int> Present => Task.FromResult(7);
+    static Task<int> Forward() => Pending;
+    static Task<int> ForwardInitialized() => Initialized;
+    static Task<int> ForwardGetter() => Getter;
+    public static void Main()
+    {
+        Console.WriteLine(Forward() == null);
+        Console.WriteLine(ForwardInitialized() == null);
+        Console.WriteLine(ForwardGetter() == null);
+        Console.WriteLine(Present.Result);
+        Console.WriteLine(calls);
+    }
+}`, nullableContext: NullableContextOptions.Disable, expectedOutput: string.Join(
+                Environment.NewLine,
+                []string{"True", "True", "True", "7", "3"}
+            ) +
+                Environment.NewLine)
+    }
+
+    @Fact
+    func SourceEnvelopeContracts_SynchronizeInterfaceAndOverrideGroups() {
+        LiteralConstructionRuntimeParity.AssertMatches(`
+#nullable disable
+using System;
+using System.Diagnostics.CodeAnalysis;
+using System.Threading.Tasks;
+interface I { Task<int> Read(); }
+sealed class Missing : I
+{
+    [return: MaybeNull]
+    public Task<int> Read() { P.Calls++; return null; }
+}
+abstract class Base { public abstract Task<int> Read(); }
+sealed class Derived : Base
+{
+    [return: MaybeNull]
+    public override Task<int> Read() { P.Calls++; return null; }
+}
+sealed class Present : I { public Task<int> Read() => Task.FromResult(7); }
+public static class P
+{
+    public static int Calls;
+    public static void Main()
+    {
+        I missing = new Missing();
+        Base derived = new Derived();
+        I present = new Present();
+        Console.WriteLine(missing.Read() == null);
+        Console.WriteLine(derived.Read() == null);
+        Console.WriteLine(present.Read().Result);
+        Console.WriteLine(Calls);
+    }
+}`, nullableContext: NullableContextOptions.Disable, expectedOutput: string.Join(
+                Environment.NewLine,
+                []string{"True", "True", "7", "2"}
+            ) +
+                Environment.NewLine)
+    }
+
+    @Fact
+    func AwaitedDeconstruction_UsesLogicalResultFlow() {
+        LiteralConstructionRuntimeParity.AssertMatches(`
+#nullable disable
+using System;
+using System.Threading.Tasks;
+public static class P
+{
+    static int calls;
+    static async Task<string> Missing() { calls++; await Task.Yield(); return null; }
+    static async Task<int> Declare()
+    {
+        var (text, _) = (await Missing(), 0);
+        return text.Length;
+    }
+    static async Task<int> Assign()
+    {
+        string text;
+        int unused;
+        (text, unused) = (await Missing(), 0);
+        return text.Length;
+    }
+    public static void Main()
+    {
+        try { Console.WriteLine(Declare().GetAwaiter().GetResult()); }
+        catch (NullReferenceException) { Console.WriteLine("null"); }
+        try { Console.WriteLine(Assign().GetAwaiter().GetResult()); }
+        catch (NullReferenceException) { Console.WriteLine("null"); }
+        Console.WriteLine(calls);
+    }
+}`, nullableContext: NullableContextOptions.Disable, expectedOutput: string.Join(
+                Environment.NewLine,
+                []string{"null", "null", "2"}
+            ) +
+                Environment.NewLine)
+    }
+
     @Fact
     func NarrowedStorage_PreservesChangedReturnContracts() {
         LiteralConstructionRuntimeParity.AssertMatches(`
