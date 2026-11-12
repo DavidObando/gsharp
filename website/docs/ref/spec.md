@@ -965,7 +965,8 @@ This rule lets `Gsharp.Extensions.Optional.Map` carry two overloads — `where T
 
 ```ebnf
 TypeDecl          = TypeAliasDecl | DelegateDecl | AggregateDecl .
-TypeAliasDecl     = "type" identifier TypeParamList? "=" identifier .
+TypeAliasDecl     = "type" identifier TypeParamList? "=" NamedTypeTarget .
+NamedTypeTarget   = identifier TypeArgList? { "." identifier TypeArgList? } .
 DelegateDecl      = Visibility? "delegate" identifier TypeParamList? "(" Parameters? ")" TypeClause? ";" .
 AggregateDecl     = Visibility? OpenOrSealed? Data? Inline? Partial? Unsafe? AggregateKeyword identifier TypeParamList? PrimaryCtor? BaseClause? AggregateBody? .
 AggregateKeyword  = "class" | "struct" | "enum" | "interface" .
@@ -979,6 +980,8 @@ AggregateBody     = "{" Member* "}" .
 ```
 
 The aggregate keyword IS the declaration keyword. Unsupported modifier combinations are rejected at parse time (diagnostics GS0306–GS0312). Discriminated-union enums (members that carry a payload parameter list) are desugared at parse time to a sealed base class plus one subclass per case. Contextual `type` introduces aliases; named delegates use the separate `delegate` declaration.
+
+An alias target can contain qualified nested segments with separate generic arguments, such as `Outer[int32].Base[string]`. Each segment binds against its actual containing type, preserving the constructed outer arguments. The alias does not introduce a CLR type. This syntax does not add parameterized aliases, composite target forms, or a trailing nullable target suffix.
 
 `partial` is a contextual modifier on `class`, `struct`, and `interface` declarations. Multiple partial declarations with the same package, containing type, and name merge into one emitted CLR type. Every declaration in a multi-part group must carry `partial` (`GS0475`); non-partial duplicates still report `GS0102`. Parts must agree on aggregate kind (`GS0476`), accessibility (`GS0477`), type parameters (`GS0480`), and base-class shape (`GS0481`); `open` and `sealed` cannot conflict (`GS0478`); `data` / `inline` / `ref` must be repeated on every part (`GS0479`); only one part may declare a primary constructor (`GS0482`) or `deinit` (`GS0483`). Interfaces implemented by different parts are unioned, members and annotations concatenate in deterministic source order, and `shared { init { ... } }` blocks from all parts concatenate into the single `.cctor`. `partial enum` is rejected (`GS0484`). A single partial declaration with no siblings is legal. Nested partial types merge recursively within their containing type.
 
@@ -2648,7 +2651,8 @@ ConstraintFlag    ::= 'class' '?'? | 'notnull' | 'struct' | 'unmanaged' | 'init'
 Parameters        ::= Parameter (',' Parameter)*
 Parameter         ::= Annotation* 'scoped'? ('ref' | 'out' | 'in')? identifier '...'? TypeClause ('=' Expression)?
 
-TypeAliasDecl     ::= 'type' identifier TypeParamList? '=' identifier
+TypeAliasDecl     ::= 'type' identifier TypeParamList? '=' NamedTypeTarget
+NamedTypeTarget   ::= identifier TypeArgList? ('.' identifier TypeArgList?)*
 DelegateDecl      ::= 'delegate' identifier TypeParamList? '(' Parameters? ')' TypeClause? ';'   (* named CLR delegate; omit the return type for void *)
 AggregateDecl     ::= ClassDecl | StructDecl | EnumDecl | InterfaceDecl    (* leading modifiers may appear in any order; per-kind validity is enforced by the binder *)
 ClassDecl         ::= ('open' | 'sealed')? 'data'? 'class' identifier TypeParamList? PrimaryCtor? BaseClause? StructBody?
@@ -2693,7 +2697,7 @@ InterfaceSharedMember ::= 'private'? 'func' identifier TypeParamList? '(' Parame
                       | 'prop' identifier TypeClause ( '{' PropertyAccessor* '}' | ';' )   (* static-virtual interface property,  /  *)
 
 ArrayTypePrefix   ::= '[' Number? ']' | '[' ',' (',')* ']'
-TypeClause        ::= identifier ('.' identifier)* TypeArgList? '?'?
+TypeClause        ::= NamedTypeTarget '?'?
                     | ArrayTypePrefix '?'? identifier ('.' identifier)* '?'?
                     | '(' TypeClause ')' '?'?                                             (* parenthesized (grouping) type clause; the trailing '?' marks
                                                                                              the WHOLE inner type nullable, e.g. '([]int32)?',  *)
