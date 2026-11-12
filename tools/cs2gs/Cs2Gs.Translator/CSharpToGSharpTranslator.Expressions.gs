@@ -13880,6 +13880,21 @@ partial class CSharpToGSharpTranslator {
             let isDeconstructedForEachLeaf = declaration is SingleVariableDesignationSyntax && declaration.Ancestors()
                 .Any((ancestor Microsoft.CodeAnalysis.SyntaxNode) -> ancestor is ForEachVariableStatementSyntax)
             let flowState = this.context.GetTypeInfo(expression).Nullability.FlowState
+            // Assignment facts come from emitted G#, including annotation-only C# without Roslyn flow analysis.
+            if requireRoslynFlowNotNull &&
+                flowState != Microsoft
+                .CodeAnalysis
+                .NullableFlowState
+                .NotNull &&
+                this.IsGSharpAssignmentNarrowedLocal(
+                expression,
+                expression,
+                symbol,
+                scope_,
+                requireRuntimeNonNullProof
+            ) {
+                return true
+            }
             // Issues #4190/#5645: oblivious mutable receivers keep their bridge; read-only locals can use native guard narrowing.
             if requireRoslynFlowNotNull &&
                 flowState != Microsoft
@@ -14626,7 +14641,7 @@ partial class CSharpToGSharpTranslator {
             // remark above. `this` checkpoints are never asserted and are
             // not added to this list by the decomposer.
             for checkpoint in leftReceiverCheckpoints {
-                if this.IsGSharpFlowNarrowedLocal(checkpoint) {
+                if this.IsGSharpFlowNarrowedLocal(checkpoint, requireRoslynFlowNotNull: false) {
                     continue
                 }
                 if this.ReceiverNeedsNullForgiveness(checkpoint, isDereferenceReceiver: true) ||

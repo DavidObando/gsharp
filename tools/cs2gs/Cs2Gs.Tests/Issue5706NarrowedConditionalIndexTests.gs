@@ -19,6 +19,7 @@ import Xunit
 /// On 064897012, four review regressions fail, and the 24-step prefix chain exceeds a 30-second test-host limit.
 /// On cadefd047, the five nested-store, coalescing-arm, and incoming-contract regressions fail.
 /// On 6326b12f6, compound results throw, incoming coalescing values warn, and disposal exits lose nullable storage.
+/// The same head fails the by-reference join control. Shared-query mutants reject the bridge regression cases.
 /// The C# output oracle also rejects erased null guards and throwing bridges on nullable stores.
 /// Each test also compares the translated program's output with C#.
 open class Issue5706NarrowedConditionalIndexTests {
@@ -94,7 +95,7 @@ namespace Demo
             Lockable(new Shape(typeof(string)));
     }
 }`, rejectRedundantAssertions: nullableMode != "enable annotations")
-        Assert.Contains("Use(p)", printed)
+        Assert.True(printed.Contains("Use(p)", StringComparison.Ordinal), printed)
         Assert.Contains("Target{Value: value}", printed)
         Assert.DoesNotContain("Use(p!!)", printed)
         Assert.DoesNotContain("current!!.BaseClass", printed)

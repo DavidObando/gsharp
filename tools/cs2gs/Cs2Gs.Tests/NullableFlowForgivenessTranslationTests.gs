@@ -367,8 +367,8 @@ namespace Demo
     }
 
     @Fact
-    func GuardedProperty_SameConditionOr_GuardedRootStillAssertsOnMember() {
-        // The exit guard narrows the root. Keep the member assertion required by the emitted property access.
+    func GuardedProperty_SameConditionOr_GuardedRootKeepsStableMemberPath() {
+        // The exit guard keeps the root bare, so the member guard narrows the same stable path.
         let printed = TranslateUnit(`
 namespace Demo
 {
@@ -385,7 +385,8 @@ namespace Demo
         }
     }
 }`)
-        Assert.Contains("type.ClrType!!.IsValueType", printed)
+        Assert.Contains("type.ClrType.IsValueType", printed)
+        Assert.DoesNotContain("type.ClrType!!", printed)
         Assert.DoesNotContain("type!!.ClrType", printed)
     }
 
