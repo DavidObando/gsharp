@@ -525,11 +525,15 @@ class InterpolatedStringHandlerInfo {
                 }
                 var ok = true
                 for var i = 0; i < forwardedArgs.Length; i++ {
-                    var paramType = ps[2 + i].ParameterType
-                    if paramType.IsByRef {
-                        paramType = paramType.GetElementType()!!
-                    }
+                    let parameter = ps[2 + i]
+                    let paramType = parameter.ParameterType
                     let argType Type? = forwardedArgs[i].Type?.ClrType
+                    // A forwarded value cannot fill a writable reference slot, including another overload's out-bool gate.
+                    if (RefCapabilities.GetParameterRefKind(parameter) is RefKind.Ref or RefKind.Out) &&
+                        argType?.IsByRef != true {
+                        ok = false
+                        break
+                    }
                     if argType != nil && ClrOverloadResolution.ClassifyImplicit(
                         paramType,
                         argType
