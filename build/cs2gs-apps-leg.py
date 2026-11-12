@@ -45,6 +45,10 @@ run.json behind. Two subcommands turn that into what the gate job reads:
           is claimed, so the gate files no issue for it. --timed-out (or exit
           code 124 from `timeout`) overrides --incomplete and reports the leg
           red with a stable timeout fingerprint.
+
+          Failed Oahu and Code Exploder legs print bounded primary SDK logs to
+          console stderr after writing the result. This text does not enter
+          result JSON or migration reports.
 """
 
 from __future__ import annotations
@@ -54,6 +58,7 @@ from datetime import datetime
 import json
 import sys
 from pathlib import Path
+from uuid import uuid4
 
 GATE = "cs2gs-apps-nightly"
 # The four cs2gs stages, in run order. A stage the run does not mention is
@@ -61,6 +66,7 @@ GATE = "cs2gs-apps-nightly"
 STAGES = ("translate", "compile", "ilverify", "test-parity")
 STATUSES = ("passed", "failed", "skipped", "not-applicable")
 LOG_TAIL_CHARS = 8000
+SDK_LOG_HALF_BYTES = 8 * 1024
 
 
 def newest_run(runs_dir: Path) -> Path:
@@ -283,6 +289,80 @@ def leg_result(app: str, code: int, stats_path: Path, log: str, note: str, run_u
     return result
 
 
+def print_sdk_failure_logs(stats_path: Path, stats: dict | None) -> None:
+    """Print primary SDK logs only after migration, outside retained result data."""
+    try:
+        run_path = Path(stats["source"]).resolve()
+        if run_path.name != "run.json" or run_path.parent.parent != (stats_path.parent / "runs").resolve():
+            raise ValueError("run outside the leg")
+        run = json.loads(run_path.read_text(encoding="utf-8"))
+        if not isinstance(run, dict) or not isinstance(run.get("apps"), list):
+            raise ValueError("invalid run")
+    except (OSError, ValueError, TypeError, KeyError):
+        print("SDK failure diagnostics unavailable: no readable run under this leg's runs directory.", file=sys.stderr)
+        return
+    run_root = run_path.parent
+    for app in run["apps"]:
+        if not isinstance(app, dict) or app.get("succeeded") is True or app.get("failureCategory") != "compile-error":
+            continue
+        stages = app.get("stages")
+        if not isinstance(stages, list) or not any(
+                isinstance(s, dict) and s.get("stage") == "compile" and s.get("status") == "failed" for s in stages):
+            continue
+        app_id = app.get("appId")
+        if not isinstance(app_id, str) or not isinstance(app.get("artifacts"), list):
+            continue
+        for artifact in app["artifacts"]:
+            try:
+                record_path = (run_root / artifact).resolve()
+                if not record_path.is_relative_to(run_root):
+                    continue
+                record = json.loads(record_path.read_text(encoding="utf-8"))
+                if not isinstance(record, dict) or (record.get("stage"), record.get("category"),
+                                                   record.get("corpusAppId")) != ("compile", "compile-error", app_id):
+                    continue
+            except (OSError, ValueError, TypeError):
+                continue
+            token = uuid4().hex
+            print(f"::stop-commands::{token}", file=sys.stderr)
+            try:
+                try:
+                    sdk_log = record_path.parent / "sdk.build.log"
+                    if sdk_log.is_symlink() or not sdk_log.resolve().is_relative_to(run_root) or not sdk_log.is_file():
+                        raise OSError("not an owned SDK log")
+                    with sdk_log.open("rb") as stream:
+                        size = stream.seek(0, 2)
+                        stream.seek(0)
+                        head = stream.read(size if size <= 2 * SDK_LOG_HALF_BYTES else SDK_LOG_HALF_BYTES)
+                        tail = b""
+                        if size > 2 * SDK_LOG_HALF_BYTES:
+                            # Do not split log lines before GitHub applies its existing masks.
+                            head = head[:head.rfind(b"\n") + 1]
+                            stream.seek(size - SDK_LOG_HALF_BYTES - 1)
+                            boundary = stream.read(1)
+                            tail = stream.read(SDK_LOG_HALF_BYTES)
+                            if boundary != b"\n":
+                                tail = tail.partition(b"\n")[2]
+                    head, tail = head.decode("utf-8", errors="ignore"), tail.decode("utf-8", errors="ignore")
+                    shown = len(head.encode("utf-8")) + len(tail.encode("utf-8"))
+                    omitted = size - shown
+                    print(f"SDK build log for {app_id[:256]!r}: bytes={size}, shown={shown}, "
+                          f"omitted={omitted}, complete={str(omitted == 0).lower()}", file=sys.stderr)
+                    print("stdout followed by stderr; not chronological\nSDK LOG BEGIN", file=sys.stderr)
+                    print(head, end="", file=sys.stderr)
+                    if omitted:
+                        print(f"[{omitted} SDK log bytes omitted]", file=sys.stderr)
+                    print(tail, end="", file=sys.stderr)
+                    if not (head + tail).strip():
+                        print("(blank SDK log)" if not omitted else "(no complete SDK log line retained)", file=sys.stderr)
+                    print("\nSDK LOG END", file=sys.stderr)
+                except (OSError, ValueError):
+                    print(f"SDK build log for {app_id[:256]!r}: missing or unreadable sdk.build.log", file=sys.stderr)
+            finally:
+                print(f"::{token}::", file=sys.stderr)
+            break
+
+
 def cmd_result(a: argparse.Namespace) -> int:
     log = ""
     if a.log and a.log.is_file():
@@ -291,6 +371,8 @@ def cmd_result(a: argparse.Namespace) -> int:
     a.out.parent.mkdir(parents=True, exist_ok=True)
     a.out.write_text(json.dumps(result), encoding="utf-8")
     print(f"cs2gs-apps-leg result: {a.app} is {result['status']}: {result['summary']}")
+    if a.app in ("oahu", "code-exploder") and result["status"] == "red":
+        print_sdk_failure_logs(a.stats, result["stats"])
     return 0
 
 
