@@ -170,18 +170,18 @@ internal partial class DeclarationBinder {
         StructSymbol
     ]()
     private let nestedStructPackages Dictionary[StructSymbol, PackageSymbol] = Dictionary[StructSymbol, PackageSymbol]()
+    private let structDeclarationScopes Dictionary[StructSymbol, BoundScope] = Dictionary[StructSymbol, BoundScope]()
+    private let structBaseBindings Dictionary[StructSymbol, StructBaseBindingResult] = Dictionary[
+        StructSymbol,
+        StructBaseBindingResult
+    ]()
+    private let readyStructHeaders HashSet[StructSymbol] = HashSet[StructSymbol]()
     private let boundStructBodies HashSet[StructSymbol] = HashSet[StructSymbol]()
-    private let bindingStructBodies HashSet[StructSymbol] = HashSet[StructSymbol]()
-    private let completedStructBodies HashSet[StructSymbol] = HashSet[StructSymbol]()
     private let requestedNestedTypeBindings HashSet[StructSymbol] = HashSet[StructSymbol]()
-    private let pendingStructMemberBindings Dictionary[StructSymbol, () -> void] = Dictionary[
-        StructSymbol,
-        () -> void
+    private let structDeclarationWork Stack[(Symbol StructSymbol, BindMembers bool)] = Stack[
+        (Symbol StructSymbol, BindMembers bool)
     ]()
-    private let pendingDerivedStructs Dictionary[StructSymbol, List[StructSymbol]] = Dictionary[
-        StructSymbol,
-        List[StructSymbol]
-    ]()
+    private var drainingStructDeclarations bool
     private let boundNestedTypeContainers HashSet[StructSymbol] = HashSet[StructSymbol]()
 
     private let nestedInterfaceShells Dictionary[InterfaceDeclarationSyntax, InterfaceSymbol] = Dictionary[
@@ -735,6 +735,7 @@ internal partial class DeclarationBinder {
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name)
         }
         nestedStructPackages[structSymbol] = $package
+        structDeclarationScopes[structSymbol] = $scope
         return structSymbol
     }
 

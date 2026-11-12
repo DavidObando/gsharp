@@ -25,31 +25,84 @@ internal partial class DeclarationBinder {
         }
     }
 
-    /// Issue #973 (phase 2): binds the body of a previously declared struct/class
-    /// shell — its instance fields, primary-constructor parameters, base clause,
-    /// and all members — and installs them on [`structSymbol`](paramref).
-    /// Re-establishes the type-parameter scope captured at declaration time so
-    /// member types can reference the type's own type parameters.
+    /// Binds source declarations with explicit base-member continuations (issue #5975).
     internal func BindStructDeclarationBody(
         syntax StructDeclarationSyntax,
         $package PackageSymbol,
         structSymbol StructSymbol,
-        bindNestedTypes bool = true,
-        resumeMembers bool = false
+        bindNestedTypes bool = true
     ) {
-        let shouldBindOwnBody = boundStructBodies.Add(structSymbol)
-        let hasPendingMembers = pendingStructMemberBindings.ContainsKey(structSymbol)
-        if bindNestedTypes && hasPendingMembers {
+        if bindNestedTypes {
             requestedNestedTypeBindings.Add(structSymbol)
         }
-        let shouldResumeMembers = resumeMembers && hasPendingMembers
-        if !shouldBindOwnBody &&
-            !shouldResumeMembers &&
-            (hasPendingMembers || !bindNestedTypes || boundNestedTypeContainers.Contains(structSymbol)) {
+        structDeclarationWork.Push((structSymbol, false))
+        if drainingStructDeclarations {
             return
         }
+        drainingStructDeclarations = true
+        try {
+            while structDeclarationWork.Count > 0 {
+                let (symbol, bindMembers) = structDeclarationWork.Pop()
+                let declaration = symbol.Declaration!!
+                let owningPackage = nestedStructPackages[symbol]
+                if boundStructBodies.Contains(symbol) {
+                    if requestedNestedTypeBindings.Remove(symbol) && boundNestedTypeContainers.Add(symbol) {
+                        RunInStructDeclarationContext(symbol, () -> BindNestedTypeBodies(declaration, owningPackage))
+                    }
+                    continue
+                }
+                EnsureStructDeclarationHeaderBound(symbol)
+                if !bindMembers {
+                    structDeclarationWork.Push((symbol, true))
+                    let baseDefinition = symbol.BaseClass?.Definition ?? symbol.BaseClass
+                    if baseDefinition is {} sourceBase && sourceBase.Declaration != nil && !boundStructBodies.Contains(
+                        sourceBase
+                    ) {
+                        structDeclarationWork.Push((sourceBase, false))
+                    }
+                    continue
+                }
+                RunInStructDeclarationContext(
+                    symbol,
+                    () -> BindStructDeclarationBodyCore(
+                        declaration,
+                        owningPackage,
+                        symbol,
+                        requestedNestedTypeBindings.Remove(symbol)
+                    )
+                )
+                boundStructBodies.Add(symbol)
+                structBaseBindings.Remove(symbol)
+            }
+        } finally {
+            structDeclarationWork.Clear()
+            requestedNestedTypeBindings.Clear()
+            drainingStructDeclarations = false
+        }
+    }
+
+    private func RunInStructDeclarationContext(structSymbol StructSymbol, bind() -> void) {
+        let syntax = structSymbol.Declaration!!
+        if !RuntimeHelpers.TryEnsureSufficientExecutionStack() {
+            throw DeclarationDependencyStackLimitException(syntax.Identifier.Location)
+        }
+        let previousScope = $scope
+        $scope = structDeclarationScopes[structSymbol]
+        let previousPackage = $scope.SetCurrentDeclaringPackage(structSymbol.PackageName)
+        let previousTree = $scope.SetCurrentReferencingSyntaxTree(syntax.SyntaxTree)
         let previousTypeParameters = binderCtx.CurrentTypeParameters
         let previousContainingType = binderCtx.CurrentContainingType
+        let previousUnsafeDepth = binderCtx.UnsafeDepth
+        binderCtx.UnsafeDepth = 0
+        var current TypeSymbol? = structSymbol
+        while current is StructSymbol containingStruct {
+            let definition = containingStruct.Definition ?? containingStruct
+            if definition.Declaration?.IsUnsafe == true {
+                binderCtx.UnsafeDepth = 1
+                break
+            }
+            current = definition.ContainingType
+        }
         this.binderCtx.CurrentContainingType = structSymbol
         try {
             // Issue #1537: a nested type's members may reference the ENCLOSING
@@ -75,37 +128,53 @@ internal partial class DeclarationBinder {
             } else {
                 this.binderCtx.CurrentTypeParameters = nil
             }
-            if shouldBindOwnBody || shouldResumeMembers {
-                bindingStructBodies.Add(structSymbol)
-            }
-            if shouldBindOwnBody {
-                // Issue #2519: aggregate shells carry bare type parameters so every
-                // same-compilation constraint target can be published first.
-                // Resolve constraints now, with the declaring shell and all sibling
-                // source type shells visible, before binding signatures and members.
-                ResolvePartialTypeParameterConstraints(
-                    syntax.TypeParameterList,
-                    syntax.PartialTypeParameterLists,
-                    structSymbol.TypeParameters,
-                    structSymbol.Name,
-                    syntax.PartialPartLocations
-                )
-                BindStructDeclarationBodyCore(syntax, $package, structSymbol, bindNestedTypes)
-            } else if shouldResumeMembers {
-                let bindMembers = pendingStructMemberBindings[structSymbol]
-                pendingStructMemberBindings.Remove(structSymbol)
-                using let _ = binderCtx.PushUnsafeContext(syntax.IsUnsafe)
-                bindMembers()
-            } else if bindNestedTypes && boundNestedTypeContainers.Add(structSymbol) {
-                using let _ = binderCtx.PushUnsafeContext(syntax.IsUnsafe)
-                BindNestedTypeBodies(syntax, $package)
-            }
+            bind()
         } finally {
-            if shouldBindOwnBody || shouldResumeMembers {
-                bindingStructBodies.Remove(structSymbol)
-            }
             this.binderCtx.CurrentTypeParameters = previousTypeParameters
             this.binderCtx.CurrentContainingType = previousContainingType
+            binderCtx.UnsafeDepth = previousUnsafeDepth
+            $scope.SetCurrentDeclaringPackage(previousPackage)
+            $scope.SetCurrentReferencingSyntaxTree(previousTree)
+            $scope = previousScope
+        }
+    }
+
+    private func EnsureStructDeclarationHeaderBound(structSymbol StructSymbol) {
+        let pending = List[StructSymbol]()
+        var current StructSymbol? = structSymbol.Definition ?? structSymbol
+        while current is {} symbol && symbol.Declaration != nil && nestedStructPackages.ContainsKey(symbol) &&
+            !readyStructHeaders
+            .Contains(symbol) {
+            if structBaseBindings.TryGetValue(symbol, out var cycleBinding) {
+                Diagnostics.ReportClassInheritanceCycle(GetBaseClauseLocation(symbol), symbol.Name)
+                symbol.SetBaseClass(nil)
+                structBaseBindings[symbol] = StructBaseBindingResult(
+                    nil,
+                    cycleBinding.ImportedBaseType,
+                    cycleBinding.ImplementedInterfaces,
+                    cycleBinding.ImplementedClrInterfaces
+                )
+                break
+            }
+            RunInStructDeclarationContext(
+                symbol,
+                () -> {
+                    let syntax = symbol.Declaration!!
+                    ResolvePartialTypeParameterConstraints(
+                        syntax.TypeParameterList,
+                        syntax.PartialTypeParameterLists,
+                        symbol.TypeParameters,
+                        symbol.Name,
+                        syntax.PartialPartLocations
+                    )
+                    structBaseBindings.Add(symbol, BindStructBaseTypes(syntax, symbol))
+                }
+            )
+            pending.Add(symbol)
+            current = symbol.BaseClass?.Definition ?? symbol.BaseClass
+        }
+        for symbol in pending {
+            readyStructHeaders.Add(symbol)
         }
     }
 
@@ -222,40 +291,14 @@ internal partial class DeclarationBinder {
         // of its members (field types, method signatures, …) within an unsafe
         // context, so they may use unmanaged raw pointers (`*T`).
         using let unsafeContext = binderCtx.PushUnsafeContext(syntax.IsUnsafe)
-        if syntax.IsClass && HasAttributeSugarMarker(syntax.Annotations) {
-            structSymbol.SetIsAttributeClass()
-        }
         // Issue #950: `protected` is only meaningful on members of an
         // inheritable `open class`. Reject it on members of a non-open class,
         // a struct (value types are not inheritable), or a sealed type before
         // binding the members so the user sees one clean GS0380 diagnostic.
         ValidateProtectedMemberPlacement(syntax)
         let fieldBinding = BindStructFieldsAndPrimaryConstructor(syntax, $package, structSymbol)
-        let baseBinding = BindStructBaseAndInterfaces(syntax, structSymbol, fieldBinding)
-        EnsureStructDeclarationBound(baseBinding.BaseClass)
-        let baseDefinition = baseBinding.BaseClass?.Definition ?? baseBinding.BaseClass
-        if baseDefinition != nil && baseDefinition.Declaration != nil && !completedStructBodies.Contains(
-            baseDefinition
-        ) {
-            // An attribute can derive from the declaration that applies it. Publish contracts, then wait for base members.
-            pendingStructMemberBindings.Add(
-                structSymbol,
-                () -> BindStructDeclarationMembers(
-                    syntax,
-                    $package,
-                    structSymbol,
-                    fieldBinding,
-                    baseBinding,
-                    bindNestedTypes
-                )
-            )
-            if !pendingDerivedStructs.TryGetValue(baseDefinition, out var derived) {
-                derived = List[StructSymbol]()
-                pendingDerivedStructs.Add(baseDefinition, derived)
-            }
-            derived.Add(structSymbol)
-            return
-        }
+        let baseBinding = structBaseBindings[structSymbol]
+        BindStructBaseAndInterfaces(syntax, structSymbol, fieldBinding, baseBinding)
         BindStructDeclarationMembers(syntax, $package, structSymbol, fieldBinding, baseBinding, bindNestedTypes)
     }
 
@@ -276,62 +319,7 @@ internal partial class DeclarationBinder {
         RegisterStructConversionOperators($package, structSymbol, memberBinding.PendingConversionOperators)
         RegisterStructDeferredInitializers($package, structSymbol, fieldBinding)
         RegisterStructInterfaceChecks(syntax, structSymbol, baseBinding)
-        let bindRequestedNestedTypes = requestedNestedTypeBindings.Remove(structSymbol)
-        BindStructFinalMembers(syntax, $package, structSymbol, baseBinding, bindNestedTypes || bindRequestedNestedTypes)
-        completedStructBodies.Add(structSymbol)
-        if pendingDerivedStructs.Remove(structSymbol, out var derived) {
-            for declaration in derived {
-                EnsureStructDeclarationBound(declaration, resumeMembers: true)
-            }
-        }
-    }
-
-    private func EnsureStructDeclarationBound(baseClass StructSymbol?, resumeMembers bool = false) {
-        if baseClass == nil {
-            return
-        }
-        let baseDefinition = baseClass.Definition ?? baseClass
-        if boundStructBodies.Contains(baseDefinition) && !resumeMembers {
-            return
-        }
-        if baseDefinition.Declaration is {} baseSyntax && nestedStructPackages.TryGetValue(
-            baseDefinition,
-            out var basePackage
-        ) {
-            if !RuntimeHelpers.TryEnsureSufficientExecutionStack() {
-                throw DeclarationDependencyStackLimitException(baseSyntax.Identifier.Location)
-            }
-            let savedUnsafeDepth = binderCtx.UnsafeDepth
-            var enclosingUnsafe = false
-            var currentParent TypeSymbol? = baseDefinition.ContainingType
-            while !enclosingUnsafe && currentParent is StructSymbol parentStruct {
-                let parentDef = parentStruct.Definition ?? parentStruct
-                if parentDef.Declaration?.IsUnsafe == true {
-                    enclosingUnsafe = true
-                }
-                currentParent = parentDef.ContainingType
-            }
-            binderCtx.UnsafeDepth = if enclosingUnsafe {
-                1
-            } else {
-                0
-            }
-            let previousPackage = $scope.SetCurrentDeclaringPackage(basePackage.Name)
-            let previousTree = $scope.SetCurrentReferencingSyntaxTree(baseSyntax.SyntaxTree)
-            try {
-                BindStructDeclarationBody(
-                    baseSyntax,
-                    basePackage,
-                    baseDefinition,
-                    bindNestedTypes: false,
-                    resumeMembers: resumeMembers
-                )
-            } finally {
-                binderCtx.UnsafeDepth = savedUnsafeDepth
-                $scope.SetCurrentDeclaringPackage(previousPackage)
-                $scope.SetCurrentReferencingSyntaxTree(previousTree)
-            }
-        }
+        BindStructFinalMembers(syntax, $package, structSymbol, baseBinding, bindNestedTypes)
     }
 
     private func BindStructFieldsAndPrimaryConstructor(
@@ -679,29 +667,19 @@ internal partial class DeclarationBinder {
         )
     }
 
-    private func BindStructBaseAndInterfaces(
+    private func BindStructBaseTypes(
         syntax StructDeclarationSyntax,
-        structSymbol StructSymbol,
-        fieldBinding StructFieldBindingResult
+        structSymbol StructSymbol
     ) StructBaseBindingResult {
         let name = structSymbol.Name
-        let fields = fieldBinding.Fields
-        let primaryCtorParameters = fieldBinding.PrimaryConstructorParameters
-        let constFieldsBuilder = fieldBinding.ConstFields
         // Phase 4 of #141 / ADR-0047 §5: detect the `@Attribute` declaration
         // sugar marker before resolving the base clause so we can tolerate
         // an explicit `: System.Attribute` (redundant restatement) and reject
         // any conflicting explicit base.
         let hasAttributeSugar = HasAttributeSugarMarker(syntax.Annotations)
-        // Issue #949 / #973: the struct symbol shell was constructed and
-        // registered in scope by DeclareStructShell (phase 1) so it could be
-        // referenced as a self type argument in its own base/interface clause
-        // and forward-referenced by other user types. Now that the instance
-        // fields and primary-constructor parameters have been bound, install
-        // them on the shell. The resolved base class — if any — is installed
-        // afterwards via SetBaseClass. Genuine self-inheritance (`class A : A`)
-        // is rejected explicitly in the base-clause loop below.
-        structSymbol.SetInstanceFieldsAndPrimaryConstructorParameters(fields.ToImmutable(), primaryCtorParameters)
+        if syntax.IsClass && hasAttributeSugar {
+            structSymbol.SetIsAttributeClass()
+        }
         // Phase 3.B.3 sub-step 3 + 3.B.4: resolve the optional `: X, Y, Z` clause.
         // Each identifier is either the (single) base class or an interface
         // implemented by this class. A base class, if present, must be the
@@ -878,7 +856,28 @@ internal partial class DeclarationBinder {
         if importedBaseType != nil {
             structSymbol.SetImportedBaseType(importedBaseType)
         }
-        EnsureStructDeclarationBound(baseClassSymbol)
+        return StructBaseBindingResult(
+            baseClassSymbol,
+            importedBaseType,
+            implementedInterfaces,
+            implementedClrInterfaces
+        )
+    }
+
+    private func BindStructBaseAndInterfaces(
+        syntax StructDeclarationSyntax,
+        structSymbol StructSymbol,
+        fieldBinding StructFieldBindingResult,
+        baseBinding StructBaseBindingResult
+    ) {
+        let primaryCtorParameters = fieldBinding.PrimaryConstructorParameters
+        let constFieldsBuilder = fieldBinding.ConstFields
+        let baseClassSymbol = baseBinding.BaseClass
+        let importedBaseType = baseBinding.ImportedBaseType
+        structSymbol.SetInstanceFieldsAndPrimaryConstructorParameters(
+            fieldBinding.Fields.ToImmutable(),
+            primaryCtorParameters
+        )
         structSymbol.SetAttributes(
             BindAttributes(
                 syntax.Annotations,
@@ -902,25 +901,8 @@ internal partial class DeclarationBinder {
         // the right CLR TypeAttributes flag and emit the matching
         // ClassLayout / FieldLayout rows.
         StructLayoutBinder.ResolveLayoutAndFieldOffsets(structSymbol, Diagnostics)
-        // Issue #4143: an attribute class's PRIMARY constructor parameters
-        // are validated here, at the declaration, rather than left to fall
-        // through to GS0584 at each use site (or GS9998 if nothing catches
-        // it at all). Code review (Copilot): `DerivesFromSystemAttribute`
-        // alone is NOT reliable here for a NESTED same-compilation base —
-        // it reads the base's already-computed `IsAttributeClass`/
-        // `ImportedBaseType` flags, which are only set once THAT type's own
-        // `BindStructBaseAndInterfaces` has run, and a nested type whose
-        // base is a NESTED sibling declared later in the same enclosing
-        // body has not run yet at this point (measured: a bad primary
-        // parameter on `Outer.Derived(Value Holder) : Outer.Base` compiled
-        // clean with no `GS0585` when `Base` was declared after `Derived`
-        // inside the same `Outer`).
-        // `DerivesFromSystemAttributeDuringDeclaration` closes that gap
-        // without `IsAttributeType`'s `bindTypeClause` fallback, which
-        // regressed `Issue1244GenericAbstractOverrideBinderTests` when
-        // called here (a generic base clause it was never meant to
-        // re-resolve outside its own USE-site caller).
-        if DerivesFromSystemAttributeDuringDeclaration(structSymbol) {
+        // Header completion includes nested bases. Validate constructor contracts against that resolved identity.
+        if structSymbol.DerivesFromSystemAttribute() {
             ValidateAttributeConstructorParameterTypes(primaryCtorParameters, syntax.Identifier.Location)
         }
         // Issue #306: bind and resolve an explicit base-constructor initializer
@@ -946,12 +928,6 @@ internal partial class DeclarationBinder {
         if constFieldsBuilder.Count > 0 {
             structSymbol.SetConstFields(constFieldsBuilder.ToImmutable())
         }
-        return StructBaseBindingResult(
-            baseClassSymbol,
-            importedBaseType,
-            implementedInterfaces,
-            implementedClrInterfaces
-        )
     }
 
     private func CreateStructMemberBindingContext(structSymbol StructSymbol) StructMemberBindingContext {

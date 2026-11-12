@@ -2,6 +2,7 @@ package GSharp.Compiler.Tests
 
 import GSharp.Tests
 import System
+import System.Collections.Generic
 import System.IO
 import System.Linq
 import System.Reflection
@@ -357,7 +358,7 @@ class BAttribute : Attribute {}`
     @Theory
     @InlineData(false)
     @InlineData(true)
-    func DeepAttributeDependencies_ReportLocatedDiagnosticWithoutCrashing(inheritance bool) {
+    func DeepAttributeDependencies_CompileAndRetainContractsOnSmallStacks(inheritance bool) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let driver = CompileBoundedStackDriver(fixture)
         let sourceFile = Path.Combine(fixture.Directory, "dependency.gs")
@@ -388,34 +389,214 @@ class BAttribute : Attribute {}`
             outputFile,
             driver
         )
-        Assert.True(
-            code == 1,
-            "Expected recoverable compiler error; exit " + code.ToString() + ": " + output.Substring(
-                0,
-                Math.Min(output.Length, 500)
-            )
-        )
+        Assert.True(code == 0, "Exit " + code.ToString() + ": " + output.Substring(0, Math.Min(output.Length, 2000)))
         Assert.DoesNotContain("Stack overflow", output, StringComparison.OrdinalIgnoreCase)
         Assert.DoesNotContain("GS9998", output)
-        let diagnostic = Assert.Single(DiagnosticLocations(output))
-        Assert.StartsWith("GS0639@", diagnostic)
-        let span = diagnostic
-            .Substring(diagnostic.IndexOf('@') + 1)
-            .Split(',')
-            .Select((value string) -> int32.Parse(value))
+        IlVerifier.Verify(outputFile)
+        using let stream = File.OpenRead(outputFile)
+        using let pe = PEReader(stream)
+        let metadata = pe.GetMetadataReader()
+        let definitions = metadata
+            .TypeDefinitions
+            .Select((handle TypeDefinitionHandle) -> metadata.GetTypeDefinition(handle))
+            .Where((type TypeDefinition) -> metadata.GetString(type.Name).StartsWith("A", StringComparison.Ordinal))
             .ToArray()
-        Assert.Equal(span[0], span[2])
-        let line = source.Split('\n')[span[0] - 1].TrimEnd('\r')
-        let identifier = Regex.Match(line, "^(?:open )?class (A[0-9]+) : ").Groups[1].Value
-        Assert.NotEmpty(identifier)
-        let column = if inheritance {
-            12
-        } else {
-            7
+        Assert.Equal(8192, definitions.Length)
+        for var index = 0; index < definitions.Length; index++ {
+            let definition = definitions[index]
+            Assert.Equal("A" + index.ToString(), metadata.GetString(definition.Name))
+            if inheritance && index + 1 < definitions.Length {
+                Assert.Equal(
+                    "A" + (index + 1).ToString(),
+                    metadata.GetString(metadata.GetTypeDefinition(cast[TypeDefinitionHandle](definition.BaseType)).Name)
+                )
+            } else {
+                Assert.Equal(
+                    "Attribute",
+                    metadata.GetString(metadata.GetTypeReference(cast[TypeReferenceHandle](definition.BaseType)).Name)
+                )
+            }
+            if !inheritance && index + 1 < definitions.Length {
+                let application = Assert.Single(
+                    definition.GetCustomAttributes().Select(
+                        (handle CustomAttributeHandle) -> metadata.GetCustomAttribute(handle)
+                    ),
+                    (attribute CustomAttribute) -> attribute.Constructor.Kind == HandleKind.MethodDefinition
+                )
+                let constructor = metadata.GetMethodDefinition(cast[MethodDefinitionHandle](application.Constructor))
+                Assert.Equal(
+                    "A" + (index + 1).ToString(),
+                    metadata.GetString(metadata.GetTypeDefinition(constructor.GetDeclaringType()).Name)
+                )
+                Assert.Equal([]uint8{1, 0, 0, 0}, metadata.GetBlobBytes(application.Value))
+            }
         }
-        Assert.Equal(column, span[1])
-        Assert.Equal(column + identifier.Length, span[3])
-        Assert.False(File.Exists(outputFile))
+        if !inheritance {
+            let first = EmittedFixture.Load(outputFile).GetTypes().Single((type Type) -> type.Name == "A0")
+            Assert.Equal(
+                "A1",
+                Assert
+                    .Single(
+                    first.GetCustomAttributes(false),
+                    (attribute object) -> attribute.GetType().Name.StartsWith("A", StringComparison.Ordinal)
+                )
+                    .GetType()
+                    .Name
+            )
+        }
+    }
+
+    @Fact
+    func DeepAttributeDependencies_PreserveContractsAcrossFileAndDeclarationOrders() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let driver = CompileBoundedStackDriver(fixture)
+        const count = 1024
+        let left = List[string]()
+        let right = List[string]()
+        for var index = 0; index < count; index++ {
+            let even = index % 2 == 0
+            let annotation = if index + 1 == count {
+                ""
+            } else {
+                "@" +
+                    (
+                    if even {
+                        "Right"
+                    } else {
+                        "Left"
+                    }
+                ) +
+                    ".A" +
+                    (index + 1).ToString() + "(Code: " + index.ToString() + ")\n"
+            }
+            let declaration = annotation +
+                "@AttributeUsage(AttributeTargets.All, AllowMultiple: true)\nclass A" +
+                index.ToString() +
+                "(Code int32) : " +
+                (
+                if even {
+                    "System.Attribute"
+                } else {
+                    "Base"
+                }
+            ) +
+                " {}"
+            (
+                if even {
+                    left
+                } else {
+                    right
+                }
+            ).Add(declaration)
+        }
+        let leftPath = Path.Combine(fixture.Directory, "left.gs")
+        let rightPath = Path.Combine(fixture.Directory, "right.gs")
+        let response = Path.Combine(fixture.Directory, "order.rsp")
+        var expected List[string]? = nil
+        for reverseDeclarations in[]bool{false, true} {
+            File.WriteAllText(
+                leftPath,
+                "package Left\nimport System\nimport Base = System.Exception\n" +
+                    "@Right.A1(Code: 17)\nclass Probe[T] { shared { func Identity(value T) T -> value } }\n" +
+                    string.Join(
+                    "\n",
+                    if reverseDeclarations {
+                        left.AsEnumerable().Reverse()
+                    } else {
+                        left
+                    }
+                )
+            )
+            File.WriteAllText(
+                rightPath,
+                "package Right\nimport System\nimport Base = System.Attribute\n" + string.Join(
+                    "\n",
+                    if reverseDeclarations {
+                        right.AsEnumerable().Reverse()
+                    } else {
+                        right
+                    }
+                )
+            )
+            for reverseFiles in[]bool{false, true} {
+                let paths = if reverseFiles {
+                    []string{rightPath, leftPath}
+                } else {
+                    []string{leftPath, rightPath}
+                }
+                File.WriteAllText(
+                    response,
+                    "/deterministic+\n/debug:none\n" + string.Join(
+                        "\n",
+                        paths.Select((path string) -> "\"" + path + "\"")
+                    )
+                )
+                let dll = Path.Combine(
+                    fixture.Directory,
+                    "ordered-" + reverseDeclarations.ToString() + reverseFiles.ToString() + ".dll"
+                )
+                let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+                    "@" + response,
+                    dll,
+                    driver
+                )
+                Assert.True(code == 0, output)
+                let bytes = File.ReadAllBytes(dll)
+                let (repeatCode, repeatOutput) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+                    "@" + response,
+                    dll,
+                    driver
+                )
+                Assert.True(repeatCode == 0, repeatOutput)
+                Assert.Equal(bytes, File.ReadAllBytes(dll))
+                IlVerifier.Verify(dll)
+                let types = EmittedFixture.Load(dll).GetTypes()
+                let attributes = types
+                    .Where((type Type) -> type.Name.StartsWith("A", StringComparison.Ordinal))
+                    .OrderBy((type Type) -> type.Name, StringComparer.Ordinal)
+                    .ToArray()
+                Assert.Equal(count, attributes.Length)
+                let contracts = List[string]()
+                for type in attributes {
+                    Assert.Equal(typeof(Attribute), type.BaseType)
+                    let usage = Assert.Single(
+                        type.GetCustomAttributesData(),
+                        (data CustomAttributeData) -> data.AttributeType == typeof(AttributeUsageAttribute)
+                    )
+                    Assert.Equal(int32(AttributeTargets.All), usage.ConstructorArguments[0].Value)
+                    Assert.Equal(true, Assert.Single(usage.NamedArguments).TypedValue.Value)
+                    let index = int32.Parse(type.Name.Substring(1))
+                    let applications = type
+                        .GetCustomAttributesData()
+                        .Where((data CustomAttributeData) -> data.AttributeType.Assembly == type.Assembly)
+                        .ToArray()
+                    if index + 1 == count {
+                        Assert.Empty(applications)
+                        continue
+                    }
+                    let application = Assert.Single(applications)
+                    Assert.Equal("A" + (index + 1).ToString(), application.AttributeType.Name)
+                    Assert.Equal(index, Assert.Single(application.ConstructorArguments).Value)
+                    contracts.Add(type.FullName + ":" + application.AttributeType.FullName + ":" + index.ToString())
+                }
+                let actual = contracts.ToArray()
+                if expected is {} previous {
+                    Assert.Equal(previous.ToArray(), actual)
+                } else {
+                    expected = contracts
+                }
+                let probe = types.Single((type Type) -> type.Name == "Probe`1").MakeGenericType(typeof(int32))
+                Assert.Equal(42, probe.GetMethod("Identity")!!.Invoke(nil, []object{42}))
+                Assert.Equal(
+                    17,
+                    probe
+                        .GetCustomAttributesData()
+                        .Single((data CustomAttributeData) -> data.AttributeType.Name == "A1")
+                        .ConstructorArguments[0]
+                        .Value
+                )
+            }
+        }
     }
 
     @Fact

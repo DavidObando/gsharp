@@ -22,14 +22,10 @@ internal partial class DeclarationBinder {
     private let reportedUnscopedRefDiagnostics HashSet[AnnotationSyntax] = HashSet[AnnotationSyntax]()
     private let pendingAttributeUsageChecks List[() -> void] = List[() -> void]()
 
-    // Attribute classes can annotate each other. Validate a cycle only after their bound contracts exist.
+    // Attribute applications need headers now and complete usage contracts before validation (issue #5975).
     private func ValidateAttributeUsageWhenReady(attributeType TypeSymbol, validate() -> bool) bool {
-        if attributeType is StructSymbol source &&
-            (
-            bindingStructBodies.Contains(source.Definition ?? source) || pendingStructMemberBindings.ContainsKey(
-                source.Definition ?? source
-            )
-        ) {
+        if attributeType is StructSymbol source && nestedStructPackages.ContainsKey(source.Definition ?? source) &&
+            !boundStructBodies.Contains(source.Definition ?? source) {
             pendingAttributeUsageChecks.Add(
                 () -> {
                     validate()
@@ -908,10 +904,8 @@ internal partial class DeclarationBinder {
         return string.Equals(expandedQualifier, containingNamespace, StringComparison.Ordinal)
     }
 
-    private func IsAttributeType(typeSymbol TypeSymbol?) bool -> IsAttributeType(typeSymbol, HashSet[TypeSymbol]())
-
-    private func IsAttributeType(typeSymbol TypeSymbol?, visited HashSet[TypeSymbol]) bool {
-        if typeSymbol == nil || !visited.Add(typeSymbol) {
+    private func IsAttributeType(typeSymbol TypeSymbol?) bool {
+        if typeSymbol == nil {
             return false
         }
         // Issue #1921: a same-compilation user class deriving from
@@ -921,19 +915,8 @@ internal partial class DeclarationBinder {
         // base-chain walk below can't see it. StructSymbol.DerivesFromSystemAttribute
         // walks the symbol-level BaseClass chain instead of relying on ClrType.
         if typeSymbol is StructSymbol structSym {
-            // Bind source contracts through the existing guarded declaration dependency path, not their syntax alone.
-            EnsureStructDeclarationBound(structSym)
-            if structSym.DerivesFromSystemAttribute() {
-                return true
-            }
-            if structSym.Declaration != nil {
-                for baseClause in structSym.Declaration!!.BaseTypeClauses {
-                    if IsAttributeType(bindTypeClause(baseClause), visited) {
-                        return true
-                    }
-                }
-            }
-            return false
+            EnsureStructDeclarationHeaderBound(structSym)
+            return structSym.DerivesFromSystemAttribute()
         }
         let clr Type? = typeSymbol?.ClrType
         if clr == nil {
@@ -946,79 +929,6 @@ internal partial class DeclarationBinder {
                 return true
             }
             t = t.BaseType
-        }
-        return false
-    }
-
-    /// Issue #4143 code review: a side-effect-free stand-in for
-    /// `IsAttributeType`, safe to call DURING declaration
-    /// binding (from `BindStructBaseAndInterfaces` /
-    /// `BindConstructorDeclarations`), where a same-compilation base
-    /// may not have had its own body bound yet.
-    /// @remarks `IsAttributeType` falls back to `bindTypeClause`
-    /// when a base's (cref:StructSymbol.DerivesFromSystemAttribute)
-    /// flags are not yet set — correct for its own USE-site caller, which
-    /// runs once every declaration already exists. Calling THAT fallback
-    /// during declaration binding re-resolves a base clause that is either
-    /// still being bound or belongs to an unrelated, non-attribute class,
-    /// and for a GENERIC base (an open type parameter in scope elsewhere,
-    /// not yet visible from here) it reported a spurious "Type '...' doesn't
-    /// exist" — measured: regressed
-    /// `Issue1244GenericAbstractOverrideBinderTests`.
-    ///
-    /// This walks the same shapes using only side-effect-free lookups:
-    /// the already-computed (cref:StructSymbol.DerivesFromSystemAttribute)
-    /// flags first, then — only when a same-compilation base is a SIMPLE
-    /// (non-generic, unqualified) name — the `@Attribute` sugar marker
-    /// or a literal `: Attribute` / `: System.Attribute` spelling
-    /// on the base's own declaration syntax, and
-    /// (cref:BoundScope.TryLookupTypeAlias(string, out TypeSymbol?))
-    /// (silent on a miss, unlike `bindTypeClause`) to recurse one level
-    /// further when the base names another same-compilation type.
-    /// @param structSymbol The struct/class symbol to test.
-    /// @param visited Cycle guard across the recursive walk.
-    /// @returns `true` when the symbol is or derives from (cref:System.Attribute).
-    private func DerivesFromSystemAttributeDuringDeclaration(
-        structSymbol StructSymbol,
-        visited HashSet[StructSymbol]? = nil
-    ) bool {
-        var visited = visited
-        visited ??= HashSet[StructSymbol]()
-        if !visited!!.Add(structSymbol) {
-            return false
-        }
-        if structSymbol.DerivesFromSystemAttribute() {
-            return true
-        }
-        if structSymbol.Declaration is not{} declaration {
-            return false
-        }
-        if HasAttributeSugarMarker(declaration.Annotations) {
-            return true
-        }
-        for baseClause in declaration.BaseTypeClauses {
-            if baseClause.HasTypeArguments {
-                // A generic base is either an in-scope type parameter (never
-                // an attribute base) or a constructed generic (G# does not
-                // support a same-compilation generic attribute base); either
-                // way, resolving it needs the general binder, which is
-                // exactly what must be avoided here.
-                continue
-            }
-            let name = GetBaseClauseTypeDisplayName(baseClause)
-            if (name is "Attribute" or "System.Attribute") {
-                return true
-            }
-            if name.Contains('.', StringComparison.Ordinal) {
-                // A qualified name needs full resolution to find; not worth
-                // chasing for this narrow, order-of-declaration gap.
-                continue
-            }
-            if $scope.TryLookupTypeAlias(name, out var resolved) &&
-                resolved is StructSymbol baseStruct &&
-                DerivesFromSystemAttributeDuringDeclaration(baseStruct, visited) {
-                return true
-            }
         }
         return false
     }
