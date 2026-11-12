@@ -2073,8 +2073,8 @@ public static class Demo {
         return value.Length;
     }
     public static string Run() {
-        var caller = AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(x => x.GetName().Name == "Lib5617")
-            ?? Assembly.LoadFrom(Path.Combine(AppContext.BaseDirectory, "Lib5617.dll"));
+        var caller = AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(x => x.GetName().Name == "HiddenCaller5326")
+            ?? Assembly.LoadFrom(Path.Combine(AppContext.BaseDirectory, "HiddenCaller5326.dll"));
         var dictionary = (Dictionary<int,int>)caller.GetType("Caller")!.GetMethod("Create")!
             .Invoke(null, new object[] { (Action)(() => global = null) })!;
         global = "safe";
@@ -2099,7 +2099,7 @@ public static class Caller {
                     .DoesNotContain(
                     context.Compilation.References,
                     (reference MetadataReference) ->
-                    context.Compilation.GetAssemblyOrModuleSymbol(reference)?.Name == "Lib5617"
+                    context.Compilation.GetAssemblyOrModuleSymbol(reference)?.Name == "HiddenCaller5326"
                 )
             })
         Assert.Contains("return value!!.Length", printed)
@@ -3713,7 +3713,14 @@ public class Demo
             let libraryImage = if library == nil {
                 Array.Empty[byte]()
             } else {
-                EmitCSharp("Lib5617", library)
+                EmitCSharp(
+                    if runtimeOnlyLibrary {
+                        "HiddenCaller5326"
+                    } else {
+                        "Lib5617"
+                    },
+                    library
+                )
             }
             let references = List[MetadataReference](CSharpProjectLoader.RuntimeReferences())
             if libraryImage.Length > 0 && !runtimeOnlyLibrary {
@@ -3802,7 +3809,14 @@ public class Demo
                 )
                 let arguments = List[string]{compiler!!, "/target:exe", "/out:$dllPath", gsPath, mainPath}
                 if libraryImage.Length > 0 {
-                    let libraryPath = Path.Combine(workDir, "Lib5617.dll")
+                    let libraryPath = Path.Combine(
+                        workDir,
+                        if runtimeOnlyLibrary {
+                            "HiddenCaller5326.dll"
+                        } else {
+                            "Lib5617.dll"
+                        }
+                    )
                     File.WriteAllBytes(libraryPath, libraryImage)
                     if !runtimeOnlyLibrary {
                         arguments.Add("/r:" + libraryPath)
