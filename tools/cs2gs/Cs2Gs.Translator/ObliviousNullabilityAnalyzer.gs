@@ -7729,6 +7729,29 @@ internal shared class ObliviousNullabilityAnalyzer {
                 yield break
             }
         }
+        if current is ElementAccessExpressionSyntax indexAccess && model.GetSymbolInfo(indexAccess)
+            .Symbol is IPropertySymbol indexer {
+            var resolvedReceiver = false
+            for parent in EnumerateTupleContainerSources(indexAccess.Expression, model, unwrapSuppressions, visited) {
+                if parent.StorageType is INamedTypeSymbol receiverType &&
+                    TryGetGenericReceiverTuplePath(
+                    receiverType,
+                    indexer.OriginalDefinition.Type,
+                    out var tupleType,
+                    out var tuplePath
+                ) {
+                    var prefix = parent.Prefix
+                    for index in tuplePath!! {
+                        prefix = AppendTuplePath(prefix, index)
+                    }
+                    resolvedReceiver = true
+                    yield (parent.Symbol, tupleType!!, prefix)
+                }
+            }
+            if resolvedReceiver {
+                yield break
+            }
+        }
         if current is InvocationExpressionSyntax invocation && model.GetSymbolInfo(invocation)
             .Symbol is IMethodSymbol method &&
             IsRefStorageSymbol(method) {
