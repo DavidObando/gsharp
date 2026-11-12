@@ -313,10 +313,14 @@ internal partial class DeclarationBinder {
                 (!rootSet.Contains(node) && (node is StructDeclarationSyntax || node is InterfaceDeclarationSyntax)) {
                 continue
             }
-            if node is TypeClauseSyntax clause {
+            if node is TypeClauseSyntax clause && clause.Identifier is {} identifier {
                 let previousTree = $scope.SetCurrentReferencingSyntaxTree(clause.SyntaxTree)
                 try {
-                    let segments = clause.DottedName.Split('.')
+                    let segments = [clause.SegmentCount]string
+                    segments[0] = identifier.ValueText
+                    for var index = 1; index < segments.Length; index++ {
+                        segments[index] = clause.QualifierIdentifierTokens[index - 1].ValueText
+                    }
                     var current TypeSymbol? = nil
                     for var index = 0; index < segments.Length; index++ {
                         let name = string.Join(".", segments, 0, index + 1)

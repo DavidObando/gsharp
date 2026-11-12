@@ -831,12 +831,19 @@ class BAttribute : Attribute {}`
     @InlineData("argument")
     @InlineData("interface")
     @InlineData("segmented")
+    @InlineData("escaped")
     func QualifiedDeclarationSignatures_UseReadyLexicalHeaders(kind string) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let driver = CompileBoundedStackDriver(fixture)
-        const root = "open class Root { public open class Nested {} }"
+        let root = if kind == "escaped" {
+            "open class Root { public open class $$interface {} }"
+        } else {
+            "open class Root { public open class Nested {} }"
+        }
         let container = if kind == "constraint" {
             "public open class Container[T] : Root {}"
+        } else if kind == "escaped" {
+            "public open class $$event : Root {}"
         } else {
             "public open class Container : Root {}"
         }
@@ -845,6 +852,7 @@ class BAttribute : Attribute {}`
             case "base": "public class Consumer : Container.Nested {}"
             case "argument": "public open class GenericBase[T] {}\npublic class Consumer : GenericBase[Container.Nested] {}"
             case "segmented": "public class Consumer : Outer[int32].Container.Nested {}"
+            case "escaped": "public class Consumer : $$event.$$interface {}"
             default: "public interface Contract { func Read(value Container.Nested); }\n" +
                 "public class Implementation : Contract { public func Read(value Root.Nested) {} }"
         }
@@ -893,7 +901,13 @@ class BAttribute : Attribute {}`
             Assert.True(code == 0, output)
             IlVerifier.Verify(dll)
             let types = EmittedFixture.Load(dll).GetTypes()
-            let nested = types.Single((type Type) -> type.Name == "Nested")
+            let nested = types.Single(
+                (type Type) -> type.Name == if kind == "escaped" {
+                    "interface"
+                } else {
+                    "Nested"
+                }
+            )
             if kind == "interface" {
                 let contract = types.Single((type Type) -> type.Name == "Contract")
                 let read = contract.GetMethod("Read")!!
