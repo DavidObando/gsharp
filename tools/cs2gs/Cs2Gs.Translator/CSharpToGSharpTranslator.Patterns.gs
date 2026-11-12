@@ -4990,10 +4990,11 @@ partial class CSharpToGSharpTranslator {
                 targetSymbol: nil,
                 reportedTarget: arrayType
             )
-            if translated is NonNullAssertionExpression || !this.TargetWillRemainNonNullableReference(
-                elementType,
-                targetSymbol: nil
+            if translated is NonNullAssertionExpression || this.GSharpExpressionIsStaticallyNonNull(
+                expression,
+                translated
             ) ||
+                !this.TargetWillRemainNonNullableReference(elementType, targetSymbol: nil) ||
                 IsNullOrSuppressedNull(expression) {
                 return translated
             }

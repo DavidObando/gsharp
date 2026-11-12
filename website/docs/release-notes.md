@@ -16,6 +16,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- **Omit redundant outer-array assertions in cs2gs nested initializers** (Fixes #5978). Array-element bridges use emitted value nullability, so nullable inner elements do not force `!!` on non-null outer storage. Required nullable-value assertions remain.
+
 - Match forwarded handler constructor arguments without treating an `out bool` gate as a bool value. Match forwarded ref kinds and reject readonly addresses for writable constructor slots. Capture managed call addresses in source order, preserving null, bounds, and array-type checks. Fixed shared-field addresses still evaluate type initialization before subsequent synchronous arguments. Adapt forwarded values and readonly references to selected constructor parameter types without repeating evaluations. Canonical managed-reference captures preserve chosen storage across suspension. References consumed without suspension preserve address effects at their definitions inside async methods. Overloaded handlers preserve constructor gating and emit valid IL. (Fixes #5966)
 
 - Reduce `cs2gs` scalar-alias allocations by sharing immutable syntax facts and invalidating only dependent promoted-local answers. Share scope, write, closure, and guard censuses while retaining live projection bindings and dynamic flow checks. Stop write-index receiver traversal at known reference boundaries, preserving value-type ancestors without retaining every distinct reference-field prefix. Whole-pipeline allocation bounds cover chains and switch fan-out. Live alias walks remain repeated, and whole-pipeline switch fan-out allocation remains superlinear. (Part of #5962)
