@@ -4,6 +4,7 @@
 
 package Cs2Gs.Translator
 
+import CompilationMeasurements = GSharp.Core.CodeAnalysis.Compilation.CompilationMeasurements
 import Cs2Gs.CodeModel.Ast
 import Cs2Gs.CodeModel.Printing
 import Cs2Gs.Translator.Loading
@@ -2186,19 +2187,181 @@ partial class CSharpToGSharpTranslator {
             return result
         }
 
+        private let scopeWriteCandidates Dictionary[(SemanticModel, SyntaxNode), ScopeWriteIndex] = Dictionary[
+            (SemanticModel, SyntaxNode),
+            ScopeWriteIndex
+        ]()
+
+        private class ScopeWriteIndex {
+            public let Writes Dictionary[ISymbol, List[SyntaxNode]] = Dictionary[ISymbol, List[SyntaxNode]](
+                SymbolEqualityComparer.Default
+            )
+            public let Declarations Dictionary[string, List[ISymbol]] = Dictionary[string, List[ISymbol]](
+                StringComparer.Ordinal
+            )
+            public let AddressNames HashSet[ISymbol] = HashSet[ISymbol](SymbolEqualityComparer.Default)
+        }
+
+        private func GetScopeWriteIndex(scope_ SyntaxNode) ScopeWriteIndex {
+            if scope_.SyntaxTree != this.context.SemanticModel.SyntaxTree {
+                using let modelScope = this.context.UseSemanticModelFor(scope_.SyntaxTree)
+                return this.GetScopeWriteIndex(scope_)
+            }
+            let key = (this.context.SemanticModel, scope_)
+            if this.scopeWriteCandidates.TryGetValue(key, out var cached) {
+                return cached
+            }
+            let index = ScopeWriteIndex()
+            let bindings = Dictionary[ExpressionSyntax, ISymbol?](ReferenceEqualityComparer.Instance)
+            // Include nested executables, as the original reassignment walk does.
+            for node in scope_.DescendantNodesAndSelf() {
+                CompilationMeasurements.Count("translation.reassignment_node_visits")
+                let target ExpressionSyntax? = switch node {
+                    case assignment is AssignmentExpressionSyntax: assignment.Left
+                    case prefix is PrefixUnaryExpressionSyntax: prefix.Operand
+                    case postfix is PostfixUnaryExpressionSyntax: postfix.Operand
+                    case argument is ArgumentSyntax: argument.Expression
+                    case InvocationExpressionSyntax{Expression: MemberAccessExpressionSyntax member}: member.Expression
+                    case reference is RefExpressionSyntax: reference.Expression
+                    case member is MemberAccessExpressionSyntax: member.Expression
+                    case element is ElementAccessExpressionSyntax: element.Expression
+                    default: default(ExpressionSyntax?)
+                }
+                if target != nil {
+                    this.IndexScopeWriteTarget(index.Writes, bindings, node, target)
+                }
+                let declaredName string? = switch node {
+                    case declaration is VariableDeclaratorSyntax: declaration.Identifier.ValueText
+                    case designation is SingleVariableDesignationSyntax: designation.Identifier.ValueText
+                    case loop is ForEachStatementSyntax: loop.Identifier.ValueText
+                    case caught is CatchDeclarationSyntax: caught.Identifier.ValueText
+                    case parameter is ParameterSyntax: parameter.Identifier.ValueText
+                    default: default(string?)
+                }
+                if declaredName != nil {
+                    CompilationMeasurements.Count("translation.scope_declaration_symbol_queries")
+                    let declared = this.context.GetDeclaredSymbol(node)
+                    if declared is ILocalSymbol or IParameterSymbol {
+                        if !index.Declarations.TryGetValue(declaredName, out var declarations) {
+                            declarations = List[ISymbol]()
+                            index.Declarations.Add(declaredName, declarations)
+                        }
+                        declarations.Add(declared)
+                    }
+                }
+                let addressOperand ExpressionSyntax? = switch node {
+                    case reference is RefExpressionSyntax: reference.Expression
+                    case prefix is PrefixUnaryExpressionSyntax when prefix.IsKind(SyntaxKind.AddressOfExpression):
+                    prefix.Operand
+                    default: default(ExpressionSyntax?)
+                }
+                if addressOperand != nil {
+                    // Keep every operand name, including indices, as CollectAddressTakenNames does.
+                    for operandNode in addressOperand.DescendantNodesAndSelf() {
+                        CompilationMeasurements.Count("translation.scope_address_node_visits")
+                        if operandNode is IdentifierNameSyntax name && this.ScopeBoundSymbol(
+                            bindings,
+                            name
+                        ) is {} addressed {
+                            index.AddressNames.Add(addressed)
+                        }
+                    }
+                }
+            }
+            this.scopeWriteCandidates.Add(key, index)
+            CompilationMeasurements.Count("translation.scope_write_indexes")
+            return index
+        }
+
+        private func ScopeBoundSymbol(
+            bindings Dictionary[ExpressionSyntax, ISymbol?],
+            expression ExpressionSyntax
+        ) ISymbol? {
+            if !bindings.TryGetValue(expression, out var symbol) {
+                CompilationMeasurements.Count("translation.reassignment_symbol_queries")
+                symbol = this.context.GetSymbolInfo(expression).Symbol
+                bindings.Add(expression, symbol)
+            }
+            return symbol
+        }
+
+        // Index possible storage roots. SyntaxNodeWritesSymbol retains every semantic and readonly decision.
+        private func IndexScopeWriteTarget(
+            candidates Dictionary[ISymbol, List[SyntaxNode]],
+            bindings Dictionary[ExpressionSyntax, ISymbol?],
+            write SyntaxNode,
+            target ExpressionSyntax
+        ) {
+            var current ExpressionSyntax? = target
+            while current != nil {
+                CompilationMeasurements.Count("translation.reassignment_storage_target_visits")
+                current = CSharpToGSharpTranslator.UnwrapParenthesesAndSuppressions(current)
+                let symbol = this.ScopeBoundSymbol(bindings, current!!)
+                if symbol != nil {
+                    if !candidates.TryGetValue(symbol, out var writes) {
+                        writes = List[SyntaxNode]()
+                        candidates.Add(symbol, writes)
+                    }
+                    if writes.Count == 0 || !object.ReferenceEquals(writes[writes.Count - 1], write) {
+                        writes.Add(write)
+                        CompilationMeasurements.Count("translation.scope_write_candidates")
+                    }
+                }
+                if current is TupleExpressionSyntax tuple {
+                    for argument in tuple.Arguments {
+                        this.IndexScopeWriteTarget(candidates, bindings, write, argument.Expression)
+                    }
+                }
+                current = switch current {
+                    case member is MemberAccessExpressionSyntax: member.Expression
+                    case element is ElementAccessExpressionSyntax: element.Expression
+                    default: default(ExpressionSyntax?)
+                }
+            }
+        }
+
         private func ComputeIsSymbolReassigned(symbol ISymbol?, $scope SyntaxNode) bool {
-            for node in $scope.DescendantNodes() {
-                GSharp
-                    .Core
-                    .CodeAnalysis
-                    .Compilation
-                    .CompilationMeasurements
-                    .Count("translation.reassignment_node_visits")
+            for node in this.ScopeSymbolWriteCandidates($scope, symbol) {
                 if this.SyntaxNodeWritesSymbol(node, symbol) {
                     return true
                 }
             }
             return false
+        }
+
+        private func ScopeSymbolWriteCandidates(
+            scope_ SyntaxNode,
+            symbol ISymbol?,
+            excludeNested bool = false,
+            includeSelf bool = false
+        ) sequence[SyntaxNode] {
+            let index = this.GetScopeWriteIndex(scope_)
+            if symbol != nil && index.Writes.TryGetValue(symbol, out var candidates) {
+                for candidate in candidates {
+                    CompilationMeasurements.Count("translation.reassignment_node_visits")
+                    if !includeSelf && object.ReferenceEquals(candidate, scope_) {
+                        continue
+                    }
+                    var withinScope = true
+                    if excludeNested {
+                        for var ancestor SyntaxNode? = candidate.Parent; ancestor != nil && !object.ReferenceEquals(
+                            ancestor,
+                            scope_
+                        );
+                            ancestor = ancestor!!
+                            .Parent {
+                            CompilationMeasurements.Count("translation.scope_boundary_visits")
+                            if this.IsClosureBoundary(ancestor) {
+                                withinScope = false
+                                break
+                            }
+                        }
+                    }
+                    if withinScope {
+                        yield candidate
+                    }
+                }
+            }
         }
 
         // Issue #4709: whether an uninitialized struct local is written through
@@ -2673,54 +2836,58 @@ partial class CSharpToGSharpTranslator {
 
     shared {
         // Shared by declaration mutability, smart casts and taint guard proofs.
-        internal func SyntaxNodeWritesSymbol(
-            node SyntaxNode,
-            symbol ISymbol?,
-            model SemanticModel
-        ) bool -> switch node {
-            case assignment is AssignmentExpressionSyntax when WritesStorageOf(assignment.Left, symbol, model): true
-            case AssignmentExpressionSyntax{Left: TupleExpressionSyntax tuple} when TupleAssignmentTargetsInclude(
-                tuple,
-                symbol,
-                model
-            ): true
-            case postfix is PostfixUnaryExpressionSyntax when(
-                postfix.IsKind(SyntaxKind.PostIncrementExpression) || postfix.IsKind(SyntaxKind.PostDecrementExpression)
-            ) &&
-                WritesStorageOf(postfix.Operand, symbol, model): true
-            case prefix is PrefixUnaryExpressionSyntax when(
-                prefix.IsKind(SyntaxKind.PreIncrementExpression) || prefix.IsKind(SyntaxKind.PreDecrementExpression) ||
-                    prefix.IsKind(SyntaxKind.AddressOfExpression)
-            ) &&
-                WritesStorageOf(prefix.Operand, symbol, model): true
-            case argument is ArgumentSyntax when(
-                argument.RefOrOutKeyword.IsKind(SyntaxKind.RefKeyword) || argument.RefOrOutKeyword.IsKind(
-                    SyntaxKind.OutKeyword
-                )
-            ) &&
-                WritesStorageOf(argument.Expression, symbol, model): true
-            case InvocationExpressionSyntax{
-                Expression: MemberAccessExpressionSyntax member
-            } invocation when ExtensionReceiverWritesSymbol(invocation, member.Expression, symbol, model) ||
-                MutatingStructCallWritesSymbol(invocation, member, symbol, model): true
-            case refOf is RefExpressionSyntax when WritesStorageOf(refOf.Expression, symbol, model) &&
-                !(
-                refOf.Parent is EqualsValueClauseSyntax{Parent: VariableDeclaratorSyntax declarator} &&
-                    model.GetDeclaredSymbol(declarator) is ILocalSymbol local && local.RefKind == RefKind.RefReadOnly
-            ): true
-            case member is MemberAccessExpressionSyntax when MutatingStructAccessorWritesSymbol(
-                member,
-                member.Expression,
-                symbol,
-                model
-            ): true
-            case element is ElementAccessExpressionSyntax when MutatingStructAccessorWritesSymbol(
-                element,
-                element.Expression,
-                symbol,
-                model
-            ): true
-            default: false
+        internal func SyntaxNodeWritesSymbol(node SyntaxNode, symbol ISymbol?, model SemanticModel) bool {
+            CompilationMeasurements.Count("translation.reassignment_write_probes")
+            return switch node {
+                case assignment is AssignmentExpressionSyntax when WritesStorageOf(assignment.Left, symbol, model): true
+                case AssignmentExpressionSyntax{Left: TupleExpressionSyntax tuple} when TupleAssignmentTargetsInclude(
+                    tuple,
+                    symbol,
+                    model
+                ): true
+                case postfix is PostfixUnaryExpressionSyntax when(
+                    postfix.IsKind(SyntaxKind.PostIncrementExpression) || postfix.IsKind(
+                        SyntaxKind.PostDecrementExpression
+                    )
+                ) &&
+                    WritesStorageOf(postfix.Operand, symbol, model): true
+                case prefix is PrefixUnaryExpressionSyntax when(
+                    prefix.IsKind(SyntaxKind.PreIncrementExpression) || prefix.IsKind(
+                        SyntaxKind.PreDecrementExpression
+                    ) ||
+                        prefix.IsKind(SyntaxKind.AddressOfExpression)
+                ) &&
+                    WritesStorageOf(prefix.Operand, symbol, model): true
+                case argument is ArgumentSyntax when(
+                    argument.RefOrOutKeyword.IsKind(SyntaxKind.RefKeyword) || argument.RefOrOutKeyword.IsKind(
+                        SyntaxKind.OutKeyword
+                    )
+                ) &&
+                    WritesStorageOf(argument.Expression, symbol, model): true
+                case InvocationExpressionSyntax{
+                    Expression: MemberAccessExpressionSyntax member
+                } invocation when ExtensionReceiverWritesSymbol(invocation, member.Expression, symbol, model) ||
+                    MutatingStructCallWritesSymbol(invocation, member, symbol, model): true
+                case refOf is RefExpressionSyntax when WritesStorageOf(refOf.Expression, symbol, model) &&
+                    !(
+                    refOf.Parent is EqualsValueClauseSyntax{Parent: VariableDeclaratorSyntax declarator} &&
+                        model.GetDeclaredSymbol(declarator) is ILocalSymbol local &&
+                        local.RefKind == RefKind.RefReadOnly
+                ): true
+                case member is MemberAccessExpressionSyntax when MutatingStructAccessorWritesSymbol(
+                    member,
+                    member.Expression,
+                    symbol,
+                    model
+                ): true
+                case element is ElementAccessExpressionSyntax when MutatingStructAccessorWritesSymbol(
+                    element,
+                    element.Expression,
+                    symbol,
+                    model
+                ): true
+                default: false
+            }
         }
 
         private func BindsTo(expression ExpressionSyntax?, target ISymbol?, model SemanticModel) bool {
@@ -2754,6 +2921,7 @@ partial class CSharpToGSharpTranslator {
             model SemanticModel
         ) bool {
             for argument in tuple.Arguments {
+                CompilationMeasurements.Count("translation.storage_write_tuple_visits")
                 switch argument.Expression {
                     case nested is TupleExpressionSyntax when TupleAssignmentTargetsInclude(nested, symbol, model) {
                         return true
@@ -2772,6 +2940,7 @@ partial class CSharpToGSharpTranslator {
         private func WritesStorageOf(target ExpressionSyntax?, symbol ISymbol?, model SemanticModel) bool {
             var target = target
             while true {
+                CompilationMeasurements.Count("translation.storage_write_target_probes")
                 target = UnwrapParenthesesAndSuppressions(target)
                 if BindsTo(target, symbol, model) {
                     return true

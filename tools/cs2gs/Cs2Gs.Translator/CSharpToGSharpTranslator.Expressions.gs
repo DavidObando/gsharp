@@ -14134,24 +14134,21 @@ partial class CSharpToGSharpTranslator {
             $scope Microsoft.CodeAnalysis.SyntaxNode,
             requireJumpFreeScope bool
         ) bool {
-            let WithinScope = func (node Microsoft.CodeAnalysis.SyntaxNode) bool {
-                return object.ReferenceEquals(node, $scope) || !this.IsClosureBoundary(node)
-            }
+            let index = this.GetScopeGotoIndex($scope)
             if requireJumpFreeScope &&
                 (
-                this.GetScopeGotoIndex($scope).Jumps.Count > 0 || this.ScopeSynthesizesLoopContinueLabel($scope) ||
-                    $scope
-                    .DescendantNodesAndSelf(WithinScope).Any(
-                    (node Microsoft.CodeAnalysis.SyntaxNode) -> node is Microsoft
-                        .CodeAnalysis
-                        .CSharp
-                        .Syntax
-                        .LabeledStatementSyntax
-                )
+                index.Jumps.Count > 0 || this.ScopeSynthesizesLoopContinueLabel($scope) ||
+                    index.HasLabels ||
+                    $scope is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .LabeledStatementSyntax
             ) {
                 return false
             }
-            for isPattern in $scope.DescendantNodesAndSelf(WithinScope).OfType[IsPatternExpressionSyntax]() {
+            for isPattern in index.PatternsFor(symbol) {
+                CompilationMeasurements.Count("translation.guard_candidate_visits")
                 if isPattern.SpanStart >= effectiveTarget.SpanStart || !this.BindsToGuardSymbol(
                     isPattern.Expression,
                     symbol
@@ -14179,8 +14176,8 @@ partial class CSharpToGSharpTranslator {
                 }
                 return true
             }
-            for nullCheck in $scope.DescendantNodesAndSelf(WithinScope)
-                .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax]() {
+            for nullCheck in index.BinaryTestsFor(symbol) {
+                CompilationMeasurements.Count("translation.guard_candidate_visits")
                 // Roslyn represents the classic `x is T` form as a binary expression, not a pattern expression.
                 let typeTest = nullCheck.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.IsExpression) &&
                     this.IsTypeReferencePattern(nullCheck.Right) && this.BindsToGuardSymbol(nullCheck.Left, symbol) &&
@@ -14864,7 +14861,7 @@ partial class CSharpToGSharpTranslator {
                     node is ForEachVariableStatementSyntax {
                     // A guard outside a loop is not re-evaluated after a write in
                     // the loop body, so it cannot prove later iterations non-null.
-                    let hasWrite = node.DescendantNodes().Any(
+                    let hasWrite = this.ScopeSymbolWriteCandidates(node, symbol).Any(
                         (candidate Microsoft.CodeAnalysis.SyntaxNode) -> !object.ReferenceEquals(candidate, use) &&
                             this.SyntaxNodeWritesSymbol(candidate, symbol)
                     )
@@ -14895,23 +14892,6 @@ partial class CSharpToGSharpTranslator {
             return comparesSymbolToNull
         }
 
-        /// ADR-0208 R15 (#5237): gsc kills the narrowing of a local that a CLOSURE
-        /// assigns at every node that runs source code, because that code may run a
-        /// closure that escaped. C# flow analysis keeps the fact, so a read the C#
-        /// compiler proves non-null can be nilable in the emitted G#. This is the one
-        /// decision for it: the guard narrows the use in G# only when no such
-        /// call lies between them (and no loop that holds the use but not the
-        /// guard runs one), so callers fall back to the asserted read otherwise.
-        /// Whether a `ref` or address-of operand names the variable anywhere in its path
-        /// (`ref current`, `ref current[0]`, `&current.Field`): the compiler scans the names in
-        /// the operand the same way (CollectAddressTakenNames).
-        private func OperandNamesVariable(operand Microsoft.CodeAnalysis.SyntaxNode, symbol ISymbol?) bool {
-            return operand
-                .DescendantNodesAndSelf()
-                .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.IdentifierNameSyntax]()
-                .Any((name Microsoft.CodeAnalysis.CSharp.Syntax.IdentifierNameSyntax) -> this.BindsTo(name, symbol))
-        }
-
         /// A local or parameter that a closure (lambda or local function) other than its declaring
         /// function writes, directly or through a `ref` local that names it.
         private func IsClosureAssignedVariable(symbol ISymbol?) bool {
@@ -14939,68 +14919,23 @@ partial class CSharpToGSharpTranslator {
             // variable of the same name in the function (a sibling block's local) counts too. The C# name stands for
             // the emitted name: a renamed namesake only adds an assertion that the polish pass removes.
             let symbolName = symbol!!.Name
+            let index = this.GetScopeWriteIndex(declaringFunction)
             let namesakes = List[ISymbol]{symbol!!}
-            for node in declaringFunction.DescendantNodes() {
-                let declaredName string? = switch node {
-                    case declarator is Microsoft
-                        .CodeAnalysis
-                        .CSharp
-                        .Syntax
-                        .VariableDeclaratorSyntax: declarator
-                        .Identifier
-                        .ValueText
-                    case designation is SingleVariableDesignationSyntax: designation.Identifier.ValueText
-                    case loop is Microsoft.CodeAnalysis.CSharp.Syntax.ForEachStatementSyntax: loop.Identifier.ValueText
-                    case caught is Microsoft
-                        .CodeAnalysis
-                        .CSharp
-                        .Syntax
-                        .CatchDeclarationSyntax: caught
-                        .Identifier
-                        .ValueText
-                    case parameter is Microsoft
-                        .CodeAnalysis
-                        .CSharp
-                        .Syntax
-                        .ParameterSyntax: parameter
-                        .Identifier
-                        .ValueText
-                    default: default(string?)
-                }
-                if declaredName != symbolName {
-                    continue
-                }
-                let declared ISymbol? = this.context.SemanticModel.GetDeclaredSymbol(node)
-                if (declared is ILocalSymbol || declared is IParameterSymbol) && !SymbolEqualityComparer.Default.Equals(
-                    declared,
-                    symbol
-                ) {
-                    namesakes.Add(declared!!)
+            if index.Declarations.TryGetValue(symbolName, out var declarations) {
+                for declared in declarations {
+                    CompilationMeasurements.Count("translation.scope_namesake_visits")
+                    if !SymbolEqualityComparer.Default.Equals(declared, symbol) {
+                        namesakes.Add(declared)
+                    }
                 }
             }
-            for node in declaringFunction.DescendantNodes() {
-                for variable in namesakes {
+            for variable in namesakes {
+                if index.AddressNames.Contains(variable) {
+                    return true
+                }
+                for node in this.ScopeSymbolWriteCandidates(declaringFunction, variable) {
                     if this.SyntaxNodeWritesSymbol(node, variable) &&
                         NearestFunctionBoundary(node) != declaringFunction {
-                        return true
-                    }
-                    // A `ref` alias or an address-of keeps the variable's storage reachable after a call
-                    // (gsc's CollectAddressTakenNames), which ends its narrowing the same way.
-                    if node is Microsoft
-                        .CodeAnalysis
-                        .CSharp
-                        .Syntax
-                        .RefExpressionSyntax refExpression &&
-                        this.OperandNamesVariable(refExpression.Expression, variable) {
-                        return true
-                    }
-                    if node is Microsoft
-                        .CodeAnalysis
-                        .CSharp
-                        .Syntax
-                        .PrefixUnaryExpressionSyntax addressOf &&
-                        addressOf.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AddressOfExpression) &&
-                        this.OperandNamesVariable(addressOf.Operand, variable) {
                         return true
                     }
                 }
@@ -15519,28 +15454,65 @@ partial class CSharpToGSharpTranslator {
         ] = Dictionary[Microsoft.CodeAnalysis.CSharp.Syntax.IfStatementSyntax, bool]()
 
         private let scopeGotoIndex Dictionary[
-            Microsoft.CodeAnalysis.SyntaxNode,
-            (
-                Jumps List[
+            (SemanticModel, Microsoft.CodeAnalysis.SyntaxNode),
+            ScopeGotoIndex
+        ] = Dictionary[(SemanticModel, Microsoft.CodeAnalysis.SyntaxNode), ScopeGotoIndex]()
+
+        private class ScopeGotoIndex {
+            public let Jumps List[
+                (
+                    Jump Microsoft.CodeAnalysis.CSharp.Syntax.GotoStatementSyntax,
+                    Target Microsoft.CodeAnalysis.SyntaxNode?
+                )
+            ]
+            public let BackwardSpan(Start int32, End int32)?
+            public let HasLabels bool
+            public let LoopLabelCandidates IReadOnlyList[Microsoft.CodeAnalysis.SyntaxNode]
+            private let patterns Dictionary[string, List[IsPatternExpressionSyntax]]
+            private let binaryTests Dictionary[
+                string,
+                List[Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax]
+            ]
+
+            init(
+                jumps List[
                     (
                         Jump Microsoft.CodeAnalysis.CSharp.Syntax.GotoStatementSyntax,
                         Target Microsoft.CodeAnalysis.SyntaxNode?
                     )
                 ],
-                BackwardSpan(Start int32, End int32)?
-            )
-        ] = Dictionary[
-            Microsoft.CodeAnalysis.SyntaxNode,
-            (
-                Jumps List[
-                    (
-                        Jump Microsoft.CodeAnalysis.CSharp.Syntax.GotoStatementSyntax,
-                        Target Microsoft.CodeAnalysis.SyntaxNode?
-                    )
-                ],
-                BackwardSpan(Start int32, End int32)?
-            )
-        ]()
+                backwardSpan(Start int32, End int32)?,
+                hasLabels bool,
+                patterns Dictionary[string, List[IsPatternExpressionSyntax]],
+                binaryTests Dictionary[string, List[Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax]],
+                loopLabelCandidates IReadOnlyList[Microsoft.CodeAnalysis.SyntaxNode]
+            ) {
+                this.Jumps = jumps
+                this.BackwardSpan = backwardSpan
+                this.HasLabels = hasLabels
+                this.patterns = patterns
+                this.binaryTests = binaryTests
+                this.LoopLabelCandidates = loopLabelCandidates
+            }
+
+            public func PatternsFor(symbol ISymbol?) IReadOnlyList[IsPatternExpressionSyntax] {
+                return if symbol != nil && this.patterns.TryGetValue(symbol.Name, out var candidates) {
+                    cast[IReadOnlyList[IsPatternExpressionSyntax]](candidates)
+                } else {
+                    Array.Empty[IsPatternExpressionSyntax]()
+                }
+            }
+
+            public func BinaryTestsFor(symbol ISymbol?) IReadOnlyList[
+                Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax
+            ] {
+                return if symbol != nil && this.binaryTests.TryGetValue(symbol.Name, out var candidates) {
+                    cast[IReadOnlyList[Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax]](candidates)
+                } else {
+                    Array.Empty[Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax]()
+                }
+            }
+        }
 
         /// ADR-0208 (#5650, #5654, #5130): sibling branch bodies do not reach each other's reads.
         /// Switch tests and guards still run before dispatch. Gotos retain the conservative switch rule.
@@ -15632,30 +15604,92 @@ partial class CSharpToGSharpTranslator {
             return result
         }
 
-        private func GetScopeGotoIndex($scope Microsoft.CodeAnalysis.SyntaxNode)(
-            Jumps List[
-                (
-                    Jump Microsoft.CodeAnalysis.CSharp.Syntax.GotoStatementSyntax,
-                    Target Microsoft.CodeAnalysis.SyntaxNode?
-                )
-            ],
-            BackwardSpan(Start int32, End int32)?
-        ) {
-            if this.scopeGotoIndex.TryGetValue($scope, out var cached) {
+        // Names over-approximate subjects; BindsToGuardSymbol still decides source identity at each use.
+        private func GuardCandidateName(expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax) string? {
+            let subject = CSharpToGSharpTranslator.UnwrapParenthesesAndSuppressions(expression)
+            if subject is IdentifierNameSyntax identifier {
+                return identifier.Identifier.ValueText
+            }
+            CompilationMeasurements.Count("translation.guard_subject_symbol_queries")
+            return this.context.GetSymbolInfo(subject).Symbol?.Name
+        }
+
+        private func GetScopeGotoIndex($scope Microsoft.CodeAnalysis.SyntaxNode) ScopeGotoIndex {
+            if $scope.SyntaxTree != this.context.SemanticModel.SyntaxTree {
+                using let modelScope = this.context.UseSemanticModelFor($scope.SyntaxTree)
+                return this.GetScopeGotoIndex($scope)
+            }
+            let key = (this.context.SemanticModel, $scope)
+            if this.scopeGotoIndex.TryGetValue(key, out var cached) {
                 return cached
             }
             let gotos = List[Microsoft.CodeAnalysis.CSharp.Syntax.GotoStatementSyntax]()
             let labels = Dictionary[string, Microsoft.CodeAnalysis.CSharp.Syntax.LabeledStatementSyntax](
                 StringComparer.Ordinal
             )
-            for node in $scope.DescendantNodes(
+            let patterns = Dictionary[string, List[IsPatternExpressionSyntax]](StringComparer.Ordinal)
+            let binaryTests = Dictionary[string, List[Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax]](
+                StringComparer.Ordinal
+            )
+            let loopLabelCandidates = List[Microsoft.CodeAnalysis.SyntaxNode]()
+            for node in $scope.DescendantNodesAndSelf(
                 (child Microsoft.CodeAnalysis.SyntaxNode) -> object.ReferenceEquals(child, $scope) ||
                     !this.IsClosureBoundary(child)
             ) {
+                CompilationMeasurements.Count("translation.guard_scope_node_visits")
+                if node is IsPatternExpressionSyntax pattern && this.GuardCandidateName(pattern.Expression) is {} name {
+                    if !patterns.TryGetValue(name, out var candidates) {
+                        candidates = List[IsPatternExpressionSyntax]()
+                        patterns.Add(name, candidates)
+                    }
+                    candidates.Add(pattern)
+                    CompilationMeasurements.Count("translation.scope_guard_candidates")
+                }
+                if node is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax binary {
+                    for var operandIndex = 0; operandIndex < 2; operandIndex++ {
+                        let operand = if operandIndex == 0 {
+                            binary.Left
+                        } else {
+                            binary.Right
+                        }
+                        if this.GuardCandidateName(operand) is not{} name {
+                            continue
+                        }
+                        if !binaryTests.TryGetValue(name, out var candidates) {
+                            candidates = List[Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax]()
+                            binaryTests.Add(name, candidates)
+                        }
+                        if candidates.Count == 0 || !object.ReferenceEquals(candidates[candidates.Count - 1], binary) {
+                            candidates.Add(binary)
+                            CompilationMeasurements.Count("translation.scope_guard_candidates")
+                        }
+                    }
+                }
+                if object.ReferenceEquals(node, $scope) {
+                    continue
+                }
                 if node is Microsoft.CodeAnalysis.CSharp.Syntax.GotoStatementSyntax jump {
                     gotos.Add(jump)
                 } else if node is Microsoft.CodeAnalysis.CSharp.Syntax.LabeledStatementSyntax labeled {
                     labels[labeled.Identifier.ValueText] = labeled
+                }
+                if node is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .DoStatementSyntax ||
+                    node is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ForStatementSyntax{Incrementors: {Count: > 0}} ||
+                    node is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .IfStatementSyntax{Else: not nil} {
+                    loopLabelCandidates.Add(node)
+                    CompilationMeasurements.Count("translation.scope_guard_candidates")
                 }
             }
             let jumps = List[
@@ -15693,8 +15727,16 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             let backwardSpan = this.ComputeBackwardSpan(backwardParticipants, $scope)
-            let entry = (jumps, backwardSpan)
-            this.scopeGotoIndex[$scope] = entry
+            let entry = ScopeGotoIndex(
+                jumps,
+                backwardSpan,
+                labels.Count > 0,
+                patterns,
+                binaryTests,
+                loopLabelCandidates
+            )
+            this.scopeGotoIndex[key] = entry
+            CompilationMeasurements.Count("translation.scope_guard_indexes")
             return entry
         }
 
@@ -20104,7 +20146,7 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return true
             }
-            if $scope.DescendantNodes(OutsideNestedFunctions).Any(
+            if this.ScopeSymbolWriteCandidates($scope, symbol, excludeNested: true).Any(
                 (node Microsoft.CodeAnalysis.SyntaxNode) -> (
                     if exitedLoop != nil {
                         (exitedCondition != nil && exitedCondition.Span.Contains(node.Span)) ||
