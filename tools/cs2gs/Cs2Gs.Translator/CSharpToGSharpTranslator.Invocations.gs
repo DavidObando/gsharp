@@ -36,7 +36,7 @@ partial class CSharpToGSharpTranslator {
                             this.typeMapper.Map(local.Type, this.context, argument.GetLocation()),
                             local
                         )
-                        this.state.LocalHoldsPromotedValueAnswers.Clear()
+                        this.InvalidateLocalPromotedValue(local)
                         if type != nil {
                             this.state.EmittedLocalTypeClauses.Add(local)
                         }

@@ -4,6 +4,7 @@
 
 package Cs2Gs.Translator
 
+import CompilationMeasurements = GSharp.Core.CodeAnalysis.Compilation.CompilationMeasurements
 import Cs2Gs.CodeModel.Ast
 import Cs2Gs.CodeModel.Printing
 import Cs2Gs.Translator.Analyzers
@@ -810,13 +811,66 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
-        /// Issue #5602: whether [`local`](paramref) holds a value that G# types `T?` in an oblivious
-        /// compilation. The receiver rule, the value rules and the store bridge ask this one question.
-        /// @remarks A local whose declaration emitted non-null storage (`EmittedLocalStorageAcceptsNil`)
-        /// holds a non-null value: the declaration bridged its initializer. A local whose type clause is
-        /// `T?` holds a `T?` value. G# infers any other declared local from its initializer. A local that a deconstruction or an `out` argument
-        /// declares holds the widened declaration it receives (#5561).
+        private let promotedValueDependents Dictionary[ILocalSymbol, HashSet[ILocalSymbol]] = Dictionary[
+            ILocalSymbol,
+            HashSet[ILocalSymbol]
+        ](SymbolEqualityComparer.Default)
+        private var currentPromotedValueQuery ILocalSymbol? = nil
+        private var promotedValueScope SyntaxNode? = nil
+
+        private func RecordPromotedValueDependency(local ILocalSymbol) {
+            if this.currentPromotedValueQuery is not{} parent || SymbolEqualityComparer.Default.Equals(parent, local) {
+                return
+            }
+            CompilationMeasurements.Count("translation.promoted_value_dependency_reads")
+            if !this.promotedValueDependents.TryGetValue(local, out var dependents) {
+                dependents = HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
+                this.promotedValueDependents.Add(local, dependents)
+            }
+            if dependents.Add(parent) {
+                CompilationMeasurements.Count("translation.promoted_value_retained_dependencies")
+            }
+        }
+
+        private func InvalidateLocalPromotedValue(local ILocalSymbol) {
+            CompilationMeasurements.Count("translation.promoted_value_invalidation_visits")
+            this.state.LocalHoldsPromotedValueAnswers.Remove(local)
+            if !this.promotedValueDependents.Remove(local, out var dependents) {
+                return
+            }
+            CompilationMeasurements.Count("translation.promoted_value_retained_dependencies", -int64(dependents.Count))
+            let pending = Queue[ILocalSymbol](dependents)
+            while pending.Count > 0 {
+                let dependent = pending.Dequeue()
+                CompilationMeasurements.Count("translation.promoted_value_invalidation_visits")
+                this.state.LocalHoldsPromotedValueAnswers.Remove(dependent)
+                if this.promotedValueDependents.Remove(dependent, out var transitive) {
+                    CompilationMeasurements.Count(
+                        "translation.promoted_value_retained_dependencies",
+                        -int64(transitive.Count)
+                    )
+                    for next in transitive {
+                        pending.Enqueue(next)
+                    }
+                }
+            }
+        }
+
+        /// Issue #5602: whether [`local`](paramref) holds a value that G# types `T?` in an oblivious compilation.
+        /// The receiver, value, and store rules share this query and its emitted-storage dependencies.
         private func LocalHoldsPromotedValue(local ILocalSymbol) bool {
+            if !object.ReferenceEquals(this.promotedValueScope, this.state.CurrentBodyScope) {
+                this.promotedValueScope = this.state.CurrentBodyScope
+                this.state.LocalHoldsPromotedValueAnswers.Clear()
+                for dependents in this.promotedValueDependents.Values {
+                    CompilationMeasurements.Count(
+                        "translation.promoted_value_retained_dependencies",
+                        -int64(dependents.Count)
+                    )
+                }
+                this.promotedValueDependents.Clear()
+            }
+            this.RecordPromotedValueDependency(local)
             // A composed initializer can name the same local in more than one arm, so the answers
             // are kept (`LocalHoldsPromotedValueAnswers`).
             if this.state.LocalHoldsPromotedValueAnswers.TryGetValue(local, out var answer) {
@@ -828,9 +882,13 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             var result = false
+            let parent = this.currentPromotedValueQuery
+            this.currentPromotedValueQuery = local
             try {
+                CompilationMeasurements.Count("translation.promoted_value_evaluations")
                 result = this.LocalHoldsPromotedValueCore(local)
             } finally {
+                this.currentPromotedValueQuery = parent
                 this.state.LocalHoldsPromotedValueInProgress.Remove(local)
             }
             this.state.LocalHoldsPromotedValueAnswers[local] = result
@@ -890,13 +948,13 @@ partial class CSharpToGSharpTranslator {
                     .Type
                     ?.IsReferenceType == true {
                     // An assignment has the type of its destination's storage.
-                    return if this.context.GetSymbolInfo(assignment.Left).Symbol is ILocalSymbol destination {
-                        this.PatternLocalUsesNullableStorage(assignment.Left) || this.LocalHoldsPromotedValue(
+                    if this.context.GetSymbolInfo(assignment.Left).Symbol is ILocalSymbol destination {
+                        this.RecordPromotedValueDependency(destination)
+                        return this.PatternLocalUsesNullableStorage(assignment.Left) || this.LocalHoldsPromotedValue(
                             destination
                         )
-                    } else {
-                        !this.AssignmentResultHasNonNullStaticType(assignment)
                     }
+                    return !this.AssignmentResultHasNonNullStaticType(assignment)
                 }
                 case coalesce is BinaryExpressionSyntax when coalesce.IsKind(SyntaxKind.CoalesceExpression) {
                     return this.InitializerHoldsPromotedValue(coalesce.Right)

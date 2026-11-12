@@ -2048,7 +2048,7 @@ partial class CSharpToGSharpTranslator {
                             )
                         }
                         if varBound is ILocalSymbol varLocal {
-                            this.state.LocalHoldsPromotedValueAnswers.Remove(varLocal)
+                            this.InvalidateLocalPromotedValue(varLocal)
                         }
                     } else if varPattern.Designation is ParenthesizedVariableDesignationSyntax {
                         // `var (a, b)` binds the deconstructed elements; G# has no

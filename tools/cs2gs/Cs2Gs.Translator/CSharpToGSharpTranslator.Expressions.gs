@@ -19,6 +19,7 @@ import Microsoft.CodeAnalysis.Operations
 import Microsoft.CodeAnalysis.Text
 import Cs2Gs.Translator.Analyzers
 import GSharp.Core.CodeAnalysis.Syntax
+import CompilationMeasurements = GSharp.Core.CodeAnalysis.Compilation.CompilationMeasurements
 import System.Text
 
 partial class CSharpToGSharpTranslator {
@@ -1650,54 +1651,93 @@ partial class CSharpToGSharpTranslator {
                 this.IsReferenceLikeOrManagedReference(effectiveType)
         }
 
+        private let projectedInitializerAliases Dictionary[
+            (SemanticModel, Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax),
+            ProjectedInitializerAlias?
+        ] = Dictionary[
+            (SemanticModel, Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax),
+            ProjectedInitializerAlias?
+        ]()
+
+        private class ProjectedInitializerAlias {
+            public let Local ILocalSymbol
+            public let Initializer Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+            public let IsArray bool
+
+            init(local ILocalSymbol, initializer Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax) {
+                this.Local = local
+                this.Initializer = initializer
+                this.IsArray = local.Type is IArrayTypeSymbol
+            }
+        }
+
+        // Cache syntax facts only. Projection bindings and in-progress queries remain live at every alias.
+        private func GetProjectedInitializerAlias(
+            source Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+        ) ProjectedInitializerAlias? {
+            if source is not IdentifierNameSyntax identifier {
+                return nil
+            }
+            let key = (this.context.SemanticModel, identifier)
+            if !this.projectedInitializerAliases.TryGetValue(key, out var alias) {
+                CompilationMeasurements.Count("translation.projection_alias_facts")
+                alias = nil
+                if this
+                    .context
+                    .GetSymbolInfo(identifier)
+                    .Symbol is ILocalSymbol local &&
+                    local
+                    .DeclaringSyntaxReferences
+                    .FirstOrDefault()
+                    ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} next}} &&
+                    (local.Type is IArrayTypeSymbol || IsImplicitlyTypedLocal(local)) {
+                    alias = ProjectedInitializerAlias(local, next)
+                }
+                this.projectedInitializerAliases.Add(key, alias)
+            }
+            return alias
+        }
+
         private func GetManagedReferenceArrayProjectedInitializerType(
             initializer Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
         ) ITypeSymbol? {
-            let aliases = List[
-                (Local ILocalSymbol, Initializer Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax)
-            ]()
             var source = Unparenthesize(initializer)
-            // Fold direct alias chains iteratively. Projection environments remain live; no negative type answer is cached.
-            while source is IdentifierNameSyntax identifier &&
-                this
-                .context
-                .GetSymbolInfo(identifier)
-                .Symbol is ILocalSymbol local &&
+            while this.GetProjectedInitializerAlias(source) is {} alias &&
                 !this
                 .state
                 .ProjectedQueryBindingType
-                .ContainsKey(local) &&
+                .ContainsKey(alias.Local) &&
                 !this
                 .state
                 .ManagedReferenceArrayNullable
                 .ManagedReferenceArrayProjectedLocalType
-                .ContainsKey(local) &&
+                .ContainsKey(alias.Local) &&
                 !this
                 .state
                 .ManagedReferenceArrayProjectedLocalTypeInProgress
-                .Contains(local) &&
-                local
-                .DeclaringSyntaxReferences
-                .FirstOrDefault()
-                ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} next}} &&
-                (local.Type is IArrayTypeSymbol || IsImplicitlyTypedLocal(local)) {
-                aliases.Add((local, next))
-                source = Unparenthesize(next)
+                .Contains(alias.Local) {
+                CompilationMeasurements.Count("translation.projection_alias_visits")
+                source = Unparenthesize(alias.Initializer)
             }
-            var projected = this.GetManagedReferenceArrayProjectedExpressionType(source)
+            let projected = this.GetManagedReferenceArrayProjectedExpressionType(source)
+            if projected == nil {
+                return nil
+            }
+            let aliases = List[ProjectedInitializerAlias]()
+            var current = Unparenthesize(initializer)
+            while current != source && this.GetProjectedInitializerAlias(current) is {} alias {
+                CompilationMeasurements.Count("translation.projection_alias_visits")
+                aliases.Add(alias)
+                current = Unparenthesize(alias.Initializer)
+            }
             for var i = aliases.Count - 1; i >= 0; i-- {
                 let alias = aliases[i]
-                if alias.Local.Type is IArrayTypeSymbol {
-                    if projected != nil {
-                        this
-                            .state
-                            .ManagedReferenceArrayNullable
-                            .ManagedReferenceArrayProjectedLocalType[alias.Local] = projected
-                    }
-                } else if projected == nil || SymbolEqualityComparer.IncludeNullability.Equals(
-                    alias.Local.Type,
-                    projected
-                ) ||
+                if alias.IsArray {
+                    this
+                        .state
+                        .ManagedReferenceArrayNullable
+                        .ManagedReferenceArrayProjectedLocalType[alias.Local] = projected
+                } else if SymbolEqualityComparer.IncludeNullability.Equals(alias.Local.Type, projected) ||
                     !this.InferredLocalAssignmentsMatch(alias.Local, alias.Initializer, projected) {
                     return nil
                 }
@@ -6258,6 +6298,7 @@ partial class CSharpToGSharpTranslator {
             value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = nil,
             tuplePath List[int32]? = nil
         ) bool {
+            this.RecordPromotedValueDependency(local)
             if local
                 .DeclaringSyntaxReferences
                 .FirstOrDefault()
@@ -13891,6 +13932,7 @@ partial class CSharpToGSharpTranslator {
             if symbol is not ILocalSymbol{Type: {IsReferenceType: true}} local {
                 return false
             }
+            this.RecordPromotedValueDependency(local)
             if this
                 .state
                 .HoistedNullableGuardLocals

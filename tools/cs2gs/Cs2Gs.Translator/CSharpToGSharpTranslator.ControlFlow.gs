@@ -319,7 +319,7 @@ partial class CSharpToGSharpTranslator {
                             mainBinder
                         )
                     )
-                    this.state.LocalHoldsPromotedValueAnswers.Clear()
+                    this.InvalidateLocalPromotedValue(mainBinder)
                     if hoistType != nil {
                         this.state.EmittedLocalTypeClauses.Add(mainBinder)
                         if hoistType.IsNullable {
@@ -405,7 +405,7 @@ partial class CSharpToGSharpTranslator {
                 ) {
                     binderType = MakeNullable(binderType)
                 }
-                this.state.LocalHoldsPromotedValueAnswers.Clear()
+                this.InvalidateLocalPromotedValue(mainBinder)
                 if binderType != nil {
                     this.state.EmittedLocalTypeClauses.Add(mainBinder)
                     if binderType.IsNullable {
@@ -493,7 +493,7 @@ partial class CSharpToGSharpTranslator {
                 ) {
                     nestedType = MakeNullable(nestedType)
                 }
-                this.state.LocalHoldsPromotedValueAnswers.Clear()
+                this.InvalidateLocalPromotedValue(nestedBinder)
                 if nestedType != nil {
                     this.state.EmittedLocalTypeClauses.Add(nestedBinder)
                     if nestedType.IsNullable {
@@ -2188,6 +2188,12 @@ partial class CSharpToGSharpTranslator {
 
         private func ComputeIsSymbolReassigned(symbol ISymbol?, $scope SyntaxNode) bool {
             for node in $scope.DescendantNodes() {
+                GSharp
+                    .Core
+                    .CodeAnalysis
+                    .Compilation
+                    .CompilationMeasurements
+                    .Count("translation.reassignment_node_visits")
                 if this.SyntaxNodeWritesSymbol(node, symbol) {
                     return true
                 }

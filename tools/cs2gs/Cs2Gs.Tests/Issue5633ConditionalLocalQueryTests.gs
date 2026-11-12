@@ -4,6 +4,7 @@
 
 package Cs2Gs.Tests
 
+import CompilationMeasurements = GSharp.Core.CodeAnalysis.Compilation.CompilationMeasurements
 import Cs2Gs.CodeModel.Printing
 import Cs2Gs.Translator
 import Cs2Gs.Translator.Loading
@@ -22,6 +23,16 @@ import Xunit.Abstractions
 open class Issue5633ConditionalLocalQueryTests {
     private let output ITestOutputHelper
     private var translationAllocatedBytes int64 = 0
+    private var translatorAllocatedBytes int64 = 0
+    private var printerAllocatedBytes int64 = 0
+    private var translationElapsedMilliseconds float64 = 0
+    private let translationWork System
+        .Collections
+        .Generic
+        .Dictionary[string, int64] = System
+        .Collections
+        .Generic
+        .Dictionary[string, int64]()
     private var translationOriginMetrics(SourceCount int32, EdgeCount int32, OperationCount int64)
 
     init(output ITestOutputHelper) {
@@ -180,8 +191,11 @@ open class Issue5633ConditionalLocalQueryTests {
     @InlineData(true, false)
     @InlineData(false, true)
     @InlineData(true, true)
-    func LargeScalarAliases_RetainSparseLinearQueryWork(hasDefault bool, fanOut bool) {
+    func LargeScalarAliases_BoundWholePipelineAllocationsAndRetainSparseQueryWork(hasDefault bool, fanOut bool) {
         let metrics = System.Collections.Generic.List[(SourceCount int32, EdgeCount int32, OperationCount int64)]()
+        let allocations = System.Collections.Generic.List[int64]()
+        let keyVisits = System.Collections.Generic.List[int64]()
+        let promotedEvaluations = System.Collections.Generic.List[int64]()
         for links in[]int32{16, 128, 256, 512} {
             let body = StringBuilder()
             if fanOut {
@@ -203,18 +217,28 @@ open class Issue5633ConditionalLocalQueryTests {
                 "#nullable enable\nnamespace Demo { public static class P {\n" +
                     "static T? Chain<T>(T p, int choice) {\n" +
                     body.ToString() + "return x$links;\n} } }",
-                enabled: true
+                enabled: true,
+                measureWork: true
             )
             if links == 16 {
                 continue
             }
             metrics.Add(this.translationOriginMetrics)
+            allocations.Add(this.translationAllocatedBytes)
+            keyVisits.Add(this.translationWork["tuple_state_key_node_visits"])
+            promotedEvaluations.Add(this.translationWork["promoted_value_evaluations"])
             this.output.WriteLine(
                 "$links links: ${this.translationAllocatedBytes} allocated bytes; " +
                     "${this.translationOriginMetrics.SourceCount} sources; " +
                     "${this.translationOriginMetrics.EdgeCount} edges; " +
                     "${this.translationOriginMetrics.OperationCount} graph operations"
             )
+            this.output.WriteLine(
+                "Translator: ${this.translatorAllocatedBytes} bytes; printer: ${this.printerAllocatedBytes} bytes"
+            )
+            for counter in this.translationWork {
+                this.output.WriteLine("${counter.Key}: ${counter.Value}")
+            }
             Assert.Contains(
                 if hasDefault {
                     "let x$links T? = ${if fanOut { "hub" } else { "x${links - 1}" }}"
@@ -225,6 +249,15 @@ open class Issue5633ConditionalLocalQueryTests {
             )
             TranslationTestValidation.AssertBinds(printed)
         }
+        Assert.True(
+            allocations[1] <= allocations[0] * 3 && allocations[2] <= allocations[1] * 3,
+            "Doubling aliases must not quadruple whole translator/printer allocations: ${allocations[0]} -> ${allocations[1]} -> ${allocations[2]}."
+        )
+        Assert.True(keyVisits[0] > 0 && promotedEvaluations[0] > 0)
+        Assert.True(
+            keyVisits[2] <= keyVisits[0] * 5 && promotedEvaluations[2] <= promotedEvaluations[0] * 5,
+            "Syntax-key scans and promoted-value evaluations must scale with source size."
+        )
         Assert.True(
             metrics[2].SourceCount <= metrics[0].SourceCount * 5 &&
                 metrics[2].EdgeCount <= metrics[0].EdgeCount * 5 &&
@@ -527,7 +560,7 @@ namespace Demo
         TranslationTestValidation.AssertBinds(printed)
     }
 
-    private func TranslateWithinBound(source string, enabled bool) string {
+    private func TranslateWithinBound(source string, enabled bool, measureWork bool = false) string {
         let project = CSharpProjectLoader.LoadInMemory([](string, string){("Chain.cs", source)})
         Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
         let compilation = project.Compilation.WithOptions(
@@ -553,20 +586,47 @@ namespace Demo
             compilation.GetSemanticModel(original.SyntaxTree)
         )
         let context = TranslationContext(compilation, document.SemanticModel, document.FilePath)
-        let elapsed = Stopwatch.StartNew()
         let translation = Task.Run(
             () -> {
+                let started = Stopwatch.GetTimestamp()
                 let before = GC.GetAllocatedBytesForCurrentThread()
                 let translator = CSharpToGSharpTranslator()
-                let printed = GSharpPrinter.Print(translator.TranslateDocument(document, context))
+                let unit = translator.TranslateDocument(document, context)
+                let afterTranslation = GC.GetAllocatedBytesForCurrentThread()
+                let printed = GSharpPrinter.Print(unit)
                 this.translationAllocatedBytes = GC.GetAllocatedBytesForCurrentThread() - before
+                this.translationElapsedMilliseconds = Stopwatch.GetElapsedTime(started).TotalMilliseconds
+                this.translatorAllocatedBytes = afterTranslation - before
+                this.printerAllocatedBytes = this.translationAllocatedBytes - this.translatorAllocatedBytes
                 this.translationOriginMetrics = translator.LastDefaultOriginMetrics
+                if measureWork {
+                    // Measure work separately so opt-in counter overhead cannot change the allocation oracle.
+                    using let measurements = CompilationMeasurements.Start("scalar-alias-work")
+                    let measuredContext = TranslationContext(compilation, document.SemanticModel, document.FilePath)
+                    let measured = GSharpPrinter.Print(
+                        CSharpToGSharpTranslator().TranslateDocument(document, measuredContext)
+                    )
+                    Assert.Equal(Encoding.UTF8.GetBytes(printed), Encoding.UTF8.GetBytes(measured))
+                    for counter in[]string{
+                        "tuple_state_keys",
+                        "tuple_state_key_characters",
+                        "tuple_state_key_node_visits",
+                        "projection_alias_facts",
+                        "projection_alias_visits",
+                        "promoted_value_evaluations",
+                        "promoted_value_dependency_reads",
+                        "promoted_value_invalidation_visits",
+                        "promoted_value_retained_dependencies",
+                        "reassignment_node_visits"
+                    } {
+                        this.translationWork[counter] = measurements.GetCounter("translation." + counter)
+                    }
+                }
                 return printed
             }
         )
         Assert.True(translation.Wait(TimeSpan.FromSeconds(10)), "Translation took over 10 seconds.")
-        elapsed.Stop()
-        this.output.WriteLine("Translation: ${elapsed.Elapsed.TotalMilliseconds} ms")
+        this.output.WriteLine("Translation: ${this.translationElapsedMilliseconds} ms")
         return translation.Result
     }
 }
