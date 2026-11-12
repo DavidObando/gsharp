@@ -254,7 +254,9 @@ internal shared class LiteralConstructionRuntimeParity {
         verifyTranslation Action[string]? = nil,
         librarySource string? = nil,
         transform((string) -> string)? = nil,
-        verifyIL bool = false
+        verifyIL bool = false,
+        nullableContext NullableContextOptions = NullableContextOptions.Enable,
+        expectedOutput string? = nil
     ) {
         let tree = CSharpSyntaxTree.ParseText(source, CSharpParseOptions(LanguageVersion.Latest), path: "Probe.cs")
         let library = if librarySource != nil {
@@ -275,9 +277,7 @@ internal shared class LiteralConstructionRuntimeParity {
             "Native",
             []SyntaxTree{tree},
             references,
-            CSharpCompilationOptions(OutputKind.ConsoleApplication).WithNullableContextOptions(
-                NullableContextOptions.Enable
-            )
+            CSharpCompilationOptions(OutputKind.ConsoleApplication).WithNullableContextOptions(nullableContext)
         )
         Assert.Empty(
             compilation.GetDiagnostics().Where(
@@ -321,6 +321,9 @@ internal shared class LiteralConstructionRuntimeParity {
             )
             let expected = RunDotnet([]string{nativePath})
             Assert.NotEmpty(expected)
+            if expectedOutput != nil {
+                Assert.Equal(Encoding.UTF8.GetBytes(expectedOutput), expected)
+            }
             let gsPath = Path.Combine(directory, "Translated.gs")
             let translatedPath = Path.Combine(directory, "Translated.dll")
             File.WriteAllText(gsPath, printed)
@@ -367,7 +370,7 @@ internal shared class LiteralConstructionRuntimeParity {
         }
     }
 
-    private func RunDotnet(arguments[]string, printed string = "")[]uint8 {
+    internal func RunDotnet(arguments[]string, printed string = "")[]uint8 {
         let start = ProcessStartInfo("dotnet"){
             UseShellExecute = false,
             RedirectStandardOutput = true,
@@ -395,7 +398,7 @@ internal shared class LiteralConstructionRuntimeParity {
         return output
     }
 
-    private func FindCompiler() string {
+    internal func FindCompiler() string {
         var directory DirectoryInfo? = DirectoryInfo(AppContext.BaseDirectory)
         while directory != nil {
             let candidate = Path.Combine(directory.FullName, "Compiler", "gsc.dll")

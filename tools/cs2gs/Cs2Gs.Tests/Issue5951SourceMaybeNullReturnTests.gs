@@ -1,8 +1,256 @@
 package Cs2Gs.Tests
 
+import Cs2Gs.CodeModel.Printing
+import Cs2Gs.Translator
+import Cs2Gs.Translator.Loading
+import Microsoft.CodeAnalysis
+import Microsoft.CodeAnalysis.CSharp
+import System
+import System.IO
+import System.Linq
+import System.Text
 import Xunit
 
 class Issue5951SourceMaybeNullReturnTests {
+    shared {
+        private func AssertMetadataBoundary(knownSource bool) {
+            let libraryTree = CSharpSyntaxTree.ParseText(`
+#nullable enable
+using System.Diagnostics.CodeAnalysis;
+namespace Library
+{
+    public static class Lib
+    {
+        public static int Calls;
+        [return: MaybeNull]
+        public static string Value(bool missing) { Calls++; return missing ? null : "abc"; }
+    }
+}`, path: "Library.cs")
+            let library = CSharpCompilation.Create(
+                "Library",
+                []SyntaxTree{libraryTree},
+                CSharpProjectLoader.RuntimeReferences(),
+                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+                    NullableContextOptions.Enable
+                )
+            )
+            using let image = MemoryStream()
+            let libraryEmit = library.Emit(image)
+            Assert.True(libraryEmit.Success, string.Join(Environment.NewLine, libraryEmit.Diagnostics))
+            let consumer = CSharpProjectLoader.LoadInMemory([](string, Source string){("Consumer.cs", `
+#nullable disable
+using System;
+using Library;
+public static class P
+{
+    static string? Read() => Lib.Value(true);
+    public static void Main()
+    {
+        Console.WriteLine(Read() == null);
+        Console.WriteLine(Lib.Value(false).Length);
+        try { Console.WriteLine(Lib.Value(true).Length); }
+        catch (NullReferenceException) { Console.WriteLine("null"); }
+        Console.WriteLine(Lib.Calls);
+    }
+}`)}, CSharpProjectLoader
+                    .RuntimeReferences()
+                    .Append(MetadataReference.CreateFromImage(image.ToArray()))
+                    .ToArray(), assemblyName: "Native", outputKind: OutputKind.ConsoleApplication)
+            Assert.True(consumer.BoundWithoutErrors, string.Join(Environment.NewLine, consumer.ErrorDiagnostics))
+            let document = Assert.Single(consumer.Documents)
+            let compilations = if knownSource {
+                []CSharpCompilation{library, consumer.Compilation}
+            } else {
+                []CSharpCompilation{}
+            }
+            let printed = GSharpPrinter.Print(
+                CSharpToGSharpTranslator().TranslateDocument(
+                    document,
+                    TranslationContext(
+                        consumer.Compilation,
+                        document.SemanticModel,
+                        document.FilePath,
+                        compilations,
+                        compilations
+                    )
+                )
+            )
+            let directory = Path.Combine(AppContext.BaseDirectory, "issue-5951-metadata", Guid.NewGuid().ToString("N"))
+            Directory.CreateDirectory(directory)
+            try {
+                let libraryPath = Path.Combine(directory, "Library.dll")
+                File.WriteAllBytes(libraryPath, image.ToArray())
+                let nativePath = Path.Combine(directory, "Native.dll")
+                {
+                    using let native = File.Create(nativePath)
+                    let result = consumer.Compilation.Emit(native)
+                    Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics))
+                }
+                File.WriteAllText(
+                    Path.Combine(directory, "Native.runtimeconfig.json"),
+                    `{"runtimeOptions":{"tfm":"net10.0","framework":{"name":"Microsoft.NETCore.App","version":"10.0.0"}}}`
+                )
+                let expected = LiteralConstructionRuntimeParity.RunDotnet([]string{nativePath})
+                Assert.Equal(
+                    Encoding.UTF8.GetBytes(
+                        string.Join(Environment.NewLine, []string{"True", "3", "null", "3"}) + Environment.NewLine
+                    ),
+                    expected
+                )
+                let compiler = LiteralConstructionRuntimeParity.FindCompiler()
+                if knownSource {
+                    let model = library.GetSemanticModel(libraryTree)
+                    let libraryPrinted = GSharpPrinter.Print(
+                        CSharpToGSharpTranslator().TranslateDocument(
+                            LoadedDocument("Library.cs", libraryTree, model),
+                            TranslationContext(library, model, "Library.cs", compilations, compilations)
+                        )
+                    )
+                    let libraryGs = Path.Combine(directory, "Library.gs")
+                    File.WriteAllText(libraryGs, libraryPrinted)
+                    LiteralConstructionRuntimeParity.RunDotnet(
+                        []string{
+                            compiler,
+                            "/target:library",
+                            "/targetframework:net10.0",
+                            "/out:" + libraryPath,
+                            libraryGs
+                        },
+                        libraryPrinted
+                    )
+                }
+                let gsPath = Path.Combine(directory, "Translated.gs")
+                let translatedPath = Path.Combine(directory, "Translated.dll")
+                File.WriteAllText(gsPath, printed)
+                LiteralConstructionRuntimeParity.RunDotnet(
+                    []string{
+                        compiler,
+                        "/target:exe",
+                        "/targetframework:net10.0",
+                        "/reference:" + libraryPath,
+                        "/out:" + translatedPath,
+                        gsPath
+                    },
+                    printed
+                )
+                Assert.Equal(expected, LiteralConstructionRuntimeParity.RunDotnet([]string{translatedPath}, printed))
+                if knownSource {
+                    Assert.Contains("Lib.Value(false)!!.Length", printed)
+                } else {
+                    Assert.DoesNotContain("Lib.Value(false)!!", printed)
+                }
+                Assert.DoesNotContain("Lib.Value(true)!!\n", printed)
+            } finally {
+                Directory.Delete(directory, recursive: true)
+            }
+        }
+    }
+
+    @Fact
+    func DeclaredTaskEnvelopes_DoNotDependOnTheirResultKind() {
+        LiteralConstructionRuntimeParity.AssertMatches(`
+#nullable enable
+using System;
+using System.Diagnostics.CodeAnalysis;
+using System.Threading.Tasks;
+public interface IValue
+{
+    [return: MaybeNull] Task<int> Value();
+}
+public class TaskValue : IValue
+{
+    [return: MaybeNull] public Task<int> Value() => null;
+}
+public static class P
+{
+    static int calls;
+    [return: MaybeNull]
+    static Task<int> Number() { calls++; return null; }
+    [return: MaybeNull]
+    static Task<(string, int)> Tuple() => null;
+    [return: MaybeNull]
+    static Task<T> Generic<T>() => null;
+    [return: MaybeNull]
+    static T Identity<T>(T value) => value;
+    public static void Main()
+    {
+        IValue value = new TaskValue();
+        Console.WriteLine(Number() == null);
+        Console.WriteLine(Tuple() == null);
+        Console.WriteLine(Generic<string>() == null);
+        Console.WriteLine(Generic<int>() == null);
+        Console.WriteLine(value.Value() == null);
+        Console.WriteLine(Identity(7));
+        Console.WriteLine(calls);
+    }
+}`, expectedOutput: string.Join(Environment.NewLine, []string{"True", "True", "True", "True", "True", "7", "1"}) +
+                Environment.NewLine)
+    }
+
+    @Fact
+    func TaskEnvelopeAndAwaitedResult_PromoteIndependently() {
+        LiteralConstructionRuntimeParity.AssertMatches(`
+#nullable disable
+using System;
+using System.Diagnostics.CodeAnalysis;
+using System.Threading.Tasks;
+public static class P
+{
+    static int calls;
+    static async Task<string> Inner()
+    {
+        calls++;
+        await Task.Yield();
+        return null;
+    }
+    [return: MaybeNull]
+    static Task<string> Outer() { calls++; return Inner(); }
+    [return: MaybeNull]
+    static Task<string> Empty() => null;
+    static Task<string> ResultOnly() => Inner();
+    public static void Main()
+    {
+        Console.WriteLine(Empty() == null);
+        Console.WriteLine(Outer()!.GetAwaiter().GetResult() == null);
+        Console.WriteLine(ResultOnly().GetAwaiter().GetResult() == null);
+        Console.WriteLine(calls);
+    }
+}`, verifyTranslation: (
+                printed string
+            ) -> {
+                Assert.Contains(
+                    "func Empty() Task[string]?",
+                    printed
+                )
+                Assert.DoesNotContain(
+                    "func Empty() Task[string?]?",
+                    printed
+                )
+                Assert.Contains(
+                    "func Outer() Task[string?]?",
+                    printed
+                )
+                Assert.Contains(
+                    "func ResultOnly() Task[string?]",
+                    printed
+                )
+                Assert.DoesNotContain(
+                    "func ResultOnly() Task[string?]?",
+                    printed
+                )
+            }, nullableContext: NullableContextOptions.Disable, expectedOutput: string.Join(
+                Environment.NewLine,
+                []string{"True", "True", "True", "3"}
+            ) +
+                Environment.NewLine)
+    }
+
+    @Fact
+    func KnownSiblingMethods_UseSourceContracts_WhileExternalMetadataStaysFixed() {
+        AssertMetadataBoundary(knownSource: true)
+        AssertMetadataBoundary(knownSource: false)
+    }
+
     @Fact
     func SourceReturnContract_PreservesNullAtNullableSinks() {
         LiteralConstructionRuntimeParity.AssertMatches(`
@@ -209,6 +457,7 @@ namespace Other
             System.Console.WriteLine(required.Read());
             System.Console.WriteLine(new CovariantValue().Covariant());
         }
+
     }
     public class ImportedContract : Library.IRequired
     {

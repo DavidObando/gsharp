@@ -119,11 +119,11 @@ partial class CSharpToGSharpTranslator {
             return ScopeUsesAsNullable(this.context.SemanticModel, symbol, $scope)
         }
 
-        /// Issue #4356 follow-up: resolves a field or property that another
+        /// Issue #4356 follow-up: resolves a field, property, or method that another
         /// project of this migration run declares — seen here through that
         /// project's reference assembly, or through a compilation reference —
         /// to its SOURCE declaration in that project's own compilation.
-        /// @param symbol The field or property as this compilation binds it.
+        /// @param symbol The member as this compilation binds it.
         /// @param owner The declaring project's compilation.
         /// @param source The declaration in [`owner`](paramref).
         /// @returns True when both were found.
@@ -134,7 +134,7 @@ partial class CSharpToGSharpTranslator {
         ) bool {
             owner = nil
             source = nil
-            if !((symbol is IPropertySymbol || symbol is IFieldSymbol)) ||
+            if !((symbol is IPropertySymbol || symbol is IFieldSymbol || symbol is IMethodSymbol)) ||
                 symbol!!.ContainingAssembly is not{} assembly ||
                 SymbolEqualityComparer
                 .Default
@@ -171,16 +171,16 @@ partial class CSharpToGSharpTranslator {
             return true
         }
 
-        /// Issue #4356 follow-up: whether a field or property that another
+        /// Issue #4356 follow-up: whether a field, property, or method that another
         /// project of this run declares is emitted `T?` there, per
         /// (cref:TryGetDeclaringRepositoryMember) and
         /// (cref:DeclaringCompilationPromotes). The answer is a property
         /// of the declaration, so it is cached per original definition: the
         /// forgiveness predicates ask it from many sites.
-        /// @param symbol The field or property as this compilation binds it.
+        /// @param symbol The member as this compilation binds it.
         /// @returns True when the declaring project widens the member.
         private func DeclaringRepositoryMemberPromotes(symbol ISymbol?) bool {
-            if !((symbol is IPropertySymbol || symbol is IFieldSymbol)) {
+            if !((symbol is IPropertySymbol || symbol is IFieldSymbol || symbol is IMethodSymbol)) {
                 return false
             }
             let key = symbol!!.OriginalDefinition
@@ -210,17 +210,22 @@ partial class CSharpToGSharpTranslator {
             // `source` is the original definition, so a consumer's substituted
             // `Box<string>.Value` is judged as `T Value`, which the producer never
             // widens unless `T` is known to be a reference type.
-            let declared ITypeSymbol? = switch source {
-                case property is IPropertySymbol: property.Type
-                case field is IFieldSymbol: field.Type
-                default: default(ITypeSymbol?)
-            }
+            let declared = PromotableDeclaredType(source)
             if !(declared != nil && declared.IsReferenceType == true) ||
                 declared.NullableAnnotation == Microsoft
                 .CodeAnalysis
                 .NullableAnnotation
                 .Annotated {
                 return false
+            }
+            if source is IMethodSymbol {
+                return ObliviousNullabilityAnalyzer.HasMaybeNullReturnContract(source) &&
+                    ObliviousNullabilityAnalyzer.CanPromoteTuplePosition(
+                    owner,
+                    source,
+                    string.Empty,
+                    declaredReturn: true
+                )
             }
             if ObliviousNullabilityAnalyzer.HasAllowNullWriteContract(source) {
                 return true
@@ -548,14 +553,7 @@ partial class CSharpToGSharpTranslator {
             awaitedType ITypeSymbol,
             symbol IMethodSymbol?
         ) GTypeReference? {
-            var envelope = envelope
-            // MaybeNull describes the declared envelope, not its awaited result.
-            if ObliviousNullabilityAnalyzer.HasMaybeNullReturnContract(symbol) && this.ShouldPromoteToNullableReference(
-                symbol
-            ) {
-                envelope = MakeNullable(envelope)
-            }
-            if envelope is not NamedTypeReference{TypeArguments: {Count: 1}} named || named.IsNullable {
+            if envelope is not NamedTypeReference{TypeArguments: {Count: 1}} named {
                 return envelope
             }
             var promotedInner GTypeReference? = this.PromoteTupleDeclarationIfTainted(
@@ -564,10 +562,22 @@ partial class CSharpToGSharpTranslator {
                 symbol
             )
             promotedInner = this.PromoteAwaitedReturnIfTainted(promotedInner, awaitedType, symbol)
-            return if object.ReferenceEquals(promotedInner, named.TypeArguments[0]) {
+            let promoted = if object.ReferenceEquals(promotedInner, named.TypeArguments[0]) {
                 envelope
             } else {
-                cast[GTypeReference](NamedTypeReference(named.Name, []GTypeReference{promotedInner!!}))
+                cast[GTypeReference](
+                    NamedTypeReference(named.Name, []GTypeReference{promotedInner!!}){IsNullable = named.IsNullable}
+                )
+            }
+            // MaybeNull describes the declared envelope, independently of its result.
+            return if (
+                ObliviousNullabilityAnalyzer.HasMaybeNullReturnContract(symbol) ||
+                    this.DeclaringRepositoryMemberPromotes(symbol)
+            ) &&
+                this.ShouldPromoteToNullableReference(symbol) {
+                MakeNullable(promoted)
+            } else {
+                promoted
             }
         }
 
@@ -2342,7 +2352,8 @@ partial class CSharpToGSharpTranslator {
                 return ObliviousNullabilityAnalyzer.CanPromoteTuplePosition(
                     this.context.Compilation,
                     symbol,
-                    string.Empty
+                    string.Empty,
+                    declaredReturn: true
                 )
             }
             // Issue #3726: a data-driving attribute is a null-WRITING site. An
@@ -3794,14 +3805,8 @@ partial class CSharpToGSharpTranslator {
             }
 
             // The declared type that `ShouldPromoteToNullableReference` would render `T?`.
-            private func PromotableDeclaredType(symbol ISymbol?) ITypeSymbol? -> switch symbol {
-                case m is IMethodSymbol: m.ReturnType
-                case f is IFieldSymbol: f.Type
-                case pr is IPropertySymbol: pr.Type
-                case l is ILocalSymbol: l.Type
-                case p is IParameterSymbol: p.Type
-                default: default(ITypeSymbol?)
-            }
+            private func PromotableDeclaredType(symbol ISymbol?) ITypeSymbol? ->
+            ObliviousNullabilityAnalyzer.SymbolDeclaredType(symbol)
 
             /// Issue #3501: maps a positional record's synthesized property back to
             /// the primary-constructor parameter it was generated from (both

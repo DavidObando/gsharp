@@ -21495,6 +21495,14 @@ partial class CSharpToGSharpTranslator {
             if this.IsCallableValueExpression(recv) {
                 return false
             }
+            if !isDereferenceReceiver && !widenedSinkNeedsNonNull && this.DeclaringRepositoryMemberPromotes(
+                this.context.GetSymbolInfo(recv).Symbol
+            ) {
+                let (targetType, targetSymbol) = this.FindContextualValueTarget(recv)
+                if this.NullForgivingTargetAcceptsNil(targetType, targetSymbol, recv) {
+                    return false
+                }
+            }
             // Issue #5537: an element of storage that keeps an imported oblivious
             // container is `T?` in G#. A C# dereference of it throws on nil. A value
             // position keeps the target-aware bridge, so a nullable target gets no `!!`.

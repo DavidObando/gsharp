@@ -1521,8 +1521,15 @@ internal shared class ObliviousNullabilityAnalyzer {
     /// `null` for symbols that are not value declarations.
     /// @param symbol The candidate declaration symbol.
     /// @returns The denoted value type, or `null`.
-    internal func SymbolValueType(symbol ISymbol?) ITypeSymbol? -> switch symbol {
-        case method is IMethodSymbol: UnwrapAwaitedType(method.ReturnType)
+    internal func SymbolValueType(symbol ISymbol?) ITypeSymbol? -> if symbol is IMethodSymbol method {
+        UnwrapAwaitedType(method.ReturnType)
+    } else {
+        SymbolDeclaredType(symbol)
+    }
+
+    /// Reads a declaration's type without projecting a method's awaited result.
+    internal func SymbolDeclaredType(symbol ISymbol?) ITypeSymbol? -> switch symbol {
+        case method is IMethodSymbol: method.ReturnType
         case property is IPropertySymbol: property.Type
         case field is IFieldSymbol: field.Type
         case local is ILocalSymbol: local.Type
@@ -8473,14 +8480,22 @@ internal shared class ObliviousNullabilityAnalyzer {
     internal func CanPromoteTuplePosition(
         compilation Compilation?,
         symbol ISymbol?,
-        path string
-    ) bool -> CanPromoteTuplePosition(compilation, symbol, path, HashSet[ISymbol](SymbolEqualityComparer.Default))
+        path string,
+        declaredReturn bool = false
+    ) bool -> CanPromoteTuplePosition(
+        compilation,
+        symbol,
+        path,
+        HashSet[ISymbol](SymbolEqualityComparer.Default),
+        declaredReturn
+    )
 
     private func CanPromoteTuplePosition(
         compilation Compilation?,
         symbol ISymbol?,
         path string,
-        visited HashSet[ISymbol]
+        visited HashSet[ISymbol],
+        declaredReturn bool = false
     ) bool {
         var symbol = symbol
         var path = path
@@ -8498,7 +8513,11 @@ internal shared class ObliviousNullabilityAnalyzer {
         let contractPath = path
         if path.Length == 0 {
             // Scalar endpoints share the tuple ref-storage contract graph.
-            let type = SymbolValueType(symbol)
+            let type = if declaredReturn {
+                SymbolDeclaredType(symbol)
+            } else {
+                SymbolValueType(symbol)
+            }
             if !(
                 IsSourceAssembly(compilation, symbol?.ContainingAssembly) &&
                     type?.IsReferenceType == true &&
@@ -8544,7 +8563,14 @@ internal shared class ObliviousNullabilityAnalyzer {
             return true
         }
         for contract in TupleContractDeclarations(compilation, contractSymbol) {
-            if !TupleContractAllowsPromotion(compilation, contractSymbol!!, contractPath, contract, visited) {
+            if !TupleContractAllowsPromotion(
+                compilation,
+                contractSymbol!!,
+                contractPath,
+                contract,
+                visited,
+                declaredReturn
+            ) {
                 return false
             }
         }
@@ -8564,13 +8590,26 @@ internal shared class ObliviousNullabilityAnalyzer {
     private func TupleContractPositionAcceptsNil(
         compilation Compilation?,
         symbol ISymbol?,
-        path string
-    ) bool -> IsDeclaredNullablePosition(TuplePositionType(symbol, path)) ||
-        (
-        symbol != nil &&
-            !IsSourceAssembly(compilation, symbol.ContainingAssembly) &&
-            IsObliviousConcreteReferencePosition(TuplePositionType(symbol.OriginalDefinition, path))
-    )
+        path string,
+        declaredReturn bool = false
+    ) bool {
+        let type = if declaredReturn {
+            SymbolDeclaredType(symbol)
+        } else {
+            TuplePositionType(symbol, path)
+        }
+        let definitionType = if declaredReturn {
+            SymbolDeclaredType(symbol?.OriginalDefinition)
+        } else {
+            TuplePositionType(symbol?.OriginalDefinition, path)
+        }
+        return IsDeclaredNullablePosition(type) ||
+            (
+            symbol != nil &&
+                !IsSourceAssembly(compilation, symbol.ContainingAssembly) &&
+                IsObliviousConcreteReferencePosition(definitionType)
+        )
+    }
 
     internal func TuplePositionType(symbol ISymbol?, path string, requireTuple bool = false) ITypeSymbol? {
         let strippedPath = StripCreationTupleScope(path)
@@ -9520,15 +9559,16 @@ internal shared class ObliviousNullabilityAnalyzer {
         symbol ISymbol,
         path string,
         contract ISymbol?,
-        visited HashSet[ISymbol]
+        visited HashSet[ISymbol],
+        declaredReturn bool = false
     ) bool {
         let type = SymbolValueType(symbol)
         let target = SymbolValueType(contract)
         let comparison = TupleContractComparisonType(symbol, type, contract)
         if path.Length == 0 || SymbolEqualityComparer.Default.Equals(comparison, target) ||
             (type is INamedTypeSymbol{IsTupleType: true} && target is INamedTypeSymbol{IsTupleType: true}) {
-            return TupleContractPositionAcceptsNil(compilation, contract, path) ||
-                CanPromoteTuplePosition(compilation, contract, path, visited)
+            return TupleContractPositionAcceptsNil(compilation, contract, path, declaredReturn) ||
+                CanPromoteTuplePosition(compilation, contract, path, visited, declaredReturn)
         }
         if type is not INamedTypeSymbol derived ||
             comparison is not INamedTypeSymbol compared ||
@@ -10136,6 +10176,17 @@ internal shared class ObliviousNullabilityAnalyzer {
         transitive bool,
         $scope SourceScope = SourceScope.AllSources
     ) {
+        // A nullable envelope is not evidence that its awaited result can be nil.
+        if returnSymbol is IMethodSymbol{IsAsync: false, ReturnType: {IsReferenceType: true}} method &&
+            HasMaybeNullReturnContract(method) &&
+            !SymbolEqualityComparer
+            .Default
+            .Equals(method.ReturnType, SymbolValueType(method)) {
+            if transitive {
+                AddEdges(returnSymbol, value, model, edges, $scope)
+            }
+            return
+        }
         if value is RefExpressionSyntax reference {
             CollectRefStorageFlow(returnSymbol, reference.Expression, model, tainted, edges, scalarTupleEdges)
         } else if IsDirectlyNullable(value, model) {
