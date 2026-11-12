@@ -4308,7 +4308,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 let Model = func () SemanticModel {
                     return (
                         if model == nil {
-                            (model = csharp.GetSemanticModel(tree))
+                            (model = TranslationContext.GetSemanticModel(csharp, tree))
                         } else {
                             model
                         }

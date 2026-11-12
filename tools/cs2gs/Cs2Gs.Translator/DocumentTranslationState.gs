@@ -435,7 +435,7 @@ internal class DocumentTranslationState {
     }
 
     // Issue #5602: the answers of `LocalHoldsPromotedValue`. An answer depends only on the
-    // emitted-storage records and on the declarations, so a new record clears the answers.
+    // emitted-storage records and declarations. The visitor invalidates answers through their recorded local dependencies.
     prop LocalHoldsPromotedValueAnswers Dictionary[ILocalSymbol, bool] {
         get;
     }
