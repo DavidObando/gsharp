@@ -307,6 +307,7 @@ partial class CSharpToGSharpTranslator {
             if symbol != nil {
                 type = this.PromoteArrayElementIfGeneratedNullElement(type, symbol)
             }
+            type = this.PromoteStoredValueContract(type, symbol)
             if type!!.IsNullable {
                 return type
             }
@@ -564,9 +565,10 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
-        private func PromoteStoredValueContract(type GTypeReference?, symbol ILocalSymbol) GTypeReference? {
-            if type != nil &&
-                symbol.Type is INamedTypeSymbol{TypeArguments: {Length: 1}} envelope &&
+        private func PromoteStoredValueContract(type GTypeReference?, symbol ISymbol?) GTypeReference? {
+            if type != nil && ObliviousNullabilityAnalyzer.SymbolDeclaredType(symbol) is INamedTypeSymbol{
+                TypeArguments: {Length: 1}
+            } envelope &&
                 IsTaskLikeEnvelope(envelope) {
                 return this.PromoteTaskEnvelopeReturnIfTainted(type, envelope.TypeArguments[0], symbol)
             }

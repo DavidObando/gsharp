@@ -6,12 +6,303 @@ import Cs2Gs.Translator.Loading
 import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
 import System
+import System.Diagnostics
 import System.IO
 import System.Linq
 import System.Text
 import Xunit
 
 class Issue5951SourceMaybeNullReturnTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func CrossProjectEnvelopeGroups_UseTheOwningContract(ownerAcceptsNull bool) {
+        let annotation = if ownerAcceptsNull {
+            "[return: MaybeNull]"
+        } else {
+            ""
+        }
+        let libraryTree = CSharpSyntaxTree.ParseText(`
+#nullable disable
+using System.Diagnostics.CodeAnalysis;
+using System.Threading.Tasks;
+namespace Library
+{
+    public interface I { ` + annotation + ` Task<int> Read(); }
+    public abstract class Base { ` + annotation + ` public abstract Task<int> Read(); }
+}`, path: "Library.cs")
+        let library = CSharpCompilation.Create(
+            "Library",
+            []SyntaxTree{libraryTree},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+                NullableContextOptions.Disable
+            )
+        )
+        using let image = MemoryStream()
+        Assert.True(library.Emit(image).Success)
+        let consumer = CSharpProjectLoader.LoadInMemory([](string, Source string){("Consumer.cs", `
+#nullable disable
+using System;
+using System.Diagnostics.CodeAnalysis;
+using System.Threading.Tasks;
+using Library;
+public class Value : Base, I
+{
+    public static int Calls;
+    [return: MaybeNull]
+    public override Task<int> Read() { Calls++; return null; }
+}
+public static class P
+{
+    public static void Main()
+    {
+        I value = new Value();
+        Base parent = new Value();
+        Console.WriteLine(value.Read() == null);
+        Console.WriteLine(parent.Read() == null);
+        Console.WriteLine(Value.Calls);
+    }
+}`)}, CSharpProjectLoader
+                .RuntimeReferences()
+                .Append(MetadataReference.CreateFromImage(image.ToArray()))
+                .ToArray(), assemblyName: "Native", outputKind: OutputKind.ConsoleApplication)
+        Assert.True(consumer.BoundWithoutErrors, string.Join(Environment.NewLine, consumer.ErrorDiagnostics))
+        let compilations = []CSharpCompilation{library, consumer.Compilation}
+        let libraryModel = library.GetSemanticModel(libraryTree)
+        let libraryPrinted = GSharpPrinter.Print(
+            CSharpToGSharpTranslator().TranslateDocument(
+                LoadedDocument("Library.cs", libraryTree, libraryModel),
+                TranslationContext(library, libraryModel, "Library.cs", compilations, compilations)
+            )
+        )
+        let document = Assert.Single(consumer.Documents)
+        let printed = GSharpPrinter.Print(
+            CSharpToGSharpTranslator().TranslateDocument(
+                document,
+                TranslationContext(
+                    consumer.Compilation,
+                    document.SemanticModel,
+                    document.FilePath,
+                    compilations,
+                    compilations
+                )
+            )
+        )
+        let contract = if ownerAcceptsNull {
+            "Task[int32]?"
+        } else {
+            "Task[int32]"
+        }
+        Assert.Contains("func Read() " + contract, libraryPrinted)
+        if !ownerAcceptsNull {
+            Assert.DoesNotContain("func Read() Task[int32]?", libraryPrinted)
+            Assert.DoesNotContain("func Read() Task[int32]?", printed)
+        }
+        let directory = Path.Combine(AppContext.BaseDirectory, "issue-5951-owner", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let libraryPath = Path.Combine(directory, "Library.dll")
+            File.WriteAllBytes(libraryPath, image.ToArray())
+            let nativePath = Path.Combine(directory, "Native.dll")
+            {
+                using let native = File.Create(nativePath)
+                Assert.True(consumer.Compilation.Emit(native).Success)
+            }
+            File.WriteAllText(
+                Path.Combine(directory, "Native.runtimeconfig.json"),
+                `{"runtimeOptions":{"tfm":"net10.0","framework":{"name":"Microsoft.NETCore.App","version":"10.0.0"}}}`
+            )
+            let expected = LiteralConstructionRuntimeParity.RunDotnet([]string{nativePath})
+            Assert.Equal(
+                Encoding.UTF8.GetBytes(
+                    string.Join(Environment.NewLine, []string{"True", "True", "2"}) + Environment.NewLine
+                ),
+                expected
+            )
+            let compiler = LiteralConstructionRuntimeParity.FindCompiler()
+            let libraryGs = Path.Combine(directory, "Library.gs")
+            File.WriteAllText(libraryGs, libraryPrinted)
+            LiteralConstructionRuntimeParity.RunDotnet(
+                []string{compiler, "/target:library", "/targetframework:net10.0", "/out:" + libraryPath, libraryGs},
+                libraryPrinted
+            )
+            let source = Path.Combine(directory, "Translated.gs")
+            let binary = Path.Combine(directory, "Translated.dll")
+            File.WriteAllText(source, printed)
+            let arguments = []string{
+                compiler,
+                "/target:exe",
+                "/targetframework:net10.0",
+                "/reference:" + libraryPath,
+                "/out:" + binary,
+                source
+            }
+            if ownerAcceptsNull {
+                LiteralConstructionRuntimeParity.RunDotnet(arguments, printed)
+                Assert.Equal(expected, LiteralConstructionRuntimeParity.RunDotnet([]string{binary}, printed))
+            } else {
+                let start = ProcessStartInfo("dotnet"){
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                }
+                for argument in arguments {
+                    start.ArgumentList.Add(argument)
+                }
+                using let process = Process.Start(start) ?? throw InvalidOperationException("Could not start gsc.")
+                let output = process.StandardOutput.ReadToEndAsync()
+                let error = process.StandardError.ReadToEndAsync()
+                if !process.WaitForExit(120000) {
+                    process.Kill(entireProcessTree: true)
+                    process.WaitForExit()
+                    Assert.Fail("gsc process timed out.")
+                }
+                let diagnostics = output.GetAwaiter().GetResult() + error.GetAwaiter().GetResult()
+                Assert.NotEqual(0, process.ExitCode)
+                Assert.Contains("GS0155", diagnostics)
+                Assert.DoesNotContain("GS0187", diagnostics)
+                Assert.DoesNotContain("Read()!!", printed)
+            }
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    @Fact
+    func StoredAwaitOperands_UseTheDeclarationResultContract() {
+        LiteralConstructionRuntimeParity.AssertMatches(`
+#nullable disable
+using System;
+using System.Threading.Tasks;
+public static class P
+{
+    static int calls;
+    static async Task<string> Missing() { calls++; await Task.Yield(); return null; }
+    static async Task<int> Read()
+    {
+        Task<string> task;
+        task = Missing();
+        return (await task).Length;
+    }
+    public static void Main()
+    {
+        try { Console.WriteLine(Read().GetAwaiter().GetResult()); }
+        catch (NullReferenceException) { Console.WriteLine("null"); }
+        Console.WriteLine(calls);
+    }
+}`, nullableContext: NullableContextOptions.Disable, expectedOutput: string.Join(
+                Environment.NewLine,
+                []string{"null", "1"}
+            ) +
+                Environment.NewLine)
+    }
+
+    @Fact
+    func StorageDeclarations_ComposeEnvelopeAndResultContracts() {
+        LiteralConstructionRuntimeParity.AssertMatches(`
+#nullable disable
+using System;
+using System.Diagnostics.CodeAnalysis;
+using System.Threading.Tasks;
+public static class P
+{
+    static int calls;
+    static P() { }
+    static async Task<string> Inner() { calls++; await Task.Yield(); return null; }
+    [return: MaybeNull]
+    static Task<string> Outer() { calls++; return Inner(); }
+    static Task<string> Field = Outer();
+    static Task<string> Pending => Outer();
+    static async Task<int> Read(Task<string> value) => (await value).Length;
+    public static void Main()
+    {
+        Console.WriteLine(Field.GetAwaiter().GetResult() == null);
+        Console.WriteLine(Pending.GetAwaiter().GetResult() == null);
+        try { Console.WriteLine(Read(Outer()).GetAwaiter().GetResult()); }
+        catch (NullReferenceException) { Console.WriteLine("null"); }
+        Console.WriteLine(calls);
+    }
+}`, nullableContext: NullableContextOptions.Disable, expectedOutput: string.Join(
+                Environment.NewLine,
+                []string{"True", "True", "null", "6"}
+            ) +
+                Environment.NewLine)
+    }
+
+    @Fact
+    func OwnedDelegateEnvelopes_PreserveMethodAndLambdaReturns() {
+        LiteralConstructionRuntimeParity.AssertMatches(`
+#nullable disable
+using System;
+using System.Diagnostics.CodeAnalysis;
+using System.Threading.Tasks;
+delegate Task<int> Reader();
+public static class P
+{
+    static int calls;
+    [return: MaybeNull]
+    static Task<int> Empty() { calls++; return null; }
+    public static void Main()
+    {
+        Reader direct = Empty;
+        Reader lambda = () => Empty();
+#nullable enable annotations
+        Func<Task<int>?> external = Empty;
+#nullable disable annotations
+        Console.WriteLine(direct() == null);
+        Console.WriteLine(lambda() == null);
+        Console.WriteLine(external() == null);
+        Console.WriteLine(calls);
+    }
+}`, nullableContext: NullableContextOptions.Disable, expectedOutput: string.Join(
+                Environment.NewLine,
+                []string{"True", "True", "True", "3"}
+            ) +
+                Environment.NewLine)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ComposedAwaitedDeconstruction_RetainsResultDomain(useSwitch bool) {
+        let operand = if useSwitch {
+            "Choose(flag) switch { true => Missing(), _ => Missing() }"
+        } else {
+            "Choose(flag) ? Missing() : Missing()"
+        }
+        LiteralConstructionRuntimeParity.AssertMatches(`
+#nullable disable
+using System;
+using System.Threading.Tasks;
+public static class P
+{
+    static int choices;
+    static int calls;
+    static bool Choose(bool flag) { choices++; return flag; }
+    static async Task<string> Missing() { calls++; await Task.Yield(); return null; }
+    static async Task<int> Read(bool flag)
+    {
+        string text;
+        int unused;
+        (text, unused) = (await (` + operand + `), 0);
+        return text.Length;
+    }
+    public static void Main()
+    {
+        try { Console.WriteLine(Read(true).GetAwaiter().GetResult()); }
+        catch (NullReferenceException) { Console.WriteLine("null"); }
+        try { Console.WriteLine(Read(false).GetAwaiter().GetResult()); }
+        catch (NullReferenceException) { Console.WriteLine("null"); }
+        Console.WriteLine(choices + ":" + calls);
+    }
+}`, nullableContext: NullableContextOptions.Disable, expectedOutput: string.Join(
+                Environment.NewLine,
+                []string{"null", "null", "2:2"}
+            ) +
+                Environment.NewLine)
+    }
+
     @Theory
     @InlineData("assignment")
     @InlineData("delegate")

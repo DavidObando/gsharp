@@ -22062,34 +22062,13 @@ partial class CSharpToGSharpTranslator {
 
         private func AwaitedReceiverValueIsPromotedNullable(
             expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
-        ) bool {
-            switch expression {
-                case parenthesized is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax {
-                    return this.AwaitedReceiverValueIsPromotedNullable(parenthesized.Expression)
-                }
-                case cast is CastExpressionSyntax {
-                    return this.AwaitedReceiverValueIsPromotedNullable(cast.Expression)
-                }
-                case conditional is Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalExpressionSyntax {
-                    return this.AwaitedReceiverValueIsPromotedNullable(conditional.WhenTrue) ||
-                        this.AwaitedReceiverValueIsPromotedNullable(conditional.WhenFalse)
-                }
-                case invocation is InvocationExpressionSyntax when this
-                    .context
-                    .GetSymbolInfo(invocation)
-                    .Symbol is IMethodSymbol method {
-                    let resultType = ObliviousNullabilityAnalyzer.SymbolValueType(method)
-                    return IsTaskLikeEnvelope(method.ReturnType) &&
-                        (
-                        this.AwaitedReturnIsTainted(resultType, method) ||
-                            (resultType != nil && IsAnnotatedNullableReference(resultType))
-                    )
-                }
-                default {
-                    return false
-                }
-            }
-        }
+        ) bool -> ObliviousNullabilityAnalyzer
+            .AwaitedExpressionResultIsNullable(
+            this.context.Compilation,
+            expression,
+            this.context.SemanticModel,
+            this.context.SiblingCompilations
+        )
 
         // Issue #2164: true when <paramref name="recv"/> reads a nullable
         // (`T?`) field/property that is lazily initialized under a dominating
