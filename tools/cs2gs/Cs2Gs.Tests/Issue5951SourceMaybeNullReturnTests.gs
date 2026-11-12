@@ -13,6 +13,36 @@ import Xunit
 
 class Issue5951SourceMaybeNullReturnTests {
     @Fact
+    func NarrowedStorage_PreservesChangedReturnContracts() {
+        LiteralConstructionRuntimeParity.AssertMatches(`
+#nullable enable
+using System;
+using System.Diagnostics.CodeAnalysis;
+using System.Threading.Tasks;
+public static class P
+{
+    static int calls;
+    [return: MaybeNull]
+    static Task<int> Empty() { calls++; return null; }
+#nullable disable
+    static Task<int> Forward() => Empty();
+#nullable enable
+    [return: MaybeNull]
+    static Task<int> ThroughStorage()
+    {
+        Task<int>? task = Forward();
+        var copy = task;
+        return copy;
+    }
+    public static void Main()
+    {
+        Console.WriteLine(ThroughStorage() == null);
+        Console.WriteLine(calls);
+    }
+}`, expectedOutput: string.Join(Environment.NewLine, []string{"True", "1"}) + Environment.NewLine)
+    }
+
+    @Fact
     func DeclaredDelegateReturns_StayDistinctFromAsyncEnvelopes() {
         LiteralConstructionRuntimeParity.AssertMatches(`
 #nullable enable

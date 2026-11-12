@@ -34,6 +34,74 @@ partial class CSharpToGSharpTranslator {
             SyntaxNode,
             HashSet[string]
         ]()
+        private let defaultOriginQueries Dictionary[ExpressionSyntax, DefaultOriginQuery] = Dictionary[
+            ExpressionSyntax,
+            DefaultOriginQuery
+        ]()
+        private let defaultOriginProjections Dictionary[(ExpressionSyntax, string), ExpressionSyntax] = Dictionary[
+            (ExpressionSyntax, string),
+            ExpressionSyntax
+        ]()
+        private let defaultOriginReachingValues Dictionary[
+            (SyntaxNode, int32),
+            IReadOnlyList[ExpressionSyntax]
+        ] = Dictionary[(SyntaxNode, int32), IReadOnlyList[ExpressionSyntax]]()
+        private let defaultOriginFinal DefaultOriginQuery = DefaultOriginQuery(nil)
+        private let defaultOriginPending Queue[DefaultOriginQuery] = Queue[DefaultOriginQuery]()
+        private let defaultOriginEdges Queue[DefaultOriginEdge] = Queue[DefaultOriginEdge]()
+        private let defaultOriginPositive Queue[DefaultOriginQuery] = Queue[DefaultOriginQuery]()
+        private var defaultOriginOperations int64 = 0
+        private let defaultOriginEdgeKeys HashSet[(DefaultOriginQuery, DefaultOriginQuery, int32)] = HashSet[
+            (DefaultOriginQuery, DefaultOriginQuery, int32)
+        ]()
+        private let defaultOriginIndices HashSet[int32] = HashSet[int32]()
+        private let defaultOriginNulls List[DefaultOriginQuery] = List[DefaultOriginQuery]()
+        private let defaultOriginGuards List[(DefaultOriginQuery, DefaultOriginQuery)] = List[
+            (DefaultOriginQuery, DefaultOriginQuery)
+        ]()
+
+        private class DefaultOriginQuery {
+            public let Source ExpressionSyntax?
+            public let ConsumingOutgoing List[DefaultOriginEdge] = List[DefaultOriginEdge]()
+            public let ConsumingByIndex Dictionary[int32, List[DefaultOriginEdge]] = Dictionary[
+                int32,
+                List[DefaultOriginEdge]
+            ]()
+            public let EpsilonIncoming List[DefaultOriginEdge] = List[DefaultOriginEdge]()
+            public let PushParents Dictionary[int32, List[DefaultOriginQuery]] = Dictionary[
+                int32,
+                List[DefaultOriginQuery]
+            ]()
+            public var Witness ExpressionSyntax? = nil
+            public var ProjectedNullDefault ExpressionSyntax? = nil
+
+            init(source ExpressionSyntax?) {
+                this.Source = source
+            }
+        }
+
+        private class DefaultOriginEdge {
+            // An edge consumes one tuple index; -1 consumes none. Push rules prepend an index before entering another source.
+            public let From DefaultOriginQuery
+            public let To DefaultOriginQuery
+            public let Index int32
+            public let Witness ExpressionSyntax?
+
+            init(from DefaultOriginQuery, to DefaultOriginQuery, index int32, witness ExpressionSyntax?) {
+                this.From = from
+                this.To = to
+                this.Index = index
+                this.Witness = witness
+            }
+        }
+
+        // Count adjacency visits and insertion/evidence attempts, including duplicates, to detect dense-closure and rejected-scan regressions.
+        func GetDefaultOriginMetrics()(SourceCount int32, EdgeCount int32, OperationCount int64) -> (
+            this.defaultOriginQueries.Count,
+            this.defaultOriginEdgeKeys.Count,
+            this.defaultOriginOperations
+        )
+
         private enum DelegateArgumentBehavior {
             NotObserved,
             InvokedDuringCall,
@@ -583,10 +651,7 @@ partial class CSharpToGSharpTranslator {
             // narrower default-value rule: follow aliases and branch expressions
             // back to a written default, then let Roslyn's flow state decide
             // whether that default still reaches this declaration.
-            if !this.InferredInitializerOriginatesFromDefault(
-                initializer,
-                HashSet[ISymbol](SymbolEqualityComparer.Default)
-            ) {
+            if this.FindDefaultOrigin(initializer, Array.Empty[int32]()) == nil {
                 return false
             }
             let typeInfo = if initializer.SyntaxTree == this.context.SemanticModel.SyntaxTree {
@@ -642,229 +707,316 @@ partial class CSharpToGSharpTranslator {
             return local!!.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated
         }
 
-        private func InferredInitializerOriginatesFromDefault(
-            expression ExpressionSyntax?,
-            visited HashSet[ISymbol]
-        ) bool {
-            if this.TryGetReachingTupleProjection(expression, out var projectionSource, out var projectionPath) {
-                return this.InferredTupleProjectionOriginatesFromDefault(projectionSource, projectionPath, visited)
+        private func GetDefaultOriginQuery(source ExpressionSyntax) DefaultOriginQuery {
+            if !this.defaultOriginQueries.TryGetValue(source, out var query) {
+                query = DefaultOriginQuery(source)
+                this.defaultOriginQueries.Add(source, query)
+                this.defaultOriginPending.Enqueue(query)
             }
-            switch expression {
+            return query
+        }
+
+        private func PreserveDefaultOriginProjection(
+            source ExpressionSyntax,
+            path IReadOnlyList[int32]
+        ) ExpressionSyntax {
+            let key = (source, FormatTupleProjection(path.ToList()))
+            // Recursive callback fixed points require stable syntax identities, including projected deconstruction leaves.
+            if !this.defaultOriginProjections.TryGetValue(key, out var projected) {
+                projected = if path.Count == 0 {
+                    source
+                } else {
+                    this.PreserveReachingTupleProjection(source, path)!!
+                }
+                this.defaultOriginProjections.Add(key, projected)
+            }
+            return projected
+        }
+
+        private func FindDefaultOrigin(source ExpressionSyntax?, path IReadOnlyList[int32]) ExpressionSyntax? {
+            if source == nil {
+                return nil
+            }
+            let root = this.GetDefaultOriginQuery(source)
+            for index in path {
+                this.AddDefaultOriginIndex(index)
+            }
+            while this.defaultOriginPending.TryDequeue(out var query) {
+                this.ExpandDefaultOriginQuery(query)
+            }
+            // Keep aliases sparse. Only consuming transitions propagate through epsilon dependencies.
+            while this.defaultOriginEdges.Count > 0 || this.defaultOriginPositive.Count > 0 {
+                if this.defaultOriginEdges.TryDequeue(out var edge) {
+                    if edge.Index < 0 {
+                        for suffix in edge.To.ConsumingOutgoing.ToArray() {
+                            this.defaultOriginOperations++
+                            this.AddDefaultOriginEdge(
+                                edge.From,
+                                suffix.To,
+                                suffix.Index,
+                                edge.Witness ?? suffix.Witness
+                            )
+                        }
+                    } else {
+                        for prefix in edge.From.EpsilonIncoming.ToArray() {
+                            this.defaultOriginOperations++
+                            this.AddDefaultOriginEdge(prefix.From, edge.To, edge.Index, prefix.Witness ?? edge.Witness)
+                        }
+                        // Matching summaries represent unbounded projection depth without enumerating concrete paths.
+                        if edge.From.PushParents.TryGetValue(edge.Index, out var parents) {
+                            for parent in parents.ToArray() {
+                                this.defaultOriginOperations++
+                                this.AddDefaultOriginEdge(parent, edge.To, -1, edge.Witness)
+                            }
+                        }
+                    }
+                } else if this.defaultOriginPositive.TryDequeue(out var positive) {
+                    for incoming in positive.EpsilonIncoming {
+                        this.defaultOriginOperations++
+                        this.MarkDefaultOrigin(incoming.From, incoming.Witness ?? positive.Witness)
+                    }
+                }
+            }
+            if path.Count == 0 {
+                return root.Witness
+            }
+            let states = Dictionary[DefaultOriginQuery, ExpressionSyntax?]()
+            states.Add(root, nil)
+            for index in path {
+                let next = Dictionary[DefaultOriginQuery, ExpressionSyntax?]()
+                for state in states {
+                    if state.Key.ConsumingByIndex.TryGetValue(index, out var matching) {
+                        for edge in matching {
+                            this.defaultOriginOperations++
+                            next.TryAdd(edge.To, state.Value ?? edge.Witness)
+                        }
+                    }
+                }
+                states.Clear()
+                for state in next {
+                    states.Add(state.Key, state.Value)
+                }
+            }
+            for state in states {
+                let witness = state.Value ?? state.Key.Witness
+                if witness != nil {
+                    return witness
+                }
+            }
+            return nil
+        }
+
+        private func AddDefaultOriginEdge(
+            from DefaultOriginQuery,
+            to DefaultOriginQuery,
+            index int32,
+            witness ExpressionSyntax?
+        ) {
+            this.defaultOriginOperations++
+            if !this.defaultOriginEdgeKeys.Add((from, to, index)) {
+                return
+            }
+            let edge = DefaultOriginEdge(from, to, index, witness)
+            if index < 0 {
+                to.EpsilonIncoming.Add(edge)
+            } else {
+                from.ConsumingOutgoing.Add(edge)
+                if !from.ConsumingByIndex.TryGetValue(index, out var matching) {
+                    matching = List[DefaultOriginEdge]()
+                    from.ConsumingByIndex.Add(index, matching)
+                }
+                matching.Add(edge)
+            }
+            this.defaultOriginEdges.Enqueue(edge)
+            if index < 0 {
+                this.MarkDefaultOrigin(from, witness ?? to.Witness)
+            }
+        }
+
+        private func MarkDefaultOrigin(query DefaultOriginQuery, witness ExpressionSyntax?) {
+            this.defaultOriginOperations++
+            if witness != nil && query.Witness == nil {
+                query.Witness = witness
+                this.defaultOriginPositive.Enqueue(query)
+            }
+        }
+
+        private func AddDefaultOriginIndex(index int32) {
+            if !this.defaultOriginIndices.Add(index) {
+                return
+            }
+            this.AddDefaultOriginEdge(this.defaultOriginFinal, this.defaultOriginFinal, index, nil)
+            for query in this.defaultOriginNulls {
+                this.AddDefaultOriginEdge(query, this.defaultOriginFinal, index, query.ProjectedNullDefault)
+            }
+            for guarded in this.defaultOriginGuards.ToArray() {
+                this.AddDefaultOriginGuard(guarded.Item1, guarded.Item2, index)
+            }
+        }
+
+        private func AddDefaultOriginPush(from DefaultOriginQuery, to DefaultOriginQuery, index int32) {
+            this.AddDefaultOriginIndex(index)
+            if !to.PushParents.TryGetValue(index, out var parents) {
+                parents = List[DefaultOriginQuery]()
+                to.PushParents.Add(index, parents)
+            }
+            parents.Add(from)
+            if to.ConsumingByIndex.TryGetValue(index, out var matching) {
+                for edge in matching.ToArray() {
+                    this.defaultOriginOperations++
+                    this.AddDefaultOriginEdge(from, edge.To, -1, edge.Witness)
+                }
+            }
+        }
+
+        private func AddDefaultOriginProjection(
+            from DefaultOriginQuery,
+            source ExpressionSyntax,
+            path IReadOnlyList[int32]
+        ) {
+            var current = from
+            for var i = path.Count - 1; i >= 0; i-- {
+                let next = if i == 0 {
+                    this.GetDefaultOriginQuery(source)
+                } else {
+                    DefaultOriginQuery(nil)
+                }
+                this.AddDefaultOriginPush(current, next, path[i])
+                current = next
+            }
+            if path.Count == 0 {
+                this.AddDefaultOriginEdge(from, this.GetDefaultOriginQuery(source), -1, nil)
+            }
+        }
+
+        private func AddDefaultOriginGuard(from DefaultOriginQuery, to DefaultOriginQuery, index int32) {
+            let projected = DefaultOriginQuery(nil)
+            this.AddDefaultOriginEdge(from, projected, index, nil)
+            this.AddDefaultOriginPush(projected, to, index)
+        }
+
+        private func ExpandDefaultOriginQuery(query DefaultOriginQuery) {
+            let source = query.Source!!
+            if this.TryGetReachingTupleProjection(source, out var origin, out var projection) {
+                this.AddDefaultOriginProjection(query, origin!!, projection!!)
+                return
+            }
+            if source is DefaultExpressionSyntax || source.IsKind(SyntaxKind.DefaultLiteralExpression) {
+                this.AddDefaultOriginEdge(query, this.defaultOriginFinal, -1, source)
+                return
+            }
+            if source.IsKind(SyntaxKind.NullLiteralExpression) {
+                query.ProjectedNullDefault = SyntaxFactory.LiteralExpression(SyntaxKind.DefaultLiteralExpression)
+                this.defaultOriginNulls.Add(query)
+                for index in this.defaultOriginIndices.OrderBy((index int32) -> index) {
+                    this.AddDefaultOriginEdge(query, this.defaultOriginFinal, index, query.ProjectedNullDefault)
+                }
+                return
+            }
+            switch source {
                 case parenthesized is ParenthesizedExpressionSyntax {
-                    return this.InferredInitializerOriginatesFromDefault(parenthesized.Expression, visited)
+                    this.AddDefaultOriginEdge(query, this.GetDefaultOriginQuery(parenthesized.Expression), -1, nil)
+                    return
                 }
                 case suppression is PostfixUnaryExpressionSyntax when suppression.IsKind(
                     SyntaxKind.SuppressNullableWarningExpression
                 ) {
-                    return this.InferredInitializerOriginatesFromDefault(suppression.Operand, visited)
-                }
-                case literal is LiteralExpressionSyntax when literal.IsKind(SyntaxKind.DefaultLiteralExpression) {
-                    return true
-                }
-                case DefaultExpressionSyntax {
-                    return true
+                    this.AddDefaultOriginEdge(query, this.GetDefaultOriginQuery(suppression.Operand), -1, nil)
+                    return
                 }
                 case cast is CastExpressionSyntax {
-                    return this.InferredInitializerOriginatesFromDefault(cast.Expression, visited)
+                    this.AddDefaultOriginEdge(query, this.GetDefaultOriginQuery(cast.Expression), -1, nil)
+                    return
                 }
                 case assignment is AssignmentExpressionSyntax when assignment.IsKind(
                     SyntaxKind.SimpleAssignmentExpression
-                ) {
-                    return this.InferredInitializerOriginatesFromDefault(assignment.Right, visited)
-                }
-                case coalesceAssignment is AssignmentExpressionSyntax when coalesceAssignment.IsKind(
-                    SyntaxKind.CoalesceAssignmentExpression
-                ) {
-                    return !this.CoalesceAssignmentResultIsStaticallyNonNull(coalesceAssignment) &&
-                        this.InferredInitializerOriginatesFromDefault(coalesceAssignment.Right, visited)
+                ) ||
+                    assignment
+                    .IsKind(SyntaxKind.CoalesceAssignmentExpression) {
+                    let right = this.GetDefaultOriginQuery(assignment.Right)
+                    if assignment.IsKind(SyntaxKind.CoalesceAssignmentExpression) &&
+                        this
+                        .CoalesceAssignmentResultIsStaticallyNonNull(assignment) {
+                        this.defaultOriginGuards.Add((query, right))
+                        for index in this.defaultOriginIndices.OrderBy((index int32) -> index).ToArray() {
+                            this.AddDefaultOriginGuard(query, right, index)
+                        }
+                    } else {
+                        this.AddDefaultOriginEdge(query, right, -1, nil)
+                    }
+                    return
                 }
                 case conditional is ConditionalExpressionSyntax {
-                    return this.InferredInitializerOriginatesFromDefault(
-                        conditional.WhenTrue,
-                        HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
-                    ) ||
-                        this
-                        .InferredInitializerOriginatesFromDefault(
-                        conditional.WhenFalse,
-                        HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
-                    )
+                    this.AddDefaultOriginEdge(query, this.GetDefaultOriginQuery(conditional.WhenTrue), -1, nil)
+                    this.AddDefaultOriginEdge(query, this.GetDefaultOriginQuery(conditional.WhenFalse), -1, nil)
+                    return
                 }
                 case coalesce is BinaryExpressionSyntax when coalesce.IsKind(SyntaxKind.CoalesceExpression) {
-                    return this.InferredInitializerOriginatesFromDefault(
-                        coalesce.Left,
-                        HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
-                    ) ||
-                        this.InferredInitializerOriginatesFromDefault(
-                        coalesce.Right,
-                        HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
-                    )
+                    this.AddDefaultOriginEdge(query, this.GetDefaultOriginQuery(coalesce.Left), -1, nil)
+                    this.AddDefaultOriginEdge(query, this.GetDefaultOriginQuery(coalesce.Right), -1, nil)
+                    return
                 }
                 case switchExpression is SwitchExpressionSyntax {
-                    return switchExpression.Arms.Any(
-                        (arm SwitchExpressionArmSyntax) -> this.InferredInitializerOriginatesFromDefault(
-                            arm.Expression,
-                            HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
+                    for arm in switchExpression.Arms {
+                        this.AddDefaultOriginEdge(query, this.GetDefaultOriginQuery(arm.Expression), -1, nil)
+                    }
+                    return
+                }
+                case tuple is TupleExpressionSyntax {
+                    for var i = 0; i < tuple.Arguments.Count; i++ {
+                        this.AddDefaultOriginIndex(i)
+                        this.AddDefaultOriginEdge(
+                            query,
+                            this.GetDefaultOriginQuery(tuple.Arguments[i].Expression),
+                            i,
+                            nil
                         )
-                    )
+                    }
+                    return
                 }
                 case member is MemberAccessExpressionSyntax when member.SyntaxTree == this
                     .context
                     .SemanticModel
                     .SyntaxTree &&
                     this
-                    .TryGetTupleElementAccess(member, out var receiver, out var path) {
-                    return this.InferredTupleProjectionOriginatesFromDefault(receiver, path, visited)
+                    .TryGetTupleElementAccess(member, out var receiver, out var projection) {
+                    this.AddDefaultOriginProjection(query, receiver!!, projection!!)
+                    return
                 }
             }
-            if expression!!.SyntaxTree != this.context.SemanticModel.SyntaxTree {
-                return false
-            }
-            if this.context.GetSymbolInfo(expression).Symbol is not ILocalSymbol local || !visited.Add(local) {
-                return false
-            }
-            let declaration = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
-            if declaration is VariableDeclaratorSyntax && !this.IsLocalReassigned(local) && visited.All(
-                (sym ISymbol) -> sym is ILocalSymbol visitedLocal && !this.IsLocalReassigned(visitedLocal)
-            ) {
-                let emptyChain = Array.Empty[ITypeParameterSymbol]()
-                if this.TryGetSlotChainNodeMemo(declaration, emptyChain, out var cachedDefault, pathKey: "@default") {
-                    return cachedDefault
-                }
-                this.SetSlotChainNodeMemo(declaration, emptyChain, false, pathKey: "@default")
-                let cachedResult = this.GetReachingLocalValues(local, expression!!.SpanStart, visited).Any(
-                    (value ExpressionSyntax) -> this.InferredInitializerOriginatesFromDefault(
-                        value,
-                        HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
-                    )
-                )
-                this.SetSlotChainNodeMemo(declaration, emptyChain, cachedResult, pathKey: "@default")
-                return cachedResult
-            }
-            return this.GetReachingLocalValues(local, expression!!.SpanStart, visited).Any(
-                (value ExpressionSyntax) -> this.InferredInitializerOriginatesFromDefault(
-                    value,
-                    HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
-                )
-            )
-        }
-
-        private func InferredTupleProjectionOriginatesFromDefault(
-            source ExpressionSyntax?,
-            path IReadOnlyList[int32]?,
-            visited HashSet[ISymbol]
-        ) bool {
-            var source = source
-            if path!!.Count == 0 {
-                return this.InferredInitializerOriginatesFromDefault(source, visited)
-            }
-            source = Unwrap(source)
-            if IsNullOrDefaultLiteral(source) {
-                return true
-            }
-            if source is CastExpressionSyntax cast {
-                return this.InferredTupleProjectionOriginatesFromDefault(cast.Expression, path, visited)
-            }
-            if source is AssignmentExpressionSyntax assignment &&
-                (
-                assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) || assignment.IsKind(
-                    SyntaxKind.CoalesceAssignmentExpression
-                )
-            ) {
-                return this.InferredTupleProjectionOriginatesFromDefault(assignment.Right, path, visited)
-            }
-            if source is BinaryExpressionSyntax coalesce && coalesce.IsKind(SyntaxKind.CoalesceExpression) {
-                return this.InferredTupleProjectionOriginatesFromDefault(
-                    coalesce.Left,
-                    path,
-                    HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
-                ) ||
-                    this
-                    .InferredTupleProjectionOriginatesFromDefault(
-                    coalesce.Right,
-                    path,
-                    HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
-                )
-            }
-            let index = path!![0]
-            let remaining IReadOnlyList[int32] = path!!.Skip(1).ToArray()
-            if source is TupleExpressionSyntax tuple && index < tuple.Arguments.Count {
-                return this.InferredTupleProjectionOriginatesFromDefault(
-                    tuple.Arguments[index].Expression,
-                    remaining,
-                    visited
-                )
-            }
-            if source is ConditionalExpressionSyntax conditional {
-                return this.InferredTupleProjectionOriginatesFromDefault(
-                    conditional.WhenTrue,
-                    path,
-                    HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
-                ) ||
-                    this
-                    .InferredTupleProjectionOriginatesFromDefault(
-                    conditional.WhenFalse,
-                    path,
-                    HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
-                )
-            }
-            if source is SwitchExpressionSyntax switchExpression {
-                return switchExpression.Arms.Any(
-                    (arm SwitchExpressionArmSyntax) -> this.InferredTupleProjectionOriginatesFromDefault(
-                        arm.Expression,
-                        path,
-                        HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
-                    )
-                )
-            }
-            if source!!.SyntaxTree == this
+            if source.SyntaxTree != this
                 .context
                 .SemanticModel
-                .SyntaxTree &&
+                .SyntaxTree ||
                 this
                 .context
                 .GetSymbolInfo(source)
-                .Symbol is ILocalSymbol local &&
-                visited
-                .Add(local) {
-                let declaration = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
-                if declaration is VariableDeclaratorSyntax && !this.IsLocalReassigned(local) && visited.All(
-                    (sym ISymbol) -> sym is ILocalSymbol visitedLocal && !this.IsLocalReassigned(visitedLocal)
-                ) {
-                    let emptyChain = Array.Empty[ITypeParameterSymbol]()
-                    let pathKey = "@default" + FormatTupleProjection(path!!.ToList())
-                    if this.TryGetSlotChainNodeMemo(
-                        declaration,
-                        emptyChain,
-                        out var cachedTupleDefault,
-                        pathKey: pathKey
-                    ) {
-                        return cachedTupleDefault
-                    }
-                    this.SetSlotChainNodeMemo(declaration, emptyChain, false, pathKey: pathKey)
-                    let cachedResult = this.GetReachingLocalValues(local, source!!.SpanStart, visited).Any(
-                        (value ExpressionSyntax) -> this.InferredTupleProjectionOriginatesFromDefault(
-                            value,
-                            path,
-                            HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
-                        )
-                    )
-                    this.SetSlotChainNodeMemo(declaration, emptyChain, cachedResult, pathKey: pathKey)
-                    return cachedResult
-                }
-                return this.GetReachingLocalValues(local, source!!.SpanStart, visited).Any(
-                    (value ExpressionSyntax) -> this.InferredTupleProjectionOriginatesFromDefault(
-                        value,
-                        path,
-                        HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
-                    )
-                )
+                .Symbol is not ILocalSymbol local ||
+                local
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is not{} declaration {
+                return
             }
-            let projected ExpressionSyntax? = ProjectTupleElement(source, path)
-            return projected!!.SyntaxTree == this
-                .context
-                .SemanticModel
-                .SyntaxTree &&
-                this.InferredInitializerOriginatesFromDefault(projected, visited)
+            let key = (declaration, source.SpanStart)
+            if !this.defaultOriginReachingValues.TryGetValue(key, out var reaching) {
+                // A never-written, non-ref local has exactly its initializer at every valid read, including captures.
+                reaching = if local.RefKind == RefKind.None &&
+                    declaration is VariableDeclaratorSyntax{Initializer: {Value: {} initializer}} &&
+                    FindEnclosingExecutable(declaration) is {} executable &&
+                    !this.IsSymbolReassigned(local, executable) {
+                    []ExpressionSyntax{initializer}
+                } else {
+                    this.GetReachingLocalValues(local, source.SpanStart, preserveProvenance: true)
+                }
+                this.defaultOriginReachingValues.Add(key, reaching)
+            }
+            for value in reaching.OrderBy((value ExpressionSyntax) -> value.SpanStart).ThenBy(
+                TupleReachingStateKey,
+                StringComparer.Ordinal
+            ) {
+                this.AddDefaultOriginEdge(query, this.GetDefaultOriginQuery(value), -1, nil)
+            }
         }
 
         private func TryGetTupleElementAccess(
@@ -933,253 +1085,28 @@ partial class CSharpToGSharpTranslator {
             target SingleVariableDesignationSyntax,
             left ExpressionSyntax?,
             right ExpressionSyntax?,
-            visited HashSet[ISymbol]? = nil
+            visited HashSet[ISymbol]? = nil,
+            resolveDefaultOrigin bool = true
         ) ExpressionSyntax? {
-            var left = left
-            var right = right
-            var visited = visited
-            visited ??= HashSet[ISymbol](SymbolEqualityComparer.Default)
-            left = Unwrap(left)
-            if right!!.SyntaxTree == this
-                .context
-                .SemanticModel
-                .SyntaxTree &&
-                this
-                .context
-                .GetSymbolInfo(right)
-                .Symbol is ILocalSymbol alias {
-                if !visited!!.Add(alias) {
-                    return nil
-                }
-                let reaching = this.GetReachingLocalValues(alias, right!!.SpanStart, visited)
-                if reaching.Count > 1 {
-                    for value in reaching {
-                        let found ExpressionSyntax? = FindDeconstructionInitializer(
-                            target,
-                            left,
-                            value,
-                            HashSet[ISymbol](visited!!, SymbolEqualityComparer.Default)
-                        )
-                        if this.InitializerOriginatesFromDefault(found) {
-                            return found
-                        }
-                    }
-                    return nil
-                }
-            }
-            right = this.ResolveStableTupleAlias(right)
-            if right is AssignmentExpressionSyntax assignment && assignment.IsKind(
-                SyntaxKind.SimpleAssignmentExpression
-            ) {
-                return FindDeconstructionInitializer(target, left, assignment.Right, visited)
-            }
-            if left!!.SyntaxTree == target.SyntaxTree && left!!.Span.Contains(target.Span) &&
-                IsNullOrDefaultLiteral(right) {
-                return right
-            }
-            if left is DeclarationExpressionSyntax declaration {
-                return FindDeconstructionInitializer(target, declaration.Designation, right, visited)
-            }
-            if right is ConditionalExpressionSyntax conditional {
-                let found ExpressionSyntax? = FindDeconstructionInitializer(
-                    target,
-                    left,
-                    conditional.WhenTrue,
-                    HashSet[ISymbol](visited!!, SymbolEqualityComparer.Default)
-                )
-                return if this.InitializerOriginatesFromDefault(found) {
-                    found
-                } else {
-                    FindDeconstructionInitializer(
-                        target,
-                        left,
-                        conditional.WhenFalse,
-                        HashSet[ISymbol](visited!!, SymbolEqualityComparer.Default)
-                    )
-                }
-            }
-            if right is BinaryExpressionSyntax coalesce && coalesce.IsKind(SyntaxKind.CoalesceExpression) {
-                let found ExpressionSyntax? = FindDeconstructionInitializer(
-                    target,
-                    left,
-                    coalesce.Left,
-                    HashSet[ISymbol](visited!!, SymbolEqualityComparer.Default)
-                )
-                return if this.InitializerOriginatesFromDefault(found) {
-                    found
-                } else {
-                    FindDeconstructionInitializer(
-                        target,
-                        left,
-                        coalesce.Right,
-                        HashSet[ISymbol](visited!!, SymbolEqualityComparer.Default)
-                    )
-                }
-            }
-            if right is SwitchExpressionSyntax switchExpression {
-                for arm in switchExpression.Arms {
-                    let found ExpressionSyntax? = FindDeconstructionInitializer(
-                        target,
-                        left,
-                        arm.Expression,
-                        HashSet[ISymbol](visited!!, SymbolEqualityComparer.Default)
-                    )
-                    if this.InitializerOriginatesFromDefault(found) {
-                        return found
-                    }
-                }
+            if left == nil || right == nil || !TryFindDeconstructionPath(target, left, List[int32](), out var path) {
                 return nil
             }
-            if left is not TupleExpressionSyntax leftTuple ||
-                right is not TupleExpressionSyntax rightTuple ||
-                leftTuple
-                .Arguments
-                .Count != rightTuple
-                .Arguments
-                .Count {
-                return nil
-            }
-            for var i = 0; i < leftTuple.Arguments.Count; i++ {
-                let found ExpressionSyntax? = FindDeconstructionInitializer(
-                    target,
-                    leftTuple.Arguments[i].Expression,
-                    rightTuple.Arguments[i].Expression,
-                    HashSet[ISymbol](visited!!, SymbolEqualityComparer.Default)
-                )
-                if found != nil {
-                    return found
+            if resolveDefaultOrigin {
+                let witness = this.FindDefaultOrigin(right, path!!)
+                if witness != nil {
+                    return witness
                 }
             }
-            return nil
-        }
-
-        private func FindDeconstructionInitializer(
-            target SingleVariableDesignationSyntax,
-            designation VariableDesignationSyntax,
-            right ExpressionSyntax?,
-            visited HashSet[ISymbol]? = nil
-        ) ExpressionSyntax? {
-            var right = right
-            var visited = visited
-            visited ??= HashSet[ISymbol](SymbolEqualityComparer.Default)
-            if designation.SyntaxTree == target.SyntaxTree && designation.Span == target.Span {
-                return right
-            }
-            if right!!.SyntaxTree == this
-                .context
-                .SemanticModel
-                .SyntaxTree &&
-                this
-                .context
-                .GetSymbolInfo(right)
-                .Symbol is ILocalSymbol alias {
-                if !visited!!.Add(alias) {
+            // Non-default tuple leaves also supply delegate and ref-alias provenance to reaching-value callers.
+            let aliases = visited ?? HashSet[ISymbol](SymbolEqualityComparer.Default)
+            var value = this.ResolveStableTupleAlias(right, aliases)
+            for index in path!! {
+                if value is not TupleExpressionSyntax tuple || index >= tuple.Arguments.Count {
                     return nil
                 }
-                let reaching = this.GetReachingLocalValues(alias, right!!.SpanStart, visited)
-                if reaching.Count > 1 {
-                    for value in reaching {
-                        let found ExpressionSyntax? = FindDeconstructionInitializer(
-                            target,
-                            designation,
-                            value,
-                            HashSet[ISymbol](visited!!, SymbolEqualityComparer.Default)
-                        )
-                        if this.InitializerOriginatesFromDefault(found) {
-                            return found
-                        }
-                    }
-                    return nil
-                }
+                value = this.ResolveStableTupleAlias(tuple.Arguments[index].Expression, aliases)
             }
-            right = this.ResolveStableTupleAlias(right)
-            if right is AssignmentExpressionSyntax assignment && assignment.IsKind(
-                SyntaxKind.SimpleAssignmentExpression
-            ) {
-                return FindDeconstructionInitializer(target, designation, assignment.Right, visited)
-            }
-            if designation.SyntaxTree == target.SyntaxTree && designation.Span.Contains(target.Span) &&
-                IsNullOrDefaultLiteral(right) {
-                return right
-            }
-            if right is ConditionalExpressionSyntax conditional {
-                let found ExpressionSyntax? = FindDeconstructionInitializer(
-                    target,
-                    designation,
-                    conditional.WhenTrue,
-                    HashSet[ISymbol](visited!!, SymbolEqualityComparer.Default)
-                )
-                return if this.InitializerOriginatesFromDefault(found) {
-                    found
-                } else {
-                    FindDeconstructionInitializer(
-                        target,
-                        designation,
-                        conditional.WhenFalse,
-                        HashSet[ISymbol](visited!!, SymbolEqualityComparer.Default)
-                    )
-                }
-            }
-            if right is BinaryExpressionSyntax coalesce && coalesce.IsKind(SyntaxKind.CoalesceExpression) {
-                let found ExpressionSyntax? = FindDeconstructionInitializer(
-                    target,
-                    designation,
-                    coalesce.Left,
-                    HashSet[ISymbol](visited!!, SymbolEqualityComparer.Default)
-                )
-                return if this.InitializerOriginatesFromDefault(found) {
-                    found
-                } else {
-                    FindDeconstructionInitializer(
-                        target,
-                        designation,
-                        coalesce.Right,
-                        HashSet[ISymbol](visited!!, SymbolEqualityComparer.Default)
-                    )
-                }
-            }
-            if right is SwitchExpressionSyntax switchExpression {
-                for arm in switchExpression.Arms {
-                    let found ExpressionSyntax? = FindDeconstructionInitializer(
-                        target,
-                        designation,
-                        arm.Expression,
-                        HashSet[ISymbol](visited!!, SymbolEqualityComparer.Default)
-                    )
-                    if this.InitializerOriginatesFromDefault(found) {
-                        return found
-                    }
-                }
-                return nil
-            }
-            if designation is not ParenthesizedVariableDesignationSyntax parenthesized ||
-                right is not TupleExpressionSyntax rightTuple ||
-                parenthesized
-                .Variables
-                .Count != rightTuple
-                .Arguments
-                .Count {
-                return nil
-            }
-            for var i = 0; i < parenthesized.Variables.Count; i++ {
-                let found ExpressionSyntax? = FindDeconstructionInitializer(
-                    target,
-                    parenthesized.Variables[i],
-                    rightTuple.Arguments[i].Expression,
-                    HashSet[ISymbol](visited!!, SymbolEqualityComparer.Default)
-                )
-                if found != nil {
-                    return found
-                }
-            }
-            return nil
-        }
-
-        private func InitializerOriginatesFromDefault(expression ExpressionSyntax?) bool {
-            return expression != nil && this.InferredInitializerOriginatesFromDefault(
-                expression,
-                HashSet[ISymbol](SymbolEqualityComparer.Default)
-            )
+            return value
         }
 
         private func ResolveStableTupleAlias(
@@ -1194,7 +1121,10 @@ partial class CSharpToGSharpTranslator {
             visited ??= HashSet[ISymbol](SymbolEqualityComparer.Default)
             var usePosition = expression!!.SpanStart
             expression = this.UnwrapTuplePreservingCasts(expression)
-            while this.context.GetSymbolInfo(expression).Symbol is ILocalSymbol local && visited!!.Add(local) {
+            while this.context.GetSymbolInfo(expression).Symbol is ILocalSymbol local {
+                if !visited!!.Add(local) {
+                    break
+                }
                 let reaching = this.GetReachingLocalValues(local, usePosition, visited)
                 if reaching.Count == 0 {
                     break
@@ -1218,7 +1148,8 @@ partial class CSharpToGSharpTranslator {
             visited HashSet[ISymbol]? = nil,
             executableOverride SyntaxNode? = nil,
             entryValues IReadOnlyList[ExpressionSyntax]? = nil,
-            preserveDelegateCompoundAssignments bool = false
+            preserveDelegateCompoundAssignments bool = false,
+            preserveProvenance bool = false
         ) IReadOnlyList[ExpressionSyntax] {
             let declaration SyntaxNode? = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
             var initializer ExpressionSyntax? = nil
@@ -1230,7 +1161,12 @@ partial class CSharpToGSharpTranslator {
                 .Ancestors()
                 .OfType[AssignmentExpressionSyntax]()
                 .FirstOrDefault() is {Left: {} left, Right: {} right} {
-                initializer = FindDeconstructionInitializer(designation, left, right, visited)
+                initializer = if preserveProvenance &&
+                    TryFindDeconstructionPath(designation, left, List[int32](), out var path) {
+                    this.PreserveDefaultOriginProjection(right, path!!)
+                } else {
+                    FindDeconstructionInitializer(designation, left, right, visited, resolveDefaultOrigin: false)
+                }
             }
             var declarationExecutable SyntaxNode? = declaration!!.AncestorsAndSelf().FirstOrDefault(
                 (node SyntaxNode) -> node is BaseMethodDeclarationSyntax ||
@@ -1275,7 +1211,8 @@ partial class CSharpToGSharpTranslator {
                             declarationVisited,
                             executable,
                             initialValues,
-                            preserveDelegateCompoundAssignments
+                            preserveDelegateCompoundAssignments,
+                            preserveProvenance
                         )
                     )
                     for invocationPosition in this.GetInvocationPositions(nestedExecutable, executable) {
@@ -1291,7 +1228,8 @@ partial class CSharpToGSharpTranslator {
                                 invocationVisited,
                                 executable,
                                 initialValues,
-                                preserveDelegateCompoundAssignments
+                                preserveDelegateCompoundAssignments,
+                                preserveProvenance
                             )
                         )
                     }
@@ -1312,7 +1250,8 @@ partial class CSharpToGSharpTranslator {
                                     invocationVisited,
                                     nestedExecutable,
                                     nestedInitialValues.ToList(),
-                                    preserveDelegateCompoundAssignments
+                                    preserveDelegateCompoundAssignments,
+                                    preserveProvenance
                                 )
                             )
                             recursiveChanged |= nestedInitialValues.Count != before
@@ -1349,6 +1288,8 @@ partial class CSharpToGSharpTranslator {
             if useBlock?.IsReachable != true {
                 return Array.Empty[ExpressionSyntax]()
             }
+            // Backedges retain the read's block; acyclic reads evaluate only its prefix below.
+            let predecessorBlocks = GetPredecessorClosure(graph!!, useBlock!!)
             let outputs = Dictionary[BasicBlock, HashSet[ExpressionSyntax]]()
             let assignedValues = Dictionary[AssignmentExpressionSyntax, ExpressionSyntax]()
             let elementAssignedValues = Dictionary[(Write string, Previous string), ExpressionSyntax]()
@@ -1357,7 +1298,7 @@ partial class CSharpToGSharpTranslator {
             do {
                 changed = false
                 for block in graph!!.Blocks {
-                    if !block.IsReachable {
+                    if !block.IsReachable || !predecessorBlocks.Contains(block) {
                         continue
                     }
                     let values = HashSet[ExpressionSyntax]()
@@ -1380,7 +1321,8 @@ partial class CSharpToGSharpTranslator {
                             elementAssignedValues,
                             visited,
                             unknownTuple,
-                            preserveDelegateCompoundAssignments
+                            preserveDelegateCompoundAssignments,
+                            preserveProvenance: preserveProvenance
                         )
                     }
                     if block.BranchValue is {} branchValue {
@@ -1394,7 +1336,8 @@ partial class CSharpToGSharpTranslator {
                             elementAssignedValues,
                             visited,
                             unknownTuple,
-                            preserveDelegateCompoundAssignments
+                            preserveDelegateCompoundAssignments,
+                            preserveProvenance: preserveProvenance
                         )
                     }
                     if !outputs.TryGetValue(block, out var previous) || !previous.SetEquals(values) {
@@ -1420,7 +1363,8 @@ partial class CSharpToGSharpTranslator {
                     elementAssignedValues,
                     visited,
                     unknownTuple,
-                    preserveDelegateCompoundAssignments
+                    preserveDelegateCompoundAssignments,
+                    preserveProvenance: preserveProvenance
                 )
             }
             if useOperationIndex < useBlock!!.Operations.Length {
@@ -1435,7 +1379,8 @@ partial class CSharpToGSharpTranslator {
                     visited,
                     unknownTuple,
                     preserveDelegateCompoundAssignments,
-                    usePosition
+                    usePosition,
+                    preserveProvenance
                 )
             } else if useBlock!!.BranchValue is {} branchValue {
                 this.ApplyReachingOperation(
@@ -1449,7 +1394,8 @@ partial class CSharpToGSharpTranslator {
                     visited,
                     unknownTuple,
                     preserveDelegateCompoundAssignments,
-                    usePosition
+                    usePosition,
+                    preserveProvenance
                 )
             }
             return reaching.ToList()
@@ -5409,7 +5355,8 @@ partial class CSharpToGSharpTranslator {
             visited HashSet[ISymbol]?,
             unknownTuple ExpressionSyntax,
             preserveDelegateCompoundAssignments bool,
-            beforePosition int32 = 2147483647
+            beforePosition int32 = 2147483647,
+            preserveProvenance bool = false
         ) {
             if declaration!!.SpanStart < beforePosition && operation.Syntax.FullSpan.Contains(declaration!!.Span) {
                 values.Clear()
@@ -5453,7 +5400,8 @@ partial class CSharpToGSharpTranslator {
                             values,
                             elementAssignedValues,
                             visited,
-                            unknownTuple
+                            unknownTuple,
+                            preserveProvenance
                         )
                         continue
                     }
@@ -5485,7 +5433,8 @@ partial class CSharpToGSharpTranslator {
                         values,
                         elementAssignedValues,
                         visited,
-                        unknownTuple
+                        unknownTuple,
+                        preserveProvenance
                     )
                     continue
                 }
@@ -5508,8 +5457,16 @@ partial class CSharpToGSharpTranslator {
                     } else {
                         HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
                     }
-                    let source ExpressionSyntax? = this.ResolveStableTupleAlias(assignment.Right, aliasPath)
-                    value = ProjectTupleElement(source, path)
+                    let source ExpressionSyntax? = if preserveProvenance {
+                        assignment.Right
+                    } else {
+                        this.ResolveStableTupleAlias(assignment.Right, aliasPath)
+                    }
+                    value = if preserveProvenance {
+                        this.PreserveDefaultOriginProjection(source!!, path!!)
+                    } else {
+                        ProjectTupleElement(source, path)
+                    }
                     assignedValues.Add(assignment, value!!)
                 }
                 if preserveDelegateCompoundAssignments && assignment.IsKind(SyntaxKind.SubtractAssignmentExpression) {
@@ -5557,7 +5514,8 @@ partial class CSharpToGSharpTranslator {
             values HashSet[ExpressionSyntax],
             elementAssignedValues Dictionary[(Write string, Previous string), ExpressionSyntax],
             visited HashSet[ISymbol]?,
-            unknownTuple ExpressionSyntax
+            unknownTuple ExpressionSyntax,
+            preserveProvenance bool = false
         ) {
             for var writeOrdinal = 0; writeOrdinal < writes.Count; writeOrdinal++ {
                 let elementWrite = writes[writeOrdinal]
@@ -5571,7 +5529,11 @@ partial class CSharpToGSharpTranslator {
                 } else {
                     HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
                 }
-                let source ExpressionSyntax? = this.ResolveStableTupleAlias(writtenValue, aliasPath)
+                let source ExpressionSyntax? = if preserveProvenance {
+                    writtenValue
+                } else {
+                    this.ResolveStableTupleAlias(writtenValue, aliasPath)
+                }
                 if elementPath.Count == 0 {
                     values.Clear()
                     values.Add(source!!)

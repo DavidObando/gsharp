@@ -363,7 +363,7 @@ internal shared class LiteralConstructionRuntimeParity {
                 Assert.True(verified.Status == IlVerifyStatus.Passed, verified.Output)
                 Assert.Empty(verified.Errors)
             }
-            Assert.Equal(expected, RunDotnet([]string{translatedPath}))
+            Assert.Equal(expected, RunDotnet([]string{translatedPath}, printed))
             verifyTranslation?.Invoke(printed)
         } finally {
             Directory.Delete(directory, recursive: true)

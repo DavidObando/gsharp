@@ -505,6 +505,7 @@ internal shared class ObliviousNullabilityAnalyzer {
 
     private class ReturnContractGraph {
         let Nullable HashSet[ISymbol] = HashSet[ISymbol](SymbolEqualityComparer.Default)
+        let PromotedFlow HashSet[ISymbol] = HashSet[ISymbol](SymbolEqualityComparer.Default)
         let Nodes Dictionary[ISymbol, ReturnContractNode] = Dictionary[ISymbol, ReturnContractNode](
             SymbolEqualityComparer.Default
         )
@@ -522,7 +523,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         let Symbol ISymbol
         var Seed bool
         let CanBeNullable bool
-        let Sources List[ISymbol] = List[ISymbol]()
+        let Sources List[(Symbol ISymbol, Narrowed bool)] = List[(Symbol ISymbol, Narrowed bool)]()
     }
     private let RefArraySources ConditionalWeakTable[Compilation, RefArraySourceIndex] = ConditionalWeakTable[
         Compilation,
@@ -1119,6 +1120,13 @@ internal shared class ObliviousNullabilityAnalyzer {
         .Nullable
         .Contains(source!!)
 
+    internal func ValueFlowIsPromoted(compilation Compilation, symbol ISymbol) bool ->
+    TryGetSourceMember(compilation, symbol, out _, out var source) &&
+        ReturnContracts
+        .GetValue(compilation, ComputeReturnContracts)
+        .PromotedFlow
+        .Contains(source!!)
+
     internal func IsReferenceReturnEnvelope(method IMethodSymbol) bool -> method
         .ReturnType
         .IsReferenceType &&
@@ -1222,12 +1230,27 @@ internal shared class ObliviousNullabilityAnalyzer {
                         }
                     }
                     for expression in expressions {
-                        if method == nil && canBeNullable && IsDirectlyNullable(expression, model) {
+                        let flowNotNull = model
+                            .GetTypeInfo(expression)
+                            .Nullability
+                            .FlowState == Microsoft
+                            .CodeAnalysis
+                            .NullableFlowState
+                            .NotNull
+                        if method == nil && canBeNullable && !flowNotNull && IsDirectlyNullable(expression, model) {
                             node.Seed = true
                         }
-                        for item in ResolveSources(expression, model) {
+                        for item in ResolveSources(expression, model, respectNullGuards: true) {
                             if item != nil {
-                                node.Sources.Add(item)
+                                // A narrowed declared slot contributes only nullability from changed return contracts.
+                                node.Sources.Add(
+                                    (
+                                        item,
+                                        flowNotNull &&
+                                            !IsInferredStorage(item) &&
+                                            IsDeclaredNullablePosition(SymbolDeclaredType(item))
+                                    )
+                                )
                             }
                         }
                     }
@@ -1239,10 +1262,13 @@ internal shared class ObliviousNullabilityAnalyzer {
         do {
             changed = false
             for node in nodes.Values {
-                if !node.CanBeNullable || nullableReturns.Contains(node.Symbol) {
+                if !node.CanBeNullable {
                     continue
                 }
-                let nullableSource = node.Sources.Any((item ISymbol) -> ReturnSourceIsNullable(node.Owner, item, graph))
+                let nullableSource = node.Sources.Any(
+                    (item(Symbol ISymbol, Narrowed bool)) ->
+                    ReturnSourceIsNullable(node.Owner, item.Symbol, graph, item.Narrowed)
+                )
                 if !node.Seed && !nullableSource {
                     continue
                 }
@@ -1261,13 +1287,30 @@ internal shared class ObliviousNullabilityAnalyzer {
                     continue
                 }
                 changed |= nullableReturns.Add(node.Symbol)
+                if (node.Symbol is IMethodSymbol && !IsDeclaredNullablePosition(SymbolDeclaredType(node.Symbol))) ||
+                    node
+                    .Sources
+                    .Any(
+                    (item(Symbol ISymbol, Narrowed bool)) ->
+                    ReturnSourceIsNullable(node.Owner, item.Symbol, graph, requirePromotion: true)
+                ) {
+                    changed |= graph.PromotedFlow.Add(node.Symbol)
+                }
             }
         } while changed
         return graph
     }
 
-    private func ReturnSourceIsNullable(compilation Compilation, symbol ISymbol, graph ReturnContractGraph) bool {
+    private func ReturnSourceIsNullable(
+        compilation Compilation,
+        symbol ISymbol,
+        graph ReturnContractGraph,
+        requirePromotion bool = false
+    ) bool {
         if TryGetSourceMember(compilation, symbol, out _, out var source) {
+            if requirePromotion {
+                return graph.PromotedFlow.Contains(source!!)
+            }
             return graph.Nullable.Contains(source!!) ||
                 (
                 !graph.Nodes.ContainsKey(source!!) &&
@@ -1276,7 +1319,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                     IsDeclaredNullablePosition(SymbolDeclaredType(source))
             )
         }
-        return IsImportedStatedNullablePosition(symbol, compilation)
+        return !requirePromotion && IsImportedStatedNullablePosition(symbol, compilation)
     }
 
     private func IsInferredStorage(symbol ISymbol?) bool -> symbol is ILocalSymbol &&
@@ -10627,7 +10670,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 let graph = ReturnContracts.GetValue(sourceOwner, ComputeReturnContracts)
                 if graph.Nodes.TryGetValue(declaration, out var storage) {
                     for incoming in storage.Sources {
-                        pending.Enqueue((storage.Owner, incoming))
+                        pending.Enqueue((storage.Owner, incoming.Symbol))
                     }
                 }
             }
