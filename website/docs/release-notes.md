@@ -16,6 +16,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- **Omit redundant outer-array assertions in cs2gs nested initializers** (Fixes #5978). Array-element bridges use emitted value nullability, so nullable inner elements do not force `!!` on non-null outer storage. Required nullable-value assertions remain.
+
 - Print bounded primary SDK failure logs in the Oahu and Code Exploder nightly console without adding them to retained reports. Keep gate results unchanged; the Oahu build failure remains unresolved. (Part of #5977)
 
 - Match forwarded handler constructor arguments without treating an `out bool` gate as a bool value. Match forwarded ref kinds and reject readonly addresses for writable constructor slots. Capture managed call addresses in source order, preserving null, bounds, and array-type checks. Fixed shared-field addresses still evaluate type initialization before subsequent synchronous arguments. Adapt forwarded values and readonly references to selected constructor parameter types without repeating evaluations. Canonical managed-reference captures preserve chosen storage across suspension. References consumed without suspension preserve address effects at their definitions inside async methods. Overloaded handlers preserve constructor gating and emit valid IL. (Fixes #5966)
