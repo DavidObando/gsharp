@@ -1657,6 +1657,7 @@ internal partial class OverloadResolver {
                     replacements[slot] = inputAddress.Update(
                         CapturedInputRewriter(inputTemps).Rewrite(inputAddress.Operand)
                     )
+                    sourceCaptures[sourceIndex] = replacements[slot]
                     continue
                 }
                 argument = RewriteHandlerForwardedArguments(argument, sourceCaptures)
@@ -1690,7 +1691,6 @@ internal partial class OverloadResolver {
                 let temp = LocalVariableSymbol("<>namedArg$sourceIndex", isReadOnly: true, captureType ?? argument.Type)
                 evaluations.Add(BoundVariableDeclaration(argument.Syntax, temp, argument))
                 let tempLoad BoundExpression = BoundVariableExpression(argument.Syntax, temp)
-                sourceCaptures[sourceIndex] = tempLoad
                 var replacement = tempLoad
                 if addressCapturedValue {
                     replacement = BoundAddressOfExpression(argument.Syntax, replacement)
@@ -1700,6 +1700,8 @@ internal partial class OverloadResolver {
                         BoundDereferenceExpression(argument.Syntax, replacement)
                     )
                 }
+                // Handler forwarding must use the final argument, including any captured address.
+                sourceCaptures[sourceIndex] = replacement
                 replacements[slot] = replacement
             }
             let carrier = parameterOffset

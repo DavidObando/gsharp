@@ -73,6 +73,47 @@ RefApi.WriteRef(ref value, $"p{Effects.Hole("x")}");
 RefApi.WriteIn(in value, $"p{Effects.Hole("y")}")`, "CRef;Lp;Hx;Fx;WRefFalse;CInFalse;WInFalse;|0/1/2/0/0", ReferenceLibrary)
     }
 
+    @Theory
+    @InlineData(false, false, "I0;CRef;Lp;Hx;Fx;WRefFalse;AFalse/True/True/True;N1;R0;BTrue/True;|0/1/2/0/0")
+    @InlineData(true, false, "R0;CRef;Lp;Hx;Fx;WRefFalse;ATrue/True/True/True;N0;R1;BFalse/True;|0/1/2/0/0")
+    @InlineData(false, true, "I0;T;CRef;Lp;Hx;Fx;WTag7/False;AFalse/True/True/True;N1;R0;BTrue/True;|0/1/2/0/0")
+    @InlineData(true, true, "R0;T;CRef;Lp;Hx;Fx;WTag7/False;ATrue/True/True/True;N0;R1;BFalse/True;|0/1/2/0/0")
+    func ForwardedRefAddress_UsesCapturedInputs_OnceInSourceOrder(field bool, named bool, expected string) {
+        let target = if field {
+            "AddressEffects.NextCell().Value"
+        } else {
+            "values[AddressEffects.NextIndex()]"
+        }
+        let call = if named {
+            "AddressEffects.WriteTagged(value: ref " + target + ", tag: AddressEffects.Tag(), handler: "
+        } else {
+            "RefApi.WriteRef(ref " + target + ", "
+        }
+        AssertParity("var values = AddressEffects.Values\n" + call + `"p${Effects.Hole("x")}")
+AddressEffects.Dump()`, "var values = AddressEffects.Values;\n" + call + `$"p{Effects.Hole("x")}");
+AddressEffects.Dump()`, expected, ReferenceLibrary + AddressLibrary)
+    }
+
+    @Fact
+    func DistinctRefArguments_WithIdenticalSyntax_KeepDistinctCapturedAddresses() {
+        AssertParity(`var values = AddressEffects.Values
+AddressEffects.WritePair(ref values[AddressEffects.NextIndex()], ref values[AddressEffects.NextIndex()], "p${Effects.Hole("x")}")
+AddressEffects.Dump()`, `var values = AddressEffects.Values;
+AddressEffects.WritePair(ref values[AddressEffects.NextIndex()], ref values[AddressEffects.NextIndex()], $"p{Effects.Hole("x")}");
+AddressEffects.Dump()`, "I0;I1;CPair;Lp;Hx;Fx;WPairFalse/True;AFalse/True/True/True;N2;R0;BTrue/True;|0/1/2/0/0", ReferenceLibrary +
+                AddressLibrary)
+    }
+
+    @Fact
+    func ImplicitInValue_ForwardsTheCapturedReadOnlyAddress_NotItsValue() {
+        AssertParity(
+            `RefApi.WriteIn(Effects.Flag("E", true), "p${Effects.Hole("x")}")`,
+            `RefApi.WriteIn(Effects.Flag("E", true), $"p{Effects.Hole("x")}")`,
+            "E;CInTrue;Lp;Hx;Fx;WInTrue;|1/1/2/0/0",
+            ReferenceLibrary
+        )
+    }
+
     shared {
         private func AssertParity(gsharp string, csharp string, expected string, additionalLibrary string = "") {
             using let fixture = NativeSliceLanguageTests.Fixture()
@@ -176,6 +217,34 @@ public static class RefApi {
         [InterpolatedStringHandlerArgument("value")] RefHandler handler) { Effects.Trace += $"WRef{value};"; }
     public static void WriteIn(in bool value,
         [InterpolatedStringHandlerArgument("value")] InHandler handler) { Effects.Trace += $"WIn{value};"; }
+}`
+
+        private const AddressLibrary string = `
+public sealed class AddressCell { public bool Value = true; }
+[InterpolatedStringHandler]
+public struct PairRefHandler {
+    public PairRefHandler(int literalLength, int formattedCount, ref bool first, ref bool second, out bool shouldAppend) {
+        first = false; second = true; shouldAppend = true; Effects.Trace += "CPair;";
+    }
+    public void AppendLiteral(string value) { Effects.Appends++; Effects.Trace += "L" + value + ";"; }
+    public void AppendFormatted(string value) { Effects.Appends++; Effects.Trace += "F" + value + ";"; }
+}
+public static class AddressEffects {
+    public static bool[] Values = { true, true, true, true };
+    public static AddressCell[] Cells = { new AddressCell(), new AddressCell() };
+    public static int Indices, Receivers;
+    public static int NextIndex() { Effects.Trace += $"I{Indices};"; return Indices++; }
+    public static AddressCell NextCell() { Effects.Trace += $"R{Receivers};"; return Cells[Receivers++]; }
+    public static int Tag() { Effects.Trace += "T;"; return 7; }
+    public static void WriteTagged(int tag, ref bool value,
+        [InterpolatedStringHandlerArgument("value")] RefHandler handler) { Effects.Trace += $"WTag{tag}/{value};"; }
+    public static void WritePair(ref bool first, ref bool second,
+        [InterpolatedStringHandlerArgument("first", "second")] PairRefHandler handler) {
+        Effects.Trace += $"WPair{first}/{second};";
+    }
+    public static void Dump() {
+        Effects.Trace += $"A{Values[0]}/{Values[1]}/{Values[2]}/{Values[3]};N{Indices};R{Receivers};B{Cells[0].Value}/{Cells[1].Value};";
+    }
 }`
     }
 }
