@@ -19,6 +19,21 @@ import Xunit
 /// before (no per-segment outer arguments).
 open class Issue1506PerSegmentTypeArgumentParserTests {
     @Fact
+    func Issue5983_AliasRecordsEveryConstructedSegment() {
+        let tree = SyntaxTree.Parse("type Parent = Outer[int32].Middle[string].Base[int64]\n")
+        Assert.Empty(tree.Diagnostics)
+        let alias = Assert.IsType[TypeAliasDeclarationSyntax](Assert.Single(tree.Root.Members))
+        let type = alias.AliasedType
+        Assert.Equal("Outer.Middle.Base", type.DottedName)
+        Assert.Equal(3, type.SegmentCount)
+        Assert.Equal("int32", Assert.Single(type.GetSegmentTypeArguments(0)!!).Identifier!!.Text)
+        Assert.Equal("string", Assert.Single(type.GetSegmentTypeArguments(1)!!).Identifier!!.Text)
+        Assert.Equal("int64", Assert.Single(type.GetSegmentTypeArguments(2)!!).Identifier!!.Text)
+        Assert.Equal("Outer", type.GetFirstToken().Text)
+        Assert.Equal("]", type.GetLastToken().Text)
+    }
+
+    @Fact
     func ListEnumerator_RecordsOuterSegmentTypeArguments() {
         // `List[int32].Enumerator` — the single argument list attaches to the
         // OUTER (`List`) segment, and the last (`Enumerator`) segment carries
