@@ -2459,17 +2459,19 @@ internal partial class OverloadResolver {
                 // operand/pointee type must match the parameter's pointee type.
                 if argument is BoundAddressOfExpression addr {
                     let operandType = addr.Operand.Type
-                    // ADR-0060: an inline-decl `out var n` / `out let n` / `out _`
-                    // was bound with TypeSymbol.Error in the first pass because
-                    // the parameter was unknown. Re-bind now that overload
-                    // resolution has chosen the function and the parameter
-                    // pointee type is known.
-                    if operandType == TypeSymbol.Error &&
-                        i < parameterSyntax.Length &&
-                        parameterSyntax[i] is RefArgumentExpressionSyntax refArgFixup &&
-                        refArgFixup.IsInlineDeclaration &&
-                        refArgFixup.DeclaredType == nil {
-                        boundArguments[i] = bindRefArgumentExpression(refArgFixup, parameter)
+                    // Use the substituted pointee, as instance and qualified static calls do.
+                    if argSyntax is {} inlineOutSyntax &&
+                        tryRebindInlineOutVarPlaceholder(
+                        argument,
+                        inlineOutSyntax,
+                        parameter,
+                        Invariant.Required(
+                            expectedType,
+                            "a bound parameter has a target type",
+                            expression: "expectedType"
+                        )
+                    ) is {} reboundOutVar {
+                        boundArguments[i] = reboundOutVar
                         continue
                     }
                     let refArgumentLocation = Invariant.Required(

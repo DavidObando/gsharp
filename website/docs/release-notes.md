@@ -16,6 +16,7 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Infer inline `out` locals from substituted generic function parameters, preserving closed reference and value types and caller type parameters. (Fixes #5971)
 - Share local default-value and deconstruction reachability through sparse alias dependencies and finite tuple-index summaries, including reassigned locals, split aliases, loop-carried cycles and tuple-unboxing cycles. (Fixes #5633)
 
 - Preserve nullable tuple leaves in generic indexer writes in `cs2gs`, instead of inserting runtime null assertions. (Part of #5948)
