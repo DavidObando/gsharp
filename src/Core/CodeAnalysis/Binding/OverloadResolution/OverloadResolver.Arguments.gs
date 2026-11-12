@@ -1049,6 +1049,7 @@ internal partial class OverloadResolver {
                     }
                     continue
                 }
+                argument = CanonicalizeCapturedArgument(argument)
                 let temp = LocalVariableSymbol("<>expandedNamedArg$sourceIndex", isReadOnly: true, argument.Type)
                 evaluations.Add(BoundVariableDeclaration(argument.Syntax, temp, argument))
                 let tempLoad BoundExpression = BoundVariableExpression(argument.Syntax, temp)
@@ -1120,6 +1121,19 @@ internal partial class OverloadResolver {
             return false
         }
 
+        private func CanonicalizeCapturedArgument(argument BoundExpression) BoundExpression {
+            // Managed-reference declarations must use the address-of form consumed by RefInitializationHoister.
+            if argument.Type is ByRefTypeSymbol && argument is not BoundAddressOfExpression {
+                return BoundAddressOfExpression(
+                    argument.Syntax,
+                    BoundDereferenceExpression(argument.Syntax, argument),
+                    unmanaged: false,
+                    isReadOnly: RefCapabilities.IsReadOnlyStorage(argument)
+                )
+            }
+            return argument
+        }
+
         private func RewriteHandlerForwardedArguments(
             argument BoundExpression,
             sourceCaptures IReadOnlyDictionary[int32, BoundExpression]
@@ -1142,22 +1156,31 @@ internal partial class OverloadResolver {
                     if !DeclarationBinder.TypeSignaturesEquivalent(captured.Type, parameterType) {
                         captured = BoundConversionExpression(captured.Syntax, parameterType, captured)
                     }
-                } else if captured.Type is not ByRefTypeSymbol && RefCapabilities.GetParameterRefKind(
-                    constructorParameters[2 + i]
-                ) == RefKind
-                    .In {
+                } else if RefCapabilities.GetParameterRefKind(constructorParameters[2 + i]) == RefKind.In {
                     var parameterType = ClrNullability.GetParameterTypeSymbol(constructorParameters[2 + i])
                     if TypeSymbol.TryGetPointeeType(parameterType, out var pointeeType) {
                         parameterType = pointeeType
                     }
-                    if !DeclarationBinder.TypeSignaturesEquivalent(captured.Type, parameterType) {
-                        captured = BoundConversionExpression(captured.Syntax, parameterType, captured)
-                    }
-                    captured = ConversionClassifier.CreateImplicitInTemporary(
-                        captured,
+                    let storageType = ByRefStorageMatching.TryGetStorageType(captured, RefKind.In)
+                    if storageType == nil || !ByRefStorageMatching.AreSameStorageType(
+                        storageType,
                         parameterType,
-                        "<inArgumentHandler${sourceIndex}_$i>"
-                    )
+                        out _,
+                        out _,
+                        out _
+                    ) {
+                        if captured.Type is ByRefTypeSymbol {
+                            captured = BoundDereferenceExpression(captured.Syntax, captured)
+                        }
+                        if !DeclarationBinder.TypeSignaturesEquivalent(captured.Type, parameterType) {
+                            captured = BoundConversionExpression(captured.Syntax, parameterType, captured)
+                        }
+                        captured = ConversionClassifier.CreateImplicitInTemporary(
+                            captured,
+                            parameterType,
+                            "<inArgumentHandler${sourceIndex}_$i>"
+                        )
+                    }
                 }
                 forwarded ??= handler.ForwardedArguments.ToBuilder()
                 forwarded!![i] = captured
@@ -1680,6 +1703,7 @@ internal partial class OverloadResolver {
                     )
                     continue
                 }
+                argument = CanonicalizeCapturedArgument(argument)
                 let temp = LocalVariableSymbol("<>namedArg$sourceIndex", isReadOnly: true, captureType ?? argument.Type)
                 evaluations.Add(BoundVariableDeclaration(argument.Syntax, temp, argument))
                 let tempLoad BoundExpression = BoundVariableExpression(argument.Syntax, temp)

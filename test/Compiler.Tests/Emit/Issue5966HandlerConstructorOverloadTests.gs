@@ -209,6 +209,74 @@ RefApi.WriteIn(value, "p${(value = false).ToString()}")`, `bool value = true;
 RefApi.WriteIn(value, $"p{(value = false).ToString()}")`, "CInTrue;Lp;FFalse;WInFalse;|0/0/2/0/0", ReferenceLibrary)
     }
 
+    @Fact
+    func CapturedInSource_ConvertsToDifferentSelectedInPointee_Once() {
+        AssertParity(`BoundaryEffects.WriteInWideSource(BoundaryEffects.Number(), "p${Effects.Hole("x")}")`, `var value = BoundaryEffects.Number();
+long converted = value;
+var handler = new WideInHandler(1, 1, in converted, out bool gate);
+if (gate) { handler.AppendLiteral("p"); handler.AppendFormatted(Effects.Hole("x")); }
+BoundaryEffects.WriteInWideSource(in value, handler)`, "N;IW7;Lp;Hx;Fx;WValue7;|0/1/2/0/0", ReferenceLibrary +
+                AddressLibrary +
+                BoundaryLibrary)
+    }
+
+    @Theory
+    @InlineData(true, false, "QTrue;L;P;SFalse;G;C7/11;D11;1/1/0/1;|0/0/0/0/0")
+    @InlineData(false, false, "QFalse;R;P;SFalse;G;C7/22;D22;1/0/1/1;|0/0/0/0/0")
+    @InlineData(true, true, "QTrue;L;FTrue;NullReferenceException;D-1;1/1/0/0;|0/0/0/0/0")
+    func ConditionalInCapture_PreservesSelectedStorage_AcrossRealSuspension(choose bool, fault bool, expected string) {
+        let selection = if choose {
+            "true"
+        } else {
+            "false"
+        }
+        let holder = if fault {
+            "SuspensionEffects.Missing"
+        } else {
+            "SuspensionEffects.Original"
+        }
+        let finish = if fault {
+            `SuspensionEffects.RecordFault(pending.IsCompleted)
+try { pending.GetAwaiter().GetResult() } catch (ex Exception) { Effects.Trace += ex.GetType().Name + ";" }
+SuspensionEffects.Dump(-1)`
+        } else {
+            `SuspensionEffects.RecordPending(pending.IsCompleted)
+holder = SuspensionEffects.Replacement
+choose = !choose
+SuspensionEffects.Release()
+SuspensionEffects.Dump(pending.GetAwaiter().GetResult())`
+        }
+        let nativeFinish = if fault {
+            `SuspensionEffects.RecordFault(pending.IsCompleted);
+try { pending.GetAwaiter().GetResult(); } catch (System.Exception ex) { Effects.Trace += ex.GetType().Name + ";"; }
+SuspensionEffects.Dump(-1)`
+        } else {
+            `SuspensionEffects.RecordPending(pending.IsCompleted);
+holder = SuspensionEffects.Replacement;
+choose = !choose;
+SuspensionEffects.Release();
+SuspensionEffects.Dump(pending.GetAwaiter().GetResult())`
+        }
+        AssertParity("var holder = " + holder + "\nvar choose = " + selection + `
+async func Run() int32 {
+    return SuspensionEffects.Consume(
+        value: in (SuspensionEffects.Choose(choose) ? SuspensionEffects.Left(holder).A : SuspensionEffects.Right(holder).B),
+        tag: await SuspensionEffects.Pause())
+}
+let pending = Run()
+` + finish, "var holder = " + holder + ";\nbool choose = " + selection + `;
+async System.Threading.Tasks.Task<int> Run() {
+    bool selected = SuspensionEffects.Choose(choose);
+    var captured = selected ? SuspensionEffects.Left(holder) : SuspensionEffects.Right(holder);
+    if (selected) SuspensionEffects.Validate(in captured.A);
+    else SuspensionEffects.Validate(in captured.B);
+    int tag = await SuspensionEffects.Pause();
+    return SuspensionEffects.Consume(tag, in (selected ? ref captured.A : ref captured.B));
+}
+var pending = Run();
+` + nativeFinish, expected, SuspensionLibrary)
+    }
+
     shared {
         private func AssertParity(gsharp string, csharp string, expected string, additionalLibrary string = "") {
             using let fixture = NativeSliceLanguageTests.Fixture()
@@ -401,6 +469,8 @@ public static class BoundaryEffects {
         [InterpolatedStringHandlerArgument("value")] InHandler handler) { Effects.Trace += $"WValue{value};"; }
     public static void WriteInWide(int value,
         [InterpolatedStringHandlerArgument("value")] WideInHandler handler) { Effects.Trace += $"WValue{value};"; }
+    public static void WriteInWideSource(in int value,
+        [InterpolatedStringHandlerArgument("value")] WideInHandler handler) { Effects.Trace += $"WValue{value};"; }
     public static void WriteObject(int tag, ref object value,
         [InterpolatedStringHandlerArgument("value")] ObjectRefHandler handler) { }
     public static void WriteChoice(bool enabled, ref bool append,
@@ -409,6 +479,36 @@ public static class BoundaryEffects {
     }
     public static void DumpCaller(bool append) { Effects.Trace += $"Caller{append};"; }
     public static void DumpTags() { Effects.Trace += $"Tags{AddressEffects.Tags};"; }
+}`
+
+        private const SuspensionLibrary string = `
+public sealed class SuspensionCell {
+    public readonly int A, B;
+    public SuspensionCell(int a, int b) { A = a; B = b; }
+}
+public static class SuspensionEffects {
+    private static readonly System.Threading.Tasks.TaskCompletionSource<int> Gate =
+        new(System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously);
+    public static SuspensionCell Original = new(11, 22);
+    public static SuspensionCell Replacement = new(91, 92);
+    public static SuspensionCell Missing => null!;
+    public static int Choices, Lefts, Rights, Pauses;
+    public static bool Choose(bool value) { Choices++; Effects.Trace += $"Q{value};"; return value; }
+    public static SuspensionCell Left(SuspensionCell value) { Lefts++; Effects.Trace += "L;"; return value; }
+    public static SuspensionCell Right(SuspensionCell value) { Rights++; Effects.Trace += "R;"; return value; }
+    public static System.Threading.Tasks.Task<int> Pause() { Pauses++; Effects.Trace += "P;"; return Gate.Task; }
+    public static void Release() { Effects.Trace += "G;"; Gate.SetResult(7); }
+    public static void RecordPending(bool completed) {
+        Effects.Trace += $"S{completed};";
+        if (completed) throw new System.InvalidOperationException("The await must suspend.");
+    }
+    public static void RecordFault(bool completed) {
+        Effects.Trace += $"F{completed};";
+        if (!completed) Release();
+    }
+    public static void Validate(in int value) { }
+    public static int Consume(int tag, in int value) { Effects.Trace += $"C{tag}/{value};"; return value; }
+    public static void Dump(int value) { Effects.Trace += $"D{value};{Choices}/{Lefts}/{Rights}/{Pauses};"; }
 }`
     }
 }
