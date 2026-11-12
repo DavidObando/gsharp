@@ -6365,7 +6365,10 @@ partial class CSharpToGSharpTranslator {
         ) ITypeSymbol? {
             var sink = sink
             let tupleIndices = List[int32]()
-            let node Microsoft.CodeAnalysis.SyntaxNode? = OutermostTransparentNode(value, tupleIndices)
+            // An assignment consumes its operand before its result reaches any outer destination.
+            let node Microsoft
+                .CodeAnalysis
+                .SyntaxNode? = OutermostTransparentNode(value, tupleIndices, stopAtAssignment: true)
             var sinkType ITypeSymbol? = sinkTypeOverride ?? ObliviousNullabilityAnalyzer.SymbolValueType(sink)
             sinkType ??= if node is TupleExpressionSyntax containingTuple {
                 this.context.GetTypeInfo(containingTuple).ConvertedType
@@ -6373,9 +6376,13 @@ partial class CSharpToGSharpTranslator {
                 default(ITypeSymbol?)
             }
             let path = List[int32]()
-            if node is Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax assignment && assignment.IsKind(
-                Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleAssignmentExpression
-            ) &&
+            if node!!.Parent is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .AssignmentExpressionSyntax assignment &&
+                assignment.Right == node &&
+                assignment.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleAssignmentExpression) &&
                 ObliviousNullabilityAnalyzer
                 .TryResolveTupleContainerSource(
                 assignment.Left,
