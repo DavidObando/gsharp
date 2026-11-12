@@ -22,6 +22,130 @@ import Xunit
 /// Tests for (cref:ReferenceResolver), the seam that `import`
 /// statements use to resolve CLR types.
 open class ReferenceResolverTests {
+    @Fact
+    func LoadedRuntimeImage_PathReplacementDoesNotUpgradeEffectTrust() {
+        let directory = Path.Combine(AppContext.BaseDirectory, "owned-runtime-provenance", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let runtime = Path.GetDirectoryName(typeof(object).Assembly.Location)!!
+            let runtimeVersion = DirectoryInfo(runtime).Name
+            let dotnetRoot = DirectoryInfo(runtime).Parent!!.Parent!!.Parent!!.FullName
+            let CopyTree = func (source string, destination string) {
+                for file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories) {
+                    let target = Path.Combine(destination, Path.GetRelativePath(source, file))
+                    Directory.CreateDirectory(Path.GetDirectoryName(target)!!)
+                    File.Copy(file, target)
+                }
+            }
+            let ownedRuntime = Path.Combine(directory, "shared", "Microsoft.NETCore.App", runtimeVersion)
+            CopyTree(runtime, ownedRuntime)
+            CopyTree(Path.Combine(dotnetRoot, "host", "fxr"), Path.Combine(directory, "host", "fxr"))
+            let executableName = if OperatingSystem.IsWindows() {
+                "dotnet.exe"
+            } else {
+                "dotnet"
+            }
+            let executable = Path.Combine(directory, executableName)
+            File.Copy(Path.Combine(dotnetRoot, executableName), executable)
+            let genuine = typeof(Enumerable).Assembly.GetName()
+            using let fake = CSharpFixture(
+                "[assembly:System.Reflection.AssemblyVersion(\"${genuine.Version}\")] namespace System.Custom { public static class Store { public static string? Value; } } namespace System.Linq { public static class Enumerable { public static System.Collections.Generic.IEnumerable<T> Empty<T>() { System.Custom.Store.Value = null; return System.Array.Empty<T>(); } } }",
+                assemblyName: genuine.Name,
+                publicKey: genuine.GetPublicKey().ToImmutableArray()
+            )
+            let path = Path.Combine(ownedRuntime, "OwnedUnverifiedImage.dll")
+            File.Copy(fake.AssemblyPath, path)
+            for file in Directory.EnumerateFiles(AppContext.BaseDirectory, "*.dll") {
+                File.Copy(file, Path.Combine(directory, Path.GetFileName(file)), overwrite: true)
+            }
+            let program = `
+using System;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Runtime.Loader;
+using System.Collections.Immutable;
+using GSharp.Core.CodeAnalysis.Symbols;
+public static class Probe {
+    public static void Main(string[] args) {
+        var path = args[0];
+        var owner = new Owner();
+        var loaded = owner.LoadFromAssemblyPath(path);
+        var store = loaded.GetType("System.Custom.Store", true)!;
+        store.GetField("Value")!.SetValue(null, "safe");
+        loaded.GetType("System.Linq.Enumerable", true)!.GetMethod("Empty")!.MakeGenericMethod(typeof(int)).Invoke(null, null);
+        var replacement = path + ".replacement";
+        File.Copy(typeof(Enumerable).Assembly.Location, replacement);
+        File.Move(replacement, path, true);
+        Console.WriteLine("identity:" + (loaded.FullName == AssemblyName.GetAssemblyName(path).FullName));
+        Console.WriteLine("effect:" + (store.GetField("Value")!.GetValue(null) == null ? "cleared" : "retained"));
+        Console.WriteLine("unverified:" + ReferenceResolver.IsTrustedEffectAssembly(loaded));
+        Console.WriteLine("canonical:" + ReferenceResolver.IsTrustedEffectAssembly(typeof(Enumerable).Assembly));
+        var ownedPath = path + ".owned.dll";
+        File.Copy(typeof(Enumerable).Assembly.Location, ownedPath);
+        using(var captured = ReferenceResolver.WithRuntimeReferences(new[] {ownedPath})) {
+            if(!captured.TryResolveType("System.Linq.Enumerable", out var selected)) throw new Exception("owned framework type missing");
+            Console.WriteLine("captured:" + ReferenceResolver.IsTrustedEffectAssembly(selected!.Assembly));
+        }
+        using var resolver = ReferenceResolver.WithRuntimeReferences(Array.Empty<string>(), ImmutableArray.Create(typeof(object).Assembly, loaded));
+        var source = "import System.Linq\nimport System.Custom\nfunc Guard(ref text string?) int32 {\n    if text == nil { return 0 }\n    let _ = Enumerable.Empty[int32]()\n    return text.Length\n}";
+        var compilation = new GSharp.Core.CodeAnalysis.Compilation.Compilation(resolver, GSharp.Core.CodeAnalysis.Syntax.SyntaxTree.Parse(source));
+        foreach(var diagnostic in compilation.GetDiagnostics())
+            Console.WriteLine(diagnostic.Id + "@" + (diagnostic.Location.StartLine + 1) + ":" + (diagnostic.Location.StartCharacter + 1));
+        using var authentic = ReferenceResolver.WithRuntimeReferences(Array.Empty<string>(), ImmutableArray.Create(typeof(object).Assembly, typeof(Enumerable).Assembly));
+        var control = new GSharp.Core.CodeAnalysis.Compilation.Compilation(authentic, GSharp.Core.CodeAnalysis.Syntax.SyntaxTree.Parse(source.Replace("import System.Custom\n", "")));
+        Console.WriteLine("authentic-errors:" + control.GetDiagnostics().Count(diagnostic => diagnostic.IsError));
+    }
+    private sealed class Owner : AssemblyLoadContext { public Owner() : base(true) {} }
+}`
+            let references = ReferenceResolver
+                .HostTrustedPlatformAssemblyPaths()
+                .Select((reference string) -> cast[MetadataReference](MetadataReference.CreateFromFile(reference)))
+                .Append(MetadataReference.CreateFromFile(typeof(ReferenceResolver).Assembly.Location))
+            let compilation = CSharpCompilation.Create(
+                "GSharp.Core.Tests",
+                []Microsoft.CodeAnalysis.SyntaxTree{CSharpSyntaxTree.ParseText(program)},
+                references,
+                CSharpCompilationOptions(OutputKind.ConsoleApplication)
+            )
+            let output = Path.Combine(directory, "GSharp.Core.Tests.dll")
+            {
+                using let image = File.Create(output)
+                let emitted = compilation.Emit(image)
+                Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics))
+            }
+            File.WriteAllText(
+                Path.ChangeExtension(output, ".runtimeconfig.json"),
+                "{\"runtimeOptions\":{\"tfm\":\"net10.0\",\"framework\":{\"name\":\"Microsoft.NETCore.App\",\"version\":\"$runtimeVersion\"}}}"
+            )
+            let start = ProcessStartInfo(executable){
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false
+            }
+            start.ArgumentList.Add(output)
+            start.ArgumentList.Add(path)
+            using let process = Process.Start(start) ?? throw InvalidOperationException("owned runtime did not start")
+            let stdout = process.StandardOutput.ReadToEndAsync()
+            let stderr = process.StandardError.ReadToEndAsync()
+            if !process.WaitForExit(60000) {
+                process.Kill(entireProcessTree: true)
+                Assert.Fail("owned runtime provenance probe timed out")
+            }
+            let text = stdout.GetAwaiter().GetResult() + stderr.GetAwaiter().GetResult()
+            Assert.True(process.ExitCode == 0, text)
+            Assert.Contains("identity:True", text)
+            Assert.Contains("effect:cleared", text)
+            Assert.Contains("unverified:False", text)
+            Assert.Contains("canonical:True", text)
+            Assert.Contains("captured:True", text)
+            Assert.Contains("GS0158@6:17", text)
+            Assert.Contains("authentic-errors:0", text)
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
     @Theory
     @InlineData("{}")
     @InlineData("{\"targets\":[]}")
@@ -148,7 +272,9 @@ open class ReferenceResolverTests {
             publicKey: host.GetPublicKey().ToImmutableArray()
         )
         Assert.Equal(host.FullName, AssemblyName.GetAssemblyName(replacement.AssemblyPath).FullName)
-        Assert.False(ReferenceResolver.IsTrustedHostAssemblyIdentity(host, replacement.AssemblyPath))
+        using let references = ReferenceResolver.WithReferences([]string{replacement.AssemblyPath})
+        Assert.True(references.TryResolveType("System.Custom.Store", out var type))
+        Assert.False(ReferenceResolver.IsTrustedEffectAssembly(type.Assembly))
         Assert.True(ReferenceResolver.IsTrustedEffectAssembly(typeof(Console).Assembly))
     }
 
@@ -159,12 +285,6 @@ open class ReferenceResolverTests {
             ReferenceResolver.HostTrustedPlatformAssemblyPaths()
         )
         Assert.False(ReferenceResolver.IsTrustedEffectAssembly(typeof(ReferenceResolverTests).Assembly))
-        Assert.False(
-            ReferenceResolver.IsTrustedHostAssemblyIdentity(
-                typeof(ReferenceResolverTests).Assembly.GetName(),
-                typeof(ReferenceResolverTests).Assembly.Location
-            )
-        )
     }
 
     @Fact

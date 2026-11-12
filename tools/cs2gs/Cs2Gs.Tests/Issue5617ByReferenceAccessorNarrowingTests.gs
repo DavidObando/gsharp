@@ -2616,6 +2616,103 @@ public static class Demo {
         )
     }
 
+    @Theory
+    @InlineData("add")
+    @InlineData("remove")
+    @InlineData("replace")
+    func RefParameter_ContextCatalogSnapshotRemainsCoherentAcrossCallerMutation(change string) {
+        let tree = CSharpSyntaxTree.ParseText(
+            "using System; public static class Demo { private static string? slot; private static void Clear() { slot = null; } private static int Guard(ref string? text) { if(text == null)return 0; Clear(); var items = Parts<string>(\"item\"); return text.Length + items[0].Length; } private static T[] Parts<T>(T value) => new[] {value}; public static string Run() { slot = \"safe\"; try { return Guard(ref slot).ToString(); } catch(NullReferenceException) { return \"cleared\"; } } }",
+            path: "CatalogRoot.cs"
+        )
+        let options = CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+            NullableContextOptions.Enable
+        )
+        let root = CSharpCompilation.Create(
+            "CatalogRoot5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences(),
+            options
+        )
+        let first = CSharpCompilation.Create(
+            "CatalogFirst5326",
+            []SyntaxTree{CSharpSyntaxTree.ParseText("public class First {}", path: "First.cs")},
+            CSharpProjectLoader.RuntimeReferences(),
+            options
+        )
+        let second = CSharpCompilation.Create(
+            "CatalogSecond5326",
+            []SyntaxTree{CSharpSyntaxTree.ParseText("public class Second {}", path: "Second.cs")},
+            CSharpProjectLoader.RuntimeReferences(),
+            options
+        )
+        let catalog = List[CSharpCompilation]{first}
+        let context = TranslationContext(
+            root,
+            root.GetSemanticModel(tree),
+            tree.FilePath,
+            siblingCompilations: catalog,
+            repositoryCompilations: catalog
+        )
+        let document = LoadedDocument(tree.FilePath, tree, context.SemanticModel)
+        let ownerIndex = context.OwnershipIndexIdentity
+        let effects = context.EffectIndexes
+        Assert.Same(first, context.SourceCompilation(first.Assembly))
+        let before = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+        if change == "add" {
+            catalog.Add(second)
+        } else if change == "remove" {
+            catalog.Clear()
+        } else {
+            catalog[0] = second
+        }
+        Assert.Same(first, Assert.Single(context.RepositoryCompilations!!))
+        Assert.Same(first, Assert.Single(context.SiblingCompilations!!))
+        Assert.Same(first, context.SourceCompilation(first.Assembly))
+        Assert.Null(context.SourceCompilation(second.Assembly))
+        Assert.Same(ownerIndex, context.OwnershipIndexIdentity)
+        Assert.Same(effects, context.EffectIndexes)
+        let after = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+        Assert.Equal(Encoding.UTF8.GetBytes(before), Encoding.UTF8.GetBytes(after))
+        let fresh = TranslationContext(
+            root,
+            root.GetSemanticModel(tree),
+            tree.FilePath,
+            siblingCompilations: catalog,
+            repositoryCompilations: catalog
+        )
+        Assert.Equal(catalog.Count, fresh.RepositoryCompilations!!.Count)
+        Assert.NotSame(ownerIndex, fresh.OwnershipIndexIdentity)
+        Assert.Equal(change == "add", fresh.SourceCompilation(first.Assembly) != nil)
+        Assert.Equal(change != "remove", fresh.SourceCompilation(second.Assembly) != nil)
+        for var index = 0; index < 48; index++ {
+            let peer = TranslationContext(
+                root,
+                root.GetSemanticModel(tree),
+                tree.FilePath,
+                siblingCompilations: catalog,
+                repositoryCompilations: catalog
+            )
+            Assert.Same(fresh.RepositoryCompilations, peer.RepositoryCompilations)
+            Assert.Same(fresh.SiblingCompilations, peer.SiblingCompilations)
+            Assert.Same(fresh.OwnershipIndexIdentity, peer.OwnershipIndexIdentity)
+            Assert.Same(fresh.EffectIndexes, peer.EffectIndexes)
+        }
+        let freshOutput = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, fresh))
+        let oldAgain = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+        Assert.Contains("return text!!.Length", after)
+        Assert.Equal(Encoding.UTF8.GetBytes(after), Encoding.UTF8.GetBytes(freshOutput))
+        Assert.Equal(Encoding.UTF8.GetBytes(after), Encoding.UTF8.GetBytes(oldAgain))
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("cleared"),
+            Encoding.UTF8.GetBytes(CompileAndRun(after, Array.Empty[byte]()).Trim())
+        )
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("cleared"),
+            Encoding.UTF8.GetBytes(CompileAndRun(freshOutput, Array.Empty[byte]()).Trim())
+        )
+    }
+
     @Fact
     func RefParameter_DocumentOwnershipIsLazySharedAndCatalogVersioned() {
         let trees = Enumerable

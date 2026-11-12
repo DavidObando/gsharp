@@ -448,6 +448,22 @@ Corrupt owned file inputs retain their original untrusted references and Roslyn
 diagnostics. File-input tests require cache-backed replacement and continued
 healthy snapshots; unchanged references alone are not snapshot evidence.
 
+Loaded runtime assemblies do not acquire trust from their current file paths.
+Only captured immutable load images or exact compiler-owned canonical CLR
+framework bindings establish runtime provenance. Identity metadata, MVIDs, paths,
+timestamps, and default-load-context membership alone do not establish trust.
+Unregistered assemblies remain untrusted after their original files change.
+
+A translation context captures one immutable catalog version, matching its
+immutable Roslyn compilation/model and per-document pass lifetime. Its public
+catalog readers, source owners, effect indexes, and projection queries use that
+same snapshot. Caller list mutation affects a new context, never part of an
+existing context. Snapshot arrays and completed indexes share weak root/catalog
+identity-and-version ownership, without copying catalogs per document. This
+preserves the pipeline's fresh-context-per-retranslation behavior and avoids
+invalidating live projection boundaries during a pass. Existing CLR constructor
+and semantic-model-scope overloads remain executable for compiled consumers.
+
 The original open-comparer corpus row `h1_by_ref_param_survives_calls` now records its exact rejection diagnostics.
 The disjoint out-parameter execution control re-proves its fact around unknown comparer calls.
 This keeps the disjoint-write coverage without assuming that an externally supplied comparer is pure.

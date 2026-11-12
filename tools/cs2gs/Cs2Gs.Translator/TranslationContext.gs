@@ -23,6 +23,7 @@ import System.Threading
 /// (cref:SemanticModel) so mapping code can resolve symbols
 /// (`GetDeclaredSymbol`, `GetSymbolInfo`, `GetTypeInfo`,
 /// data-flow) without threading the model through every call (ADR-0115 §A).
+/// Each context captures immutable compilation catalogs. Caller list changes require a new context.
 class TranslationContext {
     private let diagnostics List[TranslationDiagnostic] = List[TranslationDiagnostic]()
 
@@ -45,6 +46,7 @@ class TranslationContext {
     private let siblingCompilations IReadOnlyList[CSharpCompilation]?
 
     private let repositoryCompilations IReadOnlyList[CSharpCompilation]?
+    private let catalogSnapshot SourceCatalogSnapshot?
 
     private let rootCompilation CSharpCompilation
 
@@ -106,8 +108,14 @@ class TranslationContext {
         CacheSemanticModel(this.Compilation, this.SemanticModel)
         this.FilePath = filePath
         this.CancellationToken = cancellationToken
-        this.siblingCompilations = siblingCompilations
-        this.repositoryCompilations = repositoryCompilations
+        this.catalogSnapshot = CaptureSourceCatalog(
+            compilation,
+            siblingCompilations,
+            repositoryCompilations,
+            cancellationToken
+        )
+        this.siblingCompilations = this.catalogSnapshot?.Siblings
+        this.repositoryCompilations = this.catalogSnapshot?.Repository
         ObliviousNullabilityAnalyzer.RegisterSourceAssemblies(
             this.Compilation,
             this.repositoryCompilations ?? this.siblingCompilations
@@ -210,7 +218,9 @@ class TranslationContext {
     /// returned scope to restore the previous model.
     /// @param tree The syntax tree the next node(s) to resolve belong to.
     /// @returns A scope that restores the previous active model on (cref:IDisposable.Dispose).
-    func UseSemanticModelFor(tree SyntaxTree?, owner CSharpCompilation? = nil) IDisposable {
+    func UseSemanticModelFor(tree SyntaxTree?) IDisposable -> this.UseSemanticModelFor(tree, nil)
+
+    func UseSemanticModelFor(tree SyntaxTree?, owner CSharpCompilation?) IDisposable {
         if tree == nil {
             return NoOpScope.Instance
         }
@@ -287,44 +297,25 @@ class TranslationContext {
             }
         }
         let actual = this.actualOwners ?? throw InvalidOperationException("Missing source graph.")
-        if !includeCatalog || (this.repositoryCompilations == nil && this.siblingCompilations == nil) {
+        let snapshot = this.catalogSnapshot
+        if !includeCatalog || snapshot == nil {
             return actual
         }
         if this.catalogOwners == nil {
-            let root = SourceOwnershipByCompilation.GetOrCreateValue(this.rootCompilation)
-            let repositories = root.Catalogs.GetOrCreateValue(
-                if this.repositoryCompilations == nil {
-                    NoCatalog
-                } else {
-                    cast[object](this.repositoryCompilations)
-                }
-            )
-            let publication = repositories.Siblings.GetOrCreateValue(
-                if this.siblingCompilations == nil {
-                    NoCatalog
-                } else {
-                    cast[object](this.siblingCompilations)
-                }
-            )
-            lock publication {
-                if publication.Index == nil ||
-                    !SameCompilations(publication.RepositoryVersion, this.repositoryCompilations) ||
-                    !SameCompilations(publication.SiblingVersion, this.siblingCompilations) {
-                    let repositories = (
-                        this.repositoryCompilations ?? Array.Empty[CSharpCompilation]()
-                    ).ToImmutableArray()
-                    let siblings = (this.siblingCompilations ?? Array.Empty[CSharpCompilation]()).ToImmutableArray()
+            lock snapshot {
+                if snapshot.Index == nil {
                     let index = SourceOwnershipIndex(
-                        actual.Compilations.Concat(repositories).Concat(siblings),
+                        actual
+                            .Compilations
+                            .Concat(snapshot.Repository ?? Array.Empty[CSharpCompilation]())
+                            .Concat(snapshot.Siblings ?? Array.Empty[CSharpCompilation]()),
                         this.CancellationToken,
                         this.BeforeOwnershipTree
                     )
                     this.CancellationToken.ThrowIfCancellationRequested()
-                    publication.RepositoryVersion = repositories
-                    publication.SiblingVersion = siblings
-                    publication.Index = index
+                    snapshot.Index = index
                 }
-                this.catalogOwners = publication.Index
+                this.catalogOwners = snapshot.Index
             }
         }
         return this.catalogOwners ?? throw InvalidOperationException("Missing source catalog.")
@@ -393,14 +384,23 @@ class TranslationContext {
 
     private class SourceOwnershipPublication {
         var Index SourceOwnershipIndex?
-        var RepositoryVersion IReadOnlyList[CSharpCompilation]?
-        var SiblingVersion IReadOnlyList[CSharpCompilation]?
+        var Snapshot SourceCatalogSnapshot?
         let Catalogs ConditionalWeakTable[object, SourceCatalogs] = ConditionalWeakTable[object, SourceCatalogs]()
     }
 
     private class SourceCatalogs {
         let Siblings ConditionalWeakTable[object, SourceOwnershipPublication] =
         ConditionalWeakTable[object, SourceOwnershipPublication]()
+    }
+
+    private class SourceCatalogSnapshot {
+        init(siblings IReadOnlyList[CSharpCompilation]?, repository IReadOnlyList[CSharpCompilation]?) {
+            this.Siblings = siblings
+            this.Repository = repository
+        }
+        let Siblings IReadOnlyList[CSharpCompilation]?
+        let Repository IReadOnlyList[CSharpCompilation]?
+        var Index SourceOwnershipIndex?
     }
 
     /// Resolves the declared symbol for a declaration node via the active model.
@@ -555,6 +555,56 @@ class TranslationContext {
         private let SourceOwnershipByCompilation ConditionalWeakTable[CSharpCompilation, SourceOwnershipPublication] =
         ConditionalWeakTable[CSharpCompilation, SourceOwnershipPublication]()
         private let NoCatalog object = System.Object()
+
+        private func CaptureSourceCatalog(
+            root CSharpCompilation,
+            siblings IReadOnlyList[CSharpCompilation]?,
+            repository IReadOnlyList[CSharpCompilation]?,
+            cancellationToken CancellationToken
+        ) SourceCatalogSnapshot? {
+            if siblings == nil && repository == nil {
+                return nil
+            }
+            let owner = SourceOwnershipByCompilation.GetOrCreateValue(root)
+            let repositories = owner.Catalogs.GetOrCreateValue(
+                if repository == nil {
+                    NoCatalog
+                } else {
+                    cast[object](repository)
+                }
+            )
+            let publication = repositories.Siblings.GetOrCreateValue(
+                if siblings == nil {
+                    NoCatalog
+                } else {
+                    cast[object](siblings)
+                }
+            )
+            lock publication {
+                let prior = publication.Snapshot
+                if prior != nil &&
+                    SameCompilations(prior.Repository, repository) &&
+                    SameCompilations(prior.Siblings, siblings) {
+                    return prior
+                }
+                let repositoryVersion IReadOnlyList[CSharpCompilation]? =
+                if repository == nil {
+                    nil
+                } else {
+                    repository.ToImmutableArray()
+                }
+                let siblingVersion IReadOnlyList[CSharpCompilation]? =
+                if siblings == nil {
+                    nil
+                } else {
+                    siblings.ToImmutableArray()
+                }
+                cancellationToken.ThrowIfCancellationRequested()
+                let snapshot = SourceCatalogSnapshot(siblingVersion, repositoryVersion)
+                publication.Snapshot = snapshot
+                return snapshot
+            }
+        }
 
         private func SameCompilations(
             left IReadOnlyList[CSharpCompilation]?,

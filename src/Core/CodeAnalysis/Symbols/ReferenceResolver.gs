@@ -1600,30 +1600,13 @@ class ReferenceResolver : IDisposable {
         /// @returns The host's trusted-platform assembly paths.
         func HostTrustedPlatformAssemblyPaths() IReadOnlyList[string] -> GetHostTrustedPlatformAssemblies()
 
-        /// Verifies supported framework images against installed runtime or reference-pack images, not supplied identity metadata.
-        internal func IsTrustedHostAssemblyIdentity(name AssemblyName, originalPath string?) bool {
-            if string.IsNullOrEmpty(originalPath) || !TrustedEffectImages.Value.TryGetValue(
-                name.FullName,
-                out var hashes
-            ) {
-                return false
-            }
-            try {
-                CompilationMeasurements.Count("reference.effect-image-hashes")
-                using let image = File.OpenRead(originalPath)
-                let hash = Convert.ToHexString(SHA256.HashData(image))
-                return hashes.Contains(hash)
-            } catch (error IOException) {
-                return false
-            } catch (error UnauthorizedAccessException) {
-                return false
-            }
-        }
-
         internal func IsTrustedEffectImage(name AssemblyName, fingerprint string) bool ->
         TrustedEffectImages.Value.TryGetValue(name.FullName, out var hashes) && hashes.Contains(fingerprint)
 
         internal func IsTrustedEffectAssembly(assembly Assembly) bool {
+            if CanonicalRuntimeEffectAnchors.Contains(assembly) {
+                return true
+            }
             let name = assembly.GetName()
             if !TrustedEffectImages.Value.TryGetValue(name.FullName, out var hashes) {
                 return false
@@ -1634,34 +1617,23 @@ class ReferenceResolver : IDisposable {
             if RuntimeEffectFingerprints.TryGetValue(assembly, out var runtimeFingerprint) {
                 return hashes.Contains(runtimeFingerprint.Value)
             }
-            let runtimeDirectory = Path.GetDirectoryName(typeof(object).Assembly.Location)
-            try {
-                if AssemblyLoadContext.GetLoadContext(assembly) == nil ||
-                    runtimeDirectory == nil ||
-                    Path.GetDirectoryName(assembly.Location) != runtimeDirectory {
-                    return false
-                }
-                let fingerprint = RuntimeEffectFingerprints.GetValue(
-                    assembly,
-                    (key Assembly) -> Lazy[string](
-                        () -> {
-                            CompilationMeasurements.Count("reference.effect-image-hashes")
-                            using let image = File.OpenRead(key.Location)
-                            return Convert.ToHexString(SHA256.HashData(image))
-                        }
-                    )
-                )
-                return hashes.Contains(fingerprint.Value)
-            } catch (error NotSupportedException) {
-                return false
-            } catch (error ArgumentException) {
-                return false
-            } catch (error IOException) {
-                return false
-            } catch (error UnauthorizedAccessException) {
-                return false
-            }
+            return false
         }
+
+        // These exact CLR bindings belong to the compiler's runtime, not an assembly found by name or path.
+        private let CanonicalRuntimeEffectAnchors ImmutableHashSet[Assembly] = ImmutableHashSet.Create[Assembly](
+            ReferenceEqualityComparer.Instance,
+            typeof(object).Assembly,
+            typeof(Enumerable).Assembly,
+            typeof(Console).Assembly,
+            typeof(ImmutableArray[int32]).Assembly,
+            typeof(System.Collections.Concurrent.ConcurrentDictionary[string, object]).Assembly,
+            typeof(System.Collections.ObjectModel.Collection[object]).Assembly,
+            typeof(System.Collections.Specialized.NameValueCollection).Assembly,
+            typeof(System.Text.RegularExpressions.Regex).Assembly,
+            typeof(System.Numerics.BigInteger).Assembly,
+            typeof(Uri).Assembly
+        )
 
         private let TrustedEffectImages Lazy[Dictionary[string, HashSet[string]]] =
         Lazy[Dictionary[string, HashSet[string]]](BuildTrustedEffectImages)

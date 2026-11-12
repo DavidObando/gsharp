@@ -25,8 +25,10 @@ import Xunit
 /// hand-written source file merely because its name matches a generated-file
 /// pattern (it must check for an actual generated marker instead).
 open class CSharpProjectLoaderDiagnosticsTests {
-    @Fact
-    func CompiledFiveArgumentContextConsumer_RetainsItsConstructorAbi() {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func CompiledFiveArgumentContextConsumer_RetainsItsConstructorAbi(useScope bool) {
         let nativeAssembly = typeof(TranslationContext).Assembly
         let name = nativeAssembly.GetName()
         let references = CSharpProjectLoader
@@ -58,12 +60,17 @@ open class CSharpProjectLoaderDiagnosticsTests {
         }
         let contract = Emit(
             name.Name!!,
-            "[assembly:System.Reflection.AssemblyVersion(\"${name.Version}\")] namespace Cs2Gs.Translator { public class TranslationContext { public TranslationContext(Microsoft.CodeAnalysis.CSharp.CSharpCompilation c, Microsoft.CodeAnalysis.SemanticModel m, string p, System.Collections.Generic.IReadOnlyList<Microsoft.CodeAnalysis.CSharp.CSharpCompilation> siblings, System.Collections.Generic.IReadOnlyList<Microsoft.CodeAnalysis.CSharp.CSharpCompilation> repository) {} } }",
+            "[assembly:System.Reflection.AssemblyVersion(\"${name.Version}\")] namespace Cs2Gs.Translator { public class TranslationContext { public TranslationContext(Microsoft.CodeAnalysis.CSharp.CSharpCompilation c, Microsoft.CodeAnalysis.SemanticModel m, string p, System.Collections.Generic.IReadOnlyList<Microsoft.CodeAnalysis.CSharp.CSharpCompilation> siblings, System.Collections.Generic.IReadOnlyList<Microsoft.CodeAnalysis.CSharp.CSharpCompilation> repository) {} public System.IDisposable UseSemanticModelFor(Microsoft.CodeAnalysis.SyntaxTree tree) => null; } }",
             references
         )
+        let body = if useScope {
+            "var context = new Cs2Gs.Translator.TranslationContext(c, m, \"Consumer.cs\", null, null); using(context.UseSemanticModelFor(m.SyntaxTree)) { return context; }"
+        } else {
+            "return new Cs2Gs.Translator.TranslationContext(c, m, \"Consumer.cs\", null, null);"
+        }
         let consumer = Emit(
             "FiveArgumentContextConsumer5326",
-            "public static class Consumer { public static object Create(Microsoft.CodeAnalysis.CSharp.CSharpCompilation c, Microsoft.CodeAnalysis.SemanticModel m) => new Cs2Gs.Translator.TranslationContext(c, m, \"Consumer.cs\", null, null); }",
+            "public static class Consumer { public static object Create(Microsoft.CodeAnalysis.CSharp.CSharpCompilation c, Microsoft.CodeAnalysis.SemanticModel m) { $body } }",
             references.Append(cast[MetadataReference](MetadataReference.CreateFromImage(contract)))
         )
         let tree = CSharpSyntaxTree.ParseText("public class C {}", path: "Consumer.cs")
