@@ -16,6 +16,7 @@ import System.Collections.Immutable
 import System.Diagnostics
 import System.IO
 import System.Linq
+import System.Runtime.Loader
 import System.Threading.Tasks
 import Xunit
 
@@ -25,13 +26,154 @@ import Xunit
 /// pattern (it must check for an actual generated marker instead).
 open class CSharpProjectLoaderDiagnosticsTests {
     @Fact
+    async func SnapshotGraph_DoesNotRebindMemoryImageToItsSuppliedDiskPath() {
+        let source = CSharpCompilation.Create(
+            "MemoryOnly5326",
+            []SyntaxTree{
+                CSharpSyntaxTree.ParseText(
+                    "public static class MemoryOnly { public static string? Value; public static void Clear() { Value = null; } public static int Selected(int value) => value; }"
+                )
+            },
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+                NullableContextOptions.Enable
+            )
+        )
+        using let image = MemoryStream()
+        let emitted = source.Emit(image)
+        Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics))
+        let properties = MetadataReferenceProperties.Assembly.WithAliases(
+            ImmutableArray.Create("global", "MemoryAlias")
+        )
+        let reference = MetadataReference.CreateFromImage(
+            image.ToArray(),
+            properties,
+            filePath: typeof(Console).Assembly.Location
+        )
+        using let workspace = AdhocWorkspace()
+        let id = ProjectId.CreateNewId()
+        let references = CSharpProjectLoader
+            .RuntimeReferences()
+            .Where((item MetadataReference) -> (item as PortableExecutableReference)?.FilePath != reference.FilePath)
+            .Append(cast[MetadataReference](reference))
+        let solution = workspace
+            .CurrentSolution
+            .AddProject(
+            ProjectInfo.Create(
+                id,
+                VersionStamp.Create(),
+                "Consumer",
+                "Consumer",
+                LanguageNames.CSharp,
+                compilationOptions: CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary),
+                metadataReferences: references
+            )
+        )
+            .AddDocument(
+            DocumentId.CreateNewId(id),
+            "Consumer.cs",
+            Microsoft
+                .CodeAnalysis
+                .Text
+                .SourceText
+                .From(
+                "using System; public static class Consumer { public static int Call() => MemoryOnly.Selected(1); public static int Guard(ref string? value) { if(value == null)return 0; MemoryOnly.Clear(); return value.Length; } public static string Run() { MemoryOnly.Value = \"safe\"; try { return Guard(ref MemoryOnly.Value).ToString(); } catch(NullReferenceException) { return \"cleared\"; } } }"
+            )
+        )
+        let project = solution.GetProject(id) ?? throw InvalidOperationException("project missing")
+        let frozen = CSharpProjectLoader.SnapshotProjectGraph(
+            project,
+            Dictionary[string, PortableExecutableReference](StringComparer.Ordinal)
+        )
+        Assert.Contains(frozen.MetadataReferences, (item MetadataReference) -> object.ReferenceEquals(item, reference))
+        Assert.Equal(properties, reference.Properties)
+        Assert.False(TranslationContext.HasTrustedEffectImage(reference, typeof(Console).Assembly.FullName!!))
+        let compilation = Assert.IsType[CSharpCompilation](await frozen.GetCompilationAsync())
+        Assert.Empty(
+            compilation.GetDiagnostics().Where(
+                (diagnostic Diagnostic) -> diagnostic.Severity == DiagnosticSeverity.Error
+            )
+        )
+        let memory = compilation.GetTypeByMetadataName("MemoryOnly") ??
+            throw InvalidOperationException("original image type missing")
+        Assert.Equal("MemoryOnly5326", memory.ContainingAssembly.Name)
+        Assert.Equal(
+            SpecialType.System_Int32,
+            Assert.Single(memory.GetMembers("Selected").OfType[IMethodSymbol]()).Parameters[0].Type.SpecialType
+        )
+        let tree = compilation.SyntaxTrees.Single()
+        let model = compilation.GetSemanticModel(tree)
+        let document = LoadedDocument(tree.FilePath, tree, model)
+        let context = TranslationContext(compilation, model, document.FilePath)
+        Assert.Contains(
+            "return value!!.Length",
+            GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+        )
+        using let consumerImage = MemoryStream()
+        let consumerEmitted = compilation.Emit(consumerImage)
+        Assert.True(consumerEmitted.Success, string.Join(Environment.NewLine, consumerEmitted.Diagnostics))
+        let load = AssemblyLoadContext("OriginalMemoryImage5326", isCollectible: true)
+        try {
+            image.Position = 0
+            load.LoadFromStream(image)
+            consumerImage.Position = 0
+            let assembly = load.LoadFromStream(consumerImage)
+            Assert.Equal(
+                "cleared",
+                cast[string](assembly.GetType("Consumer", throwOnError: true)!!.GetMethod("Run")!!.Invoke(nil, nil))
+            )
+        } finally {
+            load.Unload()
+        }
+    }
+
+    @Fact
+    async func FileProjectIngestion_PreservesTrustedFrameworkPrecision() {
+        let directory = Path.Combine(AppContext.BaseDirectory, "owned-file-inputs", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            File.WriteAllText(Path.Combine(directory, "Directory.Build.props"), "<Project />")
+            let path = Path.Combine(directory, "Precision.csproj")
+            File.WriteAllText(
+                path,
+                `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable></PropertyGroup></Project>`
+            )
+            File.WriteAllText(
+                Path.Combine(directory, "Precision.cs"),
+                "using System; public static class Precision { public static int Guard(ref string? value) { if(value == null)return 0; var same = object.ReferenceEquals(value, value); return value.Length; } }"
+            )
+            let loaded = await CSharpProjectLoader.LoadProjectAsync(path)
+            Assert.Empty(loaded.ErrorDiagnostics)
+            let document = loaded.Documents.Single()
+            let context = TranslationContext(loaded.Compilation, document.SemanticModel, document.FilePath)
+            let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+            Assert.Contains("return value.Length", printed)
+            Assert.DoesNotContain("value!!.Length", printed)
+            let core = loaded.Compilation.GetSpecialType(SpecialType.System_Object).ContainingAssembly
+            let reference = loaded
+                .Compilation
+                .References
+                .OfType[PortableExecutableReference]()
+                .Single(
+                (item PortableExecutableReference) -> SymbolEqualityComparer.Default.Equals(
+                    loaded.Compilation.GetAssemblyOrModuleSymbol(item),
+                    core
+                )
+            )
+            Assert.True(TranslationContext.HasTrustedEffectImage(reference, core.Identity.GetDisplayName()))
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    @Fact
     async func OwnedSnapshots_ReachTheActualCompilationReferenceGraph() {
         let directory = Path.Combine(AppContext.BaseDirectory, "owned-reference-graph", Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(directory)
         try {
             let path = Path.Combine(directory, "System.Console.dll")
             File.Copy(typeof(Console).Assembly.Location, path)
-            let original = MetadataReference.CreateFromFile(path)
+            let original = TranslationContext.CreateOwnedMetadataReference(path)
             let references = CSharpProjectLoader
                 .RuntimeReferences()
                 .Where(
@@ -105,7 +247,7 @@ open class CSharpProjectLoaderDiagnosticsTests {
                     .OfType[PortableExecutableReference]()
                     .Where((reference PortableExecutableReference) -> reference.FilePath == path)
             )
-            Assert.NotSame(original, ownedRoot)
+            Assert.Same(original, ownedRoot)
             Assert.Same(ownedRoot.GetMetadata().Id, ownedProducer.GetMetadata().Id)
             Assert.Equal(original.Properties, ownedRoot.Properties)
             Assert.Equal(producerProperties, ownedProducer.Properties)
@@ -130,7 +272,7 @@ open class CSharpProjectLoaderDiagnosticsTests {
             "missing-reference-" + Guid.NewGuid().ToString("N") + ".dll"
         )
         let broken = MetadataReference.CreateFromImage([]byte{0}, filePath: missing)
-        let healthy = MetadataReference.CreateFromFile(typeof(Console).Assembly.Location)
+        let healthy = TranslationContext.CreateOwnedMetadataReference(typeof(Console).Assembly.Location)
         let references = CSharpProjectLoader
             .RuntimeReferences()
             .Where(

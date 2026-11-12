@@ -34,15 +34,6 @@ class TranslationContext {
 
     private var suppressDiagnosticsDepth int32
 
-    // Issue #1910: a partial type's other declarations live in different
-    // `SyntaxTree`s than the one this context was created for, so resolving a
-    // symbol on one of their members requires a `SemanticModel` bound to THAT
-    // tree — the active model throws "node is not within syntax tree"
-    // otherwise. `UseSemanticModelFor` temporarily swaps the active model
-    // while a partial declaration's own members are translated; this cache
-    // avoids re-creating a `SemanticModel` per member for the same tree.
-    private let modelsByTree Dictionary[SyntaxTree, SemanticModel] = Dictionary[SyntaxTree, SemanticModel]()
-
     // Issue #2412: every project's own `Compilation` loaded alongside this one
     // in the same migration run (the app plus every transitively-referenced
     // sibling project — see `TranslateStage`), consulted by
@@ -95,7 +86,6 @@ class TranslationContext {
         this.Compilation = compilation ?? throw ArgumentNullException("compilation")
         this.rootCompilation = this.Compilation
         this.SemanticModel = semanticModel ?? throw ArgumentNullException("semanticModel")
-        this.modelsByTree[this.SemanticModel.SyntaxTree] = this.SemanticModel
         CacheSemanticModel(this.Compilation, this.SemanticModel)
         this.FilePath = filePath
         this.CancellationToken = cancellationToken
@@ -116,17 +106,26 @@ class TranslationContext {
     internal var StorageEffectBodyVisits int32
     internal var BeforeStorageEffectBody Action?
     internal var AfterStorageComparerFactory Action?
+    internal var BeforeOwnershipTree Action?
 
     internal class DeferredCallbackIndex {
         init(
-            factories List[Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax],
-            comparers List[Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax]
+            factories List[
+                (Syntax Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax, Owner CSharpCompilation)
+            ],
+            comparers List[
+                (Syntax Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax, Owner CSharpCompilation)
+            ]
         ) {
             Factories = factories.ToImmutableArray()
             Comparers = comparers.ToImmutableArray()
         }
-        let Factories IReadOnlyList[Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax]
-        let Comparers IReadOnlyList[Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax]
+        let Factories IReadOnlyList[
+            (Syntax Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax, Owner CSharpCompilation)
+        ]
+        let Comparers IReadOnlyList[
+            (Syntax Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax, Owner CSharpCompilation)
+        ]
     }
 
     internal class StorageIndexes {
@@ -142,7 +141,7 @@ class TranslationContext {
         )
     }
 
-    internal prop EffectIndexes StorageIndexes -> StorageIndexesByCompilation.GetOrCreateValue(this.rootCompilation)
+    internal prop EffectIndexes StorageIndexes -> this.SourceOwners(true).Effects
 
     /// Gets the owning C# compilation.
     prop Compilation CSharpCompilation {
@@ -194,38 +193,25 @@ class TranslationContext {
     /// returned scope to restore the previous model.
     /// @param tree The syntax tree the next node(s) to resolve belong to.
     /// @returns A scope that restores the previous active model on (cref:IDisposable.Dispose).
-    func UseSemanticModelFor(tree SyntaxTree?) IDisposable {
+    func UseSemanticModelFor(tree SyntaxTree?, owner CSharpCompilation? = nil) IDisposable {
         if tree == nil {
             return NoOpScope.Instance
         }
-        if this.sourceOwners == nil {
-            let owners = Dictionary[SyntaxTree, CSharpCompilation]()
-            for compilation in this.SourceCompilations() {
-                for source in compilation.SyntaxTrees {
-                    owners.TryAdd(source, compilation)
-                }
-            }
-            this.sourceOwners = owners
-        }
-        let owners = this.sourceOwners ?? throw InvalidOperationException("Source owners were not initialized.")
-        let ownerCompilation = if owners.TryGetValue(tree, out var owner) {
-            owner
-        } else {
-            this.rootCompilation
-        }
-        if tree == this.SemanticModel.SyntaxTree && object.ReferenceEquals(
-            this.SemanticModel.Compilation,
-            ownerCompilation
-        ) {
+        // The active model is already owned. A shared tree is not evidence that
+        // a different compilation (including the root) owns this invocation.
+        if tree == this
+            .SemanticModel
+            .SyntaxTree &&
+            (owner == nil || object.ReferenceEquals(this.SemanticModel.Compilation, owner)) {
             return NoOpScope.Instance
         }
-        if !this.modelsByTree.TryGetValue(tree, out var model) || !object.ReferenceEquals(
-            model.Compilation,
-            ownerCompilation
-        ) {
-            model = GetSemanticModel(ownerCompilation, tree)
-            this.modelsByTree[tree] = model
+        let ownerCompilation = owner ?? if this.Compilation.ContainsSyntaxTree(tree) {
+            this.Compilation
+        } else {
+            this.SourceOwners(false).UniqueTreeOwner(tree) ?? this.SourceOwners(true).UniqueTreeOwner(tree) ??
+                throw InvalidOperationException("A source tree requires an explicit compilation owner.")
         }
+        let model = GetSemanticModel(ownerCompilation, tree)
         let previousCompilation = this.Compilation
         let previousModel = this.SemanticModel
         this.Compilation = ownerCompilation
@@ -233,61 +219,155 @@ class TranslationContext {
         return RestoreModelScope(this, previousCompilation, previousModel)
     }
 
-    private var sourceOwners Dictionary[SyntaxTree, CSharpCompilation]?
-    private var actualSourceCompilations IReadOnlyList[CSharpCompilation]?
+    private var actualOwners SourceOwnershipIndex?
+    private var catalogOwners SourceOwnershipIndex?
 
-    internal func SourceCompilations(includeSiblingLookup bool = true) IReadOnlyList[CSharpCompilation] {
-        let result = List[CSharpCompilation]()
-        let pending = Queue[CSharpCompilation]()
-        let seen = HashSet[CSharpCompilation](ReferenceEqualityComparer.Instance)
-        pending.Enqueue(this.rootCompilation)
-        if this.actualSourceCompilations != nil {
-            result.AddRange(this.actualSourceCompilations)
-            for compilation in result {
-                seen.Add(compilation)
-            }
-            pending.Clear()
+    internal func SourceCompilations(includeSiblingLookup bool = true) IReadOnlyList[CSharpCompilation] ->
+    this.SourceOwners(includeSiblingLookup).Compilations
+
+    internal func GetOwnedSemanticModel(tree SyntaxTree, owner CSharpCompilation? = nil) SemanticModel {
+        using let modelScope = this.UseSemanticModelFor(tree, owner)
+        return this.SemanticModel
+    }
+
+    internal func SourceCompilation(symbol ISymbol) CSharpCompilation? {
+        let assembly = symbol as IAssemblySymbol ?? symbol.ContainingAssembly
+        return if assembly == nil {
+            nil
+        } else {
+            this.SourceOwners(true).Owner(assembly)
         }
-        while pending.Count > 0 {
-            this.CancellationToken.ThrowIfCancellationRequested()
-            let compilation = pending.Dequeue()
-            if !seen.Add(compilation) {
-                continue
-            }
-            result.Add(compilation)
-            for reference in compilation.References.OfType[CompilationReference]() {
-                if reference.Compilation is CSharpCompilation source {
-                    pending.Enqueue(source)
+    }
+
+    private func SourceOwners(includeCatalog bool) SourceOwnershipIndex {
+        if this.actualOwners == nil {
+            let publication = SourceOwnershipByCompilation.GetOrCreateValue(this.rootCompilation)
+            lock publication {
+                if publication.Index == nil {
+                    publication.Index = SourceOwnershipIndex(
+                        []CSharpCompilation{this.rootCompilation},
+                        this.CancellationToken,
+                        this.BeforeOwnershipTree
+                    )
                 }
+                this.actualOwners = publication.Index
             }
         }
-        this.actualSourceCompilations = result.ToArray()
-        if includeSiblingLookup {
-            for compilation in(this.repositoryCompilations ?? Array.Empty[CSharpCompilation]()).Concat(
-                this.siblingCompilations ?? Array.Empty[CSharpCompilation]()
-            ) {
-                pending.Enqueue(compilation)
+        let actual = this.actualOwners ?? throw InvalidOperationException("Missing source graph.")
+        if !includeCatalog || (this.repositoryCompilations == nil && this.siblingCompilations == nil) {
+            return actual
+        }
+        if this.catalogOwners == nil {
+            let root = SourceOwnershipByCompilation.GetOrCreateValue(this.rootCompilation)
+            let repositories = root.Catalogs.GetOrCreateValue(
+                if this.repositoryCompilations == nil {
+                    NoCatalog
+                } else {
+                    cast[object](this.repositoryCompilations)
+                }
+            )
+            let publication = repositories.Siblings.GetOrCreateValue(
+                if this.siblingCompilations == nil {
+                    NoCatalog
+                } else {
+                    cast[object](this.siblingCompilations)
+                }
+            )
+            lock publication {
+                if publication.Index == nil ||
+                    !SameCompilations(publication.RepositoryVersion, this.repositoryCompilations) ||
+                    !SameCompilations(publication.SiblingVersion, this.siblingCompilations) {
+                    let repositories = (
+                        this.repositoryCompilations ?? Array.Empty[CSharpCompilation]()
+                    ).ToImmutableArray()
+                    let siblings = (this.siblingCompilations ?? Array.Empty[CSharpCompilation]()).ToImmutableArray()
+                    let index = SourceOwnershipIndex(
+                        actual.Compilations.Concat(repositories).Concat(siblings),
+                        this.CancellationToken,
+                        this.BeforeOwnershipTree
+                    )
+                    this.CancellationToken.ThrowIfCancellationRequested()
+                    publication.RepositoryVersion = repositories
+                    publication.SiblingVersion = siblings
+                    publication.Index = index
+                }
+                this.catalogOwners = publication.Index
             }
+        }
+        return this.catalogOwners ?? throw InvalidOperationException("Missing source catalog.")
+    }
+
+    internal prop OwnershipTreeEntries int32 -> this.SourceOwners(true).TreeEntries
+    internal prop OwnershipIndexIdentity object -> this.SourceOwners(true)
+    internal prop HasOwnershipIndex bool -> this.actualOwners != nil
+
+    private class SourceOwnershipIndex {
+        let Compilations IReadOnlyList[CSharpCompilation]
+        let Effects StorageIndexes = StorageIndexes()
+        var TreeEntries int32
+        private let assemblies Dictionary[IAssemblySymbol, CSharpCompilation] =
+        Dictionary[IAssemblySymbol, CSharpCompilation](SymbolEqualityComparer.Default)
+        private let trees Dictionary[SyntaxTree, CSharpCompilation?] =
+        Dictionary[SyntaxTree, CSharpCompilation?](ReferenceEqualityComparer.Instance)
+
+        init(roots IEnumerable[CSharpCompilation], cancellationToken CancellationToken, beforeTree Action?) {
+            let result = List[CSharpCompilation]()
+            let pending = Queue[CSharpCompilation](roots)
+            let seen = HashSet[CSharpCompilation](ReferenceEqualityComparer.Instance)
             while pending.Count > 0 {
-                this.CancellationToken.ThrowIfCancellationRequested()
+                cancellationToken.ThrowIfCancellationRequested()
                 let compilation = pending.Dequeue()
                 if !seen.Add(compilation) {
                     continue
                 }
                 result.Add(compilation)
+                this.assemblies.TryAdd(compilation.Assembly, compilation)
+                for tree in compilation.SyntaxTrees {
+                    beforeTree?.Invoke()
+                    cancellationToken.ThrowIfCancellationRequested()
+                    this.TreeEntries++
+                    if !this.trees.TryAdd(tree, compilation) && !object.ReferenceEquals(this.trees[tree], compilation) {
+                        this.trees[tree] = nil
+                    }
+                }
                 for reference in compilation.References.OfType[CompilationReference]() {
                     if reference.Compilation is CSharpCompilation source {
+                        if compilation.GetAssemblyOrModuleSymbol(reference) is IAssemblySymbol boundAssembly {
+                            this.assemblies.TryAdd(boundAssembly, source)
+                        }
                         pending.Enqueue(source)
                     }
                 }
             }
+            cancellationToken.ThrowIfCancellationRequested()
+            this.Compilations = result.ToImmutableArray()
         }
-        return result
+
+        func Owner(assembly IAssemblySymbol) CSharpCompilation? ->
+        if this.assemblies.TryGetValue(assembly, out var owner) {
+            owner
+        } else {
+            nil
+        }
+
+        func UniqueTreeOwner(tree SyntaxTree) CSharpCompilation? ->
+        if this.trees.TryGetValue(tree, out var owner) {
+            owner
+        } else {
+            nil
+        }
     }
 
-    internal func GetOwnedSemanticModel(tree SyntaxTree) SemanticModel {
-        using let owner = this.UseSemanticModelFor(tree)
-        return this.SemanticModel
+    private class SourceOwnershipPublication {
+        var Index SourceOwnershipIndex?
+        var RepositoryVersion IReadOnlyList[CSharpCompilation]?
+        var SiblingVersion IReadOnlyList[CSharpCompilation]?
+        let Catalogs ConditionalWeakTable[object, SourceCatalogs] = ConditionalWeakTable[object, SourceCatalogs]()
+    }
+
+    private class SourceCatalogs {
+        let Siblings ConditionalWeakTable[object, SourceOwnershipPublication] =
+        ConditionalWeakTable[object, SourceOwnershipPublication]()
     }
 
     /// Resolves the declared symbol for a declaration node via the active model.
@@ -439,10 +519,28 @@ class TranslationContext {
     }
 
     shared {
-        private let StorageIndexesByCompilation ConditionalWeakTable[CSharpCompilation, StorageIndexes] =
-        ConditionalWeakTable[CSharpCompilation, StorageIndexes]()
+        private let SourceOwnershipByCompilation ConditionalWeakTable[CSharpCompilation, SourceOwnershipPublication] =
+        ConditionalWeakTable[CSharpCompilation, SourceOwnershipPublication]()
+        private let NoCatalog object = System.Object()
+
+        private func SameCompilations(
+            left IReadOnlyList[CSharpCompilation]?,
+            right IReadOnlyList[CSharpCompilation]?
+        ) bool {
+            if (left?.Count ?? 0) != (right?.Count ?? 0) {
+                return false
+            }
+            for var index = 0; index < (left?.Count ?? 0); index++ {
+                if !object.ReferenceEquals(left!![index], right!![index]) {
+                    return false
+                }
+            }
+            return true
+        }
         private let OwnedEffectImages ConditionalWeakTable[PortableExecutableReference, StrongBox[string]] =
         ConditionalWeakTable[PortableExecutableReference, StrongBox[string]]()
+        private let OwnedEffectMetadata ConditionalWeakTable[MetadataId, StrongBox[string]] =
+        ConditionalWeakTable[MetadataId, StrongBox[string]]()
 
         /// Bind and verify the same immutable bytes; a caller-supplied path is not image provenance.
         func CreateOwnedMetadataReference(
@@ -464,21 +562,37 @@ class TranslationContext {
             }
             let image = ImmutableArray.CreateRange(File.ReadAllBytes(path))
             let reference = MetadataReference.CreateFromImage(image, properties: properties, filePath: path)
-            OwnedEffectImages.Add(reference, StrongBox[string](Convert.ToHexString(SHA256.HashData(image.AsSpan()))))
+            let ownedFingerprint = StrongBox[string](Convert.ToHexString(SHA256.HashData(image.AsSpan())))
+            OwnedEffectImages.Add(reference, ownedFingerprint)
+            OwnedEffectMetadata.Add(reference.GetMetadata().Id, ownedFingerprint)
             if snapshots != nil {
                 snapshots[key] = reference
             }
             return reference
         }
 
-        internal func HasTrustedEffectImage(reference PortableExecutableReference, identity string) bool ->
-        OwnedEffectImages.TryGetValue(reference, out var fingerprint) &&
-            GSharp
-            .Core
-            .CodeAnalysis
-            .Symbols
-            .ReferenceResolver
-            .IsTrustedEffectImage(System.Reflection.AssemblyName(identity), fingerprint.Value)
+        internal func HasTrustedEffectImage(reference PortableExecutableReference, identity string) bool {
+            if !OwnedEffectImages.TryGetValue(reference, out var fingerprint) {
+                try {
+                    if !OwnedEffectMetadata.TryGetValue(reference.GetMetadata().Id, out fingerprint) {
+                        return false
+                    }
+                    OwnedEffectImages.GetValue(reference, (key PortableExecutableReference) -> fingerprint)
+                } catch (error IOException) {
+                    return false
+                } catch (error UnauthorizedAccessException) {
+                    return false
+                } catch (error BadImageFormatException) {
+                    return false
+                }
+            }
+            return GSharp
+                .Core
+                .CodeAnalysis
+                .Symbols
+                .ReferenceResolver
+                .IsTrustedEffectImage(System.Reflection.AssemblyName(identity), fingerprint.Value)
+        }
 
         private let SemanticModelsByCompilation ConditionalWeakTable[
             Compilation,

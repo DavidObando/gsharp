@@ -18882,38 +18882,36 @@ partial class CSharpToGSharpTranslator {
             lock this.context.EffectIndexes {
                 if this.effectAliasedFields == nil {
                     let fields = HashSet[IFieldSymbol](SymbolEqualityComparer.Default)
-                    for tree in this
-                        .context
-                        .SourceCompilations(false)
-                        .SelectMany((compilation CSharpCompilation) -> compilation.SyntaxTrees)
-                        .Distinct() {
-                        this.context.EffectIndexes.TreeVisits++
-                        let model = this.context.GetOwnedSemanticModel(tree)
-                        for syntax in tree.GetRoot(this.context.CancellationToken).DescendantNodes() {
-                            this.context.CancellationToken.ThrowIfCancellationRequested()
-                            let address = switch syntax {
-                                case reference is Microsoft
-                                    .CodeAnalysis
-                                    .CSharp
-                                    .Syntax
-                                    .RefExpressionSyntax: reference.Expression
-                                case argument is ArgumentSyntax when argument
-                                    .RefKindKeyword
-                                    .RawKind != 0: argument.Expression
-                                default: default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
-                            }
-                            if address != nil {
-                                let operation = model.GetOperation(address, this.context.CancellationToken)
-                                if operation != nil {
-                                    let pending = Stack[IOperation]()
-                                    pending.Push(operation)
-                                    while pending.Count > 0 {
-                                        let current = pending.Pop()
-                                        if current is IFieldReferenceOperation member {
-                                            fields.Add(member.Field.OriginalDefinition)
-                                        }
-                                        for child in current.ChildOperations {
-                                            pending.Push(child)
+                    for compilation in this.context.SourceCompilations(false) {
+                        for tree in compilation.SyntaxTrees {
+                            this.context.EffectIndexes.TreeVisits++
+                            let model = TranslationContext.GetSemanticModel(compilation, tree)
+                            for syntax in tree.GetRoot(this.context.CancellationToken).DescendantNodes() {
+                                this.context.CancellationToken.ThrowIfCancellationRequested()
+                                let address = switch syntax {
+                                    case reference is Microsoft
+                                        .CodeAnalysis
+                                        .CSharp
+                                        .Syntax
+                                        .RefExpressionSyntax: reference.Expression
+                                    case argument is ArgumentSyntax when argument
+                                        .RefKindKeyword
+                                        .RawKind != 0: argument.Expression
+                                    default: default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
+                                }
+                                if address != nil {
+                                    let operation = model.GetOperation(address, this.context.CancellationToken)
+                                    if operation != nil {
+                                        let pending = Stack[IOperation]()
+                                        pending.Push(operation)
+                                        while pending.Count > 0 {
+                                            let current = pending.Pop()
+                                            if current is IFieldReferenceOperation member {
+                                                fields.Add(member.Field.OriginalDefinition)
+                                            }
+                                            for child in current.ChildOperations {
+                                                pending.Push(child)
+                                            }
                                         }
                                     }
                                 }
@@ -18926,11 +18924,19 @@ partial class CSharpToGSharpTranslator {
             return this.effectAliasedFields!!.Contains(field.OriginalDefinition)
         }
 
-        private let storageCallEffects Dictionary[ITypeSymbol, Dictionary[Microsoft.CodeAnalysis.SyntaxNode, bool]] =
-        Dictionary[ITypeSymbol, Dictionary[Microsoft.CodeAnalysis.SyntaxNode, bool]](SymbolEqualityComparer.Default)
+        private let storageCallEffects Dictionary[
+            ITypeSymbol,
+            Dictionary[(Owner Compilation, Node Microsoft.CodeAnalysis.SyntaxNode), bool]
+        ] =
+        Dictionary[ITypeSymbol, Dictionary[(Owner Compilation, Node Microsoft.CodeAnalysis.SyntaxNode), bool]](
+            SymbolEqualityComparer.Default
+        )
 
-        private let storageOperations Dictionary[Microsoft.CodeAnalysis.SyntaxNode, IOperation?] =
-        Dictionary[Microsoft.CodeAnalysis.SyntaxNode, IOperation?]()
+        private let storageOperations Dictionary[
+            (Owner Compilation, Node Microsoft.CodeAnalysis.SyntaxNode),
+            IOperation?
+        ] =
+        Dictionary[(Owner Compilation, Node Microsoft.CodeAnalysis.SyntaxNode), IOperation?]()
 
         private func OperationCallbackMethod(operation IOperation) IMethodSymbol? -> switch operation {
             case binary is IBinaryOperation: binary.OperatorMethod
@@ -18945,12 +18951,11 @@ partial class CSharpToGSharpTranslator {
             if node is not Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax {
                 return false
             }
-            if !this.storageOperations.TryGetValue(node, out var operation) {
-                operation = this
-                    .context
-                    .GetOwnedSemanticModel(node.SyntaxTree)
-                    .GetOperation(node, this.context.CancellationToken)
-                this.storageOperations[node] = operation
+            let model = this.context.GetOwnedSemanticModel(node.SyntaxTree)
+            let key(Owner Compilation, Node Microsoft.CodeAnalysis.SyntaxNode) = (model.Compilation, node)
+            if !this.storageOperations.TryGetValue(key, out var operation) {
+                operation = model.GetOperation(node, this.context.CancellationToken)
+                this.storageOperations[key] = operation
             }
             let visiting = HashSet[IMethodSymbol](SymbolEqualityComparer.Default)
             while operation != nil {
@@ -18971,8 +18976,10 @@ partial class CSharpToGSharpTranslator {
             invocation Microsoft.CodeAnalysis.SyntaxNode,
             rootType ITypeSymbol?
         ) bool {
+            let model = this.context.GetOwnedSemanticModel(invocation.SyntaxTree)
+            let key(Owner Compilation, Node Microsoft.CodeAnalysis.SyntaxNode) = (model.Compilation, invocation)
             if rootType != nil && this.storageCallEffects.TryGetValue(rootType, out var cached) && cached.TryGetValue(
-                invocation,
+                key,
                 out var effect
             ) {
                 return effect
@@ -18981,34 +18988,60 @@ partial class CSharpToGSharpTranslator {
             let result = this.ScanStorageEffectNode(invocation, rootType, visiting)
             if rootType != nil {
                 if !this.storageCallEffects.TryGetValue(rootType, out var effects) {
-                    effects = Dictionary[Microsoft.CodeAnalysis.SyntaxNode, bool]()
+                    effects = Dictionary[(Owner Compilation, Node Microsoft.CodeAnalysis.SyntaxNode), bool]()
                     this.storageCallEffects[rootType] = effects
                 }
-                effects[invocation] = result
+                effects[key] = result
             }
             return result
         }
 
+        private class OwnedEffectCallback {
+            init(expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax, owner CSharpCompilation) {
+                this.Expression = expression
+                this.Owner = owner
+            }
+            let Expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+            let Owner CSharpCompilation
+        }
+
         private func ResolveEffectCallback(
             expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
-            bindings Dictionary[IParameterSymbol, Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]?
-        ) Microsoft
-            .CodeAnalysis
-            .CSharp
-            .Syntax
-            .ExpressionSyntax {
-            var current = expression
+            bindings Dictionary[IParameterSymbol, OwnedEffectCallback]?,
+            owner CSharpCompilation? = nil
+        ) OwnedEffectCallback {
+            var current = OwnedEffectCallback(
+                expression,
+                owner ?? cast[CSharpCompilation](this.context.GetOwnedSemanticModel(expression.SyntaxTree).Compilation)
+            )
             let seen = HashSet[IParameterSymbol](SymbolEqualityComparer.Default)
             while bindings != nil &&
-                this
-                .context
-                .GetOwnedSemanticModel(current.SyntaxTree)
-                .GetSymbolInfo(current)
+                TranslationContext
+                .GetSemanticModel(current.Owner, current.Expression.SyntaxTree)
+                .GetSymbolInfo(current.Expression)
                 .Symbol is IParameterSymbol parameter &&
                 seen.Add(parameter) && bindings.TryGetValue(parameter.OriginalDefinition, out var actual) {
                 current = actual
             }
             return current
+        }
+
+        private func EffectCallbackMayWrite(
+            callback OwnedEffectCallback,
+            rootType ITypeSymbol?,
+            visiting HashSet[IMethodSymbol],
+            bindings Dictionary[IParameterSymbol, OwnedEffectCallback]?
+        ) bool {
+            let actual = this.ResolveEffectCallback(callback.Expression, bindings, callback.Owner)
+            using let modelScope = this.context.UseSemanticModelFor(actual.Expression.SyntaxTree, actual.Owner)
+            let expression = Unwrap(actual.Expression)
+            if expression is AnonymousFunctionExpressionSyntax lambda {
+                return this.ScanStorageEffectNode(lambda.Body, rootType, visiting, bindings)
+            }
+            if expression != nil && this.context.GetSymbolInfo(expression).Symbol is IMethodSymbol target {
+                return this.MethodStorageMayWriteType(target, rootType, visiting, bindings)
+            }
+            return true
         }
 
         private prop effectSourceMethods Dictionary[string, List[IMethodSymbol]]? {
@@ -19021,52 +19054,50 @@ partial class CSharpToGSharpTranslator {
                 if this.effectSourceMethods == nil {
                     let result = Dictionary[string, List[IMethodSymbol]](StringComparer.Ordinal)
                     let iterators = HashSet[IMethodSymbol](SymbolEqualityComparer.Default)
-                    for tree in this
-                        .context
-                        .SourceCompilations(false)
-                        .SelectMany((compilation CSharpCompilation) -> compilation.SyntaxTrees)
-                        .Distinct() {
-                        this.context.EffectIndexes.TreeVisits++
-                        this.context.CancellationToken.ThrowIfCancellationRequested()
-                        let model = this.context.GetOwnedSemanticModel(tree)
-                        for declaration in tree
-                            .GetRoot(this.context.CancellationToken)
-                            .DescendantNodes()
-                            .Where(
-                            (node Microsoft.CodeAnalysis.SyntaxNode) -> node is MethodDeclarationSyntax or
-                                LocalFunctionStatementSyntax
-                        ) {
+                    for compilation in this.context.SourceCompilations(false) {
+                        for tree in compilation.SyntaxTrees {
+                            this.context.EffectIndexes.TreeVisits++
                             this.context.CancellationToken.ThrowIfCancellationRequested()
-                            if model.GetDeclaredSymbol(declaration) is IMethodSymbol method {
-                                if declaration
-                                    .DescendantNodes()
-                                    .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.YieldStatementSyntax]()
-                                    .Any(
-                                    (
-                                        statement Microsoft.CodeAnalysis.CSharp.Syntax.YieldStatementSyntax
-                                    ) -> FindNestedFunction(statement.Parent, declaration) == nil
-                                ) {
-                                    iterators.Add(method.OriginalDefinition)
-                                }
-                                if declaration is LocalFunctionStatementSyntax {
-                                    continue
-                                }
-                                let names = method
-                                    .ExplicitInterfaceImplementations
-                                    .Select((slot IMethodSymbol) -> slot.Name)
-                                    .Append(method.Name)
-                                    .Distinct(StringComparer.Ordinal)
-                                for name in names {
-                                    if !result.TryGetValue(name, out var methods) {
-                                        methods = List[IMethodSymbol]()
-                                        result[name] = methods
+                            let model = TranslationContext.GetSemanticModel(compilation, tree)
+                            for declaration in tree
+                                .GetRoot(this.context.CancellationToken)
+                                .DescendantNodes()
+                                .Where(
+                                (node Microsoft.CodeAnalysis.SyntaxNode) -> node is MethodDeclarationSyntax or
+                                    LocalFunctionStatementSyntax
+                            ) {
+                                this.context.CancellationToken.ThrowIfCancellationRequested()
+                                if model.GetDeclaredSymbol(declaration) is IMethodSymbol method {
+                                    if declaration
+                                        .DescendantNodes()
+                                        .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.YieldStatementSyntax]()
+                                        .Any(
+                                        (
+                                            statement Microsoft.CodeAnalysis.CSharp.Syntax.YieldStatementSyntax
+                                        ) -> FindNestedFunction(statement.Parent, declaration) == nil
+                                    ) {
+                                        iterators.Add(method.OriginalDefinition)
                                     }
-                                    methods.Add(method)
+                                    if declaration is LocalFunctionStatementSyntax {
+                                        continue
+                                    }
+                                    let names = method
+                                        .ExplicitInterfaceImplementations
+                                        .Select((slot IMethodSymbol) -> slot.Name)
+                                        .Append(method.Name)
+                                        .Distinct(StringComparer.Ordinal)
+                                    for name in names {
+                                        if !result.TryGetValue(name, out var methods) {
+                                            methods = List[IMethodSymbol]()
+                                            result[name] = methods
+                                        }
+                                        methods.Add(method)
+                                    }
                                 }
                             }
                         }
+                        this.context.CancellationToken.ThrowIfCancellationRequested()
                     }
-                    this.context.CancellationToken.ThrowIfCancellationRequested()
                     this.context.EffectIndexes.Iterators.UnionWith(iterators)
                     this.effectSourceMethods = result
                 }
@@ -19155,7 +19186,7 @@ partial class CSharpToGSharpTranslator {
         private func StorageEffectKey(
             method IMethodSymbol,
             rootType ITypeSymbol?,
-            bindings Dictionary[IParameterSymbol, Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]?
+            bindings Dictionary[IParameterSymbol, OwnedEffectCallback]?
         ) string {
             let parts = List[string]()
             parts.Add("method:" + this.EffectSymbolKey(method))
@@ -19169,18 +19200,22 @@ partial class CSharpToGSharpTranslator {
             }
             if bindings != nil {
                 for entry in bindings {
-                    let actual = this.ResolveEffectCallback(entry.Value, bindings)
+                    let actual = this.ResolveEffectCallback(entry.Value.Expression, bindings, entry.Value.Owner)
                     parts.Add(
                         this.EffectSymbolKey(entry.Key) + ":" + entry.Key.Ordinal.ToString() + "@" + this.EffectTreeKey(
-                            actual.SyntaxTree
+                            actual.Expression.SyntaxTree
                         ) +
                             ":" +
+                            this.EffectSymbolKey(actual.Owner.Assembly) +
+                            ":" +
                             actual
+                            .Expression
                             .Span
                             .Start
                             .ToString() +
                             ":" +
                             actual
+                            .Expression
                             .Span
                             .Length
                             .ToString()
@@ -19291,7 +19326,7 @@ partial class CSharpToGSharpTranslator {
             type ITypeSymbol?,
             rootType ITypeSymbol?,
             visiting HashSet[IMethodSymbol],
-            bindings Dictionary[IParameterSymbol, Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]?
+            bindings Dictionary[IParameterSymbol, OwnedEffectCallback]?
         ) bool {
             let values = List[ITypeSymbol?]()
             this.AddEffectValueTypes(values, this.EffectStorageType(type))
@@ -19309,7 +19344,7 @@ partial class CSharpToGSharpTranslator {
             names[]string,
             rootType ITypeSymbol?,
             visiting HashSet[IMethodSymbol],
-            bindings Dictionary[IParameterSymbol, Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]?,
+            bindings Dictionary[IParameterSymbol, OwnedEffectCallback]?,
             comparerKinds int32 = 0
         ) bool {
             if values.Any(
@@ -19371,7 +19406,7 @@ partial class CSharpToGSharpTranslator {
             names[]string,
             rootType ITypeSymbol?,
             visiting HashSet[IMethodSymbol],
-            bindings Dictionary[IParameterSymbol, Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]?
+            bindings Dictionary[IParameterSymbol, OwnedEffectCallback]?
         ) bool {
             if !this.activeCallbackTypes.Add(type) {
                 return false
@@ -19529,7 +19564,7 @@ partial class CSharpToGSharpTranslator {
             type ITypeSymbol?,
             rootType ITypeSymbol?,
             visiting HashSet[IMethodSymbol],
-            bindings Dictionary[IParameterSymbol, Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]?,
+            bindings Dictionary[IParameterSymbol, OwnedEffectCallback]?,
             exact bool = false
         ) bool {
             if type is IArrayTypeSymbol || type?.SpecialType == SpecialType.System_String {
@@ -19636,56 +19671,59 @@ partial class CSharpToGSharpTranslator {
             )
         }
 
-        private prop effectDeferredFactories IReadOnlyList[InvocationExpressionSyntax]? {
+        private prop effectDeferredFactories IReadOnlyList[
+            (Syntax InvocationExpressionSyntax, Owner CSharpCompilation)
+        ]? {
             get -> this.context.EffectIndexes.DeferredIndex?.Factories
         }
 
         private func DeferredEffectCallbacksMayWrite(
             rootType ITypeSymbol?,
             visiting HashSet[IMethodSymbol],
-            bindings Dictionary[IParameterSymbol, Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]?,
+            bindings Dictionary[IParameterSymbol, OwnedEffectCallback]?,
             comparers bool = false,
             comparedValues List[ITypeSymbol?]? = nil,
             comparerKinds int32 = 3
         ) bool {
             lock this.context.EffectIndexes {
                 if this.effectDeferredFactories == nil {
-                    let factories = List[InvocationExpressionSyntax]()
-                    let comparerFactories = List[InvocationExpressionSyntax]()
-                    for tree in this
-                        .context
-                        .SourceCompilations(false)
-                        .SelectMany((compilation CSharpCompilation) -> compilation.SyntaxTrees)
-                        .Distinct() {
-                        this.context.EffectIndexes.TreeVisits++
-                        this.context.CancellationToken.ThrowIfCancellationRequested()
-                        let model = this.context.GetOwnedSemanticModel(tree)
-                        for call in tree
-                            .GetRoot(this.context.CancellationToken)
-                            .DescendantNodes()
-                            .OfType[InvocationExpressionSyntax]() {
+                    let factories = List[(Syntax InvocationExpressionSyntax, Owner CSharpCompilation)]()
+                    let comparerFactories = List[(Syntax InvocationExpressionSyntax, Owner CSharpCompilation)]()
+                    for compilation in this.context.SourceCompilations(false) {
+                        for tree in compilation.SyntaxTrees {
+                            this.context.EffectIndexes.TreeVisits++
                             this.context.CancellationToken.ThrowIfCancellationRequested()
-                            if model.GetOperation(
-                                call,
-                                this.context.CancellationToken
-                            ) is IInvocationOperation invocation {
-                                if this.IsDeferredEffectFactory(invocation.TargetMethod) {
-                                    factories.Add(call)
-                                }
-                                if invocation
-                                    .TargetMethod
-                                    .ReturnType is INamedTypeSymbol result &&
-                                    (
-                                    CoreStorageEffects.GetComparerContractKind(this.EffectTypeName(result)) != 0 ||
-                                        result
-                                        .AllInterfaces
-                                        .Any(
-                                        (contract INamedTypeSymbol) ->
-                                        CoreStorageEffects.GetComparerContractKind(this.EffectTypeName(contract)) != 0
-                                    )
-                                ) {
-                                    comparerFactories.Add(call)
-                                    this.context.AfterStorageComparerFactory?.Invoke()
+                            using let ownerScope = this.context.UseSemanticModelFor(tree, compilation)
+                            let model = this.context.SemanticModel
+                            for call in tree
+                                .GetRoot(this.context.CancellationToken)
+                                .DescendantNodes()
+                                .OfType[InvocationExpressionSyntax]() {
+                                this.context.CancellationToken.ThrowIfCancellationRequested()
+                                if model.GetOperation(
+                                    call,
+                                    this.context.CancellationToken
+                                ) is IInvocationOperation invocation {
+                                    if this.IsDeferredEffectFactory(invocation.TargetMethod) {
+                                        factories.Add((call, compilation))
+                                    }
+                                    if invocation
+                                        .TargetMethod
+                                        .ReturnType is INamedTypeSymbol result &&
+                                        (
+                                        CoreStorageEffects.GetComparerContractKind(this.EffectTypeName(result)) != 0 ||
+                                            result
+                                            .AllInterfaces
+                                            .Any(
+                                            (contract INamedTypeSymbol) ->
+                                            CoreStorageEffects.GetComparerContractKind(
+                                                this.EffectTypeName(contract)
+                                            ) != 0
+                                        )
+                                    ) {
+                                        comparerFactories.Add((call, compilation))
+                                        this.context.AfterStorageComparerFactory?.Invoke()
+                                    }
                                     this.context.CancellationToken.ThrowIfCancellationRequested()
                                 }
                             }
@@ -19712,8 +19750,12 @@ partial class CSharpToGSharpTranslator {
                 this.effectDeferredFactories!!
             }
             for factory in selected {
-                let model = this.context.GetOwnedSemanticModel(factory.SyntaxTree)
-                if model.GetOperation(factory, this.context.CancellationToken) is IInvocationOperation invocation {
+                using let ownerScope = this.context.UseSemanticModelFor(factory.Syntax.SyntaxTree, factory.Owner)
+                let model = this.context.SemanticModel
+                if model.GetOperation(
+                    factory.Syntax,
+                    this.context.CancellationToken
+                ) is IInvocationOperation invocation {
                     if comparers &&
                         invocation
                         .TargetMethod
@@ -19752,19 +19794,7 @@ partial class CSharpToGSharpTranslator {
                             continue
                         }
                         let actual = this.ResolveEffectCallback(expression, bindings)
-                        if Unwrap(actual) is AnonymousFunctionExpressionSyntax lambda {
-                            if this.ScanStorageEffectNode(lambda.Body, rootType, visiting, bindings) {
-                                return true
-                            }
-                        } else if this
-                            .context
-                            .GetOwnedSemanticModel(actual.SyntaxTree)
-                            .GetSymbolInfo(actual)
-                            .Symbol is IMethodSymbol target {
-                            if this.MethodStorageMayWriteType(target, rootType, visiting, bindings) {
-                                return true
-                            }
-                        } else {
+                        if this.EffectCallbackMayWrite(actual, rootType, visiting, bindings) {
                             return true
                         }
                     }
@@ -19846,7 +19876,7 @@ partial class CSharpToGSharpTranslator {
             target IOperation,
             rootType ITypeSymbol?,
             visiting HashSet[IMethodSymbol],
-            bindings Dictionary[IParameterSymbol, Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]?
+            bindings Dictionary[IParameterSymbol, OwnedEffectCallback]?
         ) bool {
             if target is ITupleOperation tuple {
                 return tuple.Elements.Any(
@@ -19881,7 +19911,7 @@ partial class CSharpToGSharpTranslator {
             node Microsoft.CodeAnalysis.SyntaxNode,
             rootType ITypeSymbol?,
             visiting HashSet[IMethodSymbol],
-            bindings Dictionary[IParameterSymbol, Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]? = nil
+            bindings Dictionary[IParameterSymbol, OwnedEffectCallback]? = nil
         ) bool {
             this.context.CancellationToken.ThrowIfCancellationRequested()
             let model = this.context.GetOwnedSemanticModel(node.SyntaxTree)
@@ -19922,30 +19952,15 @@ partial class CSharpToGSharpTranslator {
                         ) {
                             return true
                         }
-                        actual = this.ResolveEffectCallback(actual, bindings)
-                        let actualModel = this.context.GetOwnedSemanticModel(actual.SyntaxTree)
-                        if Unwrap(actual) is AnonymousFunctionExpressionSyntax lambda {
-                            if this.ScanStorageEffectNode(lambda.Body, rootType, visiting, bindings) {
-                                return true
-                            }
-                        } else if actualModel.GetSymbolInfo(actual).Symbol is IMethodSymbol target {
-                            if this.MethodStorageMayWriteType(target, rootType, visiting, bindings) {
-                                return true
-                            }
-                        } else {
+                        if this.EffectCallbackMayWrite(actual, rootType, visiting, bindings) {
                             return true
                         }
                         continue
                     }
                     let callBindings = if bindings == nil {
-                        Dictionary[IParameterSymbol, Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax](
-                            SymbolEqualityComparer.Default
-                        )
+                        Dictionary[IParameterSymbol, OwnedEffectCallback](SymbolEqualityComparer.Default)
                     } else {
-                        Dictionary[IParameterSymbol, Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax](
-                            bindings,
-                            SymbolEqualityComparer.Default
-                        )
+                        Dictionary[IParameterSymbol, OwnedEffectCallback](bindings, SymbolEqualityComparer.Default)
                     }
                     for argument in invocation.Arguments {
                         if argument.Parameter is {Type: {TypeKind: TypeKind.Delegate}} parameter &&
@@ -20011,21 +20026,8 @@ partial class CSharpToGSharpTranslator {
                                 .ExpressionSyntax expression {
                                 continue
                             }
-                            let callback = Unwrap(this.ResolveEffectCallback(expression, bindings))
-                            if callback is AnonymousFunctionExpressionSyntax lambda {
-                                if this.ScanStorageEffectNode(lambda.Body, rootType, visiting, bindings) {
-                                    return true
-                                }
-                            } else if callback != nil &&
-                                this
-                                .context
-                                .GetOwnedSemanticModel(callback.SyntaxTree)
-                                .GetSymbolInfo(callback)
-                                .Symbol is IMethodSymbol target {
-                                if this.MethodStorageMayWriteType(target, rootType, visiting, bindings) {
-                                    return true
-                                }
-                            } else {
+                            let callback = this.ResolveEffectCallback(expression, bindings)
+                            if this.EffectCallbackMayWrite(callback, rootType, visiting, bindings) {
                                 return true
                             }
                         }
@@ -20158,7 +20160,7 @@ partial class CSharpToGSharpTranslator {
             method IMethodSymbol,
             rootType ITypeSymbol?,
             visiting HashSet[IMethodSymbol],
-            bindings Dictionary[IParameterSymbol, Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]? = nil,
+            bindings Dictionary[IParameterSymbol, OwnedEffectCallback]? = nil,
             values List[ITypeSymbol?]? = nil,
             receiverType ITypeSymbol? = nil,
             enumerating bool = false,
@@ -20262,7 +20264,7 @@ partial class CSharpToGSharpTranslator {
             method IMethodSymbol,
             rootType ITypeSymbol?,
             visiting HashSet[IMethodSymbol],
-            bindings Dictionary[IParameterSymbol, Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]? = nil,
+            bindings Dictionary[IParameterSymbol, OwnedEffectCallback]? = nil,
             values List[ITypeSymbol?]? = nil,
             defaultComparer bool = false,
             exactEnumeration bool = false
@@ -20270,6 +20272,16 @@ partial class CSharpToGSharpTranslator {
             let method = method.ReducedFrom ?? method
             if method.MethodKind == MethodKind.DelegateInvoke {
                 return true
+            }
+            if method.MethodKind == MethodKind.Constructor &&
+                method.IsImplicitlyDeclared &&
+                method
+                .Parameters
+                .IsEmpty &&
+                method
+                .ContainingType
+                .IsValueType {
+                return false
             }
             {
                 if !method
@@ -20282,6 +20294,23 @@ partial class CSharpToGSharpTranslator {
                         .DeclaringSyntaxReferences
                         .IsDefaultOrEmpty
                 ) {
+                    let owner = this.context.SourceCompilation(method)
+                    if owner == nil {
+                        return true
+                    }
+                    // Symbol provenance selects the body model, even when the
+                    // very same tree instance is also present in the caller.
+                    using let ownerScope = this.context.UseSemanticModelFor(
+                        method
+                            .DeclaringSyntaxReferences
+                            .FirstOrDefault()
+                            ?.SyntaxTree ??
+                            method
+                            .ContainingType
+                            .DeclaringSyntaxReferences[0]
+                            .SyntaxTree,
+                        owner
+                    )
                     this.context.StorageEffectBodyVisits++
                     this.context.BeforeStorageEffectBody?.Invoke()
                     for declaration in method.DeclaringSyntaxReferences {

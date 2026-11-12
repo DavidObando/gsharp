@@ -2400,6 +2400,230 @@ public static class Demo {
     }
 
     @Fact
+    func RefParameter_SharedSyntaxTreeUsesTheSelectedProducerMethodOwner() {
+        let shared = CSharpSyntaxTree.ParseText(
+            "namespace Lib5617 { public static class SharedBody { public static void Probe() { Helper.Touch(); } } }",
+            path: "Shared.cs"
+        )
+        let producerTree = CSharpSyntaxTree.ParseText(
+            "namespace Lib5617 { internal static class Helper { public static void Touch() { Producer.Value = null; } } public static class Producer { public static string? Value; public static void Probe() { SharedBody.Probe(); } } }",
+            path: "Producer.cs"
+        )
+        let helperTree = CSharpSyntaxTree.ParseText(
+            "namespace Lib5617 { internal static class Helper { public static void Touch() {} } }",
+            path: "ConsumerHelper.cs"
+        )
+        let consumerTree = CSharpSyntaxTree.ParseText(
+            "using System; using Lib5617; public static class Demo { private static int Guard(ref string? value) { if(value == null)return 0; Producer.Probe(); return value.Length; } public static string Run() { Producer.Value = \"safe\"; try { return Guard(ref Producer.Value).ToString(); } catch(NullReferenceException) { return \"cleared\"; } } }",
+            path: "Consumer.cs"
+        )
+        let options = CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+            NullableContextOptions.Enable
+        )
+        let producer = CSharpCompilation.Create(
+            "Lib5617",
+            []SyntaxTree{shared, producerTree},
+            CSharpProjectLoader.RuntimeReferences(),
+            options
+        )
+        let consumer = CSharpCompilation.Create(
+            "ConsumerShared5326",
+            []SyntaxTree{shared, helperTree, consumerTree},
+            CSharpProjectLoader.RuntimeReferences().Append(cast[MetadataReference](producer.ToMetadataReference())),
+            options
+        )
+        Assert.Empty(
+            consumer.GetDiagnostics().Where((diagnostic Diagnostic) -> diagnostic.Severity == DiagnosticSeverity.Error)
+        )
+        let model = consumer.GetSemanticModel(consumerTree)
+        let document = LoadedDocument(consumerTree.FilePath, consumerTree, model)
+        let context = TranslationContext(consumer, model, document.FilePath)
+        let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+        Assert.Contains("return value!!.Length", printed)
+        using let producerImage = MemoryStream()
+        let emitted = producer.Emit(producerImage)
+        Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics))
+        Assert.Equal("cleared", CompileAndRun(printed, producerImage.ToArray()).Trim())
+    }
+
+    @Theory
+    @InlineData(true)
+    @InlineData(false)
+    func RefParameter_SharedTreeCallbackRetainsItsCallerCompilation(callbackClears bool) {
+        let shared = CSharpSyntaxTree.ParseText(
+            "using System; namespace Lib5617 { public static class SharedCallback { public static void Invoke(Action action) { action(); } public static void Callback() { Helper.Touch(); } } }",
+            path: "SharedCallback.cs"
+        )
+        let producerTree = CSharpSyntaxTree.ParseText(
+            "using System; namespace Lib5617 { internal static class Helper { public static void Touch() {} } public static class Producer { public static string? Value; public static void Invoke(Action action) { SharedCallback.Invoke(action); } } }",
+            path: "Producer.cs"
+        )
+        let clear = if callbackClears {
+            "Producer.Value = null;"
+        } else {
+            ""
+        }
+        let helperTree = CSharpSyntaxTree.ParseText(
+            "namespace Lib5617 { internal static class Helper { public static void Touch() { $clear } } }",
+            path: "CallerHelper.cs"
+        )
+        let consumerTree = CSharpSyntaxTree.ParseText(
+            "using System; using Lib5617; public static class Demo { private static int Guard(ref string? value) { if(value == null)return 0; Producer.Invoke(SharedCallback.Callback); return value.Length; } public static string Run() { Producer.Value = \"safe\"; try { return Guard(ref Producer.Value).ToString(); } catch(NullReferenceException) { return \"cleared\"; } } }",
+            path: "Caller.cs"
+        )
+        let options = CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+            NullableContextOptions.Enable
+        )
+        let producer = CSharpCompilation.Create(
+            "Lib5617",
+            []SyntaxTree{shared, producerTree},
+            CSharpProjectLoader.RuntimeReferences(),
+            options
+        )
+        let consumer = CSharpCompilation.Create(
+            "CallbackOwners5326",
+            []SyntaxTree{shared, helperTree, consumerTree},
+            CSharpProjectLoader.RuntimeReferences().Append(cast[MetadataReference](producer.ToMetadataReference())),
+            options
+        )
+        Assert.Empty(
+            consumer.GetDiagnostics().Where((diagnostic Diagnostic) -> diagnostic.Severity == DiagnosticSeverity.Error)
+        )
+        let model = consumer.GetSemanticModel(consumerTree)
+        let document = LoadedDocument(consumerTree.FilePath, consumerTree, model)
+        let context = TranslationContext(consumer, model, document.FilePath)
+        let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+        Assert.Contains(
+            if callbackClears {
+                "return value!!.Length"
+            } else {
+                "return value.Length"
+            },
+            printed
+        )
+    }
+
+    @Fact
+    func RefParameter_DocumentOwnershipIsLazySharedAndCatalogVersioned() {
+        let trees = Enumerable
+            .Range(0, 48)
+            .Select(
+            (index int32) ->
+            cast[SyntaxTree](CSharpSyntaxTree.ParseText("public class C$index {}", path: "C$index.cs"))
+        )
+            .ToArray()
+        let compilation = CSharpCompilation.Create("Owners5326", trees, CSharpProjectLoader.RuntimeReferences())
+        let contexts = List[TranslationContext]()
+        var visits = 0
+        for tree in trees {
+            let model = compilation.GetSemanticModel(tree)
+            let context = TranslationContext(compilation, model, tree.FilePath)
+            context.BeforeOwnershipTree = func () {
+                visits++
+            }
+            Assert.Same(model, context.GetOwnedSemanticModel(tree))
+            Assert.False(context.HasOwnershipIndex)
+            contexts.Add(context)
+        }
+        Assert.Equal(0, visits)
+        for context in contexts {
+            Assert.Same(contexts[0].OwnershipIndexIdentity, context.OwnershipIndexIdentity)
+            Assert.Equal(trees.Length, context.OwnershipTreeEntries)
+            Assert.Same(compilation, context.GetOwnedSemanticModel(trees[1]).Compilation)
+        }
+        Assert.Equal(trees.Length, visits)
+        let other = CSharpCompilation.Create(
+            "OtherOwners5326",
+            []SyntaxTree{CSharpSyntaxTree.ParseText("public class Other {}", path: "Other.cs")},
+            CSharpProjectLoader.RuntimeReferences()
+        )
+        let catalog = List[CSharpCompilation]{other}
+        let withCatalog = TranslationContext(
+            compilation,
+            compilation.GetSemanticModel(trees[0]),
+            trees[0].FilePath,
+            repositoryCompilations: catalog
+        )
+        let sameCatalog = TranslationContext(
+            compilation,
+            compilation.GetSemanticModel(trees[1]),
+            trees[1].FilePath,
+            repositoryCompilations: catalog
+        )
+        Assert.Same(withCatalog.OwnershipIndexIdentity, sameCatalog.OwnershipIndexIdentity)
+        Assert.NotSame(contexts[0].OwnershipIndexIdentity, withCatalog.OwnershipIndexIdentity)
+        Assert.Equal(trees.Length + 1, withCatalog.OwnershipTreeEntries)
+        catalog.Clear()
+        let changedCatalog = TranslationContext(
+            compilation,
+            compilation.GetSemanticModel(trees[0]),
+            trees[0].FilePath,
+            repositoryCompilations: catalog
+        )
+        Assert.NotSame(withCatalog.OwnershipIndexIdentity, changedCatalog.OwnershipIndexIdentity)
+        Assert.Equal(trees.Length, changedCatalog.OwnershipTreeEntries)
+        let otherRoot = TranslationContext(other, other.GetSemanticModel(other.SyntaxTrees.Single()), "Other.cs")
+        Assert.NotSame(contexts[0].OwnershipIndexIdentity, otherRoot.OwnershipIndexIdentity)
+    }
+
+    @Fact
+    async func RefParameter_CancelledOwnershipWalkDoesNotPublishAndRetriesCleanly() {
+        let trees = Enumerable
+            .Range(0, 8)
+            .Select(
+            (index int32) ->
+            cast[SyntaxTree](CSharpSyntaxTree.ParseText("public class Cancel$index {}", path: "Cancel$index.cs"))
+        )
+            .ToArray()
+        let compilation = CSharpCompilation.Create(
+            "CancelledOwners5326",
+            trees,
+            CSharpProjectLoader.RuntimeReferences()
+        )
+        using let cancellation = CancellationTokenSource()
+        using let entered = ManualResetEventSlim()
+        using let release = ManualResetEventSlim()
+        let context = TranslationContext(
+            compilation,
+            compilation.GetSemanticModel(trees[0]),
+            trees[0].FilePath,
+            cancellationToken: cancellation.Token
+        )
+        context.BeforeOwnershipTree = func () {
+            entered.Set()
+            if !release.Wait(TimeSpan.FromSeconds(10)) {
+                throw TimeoutException("ownership test barrier not released")
+            }
+        }
+        let worker = Task.Run(
+            func () {
+                let _ = context.OwnershipIndexIdentity
+            }
+        )
+        try {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(10)), "ownership walk did not enter barrier")
+            cancellation.Cancel()
+        } finally {
+            release.Set()
+        }
+        await Assert.ThrowsAnyAsync[OperationCanceledException](
+            async func () {
+                await worker.WaitAsync(TimeSpan.FromSeconds(10))
+            }
+        )
+        Assert.False(context.HasOwnershipIndex)
+        var visits = 0
+        let retry = TranslationContext(compilation, compilation.GetSemanticModel(trees[0]), trees[0].FilePath)
+        retry.BeforeOwnershipTree = func () {
+            visits++
+        }
+        Assert.Equal(trees.Length, retry.OwnershipTreeEntries)
+        Assert.Equal(trees.Length, visits)
+        let reuse = TranslationContext(compilation, compilation.GetSemanticModel(trees[1]), trees[1].FilePath)
+        Assert.Same(retry.OwnershipIndexIdentity, reuse.OwnershipIndexIdentity)
+    }
+
+    @Fact
     func RefParameter_CompilationIndexesAreSharedAcrossDocumentVisitors() {
         let trees = Enumerable
             .Range(0, 8)

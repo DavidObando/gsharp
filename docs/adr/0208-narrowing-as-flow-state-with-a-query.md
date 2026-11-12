@@ -368,6 +368,11 @@ Reference visibility does not require an effect model. Visible host fallbacks
 outside the supported framework manifest retain unknown effects.
 The C# loader binds owned immutable reference images. Effect trust uses those
 same bytes, not a reference's supplied path. Unverified Roslyn references remain unknown.
+Arbitrary Roslyn references keep their actual metadata and properties: `FilePath`
+does not authorize reopening or rebinding them. File-origin authority is recorded
+only at the loader's private MSBuild file-input ingestion boundary. Owned metadata
+identity preserves verified provenance across property projections without rereading
+or hashing the image.
 
 Comparer discovery examines all visible untrusted assemblies, including private
 implementations and unregistered host assemblies. A binding pass caches the
@@ -425,6 +430,13 @@ Snapshot I/O failures preserve the original untrusted reference and its Roslyn d
 Runtime manifest names and callback inventories remain local until their complete input validates or their scan succeeds.
 Deferred and comparer indexes publish together as one immutable bundle; cancellation leaves no partial shared entries.
 An exact source override summary replaces its inherited declaration's fallback summary when the bound slot proves the target.
+Effect bodies and initializers carry their selected method's compilation owner.
+Callback bindings retain the caller's owning compilation independently of the callee.
+The same syntax-tree instance in two compilations is not a shared semantic model;
+operation and callback summary keys include ownership. Active owned models take an
+O(1) fast path. Immutable ownership indexes are weakly shared by actual root graph
+and catalog identity/version, rather than copied per document. Cancellation stages
+the graph locally and publishes no partial index or failed lazy value.
 
 The original open-comparer corpus row `h1_by_ref_param_survives_calls` now records its exact rejection diagnostics.
 The disjoint out-parameter execution control re-proves its fact around unknown comparer calls.
