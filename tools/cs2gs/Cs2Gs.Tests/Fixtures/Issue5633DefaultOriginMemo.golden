@@ -1,0 +1,21 @@
+package Demo
+
+import SystemObject = System.Object
+
+shared class P {
+    private func IsNull[T](value T) string -> (value == nil).ToString()
+
+    func Run(flag bool) string {
+        var value object? = SystemObject()
+        let before = if flag { value!! } else { value!! }
+        value = default(object?)
+        let after object? = if flag { value } else { value }
+        var pair (Left object?, Right object?) = (SystemObject(), SystemObject())
+        let saved = pair
+        pair = if flag { (default(object), SystemObject()) } else { (default(object), SystemObject()) }
+        let (savedLeft, savedRight) = saved
+        let (currentLeftValue, currentRight) = pair
+        let currentLeft object? = currentLeftValue
+        return IsNull(before!!) + ":" + IsNull(after) + ":" + IsNull(savedLeft!!) + ":" + IsNull(savedRight!!) + ":" + IsNull(currentLeft) + ":" + IsNull(currentRight)
+    }
+}
