@@ -18,6 +18,7 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 - Match forwarded handler constructor arguments without treating an `out bool` gate as a bool value. Match forwarded ref kinds and reject readonly addresses for writable constructor slots. Capture managed call addresses in source order, preserving null, bounds, and array-type checks. Adapt captured addresses to selected constructor value parameters without repeating source evaluations. Overloaded handlers preserve constructor gating and emit valid IL. (Fixes #5966)
 
+- Infer inline `out` locals from substituted generic function parameters, preserving closed reference and value types and caller type parameters. (Fixes #5971)
 - Accept return-target attributes on delegates and emit them on `Invoke` return parameters. Preserve type and parameter attributes. Reject unsupported delegate return `MarshalAs` with `GS0360` instead of omitting required marshalling metadata. (Fixes #5967)
 
 - Share local default-value and deconstruction reachability through sparse alias dependencies and finite tuple-index summaries, including reassigned locals, split aliases, loop-carried cycles and tuple-unboxing cycles. (Fixes #5633)
