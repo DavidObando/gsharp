@@ -16,6 +16,7 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Infer inline `out` locals from substituted generic function parameters, preserving closed reference and value types and caller type parameters. (Fixes #5971)
 - **Require complete callback proofs for storage effects** (#5326). Include direct formatting, open imported callbacks, handwritten enumeration, and private imported comparers. Limit deferred-factory models to verified framework images and each function's own yields. Skip unreadable reference-pack manifests without trusting partial results. Reuse verified runtime image hashes across queries, and synchronize active cancellation tests without timing races.
 - Accept return-target attributes on delegates and emit them on `Invoke` return parameters. Preserve type and parameter attributes. Reject unsupported delegate return `MarshalAs` with `GS0360` instead of omitting required marshalling metadata. (Fixes #5967)
 
