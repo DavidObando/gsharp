@@ -49,6 +49,8 @@ partial class CSharpToGSharpTranslator {
         private let defaultOriginFinal DefaultOriginQuery = DefaultOriginQuery(nil)
         private let defaultOriginPending Queue[DefaultOriginQuery] = Queue[DefaultOriginQuery]()
         private let defaultOriginEdges Queue[DefaultOriginEdge] = Queue[DefaultOriginEdge]()
+        private let defaultOriginPositive Queue[DefaultOriginQuery] = Queue[DefaultOriginQuery]()
+        private var defaultOriginOperations int64 = 0
         private let defaultOriginEdgeKeys HashSet[(DefaultOriginQuery, DefaultOriginQuery, int32)] = HashSet[
             (DefaultOriginQuery, DefaultOriginQuery, int32)
         ]()
@@ -64,6 +66,7 @@ partial class CSharpToGSharpTranslator {
             public let Incoming List[DefaultOriginEdge] = List[DefaultOriginEdge]()
             public let PushParents List[(int32, DefaultOriginQuery)] = List[(int32, DefaultOriginQuery)]()
             public var Witness ExpressionSyntax? = nil
+            public var ProjectedNullDefault ExpressionSyntax? = nil
 
             init(source ExpressionSyntax?) {
                 this.Source = source
@@ -84,6 +87,13 @@ partial class CSharpToGSharpTranslator {
                 this.Witness = witness
             }
         }
+
+        // Count insertion and evidence-propagation attempts, including duplicates, to detect dense-closure regressions.
+        func GetDefaultOriginMetrics()(SourceCount int32, EdgeCount int32, OperationCount int64) -> (
+            this.defaultOriginQueries.Count,
+            this.defaultOriginEdgeKeys.Count,
+            this.defaultOriginOperations
+        )
 
         private enum DelegateArgumentBehavior {
             NotObserved,
@@ -720,51 +730,54 @@ partial class CSharpToGSharpTranslator {
                 return nil
             }
             let root = this.GetDefaultOriginQuery(source)
-            this.AddDefaultOriginEdge(this.defaultOriginFinal, this.defaultOriginFinal, -1, nil)
             for index in path {
                 this.AddDefaultOriginIndex(index)
             }
             while this.defaultOriginPending.TryDequeue(out var query) {
                 this.ExpandDefaultOriginQuery(query)
             }
-            // Saturate finite stack summaries. Cast/unboxing cycles never create longer concrete path keys.
-            while this.defaultOriginEdges.TryDequeue(out var edge) {
-                for suffix in edge.To.Outgoing.ToArray() {
-                    if edge.Index < 0 || suffix.Index < 0 {
-                        this.AddDefaultOriginEdge(
-                            edge.From,
-                            suffix.To,
-                            if edge.Index < 0 {
-                                suffix.Index
-                            } else {
-                                edge.Index
-                            },
-                            edge.Witness ?? suffix.Witness
-                        )
-                    }
-                }
-                for prefix in edge.From.Incoming.ToArray() {
-                    if prefix.Index < 0 || edge.Index < 0 {
-                        this.AddDefaultOriginEdge(
-                            prefix.From,
-                            edge.To,
+            // Keep aliases sparse. Only consuming transitions propagate through epsilon dependencies.
+            while this.defaultOriginEdges.Count > 0 || this.defaultOriginPositive.Count > 0 {
+                if this.defaultOriginEdges.TryDequeue(out var edge) {
+                    if edge.Index < 0 {
+                        for suffix in edge.To.Outgoing.ToArray() {
+                            if suffix.Index >= 0 {
+                                this.AddDefaultOriginEdge(
+                                    edge.From,
+                                    suffix.To,
+                                    suffix.Index,
+                                    edge.Witness ?? suffix.Witness
+                                )
+                            }
+                        }
+                    } else {
+                        for prefix in edge.From.Incoming.ToArray() {
                             if prefix.Index < 0 {
-                                edge.Index
-                            } else {
-                                prefix.Index
-                            },
-                            prefix.Witness ?? edge.Witness
-                        )
+                                this.AddDefaultOriginEdge(
+                                    prefix.From,
+                                    edge.To,
+                                    edge.Index,
+                                    prefix.Witness ?? edge.Witness
+                                )
+                            }
+                        }
+                        // Matching summaries represent unbounded projection depth without enumerating concrete paths.
+                        for push in edge.From.PushParents.ToArray() {
+                            if push.Item1 == edge.Index {
+                                this.AddDefaultOriginEdge(push.Item2, edge.To, -1, edge.Witness)
+                            }
+                        }
                     }
-                }
-                if edge.Index >= 0 {
-                    // Matching push/pop summaries represent arbitrary projection depth with finitely many source states.
-                    for push in edge.From.PushParents.ToArray() {
-                        if push.Item1 == edge.Index {
-                            this.AddDefaultOriginEdge(push.Item2, edge.To, -1, edge.Witness)
+                } else if this.defaultOriginPositive.TryDequeue(out var positive) {
+                    for incoming in positive.Incoming {
+                        if incoming.Index < 0 {
+                            this.MarkDefaultOrigin(incoming.From, incoming.Witness ?? positive.Witness)
                         }
                     }
                 }
+            }
+            if path.Count == 0 {
+                return root.Witness
             }
             let states = Dictionary[DefaultOriginQuery, ExpressionSyntax?]()
             states.Add(root, nil)
@@ -783,10 +796,9 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             for state in states {
-                for edge in state.Key.Outgoing {
-                    if edge.Index < 0 && edge.To == this.defaultOriginFinal {
-                        return state.Value ?? edge.Witness
-                    }
+                let witness = state.Value ?? state.Key.Witness
+                if witness != nil {
+                    return witness
                 }
             }
             return nil
@@ -798,6 +810,7 @@ partial class CSharpToGSharpTranslator {
             index int32,
             witness ExpressionSyntax?
         ) {
+            this.defaultOriginOperations++
             if !this.defaultOriginEdgeKeys.Add((from, to, index)) {
                 return
             }
@@ -805,6 +818,17 @@ partial class CSharpToGSharpTranslator {
             from.Outgoing.Add(edge)
             to.Incoming.Add(edge)
             this.defaultOriginEdges.Enqueue(edge)
+            if index < 0 {
+                this.MarkDefaultOrigin(from, witness ?? to.Witness)
+            }
+        }
+
+        private func MarkDefaultOrigin(query DefaultOriginQuery, witness ExpressionSyntax?) {
+            this.defaultOriginOperations++
+            if witness != nil && query.Witness == nil {
+                query.Witness = witness
+                this.defaultOriginPositive.Enqueue(query)
+            }
         }
 
         private func AddDefaultOriginIndex(index int32) {
@@ -813,7 +837,7 @@ partial class CSharpToGSharpTranslator {
             }
             this.AddDefaultOriginEdge(this.defaultOriginFinal, this.defaultOriginFinal, index, nil)
             for query in this.defaultOriginNulls {
-                this.AddDefaultOriginEdge(query, this.defaultOriginFinal, index, query.Witness)
+                this.AddDefaultOriginEdge(query, this.defaultOriginFinal, index, query.ProjectedNullDefault)
             }
             for guarded in this.defaultOriginGuards.ToArray() {
                 this.AddDefaultOriginGuard(guarded.Item1, guarded.Item2, index)
@@ -867,10 +891,10 @@ partial class CSharpToGSharpTranslator {
                 return
             }
             if source.IsKind(SyntaxKind.NullLiteralExpression) {
-                query.Witness = SyntaxFactory.LiteralExpression(SyntaxKind.DefaultLiteralExpression)
+                query.ProjectedNullDefault = SyntaxFactory.LiteralExpression(SyntaxKind.DefaultLiteralExpression)
                 this.defaultOriginNulls.Add(query)
                 for index in this.defaultOriginIndices.OrderBy((index int32) -> index) {
-                    this.AddDefaultOriginEdge(query, this.defaultOriginFinal, index, query.Witness)
+                    this.AddDefaultOriginEdge(query, this.defaultOriginFinal, index, query.ProjectedNullDefault)
                 }
                 return
             }
@@ -961,7 +985,15 @@ partial class CSharpToGSharpTranslator {
             }
             let key = (declaration, source.SpanStart)
             if !this.defaultOriginReachingValues.TryGetValue(key, out var reaching) {
-                reaching = this.GetReachingLocalValues(local, source.SpanStart, preserveProvenance: true)
+                // A never-written, non-ref local has exactly its initializer at every valid read, including captures.
+                reaching = if local.RefKind == RefKind.None &&
+                    declaration is VariableDeclaratorSyntax{Initializer: {Value: {} initializer}} &&
+                    FindEnclosingExecutable(declaration) is {} executable &&
+                    !this.IsSymbolReassigned(local, executable) {
+                    []ExpressionSyntax{initializer}
+                } else {
+                    this.GetReachingLocalValues(local, source.SpanStart, preserveProvenance: true)
+                }
                 this.defaultOriginReachingValues.Add(key, reaching)
             }
             for value in reaching.OrderBy((value ExpressionSyntax) -> value.SpanStart).ThenBy(

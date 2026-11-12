@@ -1650,6 +1650,61 @@ partial class CSharpToGSharpTranslator {
                 this.IsReferenceLikeOrManagedReference(effectiveType)
         }
 
+        private func GetManagedReferenceArrayProjectedInitializerType(
+            initializer Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+        ) ITypeSymbol? {
+            let aliases = List[
+                (Local ILocalSymbol, Initializer Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax)
+            ]()
+            var source = Unparenthesize(initializer)
+            // Fold direct alias chains iteratively. Projection environments remain live; no negative type answer is cached.
+            while source is IdentifierNameSyntax identifier &&
+                this
+                .context
+                .GetSymbolInfo(identifier)
+                .Symbol is ILocalSymbol local &&
+                !this
+                .state
+                .ProjectedQueryBindingType
+                .ContainsKey(local) &&
+                !this
+                .state
+                .ManagedReferenceArrayNullable
+                .ManagedReferenceArrayProjectedLocalType
+                .ContainsKey(local) &&
+                !this
+                .state
+                .ManagedReferenceArrayProjectedLocalTypeInProgress
+                .Contains(local) &&
+                local
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} next}} &&
+                (local.Type is IArrayTypeSymbol || IsImplicitlyTypedLocal(local)) {
+                aliases.Add((local, next))
+                source = Unparenthesize(next)
+            }
+            var projected = this.GetManagedReferenceArrayProjectedExpressionType(source)
+            for var i = aliases.Count - 1; i >= 0; i-- {
+                let alias = aliases[i]
+                if alias.Local.Type is IArrayTypeSymbol {
+                    if projected != nil {
+                        this
+                            .state
+                            .ManagedReferenceArrayNullable
+                            .ManagedReferenceArrayProjectedLocalType[alias.Local] = projected
+                    }
+                } else if projected == nil || SymbolEqualityComparer.IncludeNullability.Equals(
+                    alias.Local.Type,
+                    projected
+                ) ||
+                    !this.InferredLocalAssignmentsMatch(alias.Local, alias.Initializer, projected) {
+                    return nil
+                }
+            }
+            return projected
+        }
+
         private func GetManagedReferenceArrayProjectedExpressionType(
             expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
         ) ITypeSymbol? {
@@ -1717,7 +1772,7 @@ partial class CSharpToGSharpTranslator {
                         .FirstOrDefault()
                         ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} initializer}} {
                         if local.Type is IArrayTypeSymbol {
-                            projectedLocalType = this.GetManagedReferenceArrayProjectedExpressionType(initializer)
+                            projectedLocalType = this.GetManagedReferenceArrayProjectedInitializerType(initializer)
                             if projectedLocalType != nil {
                                 this
                                     .state
@@ -1727,7 +1782,7 @@ partial class CSharpToGSharpTranslator {
                             return projectedLocalType
                         }
                         if IsImplicitlyTypedLocal(local) || Unparenthesize(initializer) is CollectionExpressionSyntax {
-                            projectedLocalType = this.GetManagedReferenceArrayProjectedExpressionType(initializer)
+                            projectedLocalType = this.GetManagedReferenceArrayProjectedInitializerType(initializer)
                             if projectedLocalType != nil && !SymbolEqualityComparer.IncludeNullability.Equals(
                                 local.Type,
                                 projectedLocalType

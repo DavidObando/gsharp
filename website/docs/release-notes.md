@@ -16,7 +16,7 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
-- Share local default-value and deconstruction reachability across conditional, switch and coalescing alias chains, including reassigned locals, split aliases, loop-carried cycles and tuple-unboxing cycles. (Fixes #5633)
+- Share local default-value and deconstruction reachability through sparse alias dependencies and finite tuple-index summaries, including reassigned locals, split aliases, loop-carried cycles and tuple-unboxing cycles. (Fixes #5633)
 
 - Preserve nullable tuple leaves in generic indexer writes in `cs2gs`, instead of inserting runtime null assertions. (Part of #5948)
 - **Preserve promoted-local null-guard narrowing in `cs2gs`** (Fixes #5645). Nullable-oblivious translations omit redundant `!!` assertions on guarded immutable-local receiver and argument reads. Mutable receivers, intervening escaped-closure calls, and mutable capture boundaries retain required assertions. Promoted nullable tuple destinations accept values changed through ref aliases without asserting the yielded value. Destination projection preserves intermediate assignment contracts before following assignment results into nullable arrays.

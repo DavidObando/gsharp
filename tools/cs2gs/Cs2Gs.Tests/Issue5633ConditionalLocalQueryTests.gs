@@ -21,6 +21,8 @@ import Xunit.Abstractions
 /// @remarks Before this fix, the enabled reassignment and deconstruction rows exceed the ten-second translation bound.
 open class Issue5633ConditionalLocalQueryTests {
     private let output ITestOutputHelper
+    private var translationAllocatedBytes int64 = 0
+    private var translationOriginMetrics(SourceCount int32, EdgeCount int32, OperationCount int64)
 
     init(output ITestOutputHelper) {
         this.output = output
@@ -171,6 +173,51 @@ open class Issue5633ConditionalLocalQueryTests {
         )
         Assert.Contains("return seed", printed)
         TranslationTestValidation.AssertBinds(printed)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func LargeScalarAliasChain_RetainsSparseLinearQueryWork(hasDefault bool) {
+        let metrics = System.Collections.Generic.List[(SourceCount int32, EdgeCount int32, OperationCount int64)]()
+        for links in[]int32{16, 128, 256, 512} {
+            let body = StringBuilder("var x0 = ${if hasDefault { "default(T)" } else { "p" }};\n")
+            for var i = 1; i <= links; i++ {
+                body.AppendLine("var x$i = x${i - 1};")
+            }
+            let printed = this.TranslateWithinBound(
+                "#nullable enable\nnamespace Demo { public static class P {\n" +
+                    "static T? Chain<T>(T p) {\n" +
+                    body.ToString() + "return x$links;\n} } }",
+                enabled: true
+            )
+            if links == 16 {
+                continue
+            }
+            metrics.Add(this.translationOriginMetrics)
+            this.output.WriteLine(
+                "$links links: ${this.translationAllocatedBytes} allocated bytes; " +
+                    "${this.translationOriginMetrics.SourceCount} sources; " +
+                    "${this.translationOriginMetrics.EdgeCount} edges; " +
+                    "${this.translationOriginMetrics.OperationCount} graph operations"
+            )
+            Assert.Contains(
+                if hasDefault {
+                    "let x$links T? = x${links - 1}"
+                } else {
+                    "let x$links = x${links - 1}"
+                },
+                printed
+            )
+            TranslationTestValidation.AssertBinds(printed)
+        }
+        Assert.True(
+            metrics[2].SourceCount <= metrics[0].SourceCount * 5 &&
+                metrics[2].EdgeCount <= metrics[0].EdgeCount * 5 &&
+                metrics[1].OperationCount <= metrics[0].OperationCount * 3 &&
+                metrics[2].OperationCount <= metrics[1].OperationCount * 3,
+            "Quadrupling links must retain linear source/edge counts and sub-quadratic graph work: ${metrics[0]} -> ${metrics[2]}."
+        )
     }
 
     @Theory
@@ -494,7 +541,14 @@ namespace Demo
         let context = TranslationContext(compilation, document.SemanticModel, document.FilePath)
         let elapsed = Stopwatch.StartNew()
         let translation = Task.Run(
-            () -> GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+            () -> {
+                let before = GC.GetAllocatedBytesForCurrentThread()
+                let translator = CSharpToGSharpTranslator()
+                let printed = GSharpPrinter.Print(translator.TranslateDocument(document, context))
+                this.translationAllocatedBytes = GC.GetAllocatedBytesForCurrentThread() - before
+                this.translationOriginMetrics = translator.LastDefaultOriginMetrics
+                return printed
+            }
         )
         Assert.True(translation.Wait(TimeSpan.FromSeconds(10)), "Translation took over 10 seconds.")
         elapsed.Stop()
