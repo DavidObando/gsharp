@@ -1,0 +1,56 @@
+package Demo
+
+import System
+import System.Linq
+
+class Node {
+    var Name string
+
+    init(name string) {
+        Name = name
+    }
+}
+
+private func Read(value Node?) string -> if value == nil { "null" } else { value.Name }
+
+private func Force(rows []Node?) string {
+    try {
+        return rows[0]!!.Name
+    } catch (NullReferenceException) {
+        return "nre"
+    }
+}
+
+private func Scalar[T](seed T) bool {
+    var a = seed
+    var b = a
+    a = default(T)
+    b = a
+    a = b
+    let read () -> T = () -> b
+    return read() == nil
+}
+
+let stable = []Node?{Node("stable")}
+let safeAlias = stable
+var rows = [1]Node?
+var alias = rows
+var saved = alias
+let read () -> string = () -> Read(saved[0])
+alias = []Node?{Node("present")}
+saved = alias
+rows = saved
+let nested = [][]Node?{[]Node?{Node("present")}}
+let nestedAlias = nested
+alias = nestedAlias[0]
+saved = alias
+
+let query = nestedAlias.Select((row []Node?) -> {
+    return (row, row)
+}).Select(((row []Node?, selected []Node?)) -> selected[0])
+
+let before = Force(alias)
+saved[0] = nil
+
+Console.Write(
+    Force(safeAlias) + "|" + before + ":" + read() + ":" + string.Join(",", query.Select(Read)) + ":" + Force(alias) + ":" + Scalar("seed").ToString() + ":" + Scalar(1).ToString())
