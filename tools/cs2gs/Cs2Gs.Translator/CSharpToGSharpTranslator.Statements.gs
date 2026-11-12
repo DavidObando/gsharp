@@ -34,26 +34,54 @@ partial class CSharpToGSharpTranslator {
             SyntaxNode,
             HashSet[string]
         ]()
-        private let defaultOriginQueries Dictionary[(ExpressionSyntax, string), DefaultOriginQuery] = Dictionary[
-            (ExpressionSyntax, string),
+        private let defaultOriginQueries Dictionary[ExpressionSyntax, DefaultOriginQuery] = Dictionary[
+            ExpressionSyntax,
             DefaultOriginQuery
+        ]()
+        private let defaultOriginProjections Dictionary[(ExpressionSyntax, string), ExpressionSyntax] = Dictionary[
+            (ExpressionSyntax, string),
+            ExpressionSyntax
         ]()
         private let defaultOriginReachingValues Dictionary[
             (SyntaxNode, int32),
             IReadOnlyList[ExpressionSyntax]
         ] = Dictionary[(SyntaxNode, int32), IReadOnlyList[ExpressionSyntax]]()
+        private let defaultOriginFinal DefaultOriginQuery = DefaultOriginQuery(nil)
+        private let defaultOriginPending Queue[DefaultOriginQuery] = Queue[DefaultOriginQuery]()
+        private let defaultOriginEdges Queue[DefaultOriginEdge] = Queue[DefaultOriginEdge]()
+        private let defaultOriginEdgeKeys HashSet[(DefaultOriginQuery, DefaultOriginQuery, int32)] = HashSet[
+            (DefaultOriginQuery, DefaultOriginQuery, int32)
+        ]()
+        private let defaultOriginIndices HashSet[int32] = HashSet[int32]()
+        private let defaultOriginNulls List[DefaultOriginQuery] = List[DefaultOriginQuery]()
+        private let defaultOriginGuards List[(DefaultOriginQuery, DefaultOriginQuery)] = List[
+            (DefaultOriginQuery, DefaultOriginQuery)
+        ]()
 
         private class DefaultOriginQuery {
-            public let Source ExpressionSyntax
-            public let Path IReadOnlyList[int32]
-            public let Parents List[DefaultOriginQuery] = List[DefaultOriginQuery]()
+            public let Source ExpressionSyntax?
+            public let Outgoing List[DefaultOriginEdge] = List[DefaultOriginEdge]()
+            public let Incoming List[DefaultOriginEdge] = List[DefaultOriginEdge]()
+            public let PushParents List[(int32, DefaultOriginQuery)] = List[(int32, DefaultOriginQuery)]()
             public var Witness ExpressionSyntax? = nil
-            public var Projection ExpressionSyntax? = nil
-            public var Complete bool = false
 
-            init(source ExpressionSyntax, path IReadOnlyList[int32]) {
+            init(source ExpressionSyntax?) {
                 this.Source = source
-                this.Path = path
+            }
+        }
+
+        private class DefaultOriginEdge {
+            // An edge consumes one tuple index; -1 consumes none. Push rules prepend an index before entering another source.
+            public let From DefaultOriginQuery
+            public let To DefaultOriginQuery
+            public let Index int32
+            public let Witness ExpressionSyntax?
+
+            init(from DefaultOriginQuery, to DefaultOriginQuery, index int32, witness ExpressionSyntax?) {
+                this.From = from
+                this.To = to
+                this.Index = index
+                this.Witness = witness
             }
         }
 
@@ -661,17 +689,11 @@ partial class CSharpToGSharpTranslator {
             return local!!.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated
         }
 
-        private func GetDefaultOriginQuery(source ExpressionSyntax, path IReadOnlyList[int32]) DefaultOriginQuery {
-            var source = source
-            var path = path
-            if this.TryGetReachingTupleProjection(source, out var origin, out var projection) {
-                source = origin!!
-                path = projection!!.Concat(path).ToArray()
-            }
-            let key = (source, FormatTupleProjection(path.ToList()))
-            if !this.defaultOriginQueries.TryGetValue(key, out var query) {
-                query = DefaultOriginQuery(source, path)
-                this.defaultOriginQueries.Add(key, query)
+        private func GetDefaultOriginQuery(source ExpressionSyntax) DefaultOriginQuery {
+            if !this.defaultOriginQueries.TryGetValue(source, out var query) {
+                query = DefaultOriginQuery(source)
+                this.defaultOriginQueries.Add(source, query)
+                this.defaultOriginPending.Enqueue(query)
             }
             return query
         }
@@ -680,122 +702,237 @@ partial class CSharpToGSharpTranslator {
             source ExpressionSyntax,
             path IReadOnlyList[int32]
         ) ExpressionSyntax {
-            let query = this.GetDefaultOriginQuery(source, path)
+            let key = (source, FormatTupleProjection(path.ToList()))
             // Recursive callback fixed points require stable syntax identities, including projected deconstruction leaves.
-            query.Projection ??= if query.Path.Count == 0 {
-                query.Source
-            } else {
-                this.PreserveReachingTupleProjection(query.Source, query.Path)
+            if !this.defaultOriginProjections.TryGetValue(key, out var projected) {
+                projected = if path.Count == 0 {
+                    source
+                } else {
+                    this.PreserveReachingTupleProjection(source, path)!!
+                }
+                this.defaultOriginProjections.Add(key, projected)
             }
-            return query.Projection!!
+            return projected
         }
 
         private func FindDefaultOrigin(source ExpressionSyntax?, path IReadOnlyList[int32]) ExpressionSyntax? {
             if source == nil {
                 return nil
             }
-            let root = this.GetDefaultOriginQuery(source, path)
-            if root.Complete {
-                return root.Witness
+            let root = this.GetDefaultOriginQuery(source)
+            this.AddDefaultOriginEdge(this.defaultOriginFinal, this.defaultOriginFinal, -1, nil)
+            for index in path {
+                this.AddDefaultOriginIndex(index)
             }
-            let queries = List[DefaultOriginQuery]{root}
-            let seen = HashSet[DefaultOriginQuery]{root}
-            let positive = Queue[DefaultOriginQuery]()
-            try {
-                // Expand the entire reachable graph before completing negatives, including strongly connected queries.
-                for var i = 0; i < queries.Count; i++ {
-                    let query = queries[i]
-                    let dependencies = List[DefaultOriginQuery]()
-                    this.ExpandDefaultOriginQuery(query, dependencies)
-                    for dependency in dependencies {
-                        if dependency.Complete {
-                            if dependency.Witness != nil {
-                                query.Witness = dependency.Witness
-                            }
-                        } else {
-                            dependency.Parents.Add(query)
-                            if seen.Add(dependency) {
-                                queries.Add(dependency)
-                            }
+            while this.defaultOriginPending.TryDequeue(out var query) {
+                this.ExpandDefaultOriginQuery(query)
+            }
+            // Saturate finite stack summaries. Cast/unboxing cycles never create longer concrete path keys.
+            while this.defaultOriginEdges.TryDequeue(out var edge) {
+                for suffix in edge.To.Outgoing.ToArray() {
+                    if edge.Index < 0 || suffix.Index < 0 {
+                        this.AddDefaultOriginEdge(
+                            edge.From,
+                            suffix.To,
+                            if edge.Index < 0 {
+                                suffix.Index
+                            } else {
+                                edge.Index
+                            },
+                            edge.Witness ?? suffix.Witness
+                        )
+                    }
+                }
+                for prefix in edge.From.Incoming.ToArray() {
+                    if prefix.Index < 0 || edge.Index < 0 {
+                        this.AddDefaultOriginEdge(
+                            prefix.From,
+                            edge.To,
+                            if prefix.Index < 0 {
+                                edge.Index
+                            } else {
+                                prefix.Index
+                            },
+                            prefix.Witness ?? edge.Witness
+                        )
+                    }
+                }
+                if edge.Index >= 0 {
+                    // Matching push/pop summaries represent arbitrary projection depth with finitely many source states.
+                    for push in edge.From.PushParents.ToArray() {
+                        if push.Item1 == edge.Index {
+                            this.AddDefaultOriginEdge(push.Item2, edge.To, -1, edge.Witness)
                         }
                     }
-                    if query.Witness != nil {
-                        positive.Enqueue(query)
-                    }
                 }
-                // Default evidence propagates backwards once. Closed components without evidence are complete negatives.
-                while positive.TryDequeue(out var query) {
-                    for parent in query.Parents {
-                        if parent.Witness == nil {
-                            parent.Witness = query.Witness
-                            positive.Enqueue(parent)
+            }
+            let states = Dictionary[DefaultOriginQuery, ExpressionSyntax?]()
+            states.Add(root, nil)
+            for index in path {
+                let next = Dictionary[DefaultOriginQuery, ExpressionSyntax?]()
+                for state in states {
+                    for edge in state.Key.Outgoing {
+                        if edge.Index == index {
+                            next.TryAdd(edge.To, state.Value ?? edge.Witness)
                         }
                     }
                 }
-                for query in queries {
-                    query.Complete = true
-                }
-            } finally {
-                for query in queries {
-                    query.Parents.Clear()
+                states.Clear()
+                for state in next {
+                    states.Add(state.Key, state.Value)
                 }
             }
-            return root.Witness
+            for state in states {
+                for edge in state.Key.Outgoing {
+                    if edge.Index < 0 && edge.To == this.defaultOriginFinal {
+                        return state.Value ?? edge.Witness
+                    }
+                }
+            }
+            return nil
         }
 
-        private func ExpandDefaultOriginQuery(query DefaultOriginQuery, dependencies List[DefaultOriginQuery]) {
-            let source = query.Source
-            let path = query.Path
-            if source is DefaultExpressionSyntax || source.IsKind(SyntaxKind.DefaultLiteralExpression) ||
-                (path.Count > 0 && IsNullOrDefaultLiteral(source)) {
-                query.Witness = source
+        private func AddDefaultOriginEdge(
+            from DefaultOriginQuery,
+            to DefaultOriginQuery,
+            index int32,
+            witness ExpressionSyntax?
+        ) {
+            if !this.defaultOriginEdgeKeys.Add((from, to, index)) {
+                return
+            }
+            let edge = DefaultOriginEdge(from, to, index, witness)
+            from.Outgoing.Add(edge)
+            to.Incoming.Add(edge)
+            this.defaultOriginEdges.Enqueue(edge)
+        }
+
+        private func AddDefaultOriginIndex(index int32) {
+            if !this.defaultOriginIndices.Add(index) {
+                return
+            }
+            this.AddDefaultOriginEdge(this.defaultOriginFinal, this.defaultOriginFinal, index, nil)
+            for query in this.defaultOriginNulls {
+                this.AddDefaultOriginEdge(query, this.defaultOriginFinal, index, query.Witness)
+            }
+            for guarded in this.defaultOriginGuards.ToArray() {
+                this.AddDefaultOriginGuard(guarded.Item1, guarded.Item2, index)
+            }
+        }
+
+        private func AddDefaultOriginPush(from DefaultOriginQuery, to DefaultOriginQuery, index int32) {
+            this.AddDefaultOriginIndex(index)
+            to.PushParents.Add((index, from))
+            for edge in to.Outgoing.ToArray() {
+                if edge.Index == index {
+                    this.AddDefaultOriginEdge(from, edge.To, -1, edge.Witness)
+                }
+            }
+        }
+
+        private func AddDefaultOriginProjection(
+            from DefaultOriginQuery,
+            source ExpressionSyntax,
+            path IReadOnlyList[int32]
+        ) {
+            var current = from
+            for var i = path.Count - 1; i >= 0; i-- {
+                let next = if i == 0 {
+                    this.GetDefaultOriginQuery(source)
+                } else {
+                    DefaultOriginQuery(nil)
+                }
+                this.AddDefaultOriginPush(current, next, path[i])
+                current = next
+            }
+            if path.Count == 0 {
+                this.AddDefaultOriginEdge(from, this.GetDefaultOriginQuery(source), -1, nil)
+            }
+        }
+
+        private func AddDefaultOriginGuard(from DefaultOriginQuery, to DefaultOriginQuery, index int32) {
+            let projected = DefaultOriginQuery(nil)
+            this.AddDefaultOriginEdge(from, projected, index, nil)
+            this.AddDefaultOriginPush(projected, to, index)
+        }
+
+        private func ExpandDefaultOriginQuery(query DefaultOriginQuery) {
+            let source = query.Source!!
+            if this.TryGetReachingTupleProjection(source, out var origin, out var projection) {
+                this.AddDefaultOriginProjection(query, origin!!, projection!!)
+                return
+            }
+            if source is DefaultExpressionSyntax || source.IsKind(SyntaxKind.DefaultLiteralExpression) {
+                this.AddDefaultOriginEdge(query, this.defaultOriginFinal, -1, source)
+                return
+            }
+            if source.IsKind(SyntaxKind.NullLiteralExpression) {
+                query.Witness = SyntaxFactory.LiteralExpression(SyntaxKind.DefaultLiteralExpression)
+                this.defaultOriginNulls.Add(query)
+                for index in this.defaultOriginIndices.OrderBy((index int32) -> index) {
+                    this.AddDefaultOriginEdge(query, this.defaultOriginFinal, index, query.Witness)
+                }
                 return
             }
             switch source {
                 case parenthesized is ParenthesizedExpressionSyntax {
-                    dependencies.Add(this.GetDefaultOriginQuery(parenthesized.Expression, path))
+                    this.AddDefaultOriginEdge(query, this.GetDefaultOriginQuery(parenthesized.Expression), -1, nil)
                     return
                 }
                 case suppression is PostfixUnaryExpressionSyntax when suppression.IsKind(
                     SyntaxKind.SuppressNullableWarningExpression
                 ) {
-                    dependencies.Add(this.GetDefaultOriginQuery(suppression.Operand, path))
+                    this.AddDefaultOriginEdge(query, this.GetDefaultOriginQuery(suppression.Operand), -1, nil)
                     return
                 }
                 case cast is CastExpressionSyntax {
-                    dependencies.Add(this.GetDefaultOriginQuery(cast.Expression, path))
+                    this.AddDefaultOriginEdge(query, this.GetDefaultOriginQuery(cast.Expression), -1, nil)
                     return
                 }
                 case assignment is AssignmentExpressionSyntax when assignment.IsKind(
                     SyntaxKind.SimpleAssignmentExpression
                 ) ||
-                    (
-                    assignment.IsKind(SyntaxKind.CoalesceAssignmentExpression) &&
-                        (path.Count > 0 || !this.CoalesceAssignmentResultIsStaticallyNonNull(assignment))
-                ) {
-                    dependencies.Add(this.GetDefaultOriginQuery(assignment.Right, path))
+                    assignment
+                    .IsKind(SyntaxKind.CoalesceAssignmentExpression) {
+                    let right = this.GetDefaultOriginQuery(assignment.Right)
+                    if assignment.IsKind(SyntaxKind.CoalesceAssignmentExpression) &&
+                        this
+                        .CoalesceAssignmentResultIsStaticallyNonNull(assignment) {
+                        this.defaultOriginGuards.Add((query, right))
+                        for index in this.defaultOriginIndices.OrderBy((index int32) -> index).ToArray() {
+                            this.AddDefaultOriginGuard(query, right, index)
+                        }
+                    } else {
+                        this.AddDefaultOriginEdge(query, right, -1, nil)
+                    }
                     return
                 }
                 case conditional is ConditionalExpressionSyntax {
-                    dependencies.Add(this.GetDefaultOriginQuery(conditional.WhenTrue, path))
-                    dependencies.Add(this.GetDefaultOriginQuery(conditional.WhenFalse, path))
+                    this.AddDefaultOriginEdge(query, this.GetDefaultOriginQuery(conditional.WhenTrue), -1, nil)
+                    this.AddDefaultOriginEdge(query, this.GetDefaultOriginQuery(conditional.WhenFalse), -1, nil)
                     return
                 }
                 case coalesce is BinaryExpressionSyntax when coalesce.IsKind(SyntaxKind.CoalesceExpression) {
-                    dependencies.Add(this.GetDefaultOriginQuery(coalesce.Left, path))
-                    dependencies.Add(this.GetDefaultOriginQuery(coalesce.Right, path))
+                    this.AddDefaultOriginEdge(query, this.GetDefaultOriginQuery(coalesce.Left), -1, nil)
+                    this.AddDefaultOriginEdge(query, this.GetDefaultOriginQuery(coalesce.Right), -1, nil)
                     return
                 }
                 case switchExpression is SwitchExpressionSyntax {
                     for arm in switchExpression.Arms {
-                        dependencies.Add(this.GetDefaultOriginQuery(arm.Expression, path))
+                        this.AddDefaultOriginEdge(query, this.GetDefaultOriginQuery(arm.Expression), -1, nil)
                     }
                     return
                 }
-                case tuple is TupleExpressionSyntax when path.Count > 0 && path[0] < tuple.Arguments.Count {
-                    dependencies.Add(
-                        this.GetDefaultOriginQuery(tuple.Arguments[path[0]].Expression, path.Skip(1).ToArray())
-                    )
+                case tuple is TupleExpressionSyntax {
+                    for var i = 0; i < tuple.Arguments.Count; i++ {
+                        this.AddDefaultOriginIndex(i)
+                        this.AddDefaultOriginEdge(
+                            query,
+                            this.GetDefaultOriginQuery(tuple.Arguments[i].Expression),
+                            i,
+                            nil
+                        )
+                    }
                     return
                 }
                 case member is MemberAccessExpressionSyntax when member.SyntaxTree == this
@@ -804,7 +941,7 @@ partial class CSharpToGSharpTranslator {
                     .SyntaxTree &&
                     this
                     .TryGetTupleElementAccess(member, out var receiver, out var projection) {
-                    dependencies.Add(this.GetDefaultOriginQuery(receiver!!, projection!!.Concat(path).ToArray()))
+                    this.AddDefaultOriginProjection(query, receiver!!, projection!!)
                     return
                 }
             }
@@ -831,7 +968,7 @@ partial class CSharpToGSharpTranslator {
                 TupleReachingStateKey,
                 StringComparer.Ordinal
             ) {
-                dependencies.Add(this.GetDefaultOriginQuery(value, path))
+                this.AddDefaultOriginEdge(query, this.GetDefaultOriginQuery(value), -1, nil)
             }
         }
 
@@ -901,14 +1038,17 @@ partial class CSharpToGSharpTranslator {
             target SingleVariableDesignationSyntax,
             left ExpressionSyntax?,
             right ExpressionSyntax?,
-            visited HashSet[ISymbol]? = nil
+            visited HashSet[ISymbol]? = nil,
+            resolveDefaultOrigin bool = true
         ) ExpressionSyntax? {
             if left == nil || right == nil || !TryFindDeconstructionPath(target, left, List[int32](), out var path) {
                 return nil
             }
-            let witness = this.FindDefaultOrigin(right, path!!)
-            if witness != nil {
-                return witness
+            if resolveDefaultOrigin {
+                let witness = this.FindDefaultOrigin(right, path!!)
+                if witness != nil {
+                    return witness
+                }
             }
             // Non-default tuple leaves also supply delegate and ref-alias provenance to reaching-value callers.
             let aliases = visited ?? HashSet[ISymbol](SymbolEqualityComparer.Default)
@@ -978,7 +1118,7 @@ partial class CSharpToGSharpTranslator {
                     TryFindDeconstructionPath(designation, left, List[int32](), out var path) {
                     this.PreserveDefaultOriginProjection(right, path!!)
                 } else {
-                    FindDeconstructionInitializer(designation, left, right, visited)
+                    FindDeconstructionInitializer(designation, left, right, visited, resolveDefaultOrigin: false)
                 }
             }
             var declarationExecutable SyntaxNode? = declaration!!.AncestorsAndSelf().FirstOrDefault(

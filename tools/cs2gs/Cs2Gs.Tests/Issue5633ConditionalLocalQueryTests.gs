@@ -215,6 +215,67 @@ open class Issue5633ConditionalLocalQueryTests {
     }
 
     @Fact
+    func TupleUnboxingCycle_CompletesWithinBound() {
+        let printed = this.TranslateWithinBound(`
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        public static object? Run((object? Next, int Tag) start, bool again)
+        {
+            var current = start;
+            do
+            {
+                var (value, _) = current;
+                current = ((object?, int))current.Next!;
+            } while (again);
+            return current.Next;
+        }
+    }
+}`, enabled: true)
+        Assert.Contains("return current.Next", printed)
+        TranslationTestValidation.AssertBinds(printed)
+    }
+
+    @Fact
+    func TupleUnboxingCycle_PreservesDefaultEvidenceAndTupleLeaves() {
+        let printed = this.TranslateWithinBound(`
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        static string IsNull<T>(T value) => (value is null).ToString();
+        public static string Run<T>(T replacement, bool flag)
+        {
+            var leaf = (Next: new object(), Value: default(T), Other: replacement);
+            var current = (Next: (object)leaf, Value: (T?)replacement, Other: (T?)replacement);
+            string result = "";
+            int count = 0;
+            do
+            {
+                var (next, value, other) = current;
+                var observed = flag ? value : value;
+                result += IsNull(observed) + ":" + IsNull(other) + ";";
+                if (++count == 2) break;
+                current = ((object, T?, T?))next;
+            } while (true);
+            return result;
+        }
+    }
+}`, enabled: true)
+        Assert.Contains("observed T?", printed)
+        Assert.DoesNotContain("other T?", printed)
+        TranslationTestValidation.AssertBinds(printed)
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "System.Console.WriteLine(P.Run(\"value\", true))\n" + "System.Console.WriteLine(P.Run(\"value\", false))",
+            "False:False;True:False;" + Environment.NewLine + "False:False;True:False;"
+        )
+    }
+
+    @Fact
     func CyclicOrigins_PropagateDefaultsWithoutChangingRuntimeValues() {
         let printed = this.TranslateWithinBound(`
 #nullable enable
