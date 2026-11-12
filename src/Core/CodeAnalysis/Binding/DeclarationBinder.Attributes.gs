@@ -377,6 +377,18 @@ internal partial class DeclarationBinder {
                     defaultSystemTarget
                 )
                 if bound != nil {
+                    // Delegate Invoke has no FieldMarshal return emitter (issue #5967).
+                    if defaultSystemTarget == AttributeTargets.Delegate &&
+                        bound.Target == AttributeTargetKind.Return &&
+                        KnownAttributes
+                        .IsMarshalAs(bound) {
+                        Diagnostics.ReportMarshalAsRejected(
+                            annotation.Location,
+                            "Invoke return",
+                            "delegate return marshalling is not implemented"
+                        )
+                        continue
+                    }
                     let key = (bound.AttributeType, bound.Target)
                     if applications.TryGetValue(key, out var count) {
                         KnownAttributes.GetAttributeUsage(bound.AttributeType, out _, out var allowMultiple)
