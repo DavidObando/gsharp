@@ -1689,11 +1689,12 @@ class StructSymbol : TypeSymbol {
     /// @returns `true` when this class is or derives from (cref:System.Attribute).
     func DerivesFromSystemAttribute() bool {
         for current in GetHierarchy() {
-            if current.IsAttributeClass {
+            let definition = current.Definition ?? current
+            if definition.IsAttributeClass {
                 return true
             }
-            if current.ImportedBaseType != nil {
-                let clr = current.ImportedBaseType!!.ClrType
+            if definition.ImportedBaseType != nil {
+                let clr = definition.ImportedBaseType!!.ClrType
                 for var t Type? = clr; t != nil; t = t!!.BaseType {
                     if t.FullName == typeof(Attribute).FullName {
                         return true

@@ -282,7 +282,186 @@ class BAttribute : Attribute {}`
         Assert.Equal(Encoding.UTF8.GetBytes("2"), fixture.RunBytes(dll))
     }
 
+    @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func ConstructedAttributes_ReadDefinitionContractsWithoutLosingTypeArguments(sugar bool, nested bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let name = if nested {
+            "Container.Tag"
+        } else {
+            "Tag"
+        }
+        let attribute = "@AttributeUsage(AttributeTargets.All, AllowMultiple: true)\n" +
+            (
+            if sugar {
+                "@Attribute\n"
+            } else {
+                ""
+            }
+        ) +
+            "public class TagAttribute[T](Code int32)" +
+            (
+            if sugar {
+                ""
+            } else {
+                " : Attribute"
+            }
+        ) +
+            " {}"
+        let source = "import System\n@" +
+            name +
+            "[int32](7)\n@" +
+            name +
+            "[int32](9)\ndelegate Reader() int32;\n" +
+            (
+            if nested {
+                "class Container {\n" + attribute + "\n}"
+            } else {
+                attribute
+            }
+        )
+        let dll = fixture.Compile(source, "constructed5968", false)
+        IlVerifier.Verify(dll)
+        let reader = EmittedFixture.Load(dll).GetTypes().Single((t Type) -> t.Name == "Reader")
+        let applications = reader
+            .GetCustomAttributesData()
+            .Where((a CustomAttributeData) -> a.AttributeType.Name == "TagAttribute`1")
+            .ToArray()
+        Assert.Equal(
+            []int32{7, 9},
+            applications.Select((a CustomAttributeData) -> cast[int32](Assert.Single(a.ConstructorArguments).Value))
+                .ToArray()
+        )
+        for application in applications {
+            Assert.False(application.AttributeType.ContainsGenericParameters)
+            Assert.Equal(typeof(int32), Assert.Single(application.AttributeType.GetGenericArguments()))
+            Assert.Equal(typeof(Attribute), application.AttributeType.BaseType)
+            let usage = Assert.Single(
+                application.AttributeType.GetGenericTypeDefinition().GetCustomAttributesData(),
+                (a CustomAttributeData) -> a.AttributeType == typeof(AttributeUsageAttribute)
+            )
+            Assert.Equal(true, Assert.Single(usage.NamedArguments).TypedValue.Value)
+        }
+        let (code, output) = fixture.TryCompile(
+            source.Replace("AllowMultiple: true", "AllowMultiple: false"),
+            "constructed-duplicate5968",
+            false
+        )
+        Assert.NotEqual(0, code)
+        Assert.Equal([]string{"GS0210@3,2,3," + (name.Length + 2).ToString()}, DiagnosticLocations(output))
+    }
+
+    @Fact
+    func DeepAttributeDependencies_ReportLocatedDiagnosticWithoutCrashing() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let driver = fixture.CompileCSharpExecutable(`using System;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Runtime.Loader;
+using System.Threading;
+public static class Driver {
+    public static int Main(string[] args) {
+        var directory = Path.GetDirectoryName(args[0])!;
+        AssemblyLoadContext.Default.Resolving += (context, name) => {
+            var path = Path.Combine(directory, name.Name + ".dll");
+            return File.Exists(path) ? context.LoadFromAssemblyPath(path) : null;
+        };
+        var entry = Assembly.LoadFrom(args[0]).GetType("GSharp.Compiler.Program", true)!
+            .GetMethod("Main", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)!;
+        var code = -1;
+        var thread = new Thread(() => {
+            code = (int)entry.Invoke(null, new object[] { args.Skip(1).ToArray() })!;
+        }, 512 * 1024);
+        thread.Start();
+        thread.Join();
+        return code;
+    }
+}`, "bounded-stack5968")
+        let sourceFile = Path.Combine(fixture.Directory, "dependency.gs")
+        let outputFile = Path.Combine(fixture.Directory, "dependency.dll")
+        File.WriteAllText(sourceFile, AttributeChain(8))
+        let (controlCode, controlOutput) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+            sourceFile,
+            outputFile,
+            driver
+        )
+        Assert.True(controlCode == 0, controlOutput)
+        File.Delete(outputFile)
+        let source = AttributeChain(8192)
+        File.WriteAllText(sourceFile, source)
+        let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+            sourceFile,
+            outputFile,
+            driver
+        )
+        Assert.True(
+            code == 1,
+            "Expected recoverable compiler error; exit " + code.ToString() + ": " + output.Substring(
+                0,
+                Math.Min(output.Length, 500)
+            )
+        )
+        Assert.DoesNotContain("Stack overflow", output, StringComparison.OrdinalIgnoreCase)
+        Assert.DoesNotContain("GS9998", output)
+        let diagnostic = Assert.Single(DiagnosticLocations(output))
+        Assert.StartsWith("GS0639@", diagnostic)
+        let span = diagnostic
+            .Substring(diagnostic.IndexOf('@') + 1)
+            .Split(',')
+            .Select((value string) -> int32.Parse(value))
+            .ToArray()
+        Assert.Equal(span[0], span[2])
+        let line = source.Split('\n')[span[0] - 1].TrimEnd('\r')
+        let identifier = Regex.Match(line, "^class (A[0-9]+) : Attribute").Groups[1].Value
+        Assert.NotEmpty(identifier)
+        Assert.Equal(7, span[1])
+        Assert.Equal(7 + identifier.Length, span[3])
+        Assert.False(File.Exists(outputFile))
+    }
+
+    @Fact
+    func NestedPendingDeclarations_PreserveRequestedChildBodies() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        const source = `import System
+@BaseAttribute.Derived
+open class BaseAttribute : Attribute {
+    open func Value() int32 -> 1
+    class DerivedAttribute : BaseAttribute {
+        override func Value() int32 -> 2
+        class Leaf {
+            shared {
+                func Answer() int32 -> 42
+            }
+        }
+    }
+}
+func Main() { Console.Write(BaseAttribute.DerivedAttribute.Leaf.Answer()) }`
+        fixture.Compile(source.Replace("@BaseAttribute.Derived\n", ""), "nested-control5968", true)
+        let dll = fixture.Compile(source, "nested-pending5968", true)
+        IlVerifier.Verify(dll)
+        let leaf = EmittedFixture.Load(dll).GetTypes().Single((t Type) -> t.Name == "Leaf")
+        Assert.Equal("DerivedAttribute", leaf.DeclaringType!!.Name)
+        Assert.Equal("BaseAttribute", leaf.DeclaringType!!.DeclaringType!!.Name)
+        Assert.Equal(42, leaf.GetMethod("Answer")!!.Invoke(nil, nil))
+        Assert.Equal(Encoding.UTF8.GetBytes("42"), fixture.RunBytes(dll))
+    }
+
     shared {
+        private func AttributeChain(count int32) string {
+            let source = StringBuilder("import System\n")
+            for var index = 0; index < count; index++ {
+                if index + 1 < count {
+                    source.Append("@A").Append(index + 1).AppendLine()
+                }
+                source.Append("class A").Append(index).AppendLine(" : Attribute {}")
+            }
+            return source.ToString()
+        }
+
         private func AssertCodes(attributes[]CustomAttributeData, expected[]int32) {
             let tags = attributes.Where((a CustomAttributeData) -> a.AttributeType.Name == "TagAttribute").ToArray()
             Assert.Equal(

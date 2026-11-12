@@ -173,6 +173,8 @@ internal partial class DeclarationBinder {
     private let boundStructBodies HashSet[StructSymbol] = HashSet[StructSymbol]()
     private let bindingStructBodies HashSet[StructSymbol] = HashSet[StructSymbol]()
     private let completedStructBodies HashSet[StructSymbol] = HashSet[StructSymbol]()
+    private let requestedNestedTypeBindings HashSet[StructSymbol] = HashSet[StructSymbol]()
+    private var reportedDeclarationDependencyStackLimit bool
     private let pendingStructMemberBindings Dictionary[StructSymbol, () -> void] = Dictionary[
         StructSymbol,
         () -> void

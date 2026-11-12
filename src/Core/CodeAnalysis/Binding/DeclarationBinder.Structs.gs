@@ -13,6 +13,7 @@ import System.Collections.Generic
 import System.Collections.Immutable
 import System.Linq
 import System.Reflection
+import System.Runtime.CompilerServices
 import System.Runtime.InteropServices
 
 internal partial class DeclarationBinder {
@@ -37,14 +38,14 @@ internal partial class DeclarationBinder {
         resumeMembers bool = false
     ) {
         let shouldBindOwnBody = boundStructBodies.Add(structSymbol)
-        let shouldResumeMembers = resumeMembers && pendingStructMemberBindings.ContainsKey(structSymbol)
+        let hasPendingMembers = pendingStructMemberBindings.ContainsKey(structSymbol)
+        if bindNestedTypes && hasPendingMembers {
+            requestedNestedTypeBindings.Add(structSymbol)
+        }
+        let shouldResumeMembers = resumeMembers && hasPendingMembers
         if !shouldBindOwnBody &&
             !shouldResumeMembers &&
-            (
-            pendingStructMemberBindings.ContainsKey(structSymbol) ||
-                !bindNestedTypes ||
-                boundNestedTypeContainers.Contains(structSymbol)
-        ) {
+            (hasPendingMembers || !bindNestedTypes || boundNestedTypeContainers.Contains(structSymbol)) {
             return
         }
         let previousTypeParameters = binderCtx.CurrentTypeParameters
@@ -275,7 +276,8 @@ internal partial class DeclarationBinder {
         RegisterStructConversionOperators($package, structSymbol, memberBinding.PendingConversionOperators)
         RegisterStructDeferredInitializers($package, structSymbol, fieldBinding)
         RegisterStructInterfaceChecks(syntax, structSymbol, baseBinding)
-        BindStructFinalMembers(syntax, $package, structSymbol, baseBinding, bindNestedTypes)
+        let bindRequestedNestedTypes = requestedNestedTypeBindings.Remove(structSymbol)
+        BindStructFinalMembers(syntax, $package, structSymbol, baseBinding, bindNestedTypes || bindRequestedNestedTypes)
         completedStructBodies.Add(structSymbol)
         if pendingDerivedStructs.Remove(structSymbol, out var derived) {
             for declaration in derived {
@@ -296,6 +298,13 @@ internal partial class DeclarationBinder {
             baseDefinition,
             out var basePackage
         ) {
+            if !RuntimeHelpers.TryEnsureSufficientExecutionStack() {
+                if !reportedDeclarationDependencyStackLimit {
+                    reportedDeclarationDependencyStackLimit = true
+                    Diagnostics.ReportDeclarationDependencyTooDeep(baseSyntax.Identifier.Location)
+                }
+                return
+            }
             let savedUnsafeDepth = binderCtx.UnsafeDepth
             var enclosingUnsafe = false
             var currentParent TypeSymbol? = baseDefinition.ContainingType

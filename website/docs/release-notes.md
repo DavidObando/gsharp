@@ -21,7 +21,7 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 - Share local default-value and deconstruction reachability through sparse alias dependencies and finite tuple-index summaries, including reassigned locals, split aliases, loop-carried cycles and tuple-unboxing cycles. (Fixes #5633)
 
-- Bind source attribute declarations before validating applications, including delegate attributes, `@Attribute` sugar, and recursive attribute dependencies. Delay derived member binding until source base members are complete. (Fixes #5968)
+- Bind source attribute declarations before validating applications, including delegate attributes, `@Attribute` sugar, and recursive attribute dependencies. Read generic attribute contracts from their definitions without losing constructed application types. Delay derived member binding until source base members are complete. Report `GS0639` instead of exhausting the stack on excessive declaration dependencies. (Fixes #5968)
 
 - Preserve nullable tuple leaves in generic indexer writes in `cs2gs`, instead of inserting runtime null assertions. (Part of #5948)
 - **Preserve promoted-local null-guard narrowing in `cs2gs`** (Fixes #5645). Nullable-oblivious translations omit redundant `!!` assertions on guarded immutable-local receiver and argument reads. Mutable receivers, intervening escaped-closure calls, and mutable capture boundaries retain required assertions. Promoted nullable tuple destinations accept values changed through ref aliases without asserting the yielded value. Destination projection preserves intermediate assignment contracts before following assignment results into nullable arrays.
