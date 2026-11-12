@@ -1530,28 +1530,6 @@ internal partial class OverloadResolver {
             return false
         }
 
-        // Issue #4400: an address whose storage no later argument can redirect —
-        // a variable (reassigning it changes the value at that same storage,
-        // which the callee then sees exactly as in C#), a static field, or a
-        // value-type field chain rooted in such storage — may stay in its
-        // parameter slot when the arguments are reordered.
-        internal func IsFixedStorageAddress(argument BoundExpression) bool -> argument is BoundAddressOfExpression{
-            IsUnmanaged: false
-        } address &&
-            IsFixedStorage(address.Operand)
-
-        private func IsFixedStorage(operand BoundExpression) bool -> switch operand {
-            case _ is BoundVariableExpression: true
-            case boundFieldAccessExpression is BoundFieldAccessExpression when boundFieldAccessExpression.Receiver == nil: true
-            case BoundFieldAccessExpression{Receiver: {} receiver} when !GSharp
-                .Core
-                .CodeAnalysis
-                .Binding
-                .Binder
-                .IsReferenceTypeForConstraint(receiver.Type): IsFixedStorage(receiver)
-            default: false
-        }
-
         // Issue #4400: the inputs that select an address's storage — a reference
         // receiver (`h` in `h.F`) or an array and its index (`xs[i]`). Capturing
         // them in source order and re-taking the address from the captured values
@@ -1620,17 +1598,6 @@ internal partial class OverloadResolver {
                     return parameterOrderedArguments
                 }
                 reordered |= parameterIndex != sourceIndex
-                // Keep legacy writable-reference layouts that cannot be reordered.
-                // Readonly references use managed-address captures, not value copies.
-                if !hasHandlerSourceForwarding &&
-                    (
-                    parameterOrderedArguments[slot] is BoundAddressOfExpression or BoundConditionalAddressExpression
-                ) &&
-                    !RefCapabilities.IsReadOnlyStorage(parameterOrderedArguments[slot]) &&
-                    !IsFixedStorageAddress(parameterOrderedArguments[slot]) &&
-                    !TryGetAddressInputs(parameterOrderedArguments[slot], out _, out _) {
-                    return parameterOrderedArguments
-                }
             }
             if !reordered && !hasHandlerSourceForwarding {
                 return parameterOrderedArguments
@@ -1656,10 +1623,6 @@ internal partial class OverloadResolver {
                     }
                     argument = spilledValue
                     implicitInSpill = true
-                } else if IsFixedStorageAddress(argument) {
-                    replacements[slot] = argument
-                    sourceCaptures[sourceIndex] = argument
-                    continue
                 } else if TryGetAddressInputs(argument, out var inputAddress, out var inputs) {
                     let inputTemps = Dictionary[BoundExpression, BoundExpression](ReferenceEqualityComparer.Instance)
                     for var inputIndex = 0; inputIndex < inputs.Length; inputIndex++ {
@@ -1703,6 +1666,7 @@ internal partial class OverloadResolver {
                     )
                     continue
                 }
+                // Even a fixed field address can initialize a type or throw before the next argument.
                 argument = CanonicalizeCapturedArgument(argument)
                 let temp = LocalVariableSymbol("<>namedArg$sourceIndex", isReadOnly: true, captureType ?? argument.Type)
                 evaluations.Add(BoundVariableDeclaration(argument.Syntax, temp, argument))

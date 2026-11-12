@@ -277,7 +277,101 @@ var pending = Run();
 ` + nativeFinish, expected, SuspensionLibrary)
     }
 
+    @Theory
+    @InlineData(false, false, "C0;T40;CRef;Lp;Hx;Fx;M7/False;End90/1/1/0;|0/1/2/0/0")
+    @InlineData(true, false, "C0;T40;CInTrue;Lp;Hx;Fx;M7/True;End90/1/1/0;|0/1/2/0/0")
+    @InlineData(false, true, "C0;TypeInitializationException;End40/0/1/0;|0/0/0/0/0")
+    @InlineData(true, true, "C0;TypeInitializationException;End40/0/1/0;|0/0/0/0/0")
+    func SharedFieldAddress_InitializesBeforeFollowingArgument(readOnly bool, fault bool, expected string) {
+        let mode = if readOnly {
+            "In"
+        } else {
+            "Ref"
+        }
+        let modifier = if readOnly {
+            "in"
+        } else {
+            "ref"
+        }
+        AssertColdParity(`try {
+ColdApi.Write` + mode + "(value: " + modifier + ` ColdLocal.Value, tag: ColdLedger.Tag(), handler: "p${Effects.Hole("x")}")
+} catch (ex Exception) { Effects.Trace += ex.GetType().Name + ";" }
+ColdLedger.Dump()`, `try {
+ColdApi.Write` + mode + "(value: " + modifier + ` ColdLocal.Value, tag: ColdLedger.Tag(), handler: $"p{Effects.Hole("x")}");
+} catch (System.Exception ex) { Effects.Trace += ex.GetType().Name + ";"; }
+ColdLedger.Dump()`, fault, expected)
+    }
+
+    @Theory
+    @InlineData(false, "P0;SFalse;G;C90;M7/True;End40/0/1/1;|0/0/0/0/0")
+    @InlineData(true, "P0;EFalse;G;C90;TypeInitializationException;End40/0/1/1;|0/0/0/0/0")
+    func SharedFieldInitialization_AcrossRealAwait_MatchesNativeTiming(fault bool, expected string) {
+        var gsharp = `async func Run() bool {
+return ColdApi.Consume(value: in ColdLocal.Value, tag: await ColdLedger.Pause())
+}
+let pending = Run()
+`
+        var native = `async System.Threading.Tasks.Task<bool> Run() {
+return ColdApi.Consume(value: in ColdLocal.Value, tag: await ColdLedger.Pause());
+}
+var pending = Run();
+`
+        if fault {
+            gsharp += `ColdLedger.Fault(pending.IsCompleted)
+try { pending.GetAwaiter().GetResult() } catch (ex Exception) { Effects.Trace += ex.GetType().Name + ";" }
+ColdLedger.Dump()`
+            native += `ColdLedger.Fault(pending.IsCompleted);
+try { pending.GetAwaiter().GetResult(); } catch (System.Exception ex) { Effects.Trace += ex.GetType().Name + ";"; }
+ColdLedger.Dump()`
+        } else {
+            gsharp += `ColdLedger.Pending(pending.IsCompleted)
+ColdLedger.Release()
+pending.GetAwaiter().GetResult()
+ColdLedger.Dump()`
+            native += `ColdLedger.Pending(pending.IsCompleted);
+ColdLedger.Release();
+pending.GetAwaiter().GetResult();
+ColdLedger.Dump()`
+        }
+        AssertColdParity(gsharp, native, fault, expected)
+    }
+
     shared {
+        private func AssertColdParity(gsharp string, csharp string, fault bool, expected string) {
+            using let fixture = NativeSliceLanguageTests.Fixture()
+            let library = fixture.CompileCSharp(Library + ReferenceLibrary + InitializationLibrary, "ColdLibrary5966")
+            let owner = if fault {
+                "ColdBroken"
+            } else {
+                "ColdReady"
+            }
+            let oracle = fixture.CompileCSharp(`using HandlerLibrary;
+namespace ColdNative {
+class ColdLocal { public static bool Value; static ColdLocal() { Value = ` + owner + `.Value; } }
+public static class Consumer { public static string Run() {
+` + csharp + `;
+return Effects.Snapshot();
+} }
+}`, "ColdOracle5966", library)
+            IlVerifier.Verify(oracle, []string{library})
+            let launcher = fixture.Compile(`import System
+import ColdNative
+Console.Write(Consumer.Run())`, "ColdNative5966", executable: true, "/r:" + oracle, "/r:" + library)
+            let native = fixture.RunBytes(launcher)
+            Assert.Equal(Encoding.UTF8.GetBytes(expected), native)
+            let program = fixture.Compile(`import System
+import HandlerLibrary
+class ColdLocal { shared {
+var Value bool
+init { Value = ` + owner + `.Value }
+} }
+` + gsharp + `
+Console.Write(Effects.Snapshot())`, "ColdGSharp5966", executable: true, "/r:" + library)
+            Assert.Equal(native, fixture.RunBytes(program))
+            IlVerifier.Verify(launcher, []string{oracle, library})
+            IlVerifier.Verify(program, []string{library})
+        }
+
         private func AssertParity(gsharp string, csharp string, expected string, additionalLibrary string = "") {
             using let fixture = NativeSliceLanguageTests.Fixture()
             let library = fixture.CompileCSharp(Library + additionalLibrary, "HandlerLibrary5966")
@@ -509,6 +603,44 @@ public static class SuspensionEffects {
     public static void Validate(in int value) { }
     public static int Consume(int tag, in int value) { Effects.Trace += $"C{tag}/{value};"; return value; }
     public static void Dump(int value) { Effects.Trace += $"D{value};{Choices}/{Lefts}/{Rights}/{Pauses};"; }
+}`
+
+        private const InitializationLibrary string = `
+public static class ColdLedger {
+    public static int State, Tags, Cctors, Pauses;
+    private static readonly System.Threading.Tasks.TaskCompletionSource<int> Gate =
+        new(System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously);
+    public static int Tag() { Tags++; Effects.Trace += $"T{State};"; State = 90; return 7; }
+    public static System.Threading.Tasks.Task<int> Pause() { Pauses++; Effects.Trace += $"P{State};"; return Gate.Task; }
+    public static void Release() { Effects.Trace += "G;"; Gate.SetResult(7); }
+    public static void Pending(bool completed) {
+        Effects.Trace += $"S{completed};";
+        if (completed) throw new System.InvalidOperationException("Expected actual suspension.");
+        State = 90;
+    }
+    public static void Fault(bool completed) {
+        Effects.Trace += $"E{completed};";
+        if (!completed) { State = 90; Release(); }
+    }
+    public static void Dump() { Effects.Trace += $"End{State}/{Tags}/{Cctors}/{Pauses};"; }
+}
+public static class ColdReady {
+    public static bool Value;
+    static ColdReady() { ColdLedger.Cctors++; Effects.Trace += $"C{ColdLedger.State};"; ColdLedger.State = 40; Value = true; }
+}
+public static class ColdBroken {
+    public static bool Value;
+    static ColdBroken() {
+        ColdLedger.Cctors++; Effects.Trace += $"C{ColdLedger.State};"; ColdLedger.State = 40;
+        throw new System.InvalidOperationException("cctor");
+    }
+}
+public static class ColdApi {
+    public static void WriteRef(int tag, ref bool value,
+        [InterpolatedStringHandlerArgument("value")] RefHandler handler) { Effects.Trace += $"M{tag}/{value};"; }
+    public static void WriteIn(int tag, in bool value,
+        [InterpolatedStringHandlerArgument("value")] InHandler handler) { Effects.Trace += $"M{tag}/{value};"; }
+    public static bool Consume(int tag, in bool value) { Effects.Trace += $"M{tag}/{value};"; return value; }
 }`
     }
 }
