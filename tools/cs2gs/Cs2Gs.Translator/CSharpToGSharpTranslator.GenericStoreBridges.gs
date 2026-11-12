@@ -710,7 +710,8 @@ partial class CSharpToGSharpTranslator {
             private func OutermostTransparentNode(
                 value ExpressionSyntax?,
                 tupleIndices List[int32]? = nil,
-                storeNodes List[SyntaxNode]? = nil
+                storeNodes List[SyntaxNode]? = nil,
+                stopAtAssignment bool = false
             ) SyntaxNode? {
                 var node SyntaxNode? = value
                 while true {
@@ -743,6 +744,9 @@ partial class CSharpToGSharpTranslator {
                                 SyntaxKind.CoalesceAssignmentExpression
                             )
                         ) {
+                            if stopAtAssignment {
+                                return node
+                            }
                             storeNodes?.Add(node!!)
                             node = parent
                         }

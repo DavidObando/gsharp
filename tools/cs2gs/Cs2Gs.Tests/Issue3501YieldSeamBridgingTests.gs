@@ -9,8 +9,12 @@ import Cs2Gs.CodeModel.Printing
 import Cs2Gs.CodeModel.RoundTrip
 import Cs2Gs.Translator
 import Cs2Gs.Translator.Loading
+import GSharp.Tests
 import Microsoft.CodeAnalysis
 import System
+import System.IO
+import System.Reflection
+import System.Text
 import Xunit
 
 /// Issue #3501 (GS0155 yield family): a `yield` is a value seam against the
@@ -21,8 +25,8 @@ import Xunit
 /// for tuple literals (`yield (tryOutVar, true)` against `(Base, bool)`).
 open class Issue3501YieldSeamBridgingTests {
     @Fact
-    func Oblivious_TupleYieldWithPromotedElement_BridgesPerElement() {
-        let printed = TranslateOblivious(`
+    func Oblivious_TupleYieldWithPromotedElement_PreservesNullableContractAndOutput() {
+        const source = `
 using System.Collections.Generic;
 
 namespace Demo
@@ -40,10 +44,35 @@ namespace Demo
             var candidate = Find(true);
             yield return (candidate, true);
         }
+
+        public static string Run()
+        {
+            string output = "";
+            foreach (var row in new C().Rows())
+            {
+                output += (row.Name ?? "null") + ":" + row.Flag;
+            }
+            return output;
+        }
     }
-}`)
+}`
+        let printed = TranslateOblivious(source)
         Assert.Contains("Find(b bool) string?", printed)
-        Assert.Contains("yield (candidate!!, true)", printed)
+        Assert.Contains("sequence[(Name string?, Flag bool)]", printed)
+        let project = CSharpProjectLoader.LoadInMemory([](string, string){("Snippet.cs", source)})
+        using let image = MemoryStream()
+        let emitted = project.Compilation.Emit(image)
+        Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics))
+        let assembly = Assembly.Load(image.ToArray())
+        let method = assembly.GetType("Demo.C")!!.GetMethod("Run", BindingFlags.Public | BindingFlags.Static)!!
+        let expected = Assert.IsType[string](method.Invoke(nil, nil))
+        Assert.Equal("null:True", expected)
+        let result = EmittedOracle.Evaluate(printed + Environment.NewLine + "Demo.C.Run()")
+        Assert.Null(result.UnhandledException)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(Encoding.UTF8.GetBytes(expected), Encoding.UTF8.GetBytes(Assert.IsType[string](result.Value)))
+        Assert.Contains("yield (candidate, true)", printed)
+        Assert.DoesNotContain("candidate!!", printed)
     }
 
     @Fact
