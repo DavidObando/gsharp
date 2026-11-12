@@ -357,30 +357,7 @@ class BAttribute : Attribute {}`
     @Fact
     func DeepAttributeDependencies_ReportLocatedDiagnosticWithoutCrashing() {
         using let fixture = NativeSliceLanguageTests.Fixture()
-        let driver = fixture.CompileCSharpExecutable(`using System;
-using System.IO;
-using System.Linq;
-using System.Reflection;
-using System.Runtime.Loader;
-using System.Threading;
-public static class Driver {
-    public static int Main(string[] args) {
-        var directory = Path.GetDirectoryName(args[0])!;
-        AssemblyLoadContext.Default.Resolving += (context, name) => {
-            var path = Path.Combine(directory, name.Name + ".dll");
-            return File.Exists(path) ? context.LoadFromAssemblyPath(path) : null;
-        };
-        var entry = Assembly.LoadFrom(args[0]).GetType("GSharp.Compiler.Program", true)!
-            .GetMethod("Main", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)!;
-        var code = -1;
-        var thread = new Thread(() => {
-            code = (int)entry.Invoke(null, new object[] { args.Skip(1).ToArray() })!;
-        }, 512 * 1024);
-        thread.Start();
-        thread.Join();
-        return code;
-    }
-}`, "bounded-stack5968")
+        let driver = CompileBoundedStackDriver(fixture)
         let sourceFile = Path.Combine(fixture.Directory, "dependency.gs")
         let outputFile = Path.Combine(fixture.Directory, "dependency.dll")
         File.WriteAllText(sourceFile, AttributeChain(8))
@@ -450,7 +427,178 @@ func Main() { Console.Write(BaseAttribute.DerivedAttribute.Leaf.Answer()) }`
         Assert.Equal(Encoding.UTF8.GetBytes("42"), fixture.RunBytes(dll))
     }
 
+    @Theory
+    @InlineData("self", false)
+    @InlineData("self", true)
+    @InlineData("mutual", false)
+    @InlineData("mutual", true)
+    @InlineData("derived", false)
+    @InlineData("derived", true)
+    func LegalAnnotationCycles_RetainContractsAndInstancesOnSmallStacks(kind string, nested bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let driver = CompileBoundedStackDriver(fixture)
+        let self = kind == "self"
+        let derived = kind == "derived"
+        const usage = "@AttributeUsage(AttributeTargets.All, AllowMultiple: true)\n"
+        let first = (
+            if self {
+                "@A(11)\n@A(12)\n"
+            } else {
+                "@B(21)\n@B(22)\n"
+            }
+        ) +
+            usage +
+            (
+            if derived {
+                "open "
+            } else {
+                ""
+            }
+        ) +
+            "class AAttribute(Code int32) : Attribute {}"
+        let second = "@A(11)\n@A(12)\n" +
+            usage +
+            (
+            if derived {
+                "class BAttribute(Input int32) : AAttribute(Input) {}"
+            } else {
+                "class BAttribute(Code int32) : Attribute {}"
+            }
+        )
+        const target = "@A(31)\n@A(32)\nclass Target {}"
+        for reverse in[]bool{false, true} {
+            var declarations = if self {
+                []string{first, target}
+            } else {
+                []string{first, second, target}
+            }
+            if reverse {
+                declarations = declarations.Reverse().ToArray()
+            }
+            let body = string.Join("\n", declarations)
+            let source = "import System\n" +
+                (
+                if nested {
+                    "class Envelope {\n" + body + "\n}"
+                } else {
+                    body
+                }
+            )
+            let name = "cycle-instances-" + reverse.ToString()
+            let sourcePath = Path.Combine(fixture.Directory, name + ".gs")
+            let dll = Path.Combine(fixture.Directory, name + ".dll")
+            File.WriteAllText(sourcePath, source)
+            let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+                sourcePath,
+                dll,
+                driver
+            )
+            Assert.True(code == 0, output.Substring(0, Math.Min(output.Length, 2000)))
+            IlVerifier.Verify(dll)
+            let types = EmittedFixture.Load(dll).GetTypes()
+            let a = types.Single((t Type) -> t.Name == "AAttribute")
+            let owner = types.Single((t Type) -> t.Name == "Target")
+            AssertCycleApplications(
+                a,
+                if self {
+                    "AAttribute"
+                } else {
+                    "BAttribute"
+                },
+                if self {
+                    []int32{11, 12}
+                } else {
+                    []int32{21, 22}
+                }
+            )
+            AssertCycleApplications(owner, "AAttribute", []int32{31, 32})
+            if !self {
+                AssertCycleApplications(types.Single((t Type) -> t.Name == "BAttribute"), "AAttribute", []int32{11, 12})
+            }
+            for attribute in types.Where((t Type) -> t.Name == "AAttribute" || t.Name == "BAttribute") {
+                Assert.Equal(
+                    if derived && attribute.Name == "BAttribute" {
+                        a
+                    } else {
+                        typeof(Attribute)
+                    },
+                    attribute.BaseType
+                )
+                let contract = Assert.Single(
+                    attribute.GetCustomAttributesData(),
+                    (data CustomAttributeData) -> data.AttributeType == typeof(AttributeUsageAttribute)
+                )
+                Assert.Equal(int32(AttributeTargets.All), contract.ConstructorArguments[0].Value)
+                let allowMultiple = Assert.Single(contract.NamedArguments)
+                Assert.Equal("AllowMultiple", allowMultiple.MemberName)
+                Assert.Equal(true, allowMultiple.TypedValue.Value)
+                if nested {
+                    Assert.Equal("Envelope", attribute.DeclaringType!!.Name)
+                }
+            }
+        }
+    }
+
     shared {
+        private func AssertCycleApplications(owner Type, attributeName string, expected[]int32) {
+            let metadata = owner
+                .GetCustomAttributesData()
+                .Where((data CustomAttributeData) -> data.AttributeType.Name == attributeName)
+                .ToArray()
+            Assert.Equal(
+                expected,
+                metadata.Select(
+                    (data CustomAttributeData) -> cast[int32](Assert.Single(data.ConstructorArguments).Value)
+                )
+                    .ToArray()
+            )
+            let instances = owner
+                .GetCustomAttributes(false)
+                .Where((attribute object) -> attribute.GetType().Name == attributeName)
+                .ToArray()
+            Assert.Equal(
+                expected,
+                instances
+                    .Select(
+                    (attribute object) -> cast[int32](
+                        attribute.GetType().GetField(
+                            "Code",
+                            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                        )!!.GetValue(attribute)
+                    )
+                )
+                    .OrderBy((value int32) -> value)
+                    .ToArray()
+            )
+        }
+
+        private func CompileBoundedStackDriver(fixture NativeSliceLanguageTests.Fixture) string {
+            return fixture.CompileCSharpExecutable(`using System;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Runtime.Loader;
+using System.Threading;
+public static class Driver {
+    public static int Main(string[] args) {
+        var directory = Path.GetDirectoryName(args[0])!;
+        AssemblyLoadContext.Default.Resolving += (context, name) => {
+            var path = Path.Combine(directory, name.Name + ".dll");
+            return File.Exists(path) ? context.LoadFromAssemblyPath(path) : null;
+        };
+        var entry = Assembly.LoadFrom(args[0]).GetType("GSharp.Compiler.Program", true)!
+            .GetMethod("Main", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)!;
+        var code = -1;
+        var thread = new Thread(() => {
+            code = (int)entry.Invoke(null, new object[] { args.Skip(1).ToArray() })!;
+        }, 512 * 1024);
+        thread.Start();
+        thread.Join();
+        return code;
+    }
+}`, "bounded-stack5968")
+        }
+
         private func AttributeChain(count int32) string {
             let source = StringBuilder("import System\n")
             for var index = 0; index < count; index++ {

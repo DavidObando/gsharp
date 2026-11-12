@@ -390,7 +390,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     )
 
     /// Reports declaration dependencies that exceed the available execution stack.
-    func ReportDeclarationDependencyTooDeep(location TextLocation) -> Report(
+    internal func ReportDeclarationDependencyTooDeep(location TextLocation) -> Report(
         location,
         DiagnosticDescriptors.DeclarationDependencyTooDeep
     )
