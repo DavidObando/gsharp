@@ -27,6 +27,9 @@ Separate source declaration scheduling into header, member, and usage-validation
    Schedule enclosing type-parameter constraints independently, without requiring the enclosing body's completion.
    Complete source qualifier-container headers before binding named constraints that use inherited nested types.
    Bind each complete constraint contract once, before the declaration's own base clauses.
+   Apply qualifier prerequisites throughout base/interface clauses, including nested type arguments.
+   Use the binder's lexical, arity-aware lookup for prerequisite discovery and actual type binding.
+   Drain source headers in declaration order after aliases exist and before shell attributes or delegate signatures bind.
 2. Check the completed source base relation for inheritance cycles.
    Use the existing cycle checker on the discovered work, without repeating the compilation's nested-type census.
    Report the existing cycle diagnostic and break the offending base edge before member binding.
@@ -34,6 +37,8 @@ Separate source declaration scheduling into header, member, and usage-validation
 3. Use explicit work entries for member requests and their continuations.
    Schedule source base members before derived members.
    Queue nested-body requests without recursively binding their containing declaration.
+   Complete qualifier headers before binding class and interface signatures, including nested interface declarations.
+   Scan signatures in their owning context; do not traverse nested declaration bodies or executable blocks.
    Publish member readiness only after the complete body has bound.
 4. Bind attribute applications against completed header identity.
    Keep constructed generic application types, but read usage from definitions.

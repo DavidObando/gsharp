@@ -64,12 +64,15 @@ internal partial class DeclarationBinder {
                 }
                 RunInStructDeclarationContext(
                     symbol,
-                    () -> BindStructDeclarationBodyCore(
-                        declaration,
-                        owningPackage,
-                        symbol,
-                        requestedNestedTypeBindings.Remove(symbol)
-                    )
+                    () -> {
+                        EnsureDeclarationSignatureHeaders(declaration)
+                        BindStructDeclarationBodyCore(
+                            declaration,
+                            owningPackage,
+                            symbol,
+                            requestedNestedTypeBindings.Remove(symbol)
+                        )
+                    }
                 )
                 boundStructBodies.Add(symbol)
                 structBaseBindings.Remove(symbol)
@@ -210,6 +213,22 @@ internal partial class DeclarationBinder {
                 activeConstraints.Remove(symbol)
                 continue
             }
+            var baseDependency StructSymbol? = nil
+            RunInStructDeclarationContext(
+                symbol,
+                () -> {
+                    baseDependency = FindPendingTypeQualifierHeader(
+                        symbol.Declaration!!.BaseTypeClauses.Cast[SyntaxNode](),
+                        activeHeaders
+                    )
+                }
+            )
+            let basePrerequisite = baseDependency
+            if basePrerequisite != nil {
+                work.Push((symbol, bindHeader))
+                work.Push((basePrerequisite, requestHeader))
+                continue
+            }
             RunInStructDeclarationContext(
                 symbol,
                 () -> structBaseBindings.Add(symbol, BindStructBaseTypes(symbol.Declaration!!, symbol))
@@ -232,19 +251,25 @@ internal partial class DeclarationBinder {
         }
     }
 
+    internal func BindSourceStructHeaders() {
+        for symbol in sourceStructDeclarationOrder {
+            EnsureStructDeclarationHeaderBound(symbol)
+        }
+    }
+
     private func FindPendingConstraintHeader(
         syntax StructDeclarationSyntax,
         activeHeaders HashSet[StructSymbol]
     ) StructSymbol? {
-        let clauses = Stack[TypeClauseSyntax]()
+        let clauses = List[SyntaxNode]()
         let addConstraints = func (list TypeParameterListSyntax) {
             for parameter in list.Parameters {
                 if parameter.ConstraintType is {} clause {
-                    clauses.Push(clause)
+                    clauses.Add(clause)
                 }
                 if parameter.ConstraintTypeArguments is {} arguments {
                     for argument in arguments {
-                        clauses.Push(argument)
+                        clauses.Add(argument)
                     }
                 }
             }
@@ -257,33 +282,59 @@ internal partial class DeclarationBinder {
                 addConstraints(list)
             }
         }
-        while clauses.Count > 0 {
-            let clause = clauses.Pop()
-            let previousTree = $scope.SetCurrentReferencingSyntaxTree(clause.SyntaxTree)
-            try {
-                let segments = clause.DottedName.Split('.')
-                for var index = 0; index + 1 < segments.Length; index++ {
-                    let name = string.Join(".", segments, 0, index + 1)
-                    let arity = clause.GetSegmentTypeArguments(index)?.Count ?? -1
-                    var resolved TypeSymbol? = nil
-                    if arity >= 0 {
-                        $scope.TryLookupTypeAlias(name, arity, out resolved)
-                        resolved ??= ResolveNestedAttributeName(name, arity)
-                    }
-                    resolved ??= ResolveAttributeName(name)
-                    if resolved is StructSymbol container {
-                        let definition = container.Definition ?? container
-                        if nestedStructPackages.ContainsKey(definition) && !readyStructHeaders.Contains(definition) &&
-                            !structBaseBindings.ContainsKey(definition) && !activeHeaders.Contains(definition) {
-                            return definition
+        return FindPendingTypeQualifierHeader(clauses, activeHeaders)
+    }
+
+    private func EnsureDeclarationSignatureHeaders(syntax SyntaxNode) {
+        if readyStructHeaders.Count == sourceStructDeclarationOrder.Count {
+            return
+        }
+        let activeHeaders = HashSet[StructSymbol]()
+        while FindPendingTypeQualifierHeader([]SyntaxNode{syntax}, activeHeaders) is {} dependency {
+            EnsureStructDeclarationHeaderBound(dependency)
+        }
+    }
+
+    private func FindPendingTypeQualifierHeader(
+        roots IEnumerable[SyntaxNode],
+        activeHeaders HashSet[StructSymbol]
+    ) StructSymbol? {
+        let nodes = Stack[SyntaxNode](roots.Reverse())
+        let rootSet = HashSet[SyntaxNode](roots)
+        while nodes.Count > 0 {
+            let node = nodes.Pop()
+            if node is BlockStatementSyntax ||
+                (!rootSet.Contains(node) && (node is StructDeclarationSyntax || node is InterfaceDeclarationSyntax)) {
+                continue
+            }
+            if node is TypeClauseSyntax clause {
+                let previousTree = $scope.SetCurrentReferencingSyntaxTree(clause.SyntaxTree)
+                try {
+                    let segments = clause.DottedName.Split('.')
+                    for var index = 0; index + 1 < segments.Length; index++ {
+                        let name = string.Join(".", segments, 0, index + 1)
+                        let arity = clause.GetSegmentTypeArguments(index)?.Count ?? -1
+                        var resolved = lookupTypeWithArity(name, arity)
+                        if resolved == nil && arity >= 0 {
+                            resolved ??= ResolveNestedAttributeName(name, arity)
+                        }
+                        resolved ??= ResolveAttributeName(name)
+                        if resolved is StructSymbol container {
+                            let definition = container.Definition ?? container
+                            if nestedStructPackages.ContainsKey(definition) && !readyStructHeaders.Contains(
+                                definition
+                            ) &&
+                                !structBaseBindings.ContainsKey(definition) && !activeHeaders.Contains(definition) {
+                                return definition
+                            }
                         }
                     }
+                } finally {
+                    $scope.SetCurrentReferencingSyntaxTree(previousTree)
                 }
-            } finally {
-                $scope.SetCurrentReferencingSyntaxTree(previousTree)
             }
-            for child in clause.GetChildren().OfType[TypeClauseSyntax]() {
-                clauses.Push(child)
+            for child in node.GetChildren().Reverse() {
+                nodes.Push(child)
             }
         }
         return nil

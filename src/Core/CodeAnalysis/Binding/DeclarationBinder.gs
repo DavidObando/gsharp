@@ -38,6 +38,7 @@ internal partial class DeclarationBinder {
     private let bindInterpolatedStringAsFormattable DeclarationBinder_BindInterpolatedStringAsFormattableDelegate?
     private let resolveAccessibility(SyntaxToken?) -> Accessibility
     private let lookupType(string) -> TypeSymbol?
+    private let lookupTypeWithArity(string, int32) -> TypeSymbol?
     private let getEffectiveArgumentClrTypeForOverloadResolution(TypeSymbol) -> Type?
     private let isAsyncIteratorReturnType(TypeSymbol) -> bool
     private let isAsyncSequenceReturnType(TypeSymbol) -> bool
@@ -171,6 +172,7 @@ internal partial class DeclarationBinder {
     ]()
     private let nestedStructPackages Dictionary[StructSymbol, PackageSymbol] = Dictionary[StructSymbol, PackageSymbol]()
     private let structDeclarationScopes Dictionary[StructSymbol, BoundScope] = Dictionary[StructSymbol, BoundScope]()
+    private let sourceStructDeclarationOrder List[StructSymbol] = List[StructSymbol]()
     private let structBaseBindings Dictionary[StructSymbol, StructBaseBindingResult] = Dictionary[
         StructSymbol,
         StructBaseBindingResult
@@ -200,6 +202,7 @@ internal partial class DeclarationBinder {
         bindArrayCreationExpression DeclarationBinder_BindArrayCreationExpressionDelegate,
         resolveAccessibility(SyntaxToken?) -> Accessibility,
         lookupType(string) -> TypeSymbol?,
+        lookupTypeWithArity(string, int32) -> TypeSymbol?,
         getEffectiveArgumentClrTypeForOverloadResolution(TypeSymbol) -> Type?,
         isAsyncIteratorReturnType(TypeSymbol) -> bool,
         isAsyncSequenceReturnType(TypeSymbol) -> bool,
@@ -236,6 +239,7 @@ internal partial class DeclarationBinder {
         this.bindInterpolatedStringAsFormattable = bindInterpolatedStringAsFormattable
         this.resolveAccessibility = resolveAccessibility ?? throw ArgumentNullException("resolveAccessibility")
         this.lookupType = lookupType ?? throw ArgumentNullException("lookupType")
+        this.lookupTypeWithArity = lookupTypeWithArity ?? throw ArgumentNullException("lookupTypeWithArity")
         this.getEffectiveArgumentClrTypeForOverloadResolution = getEffectiveArgumentClrTypeForOverloadResolution ??
             throw ArgumentNullException("getEffectiveArgumentClrTypeForOverloadResolution")
         this.isAsyncIteratorReturnType = isAsyncIteratorReturnType ??
@@ -742,6 +746,7 @@ internal partial class DeclarationBinder {
         }
         nestedStructPackages[structSymbol] = $package
         structDeclarationScopes[structSymbol] = $scope
+        sourceStructDeclarationOrder.Add(structSymbol)
         return structSymbol
     }
 

@@ -616,6 +616,99 @@ class BAttribute : Attribute {}`
         }
     }
 
+    @Theory
+    @InlineData("constraint")
+    @InlineData("base")
+    @InlineData("argument")
+    @InlineData("interface")
+    func QualifiedDeclarationSignatures_UseReadyLexicalHeaders(kind string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let driver = CompileBoundedStackDriver(fixture)
+        const root = "open class Root { public open class Nested {} }"
+        let container = if kind == "constraint" {
+            "public open class Container[T] : Root {}"
+        } else {
+            "public open class Container : Root {}"
+        }
+        let consumer = switch kind {
+            case "constraint": "public class Consumer[U Container[int32].Nested] {}"
+            case "base": "public class Consumer : Container.Nested {}"
+            case "argument": "public open class GenericBase[T] {}\npublic class Consumer : GenericBase[Container.Nested] {}"
+            default: "public interface Contract { func Read(value Container.Nested); }\n" +
+                "public class Implementation : Contract { public func Read(value Root.Nested) {} }"
+        }
+        for reverse in[]bool{false, true} {
+            let siblings = if reverse {
+                consumer + "\n" + container
+            } else {
+                container + "\n" + consumer
+            }
+            let declarations = []string{
+                root,
+                if kind == "constraint" {
+                    "open class Container[T] {}"
+                } else {
+                    ""
+                },
+                "class Envelope {\n" + siblings + "\n}"
+            }
+            let sourcePath = Path.Combine(fixture.Directory, "qualifiers.gs")
+            let dll = Path.Combine(fixture.Directory, "qualifiers-" + reverse.ToString() + ".dll")
+            File.WriteAllText(
+                sourcePath,
+                string.Join(
+                    "\n",
+                    if reverse {
+                        declarations.Reverse()
+                    } else {
+                        declarations
+                    }
+                )
+            )
+            let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+                sourcePath,
+                dll,
+                driver
+            )
+            Assert.True(code == 0, output)
+            IlVerifier.Verify(dll)
+            let types = EmittedFixture.Load(dll).GetTypes()
+            let nested = types.Single((type Type) -> type.Name == "Nested")
+            if kind == "interface" {
+                let contract = types.Single((type Type) -> type.Name == "Contract")
+                let read = contract.GetMethod("Read")!!
+                Assert.Equal(nested, Assert.Single(read.GetParameters()).ParameterType)
+                let implementation = types.Single((type Type) -> type.Name == "Implementation")
+                read.Invoke(Activator.CreateInstance(implementation), []object{Activator.CreateInstance(nested)!!})
+            } else {
+                let result = types.Single(
+                    (type Type) -> type.Name == if kind == "constraint" {
+                        "Consumer`1"
+                    } else {
+                        "Consumer"
+                    }
+                )
+                if kind == "constraint" {
+                    Assert.Equal(
+                        nested,
+                        Assert.Single(Assert.Single(result.GetGenericArguments()).GetGenericParameterConstraints())
+                    )
+                    Assert.NotNull(Activator.CreateInstance(result.MakeGenericType(nested)))
+                } else {
+                    Assert.Equal(
+                        nested,
+                        if kind == "argument" {
+                            Assert.Single(result.BaseType!!.GetGenericArguments())
+                        } else {
+                            result.BaseType
+                        }
+                    )
+                    Assert.NotNull(Activator.CreateInstance(result))
+                }
+            }
+        }
+    }
+
     @Fact
     func HeaderConstraints_SeeInheritedNestedTypesInEitherDeclarationOrder() {
         using let fixture = NativeSliceLanguageTests.Fixture()

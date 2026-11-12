@@ -538,6 +538,7 @@ partial class Binder {
             },
             resolveAccessibility: ResolveAccessibility,
             lookupType: LookupType,
+            lookupTypeWithArity: LookupType,
             getEffectiveArgumentClrTypeForOverloadResolution: (t TypeSymbol) -> {
                 // Issue #3984: the two DeclarationBinder consumers of this
                 // delegate are BOTH applicability probes — they build a
@@ -7292,6 +7293,7 @@ partial class Binder {
                     declaredTypeAliases.Add(declaredAlias)
                 }
             }
+            binder.declarations.BindSourceStructHeaders()
             binder.declarations.BindPendingShellAttributes()
             for (delegateSyntax, delegateSymbol) in declaredDelegates {
                 let owningPackage = packageByTree[delegateSyntax.SyntaxTree]
