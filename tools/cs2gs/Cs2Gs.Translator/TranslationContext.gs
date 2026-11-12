@@ -11,8 +11,11 @@ import Microsoft.CodeAnalysis.CSharp
 import System
 import System.Collections.Generic
 import System.Collections.Immutable
+import System.IO
 import System.Linq
 import System.Runtime.CompilerServices
+import System.Security.Cryptography
+import System.Threading
 
 /// Carries the bound Roslyn state a translation pass needs and accumulates the
 /// structured (cref:TranslationDiagnostic) records the later mapping
@@ -86,7 +89,8 @@ class TranslationContext {
         semanticModel SemanticModel,
         filePath string,
         siblingCompilations IReadOnlyList[CSharpCompilation]? = nil,
-        repositoryCompilations IReadOnlyList[CSharpCompilation]? = nil
+        repositoryCompilations IReadOnlyList[CSharpCompilation]? = nil,
+        cancellationToken CancellationToken = default(CancellationToken)
     ) {
         this.Compilation = compilation ?? throw ArgumentNullException("compilation")
         this.rootCompilation = this.Compilation
@@ -94,6 +98,7 @@ class TranslationContext {
         this.modelsByTree[this.SemanticModel.SyntaxTree] = this.SemanticModel
         CacheSemanticModel(this.Compilation, this.SemanticModel)
         this.FilePath = filePath
+        this.CancellationToken = cancellationToken
         this.siblingCompilations = siblingCompilations
         this.repositoryCompilations = repositoryCompilations
         ObliviousNullabilityAnalyzer.RegisterSourceAssemblies(
@@ -104,6 +109,11 @@ class TranslationContext {
 
     /// Gets the root C# compilation this context was created for.
     prop RootCompilation CSharpCompilation -> this.rootCompilation
+
+    prop CancellationToken CancellationToken {
+        get;
+    }
+    internal var StorageEffectBodyVisits int32
 
     /// Gets the owning C# compilation.
     prop Compilation CSharpCompilation {
@@ -337,6 +347,29 @@ class TranslationContext {
     }
 
     shared {
+        private let OwnedEffectImages ConditionalWeakTable[PortableExecutableReference, StrongBox[string]] =
+        ConditionalWeakTable[PortableExecutableReference, StrongBox[string]]()
+
+        /// Bind and verify the same immutable bytes; a caller-supplied path is not image provenance.
+        func CreateOwnedMetadataReference(
+            path string,
+            properties MetadataReferenceProperties = default(MetadataReferenceProperties)
+        ) PortableExecutableReference {
+            let image = ImmutableArray.CreateRange(File.ReadAllBytes(path))
+            let reference = MetadataReference.CreateFromImage(image, properties: properties, filePath: path)
+            OwnedEffectImages.Add(reference, StrongBox[string](Convert.ToHexString(SHA256.HashData(image.AsSpan()))))
+            return reference
+        }
+
+        internal func HasTrustedEffectImage(reference PortableExecutableReference, identity string) bool ->
+        OwnedEffectImages.TryGetValue(reference, out var fingerprint) &&
+            GSharp
+            .Core
+            .CodeAnalysis
+            .Symbols
+            .ReferenceResolver
+            .IsTrustedEffectImage(System.Reflection.AssemblyName(identity), fingerprint.Value)
+
         private let SemanticModelsByCompilation ConditionalWeakTable[
             Compilation,
             Dictionary[SyntaxTree, SemanticModel]

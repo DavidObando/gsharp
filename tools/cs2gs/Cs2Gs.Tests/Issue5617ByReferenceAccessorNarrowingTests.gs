@@ -11,6 +11,7 @@ import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
 import System
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.Diagnostics
 import System.IO
 import System.Linq
@@ -18,6 +19,8 @@ import System.Reflection
 import System.Runtime.Loader
 import System.Text
 import System.Text.RegularExpressions
+import System.Threading
+import System.Threading.Tasks
 import Xunit
 
 /// Issue #5617: gsc removes the narrowing fact of a by-reference variable at an accessor that can run user code
@@ -1596,10 +1599,12 @@ public class Demo
     @InlineData("for (int i = 0; i < 2; i++) { total += s.Length; cancellation.Cancel(); }", true)
     @InlineData("Pure(); integers.Clear();", false)
     @InlineData("Invoke(() => { });", false)
+    @InlineData("var deferred = new[] { 1 }.Where(_ => { global = null; return true; });", false)
     func RefParameter_UsesStorageEffectsAcrossCallsAndConditions(statement string, asserted bool) {
         let printed = AssertRunsLikeCSharp(`
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using CallEffectLibrary;
 public static class Demo {
@@ -1633,6 +1638,327 @@ public static class Library {
             },
             printed
         )
+    }
+
+    @Theory
+    @InlineData("ClearCells();", "cells[0].Text")
+    @InlineData("ResetBox();", "box.Text")
+    @InlineData("explicitTarget.Touch();", "global")
+    @InlineData("genericTarget.Touch(1);", "global")
+    @InlineData("ReadProperty();", "global")
+    @InlineData("ReadIndexer();", "global")
+    @InlineData("Format(new Formatter());", "global")
+    @InlineData("FormatHandler();", "HandlerStore.Value")
+    @InlineData("Recurse(() => { }, 1);", "global")
+    @InlineData("Construct();", "global")
+    @InlineData("disposable.Dispose();", "global")
+    @InlineData("ReverseBuffer();", "buffer[0]")
+    @InlineData("_ = sequence.Count();", "global")
+    @InlineData("_ = dictionary.ContainsKey(1);", "global")
+    func RefParameter_TransitiveOperationEffects(statement string, root string) {
+        let printed = AssertRunsLikeCSharp(`
+using System;
+using System.Linq;
+using System.Collections.Generic;
+using EffectCells;
+public interface IExplicit { void Touch(); }
+public interface IGenericExplicit<T> { void Touch(T value); }
+public sealed class ExplicitWriter : IExplicit {
+    void IExplicit.Touch() { Demo.ClearGlobal(); }
+}
+public sealed class GenericExplicitWriter : IGenericExplicit<int> {
+    void IGenericExplicit<int>.Touch(int value) { Demo.ClearGlobal(); }
+}
+public sealed class Disposer : IDisposable {
+    public void Dispose() { Demo.ClearGlobal(); }
+}
+public sealed class Formatter {
+    public override string ToString() { Demo.ClearGlobal(); return "formatted"; }
+}
+public class Base {
+    private int initialized = Demo.ClearAndReturn();
+}
+public sealed class Derived : Base { }
+public sealed class Indexer {
+    public int this[int index] { get { Demo.ClearGlobal(); return index; } }
+}
+public sealed class KeyComparer : IEqualityComparer<int> {
+    public bool Equals(int x, int y) => x == y;
+    public int GetHashCode(int value) { Demo.ClearGlobal(); return value; }
+}
+public static class Demo {
+    private static string? global;
+    private static Cell box;
+    private static Cell[] cells = new Cell[1];
+    private static string?[] buffer = new string?[2];
+    public static void ClearGlobal() { global = null; }
+    public static int ClearAndReturn() { ClearGlobal(); return 1; }
+    private static int P { get { ClearGlobal(); return 1; } }
+    private static void ReadProperty() { _ = P; }
+    private static void ReadIndexer() { _ = new Indexer()[0]; }
+    private static void Format(Formatter value) { _ = $"{value}"; }
+    private static void FormatHandler() { HandlerStore.Format($"{1}"); }
+    private static void Clear<T>(T[] items) where T : struct { items[0] = default; }
+    private static void ClearCells() { Clear(cells); }
+    private static void ReverseBuffer() { System.MemoryExtensions.Reverse<string?>(buffer.AsSpan()); }
+    private static void ResetBox() { box = default; }
+    private static void Construct() { _ = new Derived(); }
+    private static void Recurse(Action callback, int remaining) {
+        if (remaining > 0) Recurse(() => ClearGlobal(), remaining - 1);
+        else callback();
+    }
+    private static int Guard(ref string? s, IExplicit explicitTarget, IGenericExplicit<int> genericTarget, IDisposable disposable,
+        IEnumerable<int> sequence, Dictionary<int, int> dictionary) {
+        if (s == null) return 0;
+        ` + statement + `
+        return s.Length + 19;
+    }
+    public static string Run() {
+        var dictionary = new Dictionary<int, int>(new KeyComparer());
+        dictionary.Add(1, 2);
+        global = "safe"; box.Text = "safe"; cells[0].Text = "safe"; HandlerStore.Value = "safe";
+        buffer[0] = "safe"; buffer[1] = null;
+        var sequence = new[] { 1 }.Where(x => { ClearGlobal(); return true; });
+        try { return Guard(ref ` + root + `, new ExplicitWriter(), new GenericExplicitWriter(), new Disposer(), sequence, dictionary).ToString(); }
+        catch (NullReferenceException) { return "cleared"; }
+    }
+}`, library: `
+namespace EffectCells;
+public struct Cell { public string? Text; }
+public static class HandlerStore {
+    public static string? Value;
+    public static void Format(EffectHandler handler) { }
+}
+[System.Runtime.CompilerServices.InterpolatedStringHandler]
+public ref struct EffectHandler {
+    public EffectHandler(int literalLength, int formattedCount) { HandlerStore.Value = null; }
+    public void AppendLiteral(string text) { }
+    public void AppendFormatted(int value) { }
+}`)
+        Assert.Contains("return s!!.Length + 19", printed)
+    }
+
+    @Theory
+    @InlineData(12)
+    @InlineData(35)
+    func RefParameter_SharedCalleeAnalysisIsLinear(depth int32) {
+        let source = StringBuilder("public static class Demo { private static void M0() { }")
+        for var i = 1; i <= depth; i++ {
+            source
+                .Append("private static void M")
+                .Append(i)
+                .Append("() { M")
+                .Append(i - 1)
+                .Append("(); M")
+                .Append(i - 1)
+                .Append("(); }")
+        }
+        source
+            .Append("private static int Guard(ref string? s) { if (s == null) return 0; M")
+            .Append(depth)
+            .Append("(); return s.Length; } public static string Run() => \"analysis\"; }")
+        var visits = 0
+        let printed = AssertRunsLikeCSharp(
+            source.ToString(),
+            inspect: (context TranslationContext) -> {
+                visits = context.StorageEffectBodyVisits
+            }
+        )
+        Assert.Contains("return s.Length", printed)
+        Assert.InRange(visits, depth + 1, (depth + 1) * 3)
+    }
+
+    @Fact
+    func RefParameter_CanceledStorageTraversalDoesNotPublishASummary() {
+        using let cancellation = CancellationTokenSource()
+        cancellation.Cancel()
+        Assert.Throws[OperationCanceledException](() -> AssertRunsLikeCSharp(`
+public static class Demo {
+    private static void Probe() { }
+    private static int Guard(ref string? s) { if (s == null) return 0; Probe(); return s.Length; }
+    public static string Run() => "analysis";
+}`, cancellationToken: cancellation.Token))
+    }
+
+    @Fact
+    func RefParameter_BoundImageDoesNotInheritItsSuppliedPathTrust() {
+        let host = typeof(Console).Assembly.GetName()
+        let source = "[assembly: System.Reflection.AssemblyVersion(\"" + host.Version!!.ToString() +
+            "\")] namespace System { public static class EffectStore { public static string? Value; " +
+            "public static void Clear() { Value = null; } } }"
+        let library = CSharpCompilation.Create(
+            host.Name,
+            []SyntaxTree{CSharpSyntaxTree.ParseText(source)},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+                .WithNullableContextOptions(NullableContextOptions.Enable)
+                .WithCryptoPublicKey(host.GetPublicKey().ToImmutableArray())
+                .WithPublicSign(true)
+        )
+        using let stream = MemoryStream()
+        let emitted = library.Emit(stream)
+        Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics))
+        let reference = MetadataReference.CreateFromImage(stream.ToArray(), filePath: typeof(Console).Assembly.Location)
+        let references = CSharpProjectLoader
+            .RuntimeReferences()
+            .Where((item MetadataReference) -> (item as PortableExecutableReference)?.FilePath != reference.FilePath)
+            .Append(cast[MetadataReference](reference))
+        let tree = CSharpSyntaxTree.ParseText(`
+public static class Demo {
+    private static int Guard(ref string? s) {
+        if (s == null) return 0;
+        System.EffectStore.Clear();
+        return s.Length;
+    }
+}
+`)
+        let compilation = CSharpCompilation.Create(
+            "BoundImage5326",
+            []SyntaxTree{tree},
+            references,
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+                NullableContextOptions.Enable
+            )
+        )
+        Assert.Empty(
+            compilation.GetDiagnostics().Where(
+                (diagnostic Diagnostic) -> diagnostic.Severity == DiagnosticSeverity.Error
+            )
+        )
+        let model = compilation.GetSemanticModel(tree)
+        let document = LoadedDocument("Snippet.cs", tree, model)
+        let printed = GSharpPrinter.Print(
+            CSharpToGSharpTranslator().TranslateDocument(
+                document,
+                TranslationContext(compilation, model, document.FilePath)
+            )
+        )
+        Assert.Contains("return s!!.Length", printed)
+    }
+
+    @Fact
+    func RefParameter_OwnedImageStaysFrozenAfterItsPathChanges() {
+        let directory = Path.Combine(AppContext.BaseDirectory, "FrozenEffect5326", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let path = Path.Combine(directory, "System.Console.dll")
+            File.Copy(typeof(Console).Assembly.Location, path)
+            let reference = TranslationContext.CreateOwnedMetadataReference(path)
+            let references = CSharpProjectLoader
+                .RuntimeReferences()
+                .Where(
+                (item MetadataReference) -> (item as PortableExecutableReference)?.FilePath != typeof(Console)
+                    .Assembly
+                    .Location
+            )
+                .Append(cast[MetadataReference](reference))
+            let tree = CSharpSyntaxTree.ParseText(`
+public static class Demo {
+    private static int Guard(ref string? s) {
+        if (s == null) return 0;
+        System.Console.WriteLine("pure");
+        return s.Length;
+    }
+}`)
+            let compilation = CSharpCompilation.Create(
+                "FrozenImage5326",
+                []SyntaxTree{tree},
+                references,
+                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+                    NullableContextOptions.Enable
+                )
+            )
+            Assert.NotNull(compilation.GetAssemblyOrModuleSymbol(reference))
+            File.WriteAllBytes(path, []byte{0})
+            let model = compilation.GetSemanticModel(tree)
+            let document = LoadedDocument("Snippet.cs", tree, model)
+            let printed = GSharpPrinter.Print(
+                CSharpToGSharpTranslator().TranslateDocument(
+                    document,
+                    TranslationContext(compilation, model, document.FilePath)
+                )
+            )
+            Assert.Contains("return s.Length", printed)
+            Assert.DoesNotContain("s!!", printed)
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    @Fact
+    func RefParameter_CallbackSummaryKeysIncludeActualSyntaxTreeIdentity() {
+        let pure = CSharpSyntaxTree.ParseText(
+            "public static class Pure { public static void Go() { Sink.Invoke(() => Act()); } private static void Act() { } }"
+        )
+        let evil = CSharpSyntaxTree.ParseText(
+            "public static class Evil { public static void Go() { Sink.Invoke(() => Act()); } private static void Act() { Demo.Global = null; } }"
+        )
+        let tree = CSharpSyntaxTree.ParseText(`
+public static class Sink { public static void Invoke(System.Action action) { action(); } }
+public static class Demo {
+    public static string? Global;
+    private static int Safe(ref string? s) { if (s == null) return 0; Pure.Go(); return s.Length + 1; }
+    private static int Write(ref string? s) { if (s == null) return 0; Evil.Go(); return s.Length + 2; }
+}`)
+        let compilation = CSharpCompilation.Create(
+            "TreeIdentity5326",
+            []SyntaxTree{tree, pure, evil},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+                NullableContextOptions.Enable
+            )
+        )
+        Assert.Empty(
+            compilation.GetDiagnostics().Where(
+                (diagnostic Diagnostic) -> diagnostic.Severity == DiagnosticSeverity.Error
+            )
+        )
+        let model = compilation.GetSemanticModel(tree)
+        let document = LoadedDocument("Snippet.cs", tree, model)
+        let printed = GSharpPrinter.Print(
+            CSharpToGSharpTranslator().TranslateDocument(
+                document,
+                TranslationContext(compilation, model, document.FilePath)
+            )
+        )
+        Assert.Contains("return s.Length + 1", printed)
+        Assert.Contains("return s!!.Length + 2", printed)
+    }
+
+    @Fact
+    func RefParameter_CancellationInterruptsAnActiveCalleeWalk() {
+        let source = StringBuilder(
+            "public static class Demo { private static void Leaf() { } private static void Work() {"
+        )
+        for var i = 0; i < 12000; i++ {
+            source.Append("Leaf();")
+        }
+        source.Append(
+            "} private static int Guard(ref string? s) { if (s == null) return 0; Work(); return s.Length; } }"
+        )
+        let tree = CSharpSyntaxTree.ParseText(source.ToString())
+        let compilation = CSharpCompilation.Create(
+            "CancelEffects5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+                NullableContextOptions.Enable
+            )
+        )
+        let model = compilation.GetSemanticModel(tree)
+        let document = LoadedDocument("Snippet.cs", tree, model)
+        using let cancellation = CancellationTokenSource()
+        let context = TranslationContext(compilation, model, document.FilePath, cancellationToken: cancellation.Token)
+        let translation = Task.Run(() -> CSharpToGSharpTranslator().TranslateDocument(document, context))
+        Assert.True(
+            SpinWait.SpinUntil(
+                () -> Volatile.Read(ref context.StorageEffectBodyVisits) > 0 || translation.IsCompleted,
+                TimeSpan.FromSeconds(15)
+            )
+        )
+        Assert.False(translation.IsCompleted, "The callee walk must still be active when cancellation is requested.")
+        cancellation.Cancel()
+        Assert.ThrowsAny[OperationCanceledException](() -> translation.GetAwaiter().GetResult())
     }
 
     @Fact
@@ -2100,12 +2426,12 @@ namespace OtherNs
         Assert.Contains("return s!!.Length + 18", printed)
         Assert.Contains("return s.Length + 19", printed)
         Assert.Contains("return s.Length + 15", printed)
-        Assert.Contains("return s.Length + total + 16", printed)
+        Assert.Contains("return s!!.Length + total + 16", printed)
         Assert.Contains("return s.Length + total + 1", printed)
         Assert.Contains("return s!!.Length + total + 2", printed)
         Assert.Contains("return s.Length + total + 4", printed)
         Assert.Contains("return s!!.Length + total + 23", printed)
-        Assert.Equal(13, Regex.Matches(printed, `s!!`).Count)
+        Assert.Equal(14, Regex.Matches(printed, `s!!`).Count)
     }
 
     /// Issue #5697: gsc narrows after a `do ... while`, `while`, or `for` loop whose exit condition proves non-null
@@ -2878,7 +3204,12 @@ public class Demo
     shared {
         /// Runs `Demo.Run()` of the C# and of its translation and compares the output. [`library`](paramref) is C#
         /// that both reference as a prebuilt assembly (`Lib5617`), so its types are imported in the G#.
-        private func AssertRunsLikeCSharp(source string, library string? = nil) string {
+        private func AssertRunsLikeCSharp(
+            source string,
+            library string? = nil,
+            inspect Action[TranslationContext]? = nil,
+            cancellationToken CancellationToken = default(CancellationToken)
+        ) string {
             let libraryImage = if library == nil {
                 Array.Empty[byte]()
             } else {
@@ -2918,8 +3249,14 @@ public class Demo
                 )
                 let model = compilation.GetSemanticModel(tree)
                 let document = LoadedDocument("Snippet.cs", tree, model)
-                let context = TranslationContext(compilation, model, document.FilePath)
+                let context = TranslationContext(
+                    compilation,
+                    model,
+                    document.FilePath,
+                    cancellationToken: cancellationToken
+                )
                 let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+                inspect?.Invoke(context)
                 Assert.Equal(expected, CompileAndRun(printed, libraryImage).Trim())
                 return printed
             } finally {

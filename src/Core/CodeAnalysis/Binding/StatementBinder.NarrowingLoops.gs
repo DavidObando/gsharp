@@ -7293,7 +7293,9 @@ internal partial class StatementBinder {
         }
         if !visiting.Add(orig) {
             hitCycle = true
-            return CallEffectSummary()
+            let recursive = CallEffectSummary()
+            recursive.InvokesCallbackParameter = FunctionHasCallbackParameter(orig)
+            return recursive
         }
         var localCycle = false
         var directSummary CallEffectSummary
@@ -7528,6 +7530,16 @@ internal partial class StatementBinder {
         return false
     }
 
+    private func SubstituteImportedEffectElement(element TypeSymbol, arguments ImmutableArray[TypeSymbol?]) TypeSymbol {
+        if element.ClrType is {IsGenericParameter: true, DeclaringMethod: not nil} parameter &&
+            !arguments.IsDefaultOrEmpty &&
+            parameter.GenericParameterPosition < arguments.Length &&
+            arguments[parameter.GenericParameterPosition] is {} argument {
+            return argument
+        }
+        return element
+    }
+
     private func AnalyzeImportedMethodEffects(
         method MethodInfo,
         receiverType TypeSymbol?,
@@ -7664,20 +7676,17 @@ internal partial class StatementBinder {
                     }
                     if argumentTypes[i] is {} argType {
                         if TryGetMutableBufferElementType(argType) is {} elemType {
-                            summary.AddElementType(elemType)
+                            summary.AddElementType(SubstituteImportedEffectElement(elemType, typeArguments))
                         }
                     } else {
-                        let pType = parameters[i].ParameterType
-                        if pType.IsArray {
-                            let projType = if receiverType != nil {
-                                MemberLookup.GetClrMethodParameterTypeSymbol(receiverType, method, i)
-                            } else {
-                                ClrNullability.GetParameterTypeSymbol(parameters[i])
-                            }
-                            if TryGetMutableBufferElementType(projType) is {} elemType {
-                                summary.AddElementType(elemType)
-                            }
-                        } else if pType.FullName == "System.Array" {
+                        let projType = if receiverType != nil {
+                            MemberLookup.GetClrMethodParameterTypeSymbol(receiverType, method, i)
+                        } else {
+                            ClrNullability.GetParameterTypeSymbol(parameters[i])
+                        }
+                        if TryGetMutableBufferElementType(projType) is {} elemType {
+                            summary.AddElementType(SubstituteImportedEffectElement(elemType, typeArguments))
+                        } else if parameters[i].ParameterType.FullName == "System.Array" {
                             summary.AddElementType(TypeSymbol.Object)
                         }
                     }
@@ -7687,17 +7696,14 @@ internal partial class StatementBinder {
                     if ClrOverloadResolution.IsParamsArrayParameter(parameters[i]) {
                         continue
                     }
-                    let pType = parameters[i].ParameterType
-                    if pType.IsArray {
-                        let projType = if receiverType != nil {
-                            MemberLookup.GetClrMethodParameterTypeSymbol(receiverType, method, i)
-                        } else {
-                            ClrNullability.GetParameterTypeSymbol(parameters[i])
-                        }
-                        if TryGetMutableBufferElementType(projType) is {} elemType {
-                            summary.AddElementType(elemType)
-                        }
-                    } else if pType.FullName == "System.Array" {
+                    let projType = if receiverType != nil {
+                        MemberLookup.GetClrMethodParameterTypeSymbol(receiverType, method, i)
+                    } else {
+                        ClrNullability.GetParameterTypeSymbol(parameters[i])
+                    }
+                    if TryGetMutableBufferElementType(projType) is {} elemType {
+                        summary.AddElementType(SubstituteImportedEffectElement(elemType, typeArguments))
+                    } else if parameters[i].ParameterType.FullName == "System.Array" {
                         summary.AddElementType(TypeSymbol.Object)
                     }
                 }
@@ -7736,10 +7742,21 @@ internal partial class StatementBinder {
             }
         }
 
-        for p in method.GetParameters() {
-            if ClrTypeUtilities.IsDelegateType(p.ParameterType) {
-                summary.InvokesCallbackParameter = true
-                break
+        let resultType = method.ReturnType
+        let resultName = (
+            if resultType.IsGenericType {
+                resultType.GetGenericTypeDefinition()
+            } else {
+                resultType
+            }
+        ).FullName ??
+            ""
+        if !IsDeferredEnumerableFactory(declFullName, resultName) {
+            for p in method.GetParameters() {
+                if ClrTypeUtilities.IsDelegateType(p.ParameterType) {
+                    summary.InvokesCallbackParameter = true
+                    break
+                }
             }
         }
 
@@ -7765,9 +7782,7 @@ internal partial class StatementBinder {
             return true
         }
         let fullName = ((stripped as ImportedTypeSymbol)?.OpenDefinition ?? stripped?.ClrType)?.FullName ?? ""
-        return fullName.StartsWith("System.Collections.Generic.IEnumerable`1", StringComparison.Ordinal) ||
-            fullName == "System.Collections.IEnumerable" ||
-            fullName.StartsWith("System.Linq.IOrderedEnumerable`1", StringComparison.Ordinal)
+        return IsEnumerableEffectTypeName(fullName)
     }
 
     private func BoundArgumentsContainLazyEnumerable(arguments ImmutableArray[BoundExpression]) bool {
@@ -8487,13 +8502,7 @@ internal partial class StatementBinder {
                 type
             }
         ).FullName
-        return if name is "System.Collections.Generic.IEqualityComparer`1" or "System.Collections.Generic.IComparer`1" {
-            1
-        } else if name is "System.Collections.IEqualityComparer" or "System.Collections.IComparer" {
-            2
-        } else {
-            0
-        }
+        return GetComparerContractKind(name ?? "")
     }
 
     private func StoredComparerKinds(owner Type) int32 {
@@ -8571,6 +8580,44 @@ internal partial class StatementBinder {
     }
 
     shared {
+        internal func DefersImportedCallbackArguments(method MethodInfo) bool {
+            if method.DeclaringType is not{} owner || !ReferenceResolver.IsTrustedEffectAssembly(owner.Assembly) {
+                return false
+            }
+            let result = method.ReturnType
+            let resultName = (
+                if result.IsGenericType {
+                    result.GetGenericTypeDefinition()
+                } else {
+                    result
+                }
+            ).FullName ??
+                ""
+            return IsDeferredEnumerableFactory(owner.FullName ?? "", resultName)
+        }
+
+        internal func IsDeferredEnumerableFactory(owner string, result string) bool ->
+        owner == "System.Linq.Enumerable" && IsEnumerableEffectTypeName(result)
+
+        internal func IsMutableBufferTypeName(name string) bool -> name is "System.Span`1" or
+            "System.Memory`1" or
+            "System.ArraySegment`1" or
+            "System.Runtime.CompilerServices.StrongBox`1"
+
+        internal func IsEnumerableEffectTypeName(name string) bool ->
+        name.StartsWith("System.Collections.Generic.IEnumerable`1", StringComparison.Ordinal) ||
+            name == "System.Collections.IEnumerable" ||
+            name.StartsWith("System.Linq.IOrderedEnumerable`1", StringComparison.Ordinal)
+
+        internal func GetComparerContractKind(name string) int32 ->
+        if name is "System.Collections.Generic.IEqualityComparer`1" or "System.Collections.Generic.IComparer`1" {
+            1
+        } else if name is "System.Collections.IEqualityComparer" or "System.Collections.IComparer" {
+            2
+        } else {
+            0
+        }
+
         internal func HasUnmodeledFrameworkCallbacks(fullName string) bool ->
         fullName.StartsWith("System.Lazy`", StringComparison.Ordinal) || fullName.StartsWith(
             "System.Threading.CancellationToken",
@@ -8884,10 +8931,7 @@ internal partial class StatementBinder {
             }
             case imp is ImportedTypeSymbol {
                 let openName = (imp.OpenDefinition ?? imp.ClrType)?.FullName ?? ""
-                if openName is "System.Span`1" or
-                    "System.Memory`1" or
-                    "System.ArraySegment`1" or
-                    "System.Runtime.CompilerServices.StrongBox`1" {
+                if IsMutableBufferTypeName(openName) {
                     if !imp.TypeArguments.IsDefaultOrEmpty {
                         return imp.TypeArguments[0]
                     }
@@ -9048,22 +9092,33 @@ internal partial class StatementBinder {
         sourceSummary CallEffectSummary,
         receiverType TypeSymbol?,
         callee FunctionSymbol?,
-        methodTypeArgs ImmutableArray[TypeSymbol]
+        methodTypeArgs ImmutableArray[TypeSymbol],
+        argumentTypes List[TypeSymbol?]? = nil
     ) CallEffectSummary {
         let substituted = CallEffectSummary()
         if sourceSummary.WritesAnyStorage {
             substituted.WritesAnyStorage = true
             return substituted
         }
+        let inferred = Dictionary[TypeParameterSymbol, TypeSymbol]()
+        if methodTypeArgs.IsDefaultOrEmpty && callee != nil && argumentTypes != nil {
+            for var i = 0; i < Math.Min(callee.Parameters.Length, argumentTypes.Count); i++ {
+                if argumentTypes[i] is {} argumentType {
+                    Binder.InferTypeArguments(callee.Parameters[i].Type, argumentType, inferred)
+                }
+            }
+        }
         substituted.InvokesCallbackParameter = sourceSummary.InvokesCallbackParameter
         if sourceSummary.IsEmpty {
             return substituted
         }
         for ft in sourceSummary.WrittenFieldTypes {
-            substituted.AddFieldType(SubstituteWrittenType(ft, receiverType, callee, methodTypeArgs))
+            let written = SubstituteWrittenType(ft, receiverType, callee, methodTypeArgs)
+            substituted.AddFieldType(StructSymbol.SubstituteTypeParameters(written, inferred) ?? written)
         }
         for et in sourceSummary.WrittenElementTypes {
-            substituted.AddElementType(SubstituteWrittenType(et, receiverType, callee, methodTypeArgs))
+            let written = SubstituteWrittenType(et, receiverType, callee, methodTypeArgs)
+            substituted.AddElementType(StructSymbol.SubstituteTypeParameters(written, inferred) ?? written)
         }
         return substituted
     }
@@ -9159,6 +9214,9 @@ internal partial class StatementBinder {
             return true
         }
         if object.Equals(loc, root) {
+            return true
+        }
+        if loc.ClrType?.IsGenericParameter == true || root.ClrType?.IsGenericParameter == true {
             return true
         }
         if loc is TypeParameterSymbol locTp {
@@ -9320,6 +9378,10 @@ internal partial class StatementBinder {
         visitedStructs HashSet[StructSymbol]?
     ) bool {
         if CanInstantiateTypeParameterWith(tp, other) {
+            return true
+        }
+        // An open value argument can be an imported aggregate whose fields include the guarded storage.
+        if !tp.HasReferenceTypeConstraint && tp.ClassConstraint == nil && !other.IsValueType {
             return true
         }
         for s in binderCtx.RootScope.GetDeclaredStructs() {
@@ -12453,6 +12515,36 @@ internal partial class StatementBinder {
                         ref hitCycle
                     )
                 }
+                let indexedType = InferCalleeExpressionType(
+                    idxExpr.Target,
+                    origCallee,
+                    enclosingType,
+                    parameters,
+                    calleeTypeParams,
+                    localTypes,
+                    out _
+                )
+                if StripAllNullability(indexedType) is StructSymbol indexedStruct {
+                    for property in indexedStruct.Properties {
+                        if property.IsIndexer && property.GetterSymbol is {} getter {
+                            let effects = GetFunctionEffectSummaryCore(
+                                getter,
+                                includeOverrides: true,
+                                visiting,
+                                out var cycle
+                            )
+                            hitCycle = hitCycle || cycle
+                            summary.MergeFrom(
+                                ApplyReceiverAndMethodSubstitution(
+                                    effects,
+                                    indexedStruct,
+                                    getter,
+                                    ImmutableArray[TypeSymbol].Empty
+                                )
+                            )
+                        }
+                    }
+                }
                 return
             }
             default {
@@ -14686,7 +14778,7 @@ internal partial class StatementBinder {
                         if c {
                             hitCycle = true
                         }
-                        summary.MergeFrom(ApplyReceiverAndMethodSubstitution(raw, s, m, methodTypeArgs))
+                        summary.MergeFrom(ApplyReceiverAndMethodSubstitution(raw, s, m, methodTypeArgs, argTypes))
                     }
                 }
                 for m in level.StaticMethods {
@@ -14696,7 +14788,7 @@ internal partial class StatementBinder {
                         if c {
                             hitCycle = true
                         }
-                        summary.MergeFrom(ApplyReceiverAndMethodSubstitution(raw, s, m, methodTypeArgs))
+                        summary.MergeFrom(ApplyReceiverAndMethodSubstitution(raw, s, m, methodTypeArgs, argTypes))
                     }
                 }
             }
@@ -15236,7 +15328,8 @@ internal partial class StatementBinder {
                                     clrMethod,
                                     symbolic,
                                     argTypes,
-                                    default(ImmutableArray[TypeSymbol?]),
+                                    methodTypeArgs.Select((type TypeSymbol) -> cast[TypeSymbol?](type))
+                                        .ToImmutableArray(),
                                     includeOverrides: !isStatic,
                                     visiting,
                                     receiverIsFreshLocal: receiverIsFreshLocal

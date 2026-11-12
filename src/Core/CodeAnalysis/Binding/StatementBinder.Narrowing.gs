@@ -6667,7 +6667,7 @@ internal partial class StatementBinder {
         }
 
         protected open override func VisitImportedCallExpression(node BoundImportedCallExpression) {
-            VisitCallableArguments(node.Arguments)
+            VisitCallableArguments(node.Arguments, node.Function.Method)
         }
 
         protected open override func VisitConstrainedStaticCallExpression(node BoundConstrainedStaticCallExpression) {
@@ -6675,7 +6675,7 @@ internal partial class StatementBinder {
         }
 
         protected open override func VisitClrStaticCallExpression(node BoundClrStaticCallExpression) {
-            VisitCallableArguments(node.Arguments)
+            VisitCallableArguments(node.Arguments, node.Method)
         }
 
         protected open override func VisitUserInstanceCallExpression(node BoundUserInstanceCallExpression) {
@@ -6723,7 +6723,7 @@ internal partial class StatementBinder {
                 AnalyzeCallableInvocation(node.Receiver, targetState, argumentSnapshots)
                 return
             }
-            VisitCallableArguments(node.Arguments)
+            VisitCallableArguments(node.Arguments, node.Method)
         }
 
         protected open override func VisitFunctionPointerInvocationExpression(
@@ -6963,8 +6963,14 @@ internal partial class StatementBinder {
             }
         }
 
-        private func VisitCallableArguments(arguments ImmutableArray[BoundExpression]) {
-            ApplyCallableArguments(VisitAndSnapshotCallableArguments(arguments))
+        private func VisitCallableArguments(
+            arguments ImmutableArray[BoundExpression],
+            method System.Reflection.MethodInfo? = nil
+        ) {
+            let snapshots = VisitAndSnapshotCallableArguments(arguments)
+            if method == nil || !StatementBinder.DefersImportedCallbackArguments(method) {
+                ApplyCallableArguments(snapshots)
+            }
         }
 
         protected open override func VisitVariableDeclaration(node BoundVariableDeclaration) {

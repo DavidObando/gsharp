@@ -68,6 +68,23 @@ open class ReferenceResolverTests {
         )
     }
 
+    @Fact
+    func HostFallbackVisibilityDoesNotRequireAnEffectManifest() {
+        using let host = CSharpFixture(
+            "namespace System.Windows.Forms { public class Host5326 { public static string? Value; " +
+                "public static void Clear() { Value = null; } } }",
+            assemblyName: "System.Windows.Forms"
+        )
+        using let unrelated = CSharpFixture("public class Unrelated5326 { }", assemblyName: "Unrelated5326")
+        let snapshot = ReferenceResolver.HostTrustedPlatformAssemblyPaths().Append(host.AssemblyPath).ToArray()
+        using let resolver = ReferenceResolver.WithReferences([]string{unrelated.AssemblyPath}, snapshot)
+        Assert.True(resolver.TryResolveType("System.Windows.Forms.Host5326", out var type))
+        let visible = Assert.IsAssignableFrom[Type](type)
+        Assert.False(resolver.IsExplicitReference(visible.Assembly))
+        Assert.False(ReferenceResolver.IsTrustedEffectAssembly(visible.Assembly))
+        Assert.True(resolver.TryResolveType("System.String", out _))
+    }
+
     @Theory
     @InlineData(false)
     @InlineData(true)

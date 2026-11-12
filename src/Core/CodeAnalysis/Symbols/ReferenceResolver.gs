@@ -1619,6 +1619,9 @@ class ReferenceResolver : IDisposable {
             }
         }
 
+        internal func IsTrustedEffectImage(name AssemblyName, fingerprint string) bool ->
+        TrustedEffectImages.Value.TryGetValue(name.FullName, out var hashes) && hashes.Contains(fingerprint)
+
         internal func IsTrustedEffectAssembly(assembly Assembly) bool {
             let name = assembly.GetName()
             if !TrustedEffectImages.Value.TryGetValue(name.FullName, out var hashes) {
@@ -1724,7 +1727,13 @@ class ReferenceResolver : IDisposable {
         /// the gsc host's runtime.
         /// @param referencePaths Paths to additional assemblies to load.
         /// @returns A resolver including the supplied references.
-        func WithReferences(referencePaths IEnumerable[string]?) ReferenceResolver {
+        func WithReferences(referencePaths IEnumerable[string]?) ReferenceResolver ->
+        WithReferences(referencePaths, GetHostTrustedPlatformAssemblies())
+
+        internal func WithReferences(
+            referencePaths IEnumerable[string]?,
+            hostPaths IReadOnlyList[string]
+        ) ReferenceResolver {
             if referencePaths == nil {
                 return Default()
             }
@@ -1744,7 +1753,6 @@ class ReferenceResolver : IDisposable {
             // copy. The host fallback only kicks in for dependencies the user did
             // not enumerate (typical when a user DLL pulls in extra BCL pieces).
             let resolverPaths = List[string](paths)
-            let hostPaths = GetHostTrustedPlatformAssemblies()
             resolverPaths.AddRange(hostPaths)
             let resolver = FallbackMetadataAssemblyResolver(resolverPaths, hostPaths)
             let userAssemblyNames = paths
@@ -1802,8 +1810,7 @@ class ReferenceResolver : IDisposable {
             }
             if userHasNonBcl && !SuppliesDownlevelCoreLibrary(paths, resolver) {
                 for host in fallbackHostPaths {
-                    if !IsBclOrRuntimeAssemblyPath(host) ||
-                        !IsTrustedHostAssemblyIdentity(AssemblyName.GetAssemblyName(host), host) {
+                    if !IsBclOrRuntimeAssemblyPath(host) {
                         continue
                     }
                     try {

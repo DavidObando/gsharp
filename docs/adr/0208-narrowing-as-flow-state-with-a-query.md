@@ -364,6 +364,10 @@ Matching a public-key token or assembly name is insufficient. Application
 dependencies on the host's trusted-platform list do not acquire a framework model.
 Loaded metadata images use their immutable snapshots. Explicit-reference membership
 belongs to each resolver, not the process-wide original-path registry.
+Reference visibility does not require an effect model. Visible host fallbacks
+outside the supported framework manifest retain unknown effects.
+The C# loader binds owned immutable reference images. Effect trust uses those
+same bytes, not a reference's supplied path. Unverified Roslyn references remain unknown.
 
 Comparer discovery examines all visible untrusted assemblies, including private
 implementations and unregistered host assemblies. A binding pass caches the
@@ -375,6 +379,14 @@ operands, and loops. Source-call traversal shares the compiler's container, buff
 and callback-container rules. Resolved calls can still write aliased storage.
 Unknown callback arguments stay unknown; proven disjoint writes and pure callbacks
 retain the fact. Call and method indexes are compilation-scoped.
+The operation walk includes implicit accessors, handlers, constructors, and dispatch
+through source implementations of imported slots. Constructed storage types and
+comparer contracts retain their semantic positions. Deferred factories retain their
+callbacks until enumeration.
+Completed summaries include root types, substitutions, and callback bindings.
+Changed recursive bindings remain unknown; cyclic incomplete negatives are not cached.
+Traversal observes the translation cancellation token and bounds context growth.
+An open value argument can contain guarded reference storage, including imported structs.
 
 **The conservative default.** The lists above and the proof rules of
 section 8 are closed. A fact survives a program point only when one of the
