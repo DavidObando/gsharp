@@ -26,7 +26,8 @@ internal class CSharpFixture : IDisposable {
         assemblyName string? = nil,
         allowUnsafe bool = false,
         deterministic bool = false,
-        optimizationLevel OptimizationLevel = OptimizationLevel.Release
+        optimizationLevel OptimizationLevel = OptimizationLevel.Release,
+        publicKey ImmutableArray[uint8] = default(ImmutableArray[uint8])
     ) {
         DirectoryPath = Path.Combine(AppContext.BaseDirectory, "csharp-fixtures", Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(DirectoryPath)
@@ -45,6 +46,7 @@ internal class CSharpFixture : IDisposable {
                     deterministic: deterministic,
                     optimizationLevel: optimizationLevel
                 )
+                    .WithCryptoPublicKey(publicKey).WithPublicSign(!publicKey.IsDefaultOrEmpty)
             )
             using let stream = File.Create(AssemblyPath)
             let result = compilation.Emit(stream)

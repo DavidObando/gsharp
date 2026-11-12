@@ -6211,6 +6211,9 @@ internal partial class StatementBinder {
                         ) {
                             continue
                         }
+                        if extParams.Length > 0 && !ClrExtensionReceiverCanApply(recvSym0, extParams[0].ParameterType) {
+                            continue
+                        }
                         foundAnyCandidate = true
                         let summary = AnalyzeImportedMethodEffects(
                             impExt,
@@ -6229,6 +6232,37 @@ internal partial class StatementBinder {
             return !foundAnyCandidate
         }
         return true
+    }
+
+    private func ClrExtensionReceiverCanApply(receiver TypeSymbol?, parameter Type) bool {
+        let actual = receiver?.ClrType
+        if actual == nil {
+            return true
+        }
+        let parameter = if parameter.IsByRef {
+            parameter.GetElementType() ?? parameter
+        } else {
+            parameter
+        }
+        if parameter.IsGenericParameter {
+            return true
+        }
+        try {
+            let openType = if parameter.IsGenericType {
+                parameter.GetGenericTypeDefinition()
+            } else {
+                parameter
+            }
+            if openType.IsInterface {
+                return ClrTypeMatchesOrImplementsInterface(actual, openType)
+            }
+            if openType.IsClass {
+                return ClrTypeDerivesFromClass(actual, openType)
+            }
+            return true
+        } catch (error NotSupportedException) {
+            return true
+        }
     }
 
     private func ResolveNamedReceiverTypesForEffects(name string, effects RegionEffects) List[ReceiverType]? {
@@ -6871,7 +6905,8 @@ internal partial class StatementBinder {
         receiverType TypeSymbol?,
         argumentTypes List[TypeSymbol?]?,
         visiting HashSet[FunctionSymbol],
-        summary CallEffectSummary
+        summary CallEffectSummary,
+        comparerKinds int32 = 0
     ) {
         let isOrdered = (
             methodName is "Sort" or
@@ -6973,7 +7008,14 @@ internal partial class StatementBinder {
                 return
             }
         }
-        if declFullName.Length > 0 && HasUnmodeledImportedComparer() {
+        var kinds = comparerKinds
+        if receiverType?.ClrType is {} comparerOwner {
+            kinds |= StoredComparerKinds(comparerOwner)
+        }
+        if declFullName == "System.Linq.Enumerable" && argumentTypes == nil {
+            kinds |= 3
+        }
+        if kinds != 0 && HasUnmodeledImportedComparer(comparedTypes, includeNonGeneric: (kinds & 2) != 0) {
             summary.WritesAnyStorage = true
             return
         }
@@ -7560,33 +7602,7 @@ internal partial class StatementBinder {
         }
 
         // 2. Unsafe, Marshal, Reflection, Interlocked, Delegate.DynamicInvoke, Activator (Limitation Class 7):
-        if declFullName == "System.Runtime.CompilerServices.Unsafe" {
-            if !IsReadOnlyUnsafeMethod(methodName) {
-                summary.WritesAnyStorage = true
-                return summary
-            }
-        } else if declFullName is "System.Runtime.InteropServices.Marshal" or
-            "System.Runtime.InteropServices.NativeMemory" or
-            "System.Buffer" {
-            summary.WritesAnyStorage = true
-            return summary
-        } else if declFullName.StartsWith("System.Reflection.", StringComparison.Ordinal) ||
-            declFullName == "System.Type" {
-            if methodName.StartsWith("SetValue", StringComparison.Ordinal) ||
-                methodName is "Invoke" or
-                "InvokeMember" or
-                "CreateInstance" {
-                summary.WritesAnyStorage = true
-                return summary
-            }
-        } else if (declFullName is "System.Delegate" or "System.MulticastDelegate") &&
-            (methodName is "DynamicInvoke" or "DynamicInvokeImpl" or "BeginInvoke") {
-            summary.WritesAnyStorage = true
-            return summary
-        } else if declFullName == "System.Activator" && methodName.StartsWith(
-            "CreateInstance",
-            StringComparison.Ordinal
-        ) {
+        if HasUnknownImportedMethodEffects(declFullName, methodName) {
             summary.WritesAnyStorage = true
             return summary
         }
@@ -7690,13 +7706,18 @@ internal partial class StatementBinder {
 
         // 5. Implicit Equality / Comparer and ToString / Formatting callbacks (Limitation Class 6):
         if MayInvokeEqualityOrComparerCallback(declFullName, methodName) {
+            var comparerKinds = 0
+            for parameter in method.GetParameters() {
+                comparerKinds |= ComparerContractKind(parameter.ParameterType)
+            }
             MergeEqualityOrComparerCallbackEffects(
                 declFullName,
                 methodName,
                 receiverType,
                 argumentTypes,
                 visiting,
-                summary
+                summary,
+                comparerKinds
             )
         }
         if MayInvokeToStringCallback(declFullName, methodName) {
@@ -7910,10 +7931,6 @@ internal partial class StatementBinder {
     }
 
     private func MergeDeferredEnumerableCallbackEffects(visiting HashSet[FunctionSymbol], summary CallEffectSummary) {
-        if HasUnmodeledImportedComparer() {
-            summary.WritesAnyStorage = true
-            return
-        }
         var dummyCycle = false
         MergeIteratorCallbackEffects(visiting, summary, ref dummyCycle, includeCountGetter: true)
         if summary.WritesAnyStorage {
@@ -8195,8 +8212,7 @@ internal partial class StatementBinder {
         if cache.TryGetValue(asm, out var cached) {
             return cached
         }
-        ReferenceResolver.TryGetAssemblyPath(asm, out var originalPath)
-        let trusted = ReferenceResolver.IsTrustedHostAssemblyIdentity(asm.GetName(), originalPath)
+        let trusted = ReferenceResolver.IsTrustedEffectAssembly(asm)
         cache[asm] = trusted
         return trusted
     }
@@ -8374,39 +8390,147 @@ internal partial class StatementBinder {
         }
     }
 
-    private func HasUnmodeledImportedComparer() bool {
+    private func HasUnmodeledImportedComparer(
+        comparedTypes List[TypeSymbol?]? = nil,
+        includeNonGeneric bool = true
+    ) bool {
         let services = binderCtx.Services
-        if services.CachedHasUnmodeledImportedComparer is {} cached {
-            return cached
-        }
-        var found = false
-        let refs = $scope.References ?? binderCtx.References
-        if refs != nil {
-            for asm in refs.Assemblies {
-                if !refs.IsExplicitReference(asm) || IsTrustedFrameworkAssembly(asm) {
-                    continue
-                }
-                try {
-                    // Factories can hide comparer contracts behind object returns. Private types also count.
-                    found = asm.GetTypes().Length > 0
-                } catch (error ReflectionTypeLoadException) {
-                    found = true
-                } catch (error TypeLoadException) {
-                    found = true
-                } catch (error IOException) {
-                    found = true
-                } catch (error BadImageFormatException) {
-                    found = true
-                } catch (error NotSupportedException) {
-                    found = true
-                }
-                if found {
-                    break
+        var targets = services.CachedImportedComparerTargets
+        if targets == nil {
+            targets = List[(Target Type?, NonGeneric bool)]()
+            let refs = $scope.References ?? binderCtx.References
+            if refs != nil {
+                for asm in refs.Assemblies {
+                    if IsTrustedFrameworkAssembly(asm) {
+                        continue
+                    }
+                    try {
+                        for type in asm.GetTypes() {
+                            let contracts = List[Type](type.GetInterfaces())
+                            if type.IsVisible || refs.CanAccessInternalMembers(type.Assembly) {
+                                for method in type.GetMethods(
+                                    BindingFlags.Public |
+                                    BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly
+                                ) {
+                                    contracts.Add(method.ReturnType)
+                                }
+                                for field in type.GetFields(
+                                    BindingFlags.Public |
+                                    BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly
+                                ) {
+                                    contracts.Add(field.FieldType)
+                                }
+                            }
+                            for contract in contracts {
+                                let name = (
+                                    if contract.IsGenericType {
+                                        contract.GetGenericTypeDefinition()
+                                    } else {
+                                        contract
+                                    }
+                                ).FullName
+                                if name is "System.Collections.IEqualityComparer" or "System.Collections.IComparer" {
+                                    targets.Add((nil, true))
+                                } else if name is "System.Collections.Generic.IEqualityComparer`1" or
+                                    "System.Collections.Generic.IComparer`1" {
+                                    targets.Add((contract.GetGenericArguments()[0], false))
+                                }
+                            }
+                        }
+                    } catch (error ReflectionTypeLoadException) {
+                        targets.Add((nil, false))
+                    } catch (error TypeLoadException) {
+                        targets.Add((nil, false))
+                    } catch (error IOException) {
+                        targets.Add((nil, false))
+                    } catch (error BadImageFormatException) {
+                        targets.Add((nil, false))
+                    } catch (error NotSupportedException) {
+                        targets.Add((nil, false))
+                    }
                 }
             }
+            services.CachedImportedComparerTargets = targets
         }
-        services.CachedHasUnmodeledImportedComparer = found
-        return found
+        for entry in targets {
+            if entry.NonGeneric && !includeNonGeneric {
+                continue
+            }
+            let target = entry.Target
+            if target == nil || target.ContainsGenericParameters || comparedTypes == nil || comparedTypes.Any(
+                (type TypeSymbol?) -> {
+                    if type == nil || type is TypeParameterSymbol {
+                        return true
+                    }
+                    let value = StripAllNullability(type) ?? type
+                    let contract = TypeSymbol.FromClrTypeWithoutNullability(target, NullabilityFreeReason.TypeStructure)
+                    return object.Equals(contract, value) ||
+                        (
+                        !contract.IsValueType && !value.IsValueType && Conversion.IsRepresentationPreservingImplicit(
+                            value,
+                            contract
+                        )
+                    )
+                }
+            ) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func ComparerContractKind(type Type) int32 {
+        let name = (
+            if type.IsGenericType {
+                type.GetGenericTypeDefinition()
+            } else {
+                type
+            }
+        ).FullName
+        return if name is "System.Collections.Generic.IEqualityComparer`1" or "System.Collections.Generic.IComparer`1" {
+            1
+        } else if name is "System.Collections.IEqualityComparer" or "System.Collections.IComparer" {
+            2
+        } else {
+            0
+        }
+    }
+
+    private func StoredComparerKinds(owner Type) int32 {
+        let cache = binderCtx.Services.CachedComparerStorage
+        if cache.TryGetValue(owner, out var cached) {
+            return cached
+        }
+        var stored = 0
+        let pending = Stack[Type]()
+        let seen = HashSet[Type]()
+        pending.Push(owner)
+        try {
+            while pending.Count > 0 {
+                let current = pending.Pop()
+                if !seen.Add(current) {
+                    continue
+                }
+                for field in current.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) {
+                    stored |= ComparerContractKind(field.FieldType)
+                    if !field
+                        .FieldType
+                        .IsArray &&
+                        field
+                        .FieldType
+                        .Namespace
+                        ?.StartsWith("System.Collections", StringComparison.Ordinal) == true {
+                        pending.Push(field.FieldType)
+                    }
+                }
+            }
+        } catch (error TypeLoadException) {
+            stored = 3
+        } catch (error NotSupportedException) {
+            stored = 3
+        }
+        cache[owner] = stored
+        return stored
     }
 
     private func IsModeledFrameworkType(declType Type?, declFullName string) bool {
@@ -8421,39 +8545,11 @@ internal partial class StatementBinder {
             return false
         }
         let fullName = rootType.FullName ?? declFullName
-        if fullName.StartsWith("System.Lazy`", StringComparison.Ordinal) || fullName.StartsWith(
-            "System.Threading.CancellationToken",
-            StringComparison.Ordinal
-        ) ||
-            fullName.StartsWith("System.Threading.Timer", StringComparison.Ordinal) || fullName.StartsWith(
-            "System.Threading.ThreadPool",
-            StringComparison.Ordinal
-        ) ||
-            fullName.StartsWith("System.Threading.ExecutionContext", StringComparison.Ordinal) || fullName.StartsWith(
-            "System.Threading.SynchronizationContext",
-            StringComparison.Ordinal
-        ) ||
-            fullName.StartsWith("System.Threading.Tasks.Task", StringComparison.Ordinal) || fullName.StartsWith(
-            "System.Timers.",
-            StringComparison.Ordinal
-        ) ||
-            fullName.StartsWith("System.Diagnostics.Process", StringComparison.Ordinal) || fullName.StartsWith(
-            "System.ComponentModel.",
-            StringComparison.Ordinal
-        ) ||
-            fullName.StartsWith("System.Net.", StringComparison.Ordinal) {
+        if HasUnmodeledFrameworkCallbacks(fullName) {
             return false
         }
         let ns = rootType.Namespace ?? fullName
-        if ns != "System" && !ns.StartsWith("System.", StringComparison.Ordinal) && ns != "Microsoft" && !ns.StartsWith(
-            "Microsoft.",
-            StringComparison.Ordinal
-        ) &&
-            ns != "Gsharp" &&
-            !ns.StartsWith("Gsharp.", StringComparison.Ordinal) && ns != "GSharp" && !ns.StartsWith(
-            "GSharp.",
-            StringComparison.Ordinal
-        ) {
+        if ns != "System" && !ns.StartsWith("System.", StringComparison.Ordinal) {
             return false
         }
         if ReflectionType(declType) is {} reflected {
@@ -8474,236 +8570,302 @@ internal partial class StatementBinder {
         return true
     }
 
-    private func IsReadOnlyUnsafeMethod(name string) bool -> name is "IsNullRef" or
-        "AreSame" or
-        "SizeOf" or
-        "NullRef" or
-        "AsRef" or
-        "Read" or
-        "ReadUnaligned" or
-        "Add" or
-        "Subtract" or
-        "AddByteOffset" or
-        "SubtractByteOffset" or
-        "ByteOffset" or
-        "IsAddressGreaterThan" or
-        "IsAddressLessThan" or
-        "SkipInit" or
-        "BitCast"
+    shared {
+        internal func HasUnmodeledFrameworkCallbacks(fullName string) bool ->
+        fullName.StartsWith("System.Lazy`", StringComparison.Ordinal) || fullName.StartsWith(
+            "System.Threading.CancellationToken",
+            StringComparison.Ordinal
+        ) ||
+            fullName.StartsWith("System.Threading.Timer", StringComparison.Ordinal) || fullName.StartsWith(
+            "System.Threading.ThreadPool",
+            StringComparison.Ordinal
+        ) ||
+            fullName.StartsWith("System.Threading.ExecutionContext", StringComparison.Ordinal) || fullName.StartsWith(
+            "System.Threading.SynchronizationContext",
+            StringComparison.Ordinal
+        ) ||
+            fullName.StartsWith("System.Threading.Tasks.Task", StringComparison.Ordinal) || fullName.StartsWith(
+            "System.Timers.",
+            StringComparison.Ordinal
+        ) ||
+            fullName.StartsWith("System.Diagnostics.Process", StringComparison.Ordinal) || fullName.StartsWith(
+            "System.ComponentModel.",
+            StringComparison.Ordinal
+        ) ||
+            fullName.StartsWith("System.Net.", StringComparison.Ordinal)
 
-    private func IsReadOnlyContainerMethodName(name string) bool -> name is "Contains" or
-        "ContainsKey" or
-        "ContainsValue" or
-        "TryGetValue" or
-        "IndexOf" or
-        "LastIndexOf" or
-        "IndexOfAny" or
-        "LastIndexOfAny" or
-        "BinarySearch" or
-        "Find" or
-        "FindIndex" or
-        "FindLast" or
-        "FindLastIndex" or
-        "FindAll" or
-        "Exists" or
-        "TrueForAll" or
-        "GetRange" or
-        "Slice" or
-        "AsSpan" or
-        "AsMemory" or
-        "ToArray" or
-        "ToList" or
-        "ToHashSet" or
-        "ToDictionary" or
-        "Peek" or
-        "TryPeek" or
-        "GetEnumerator" or
-        "GetLength" or
-        "GetLongLength" or
-        "GetLowerBound" or
-        "GetUpperBound" or
-        "GetValue" or
-        "GetOrAdd" or
-        "EnsureCapacity" or
-        "TrimExcess" or
-        "Equals" or
-        "GetHashCode" or
-        "ToString" or
-        "GetType" or
-        "GetValueRefOrNullRef" or
-        "Clone" or
-        "AsReadOnly"
+        internal func HasUnknownImportedMethodEffects(owner string, name string) bool ->
+        (owner == "System.Runtime.CompilerServices.Unsafe" && !IsReadOnlyUnsafeMethod(name)) ||
+            (
+            owner is "System.Runtime.InteropServices.Marshal" or
+                "System.Runtime.InteropServices.NativeMemory" or
+                "System.Buffer"
+        ) ||
+            (
+            (owner.StartsWith("System.Reflection.", StringComparison.Ordinal) || owner == "System.Type") &&
+                (
+                name.StartsWith("SetValue", StringComparison.Ordinal) ||
+                    name is "Invoke" or
+                    "InvokeMember" or
+                    "CreateInstance"
+            )
+        ) ||
+            (
+            (owner is "System.Delegate" or "System.MulticastDelegate") &&
+                (name is "DynamicInvoke" or "DynamicInvokeImpl" or "BeginInvoke")
+        ) ||
+            (owner == "System.Activator" && name.StartsWith("CreateInstance", StringComparison.Ordinal))
 
-    private func IsPureViewOrQueryMethodOnArrayOrSpan(declFullName string, name string) bool -> name is "AsSpan" or
-        "AsMemory" or
-        "CreateSpan" or
-        "CreateReadOnlySpan" or
-        "GetReference" or
-        "GetArrayDataReference" or
-        "TryGetArray" or
-        "TryGetString" or
-        "TryGetMemoryManager" or
-        "Cast" or
-        "AsBytes" or
-        "IndexOf" or
-        "LastIndexOf" or
-        "IndexOfAny" or
-        "LastIndexOfAny" or
-        "BinarySearch" or
-        "Contains" or
-        "SequenceEqual" or
-        "StartsWith" or
-        "EndsWith" or
-        "CommonPrefixLength" or
-        "Count" or
-        "LongCount" or
-        "Any" or
-        "All" or
-        "First" or
-        "FirstOrDefault" or
-        "Last" or
-        "LastOrDefault" or
-        "Single" or
-        "SingleOrDefault" or
-        "ElementAt" or
-        "ElementAtOrDefault" or
-        "Where" or
-        "Select" or
-        "ToArray" or
-        "ToList" or
-        "ToHashSet" or
-        "ToDictionary" or
-        "Join" or
-        "Concat" or
-        "Format" or
-        "GetLength" or
-        "GetLongLength" or
-        "GetLowerBound" or
-        "GetUpperBound" or
-        "GetValue" or
-        "Exists" or
-        "Find" or
-        "FindIndex" or
-        "FindLast" or
-        "FindLastIndex" or
-        "FindAll" or
-        "TrueForAll" or
-        "Clone" or
-        "Empty" or
-        "WriteLine" or
-        "Write" or
-        "MakeGenericType" or
-        "Create" or
-        "CreateRange" or
-        "ToImmutableArray" or
-        "ToImmutable" or
-        "AddRange"
+        internal func IsReadOnlyUnsafeMethod(name string) bool -> name is "IsNullRef" or
+            "AreSame" or
+            "SizeOf" or
+            "NullRef" or
+            "AsRef" or
+            "Read" or
+            "ReadUnaligned" or
+            "Add" or
+            "Subtract" or
+            "AddByteOffset" or
+            "SubtractByteOffset" or
+            "ByteOffset" or
+            "IsAddressGreaterThan" or
+            "IsAddressLessThan" or
+            "SkipInit" or
+            "BitCast"
 
-    private func MayInvokeEqualityOrComparerCallback(declFullName string, name string) bool {
-        if declFullName is "System.String" or
-            "System.StringComparer" or
-            "System.Runtime.CompilerServices.RuntimeHelpers" or
-            "System.Boolean" or
-            "System.Char" or
-            "System.Byte" or
-            "System.SByte" or
-            "System.Int16" or
-            "System.UInt16" or
-            "System.Int32" or
-            "System.UInt32" or
-            "System.Int64" or
-            "System.UInt64" or
-            "System.IntPtr" or
-            "System.UIntPtr" or
-            "System.Single" or
-            "System.Double" or
-            "System.Decimal" or
-            "System.Guid" {
-            return false
-        }
-        if name is "Add" or "TryAdd" {
-            if declFullName.StartsWith("System.Collections.Generic.List`", StringComparison.Ordinal) ||
-                declFullName.StartsWith("System.Collections.Immutable.ImmutableArray`", StringComparison.Ordinal) ||
-                declFullName.StartsWith("System.Collections.ObjectModel.Collection`", StringComparison.Ordinal) {
-                return false
-            }
-        }
-        if declFullName.StartsWith("System.Collections.Generic.PriorityQueue`", StringComparison.Ordinal) &&
-            name is "Enqueue" or
-            "Dequeue" or
-            "TryDequeue" or
-            "EnqueueDequeue" or
-            "DequeueEnqueue" or
-            "EnqueueRange" {
-            return true
-        }
-        return name is "ContainsKey" or
+        internal func IsReadOnlyContainerMethodName(name string) bool -> name is "Contains" or
+            "ContainsKey" or
             "ContainsValue" or
             "TryGetValue" or
-            "Contains" or
-            "Remove" or
-            "Add" or
-            "TryAdd" or
             "IndexOf" or
             "LastIndexOf" or
+            "IndexOfAny" or
+            "LastIndexOfAny" or
             "BinarySearch" or
-            "Sort" or
+            "Find" or
+            "FindIndex" or
+            "FindLast" or
+            "FindLastIndex" or
+            "FindAll" or
+            "Exists" or
+            "TrueForAll" or
+            "GetRange" or
+            "Slice" or
+            "AsSpan" or
+            "AsMemory" or
+            "ToArray" or
+            "ToList" or
+            "ToHashSet" or
+            "ToDictionary" or
+            "Peek" or
+            "TryPeek" or
+            "GetEnumerator" or
+            "GetLength" or
+            "GetLongLength" or
+            "GetLowerBound" or
+            "GetUpperBound" or
+            "GetValue" or
+            "GetOrAdd" or
+            "EnsureCapacity" or
+            "TrimExcess" or
             "Equals" or
             "GetHashCode" or
-            "Compare" or
-            "CompareTo" or
-            "Distinct" or
-            "DistinctBy" or
-            "Union" or
-            "UnionBy" or
-            "Intersect" or
-            "IntersectBy" or
-            "Except" or
-            "ExceptBy" or
-            "GroupBy" or
-            "Join" or
-            "GroupJoin" or
-            "ToDictionary" or
-            "ToLookup" or
-            "ToHashSet" or
-            "SequenceEqual" or
-            "SetEquals" or
-            "Overlaps" or
-            "IsSubsetOf" or
-            "IsProperSubsetOf" or
-            "IsSupersetOf" or
-            "IsProperSupersetOf" or
-            "UnionWith" or
-            "IntersectWith" or
-            "ExceptWith" or
-            "SymmetricExceptWith" or
-            "Min" or
-            "Max" or
-            "MinBy" or
-            "MaxBy" or
-            "Order" or
-            "OrderDescending" or
-            "OrderBy" or
-            "OrderByDescending" or
-            "ThenBy" or
-            "ThenByDescending"
-    }
+            "ToString" or
+            "GetType" or
+            "GetValueRefOrNullRef" or
+            "Clone" or
+            "AsReadOnly"
 
-    private func MayInvokeToStringCallback(declFullName string, name string) bool -> (
-        declFullName == "System.String" && name == "Create"
-    ) ||
-        name is "ToString" or
-        "Append" or
-        "AppendLine" or
-        "AppendFormat" or
-        "AppendJoin" or
-        "Insert" or
-        "Format" or
-        "Concat" or
-        "Join" or
-        "Write" or
-        "WriteLine" or
-        "TryFormat"
+        internal func IsPureViewOrQueryMethodOnArrayOrSpan(declFullName string, name string) bool -> name is "AsSpan" or
+            "AsMemory" or
+            "CreateSpan" or
+            "CreateReadOnlySpan" or
+            "GetReference" or
+            "GetArrayDataReference" or
+            "TryGetArray" or
+            "TryGetString" or
+            "TryGetMemoryManager" or
+            "Cast" or
+            "AsBytes" or
+            "IndexOf" or
+            "LastIndexOf" or
+            "IndexOfAny" or
+            "LastIndexOfAny" or
+            "BinarySearch" or
+            "Contains" or
+            "SequenceEqual" or
+            "StartsWith" or
+            "EndsWith" or
+            "CommonPrefixLength" or
+            "Count" or
+            "LongCount" or
+            "Any" or
+            "All" or
+            "First" or
+            "FirstOrDefault" or
+            "Last" or
+            "LastOrDefault" or
+            "Single" or
+            "SingleOrDefault" or
+            "ElementAt" or
+            "ElementAtOrDefault" or
+            "Where" or
+            "Select" or
+            "ToArray" or
+            "ToList" or
+            "ToHashSet" or
+            "ToDictionary" or
+            "Join" or
+            "Concat" or
+            "Format" or
+            "GetLength" or
+            "GetLongLength" or
+            "GetLowerBound" or
+            "GetUpperBound" or
+            "GetValue" or
+            "Exists" or
+            "Find" or
+            "FindIndex" or
+            "FindLast" or
+            "FindLastIndex" or
+            "FindAll" or
+            "TrueForAll" or
+            "Clone" or
+            "Empty" or
+            "WriteLine" or
+            "Write" or
+            "MakeGenericType" or
+            "Create" or
+            "CreateRange" or
+            "ToImmutableArray" or
+            "ToImmutable" or
+            "AddRange"
+
+        internal func MayInvokeEqualityOrComparerCallback(declFullName string, name string) bool {
+            if declFullName is "System.String" or
+                "System.StringComparer" or
+                "System.Runtime.CompilerServices.RuntimeHelpers" or
+                "System.Boolean" or
+                "System.Char" or
+                "System.Byte" or
+                "System.SByte" or
+                "System.Int16" or
+                "System.UInt16" or
+                "System.Int32" or
+                "System.UInt32" or
+                "System.Int64" or
+                "System.UInt64" or
+                "System.IntPtr" or
+                "System.UIntPtr" or
+                "System.Single" or
+                "System.Double" or
+                "System.Decimal" or
+                "System.Guid" {
+                return false
+            }
+            if name is "Add" or "TryAdd" {
+                if declFullName.StartsWith("System.Collections.Generic.List`", StringComparison.Ordinal) ||
+                    declFullName.StartsWith("System.Collections.Immutable.ImmutableArray`", StringComparison.Ordinal) ||
+                    declFullName.StartsWith("System.Collections.ObjectModel.Collection`", StringComparison.Ordinal) {
+                    return false
+                }
+            }
+            if declFullName.StartsWith("System.Collections.Generic.PriorityQueue`", StringComparison.Ordinal) &&
+                name is "Enqueue" or
+                "Dequeue" or
+                "TryDequeue" or
+                "EnqueueDequeue" or
+                "DequeueEnqueue" or
+                "EnqueueRange" {
+                return true
+            }
+            return name is "ContainsKey" or
+                "ContainsValue" or
+                "TryGetValue" or
+                "Contains" or
+                "Remove" or
+                "Add" or
+                "TryAdd" or
+                "IndexOf" or
+                "LastIndexOf" or
+                "BinarySearch" or
+                "Sort" or
+                "Equals" or
+                "GetHashCode" or
+                "Compare" or
+                "CompareTo" or
+                "Distinct" or
+                "DistinctBy" or
+                "Union" or
+                "UnionBy" or
+                "Intersect" or
+                "IntersectBy" or
+                "Except" or
+                "ExceptBy" or
+                "GroupBy" or
+                "Join" or
+                "GroupJoin" or
+                "ToDictionary" or
+                "ToLookup" or
+                "ToHashSet" or
+                "SequenceEqual" or
+                "SetEquals" or
+                "Overlaps" or
+                "IsSubsetOf" or
+                "IsProperSubsetOf" or
+                "IsSupersetOf" or
+                "IsProperSupersetOf" or
+                "UnionWith" or
+                "IntersectWith" or
+                "ExceptWith" or
+                "SymmetricExceptWith" or
+                "Min" or
+                "Max" or
+                "MinBy" or
+                "MaxBy" or
+                "Order" or
+                "OrderDescending" or
+                "OrderBy" or
+                "OrderByDescending" or
+                "ThenBy" or
+                "ThenByDescending"
+        }
+
+        internal func MayInvokeToStringCallback(declFullName string, name string) bool -> (
+            declFullName == "System.String" && name == "Create"
+        ) ||
+            name is "ToString" or
+            "Append" or
+            "AppendLine" or
+            "AppendFormat" or
+            "AppendJoin" or
+            "Insert" or
+            "Format" or
+            "Concat" or
+            "Join" or
+            "Write" or
+            "WriteLine" or
+            "TryFormat"
+
+        internal func IsMutableGenericContainerTypeName(openName string) bool ->
+        openName is "System.Collections.Generic.List`1" or
+            "System.Collections.Generic.IList`1" or
+            "System.Collections.Generic.ICollection`1" or
+            "System.Collections.ObjectModel.Collection`1" or
+            "System.Collections.Generic.Queue`1" or
+            "System.Collections.Generic.Stack`1" or
+            "System.Collections.Generic.LinkedList`1" or
+            "System.Collections.Generic.LinkedListNode`1" or
+            "System.Collections.Generic.Dictionary`2" or
+            "System.Collections.Generic.IDictionary`2" or
+            "System.Collections.Generic.SortedDictionary`2" or
+            "System.Collections.Generic.SortedList`2" or
+            "System.Collections.Generic.PriorityQueue`2" or
+            "System.Span`1" or
+            "System.Memory`1" or
+            "System.ArraySegment`1" or
+            "System.Runtime.CompilerServices.StrongBox`1"
+    }
 
     private func TryGetMutableBufferElementType(type TypeSymbol?) TypeSymbol? {
         let stripped = StripAllNullability(type) ?? type
@@ -8752,6 +8914,22 @@ internal partial class StatementBinder {
 
     private func GetContainerSlotTypes(receiverType TypeSymbol?) List[(SlotType TypeSymbol, IsElement bool)]? {
         let stripped = StripAllNullability(receiverType) ?? receiverType
+        let containerClr = (stripped as ImportedTypeSymbol)?.OpenDefinition ?? stripped?.ClrType
+        if stripped is {} typedContainer && containerClr is {IsGenericType: true} genericContainer {
+            let name = genericContainer.GetGenericTypeDefinition().FullName ?? ""
+            if IsMutableGenericContainerTypeName(name) {
+                let fieldSlot = name is "System.Runtime.CompilerServices.StrongBox`1" or
+                    "System.Collections.Generic.LinkedListNode`1"
+                let positions = typedContainer.GetElementPositions()
+                if !positions.IsDefaultOrEmpty {
+                    let slots = List[(SlotType TypeSymbol, IsElement bool)]()
+                    for type in positions {
+                        slots.Add((type, !fieldSlot))
+                    }
+                    return slots
+                }
+            }
+        }
         switch stripped {
             case nil {
                 return nil
@@ -8865,26 +9043,6 @@ internal partial class StatementBinder {
         }
         return nil
     }
-
-    private func IsMutableGenericContainerTypeName(
-        openName string
-    ) bool -> openName is "System.Collections.Generic.List`1" or
-        "System.Collections.Generic.IList`1" or
-        "System.Collections.Generic.ICollection`1" or
-        "System.Collections.ObjectModel.Collection`1" or
-        "System.Collections.Generic.Queue`1" or
-        "System.Collections.Generic.Stack`1" or
-        "System.Collections.Generic.LinkedList`1" or
-        "System.Collections.Generic.LinkedListNode`1" or
-        "System.Collections.Generic.Dictionary`2" or
-        "System.Collections.Generic.IDictionary`2" or
-        "System.Collections.Generic.SortedDictionary`2" or
-        "System.Collections.Generic.SortedList`2" or
-        "System.Collections.Generic.PriorityQueue`2" or
-        "System.Span`1" or
-        "System.Memory`1" or
-        "System.ArraySegment`1" or
-        "System.Runtime.CompilerServices.StrongBox`1"
 
     private func ApplyReceiverAndMethodSubstitution(
         sourceSummary CallEffectSummary,

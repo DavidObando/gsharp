@@ -23,6 +23,8 @@ import System.Runtime.InteropServices
 import System.Runtime.Loader
 import System.Security.Cryptography
 import System.Threading
+import System.Xml.Linq
+import System.Text.Json
 import SystemObject = System.Object
 
 /// Resolves imported types by name across a configurable set of referenced
@@ -53,6 +55,7 @@ class ReferenceResolver : IDisposable {
     private let runtimeContext AssemblyLoadContext?
     private let missingTransitiveReferences ImmutableArray[string]
     private let hostFallbackAssemblyNames ImmutableHashSet[string]
+    private let explicitReferenceAssemblies ImmutableHashSet[Assembly]
     private let resolveCache ConcurrentDictionary[string, Type] = ConcurrentDictionary[string, Type](
         StringComparer.Ordinal
     )
@@ -163,7 +166,8 @@ class ReferenceResolver : IDisposable {
         missingTransitiveReferences ImmutableArray[string],
         runtimeContext AssemblyLoadContext? = nil,
         typeNameIndex Lazy[ReferenceTypeNameIndex]? = nil,
-        hostFallbackAssemblyNames ImmutableHashSet[string]? = nil
+        hostFallbackAssemblyNames ImmutableHashSet[string]? = nil,
+        explicitReferenceAssemblies ImmutableHashSet[Assembly]? = nil
     ) {
         this.assemblies = assemblies
         this.metadataContext = metadataContext
@@ -171,6 +175,9 @@ class ReferenceResolver : IDisposable {
         this.missingTransitiveReferences = missingTransitiveReferences
         this.hostFallbackAssemblyNames = hostFallbackAssemblyNames ?? ImmutableHashSet.Create[string](
             StringComparer.OrdinalIgnoreCase
+        )
+        this.explicitReferenceAssemblies = explicitReferenceAssemblies ?? ImmutableHashSet.Create[Assembly](
+            ReferenceEqualityComparer.Instance
         )
         this.typeNameIndex = typeNameIndex ?? CreateTypeNameIndex(assemblies)
         this.namespaceIndex = Lazy[ImmutableHashSet[string]](
@@ -257,6 +264,10 @@ class ReferenceResolver : IDisposable {
             let assembly = LoadFromStream(MemoryStream(bytes, writable: false))
             ReferenceResolver.RegisterAssemblyOriginalPath(assembly, fullPath)
             ReferenceResolver.AssemblyImages.AddOrUpdate(assembly, bytes)
+            ReferenceResolver.RuntimeEffectFingerprints.GetValue(
+                assembly,
+                (key Assembly) -> Lazy[string](() -> Convert.ToHexString(SHA256.HashData(bytes)))
+            )
             return assembly
         }
     }
@@ -853,13 +864,7 @@ class ReferenceResolver : IDisposable {
     /// Tells whether [`assembly`](paramref) was explicitly supplied to (cref:WithReferences) or
     /// (cref:WithRuntimeReferences) rather than inherited from the ambient host runtime.
     internal func IsExplicitReference(assembly Assembly) bool {
-        if metadataContext != nil {
-            return !IsHostFallbackName(assembly.GetName().Name ?? "")
-        }
-        if runtimeContext != nil {
-            return AssemblyOriginalPaths.TryGetValue(assembly, out _)
-        }
-        return false
+        return explicitReferenceAssemblies.Contains(assembly)
     }
 
     /// Discards the memoized results of (cref:TryResolveType).
@@ -1322,6 +1327,8 @@ class ReferenceResolver : IDisposable {
         // They give the type names from the metadata tables.
         // The fingerprint above already keeps the same array alive.
         private let AssemblyImages ConditionalWeakTable[Assembly, []uint8] = ConditionalWeakTable[Assembly, []uint8]()
+        private let RuntimeEffectFingerprints ConditionalWeakTable[Assembly, Lazy[string]] =
+        ConditionalWeakTable[Assembly, Lazy[string]]()
 
         // Gives the image of an assembly by simple name, from the load context
         // that produced the assembly. Present for each assembly in AssemblyImages.
@@ -1577,7 +1584,11 @@ class ReferenceResolver : IDisposable {
                 assemblies.ToImmutable(),
                 metadataContext: nil,
                 missingTransitiveReferences: ImmutableArray[string].Empty,
-                runtimeContext: runtimeContext
+                runtimeContext: runtimeContext,
+                explicitReferenceAssemblies: ImmutableHashSet.CreateRange[Assembly](
+                    ReferenceEqualityComparer.Instance,
+                    runtimeAssemblies
+                )
             )
         }
 
@@ -1589,38 +1600,121 @@ class ReferenceResolver : IDisposable {
         /// @returns The host's trusted-platform assembly paths.
         func HostTrustedPlatformAssemblyPaths() IReadOnlyList[string] -> GetHostTrustedPlatformAssemblies()
 
-        /// Verifies host identity for imported effect models. Unsigned identities also require the host's exact path.
+        /// Verifies supported framework images against installed runtime or reference-pack images, not supplied identity metadata.
         internal func IsTrustedHostAssemblyIdentity(name AssemblyName, originalPath string?) bool {
-            let token = name.GetPublicKeyToken()
-            let signedFramework = token != nil && token.Length == 8 && Convert.ToHexString(
-                token
-            ) is "7CEC85D7BEA7798E" or
-                "B03F5F7F11D50A3A" or
-                "CC7B13FFCD2DDD51" or
-                "B77A5C561934E089" or
-                "31BF3856AD364E35"
-            for path in HostTrustedPlatformAssemblyPaths() {
-                if !string.Equals(
-                    Path.GetFileNameWithoutExtension(path),
-                    name.Name,
-                    StringComparison.OrdinalIgnoreCase
-                ) {
-                    continue
-                }
+            if string.IsNullOrEmpty(originalPath) || !TrustedEffectImages.Value.TryGetValue(
+                name.FullName,
+                out var hashes
+            ) {
+                return false
+            }
+            try {
+                using let image = File.OpenRead(originalPath)
+                let hash = Convert.ToHexString(SHA256.HashData(image))
+                return hashes.Contains(hash)
+            } catch (error IOException) {
+                return false
+            } catch (error UnauthorizedAccessException) {
+                return false
+            }
+        }
+
+        internal func IsTrustedEffectAssembly(assembly Assembly) bool {
+            let name = assembly.GetName()
+            if !TrustedEffectImages.Value.TryGetValue(name.FullName, out var hashes) {
+                return false
+            }
+            if AssemblyContentFingerprints.TryGetValue(assembly, out var fingerprint) {
+                return hashes.Contains(fingerprint.Value)
+            }
+            if RuntimeEffectFingerprints.TryGetValue(assembly, out var runtimeFingerprint) {
+                return hashes.Contains(runtimeFingerprint.Value)
+            }
+            let runtimeDirectory = Path.GetDirectoryName(typeof(object).Assembly.Location)
+            try {
+                return AssemblyLoadContext.GetLoadContext(assembly) != nil &&
+                    runtimeDirectory != nil &&
+                    Path.GetDirectoryName(assembly.Location) == runtimeDirectory &&
+                    IsTrustedHostAssemblyIdentity(name, assembly.Location)
+            } catch (error NotSupportedException) {
+                return false
+            } catch (error ArgumentException) {
+                return false
+            }
+        }
+
+        private let TrustedEffectImages Lazy[Dictionary[string, HashSet[string]]] =
+        Lazy[Dictionary[string, HashSet[string]]](BuildTrustedEffectImages)
+
+        private func BuildTrustedEffectImages() Dictionary[string, HashSet[string]] {
+            let result = Dictionary[string, HashSet[string]](StringComparer.Ordinal)
+            let runtimeDirectory = Path.GetDirectoryName(typeof(object).Assembly.Location)
+            if runtimeDirectory == nil {
+                return result
+            }
+            let directories = List[string]{runtimeDirectory}
+            let supported = HashSet[string](StringComparer.Ordinal){typeof(object).Assembly.GetName().Name ?? ""}
+            let runtimeManifest = Path.Combine(runtimeDirectory, "Microsoft.NETCore.App.deps.json")
+            if File.Exists(runtimeManifest) {
                 try {
-                    return AssemblyName.GetAssemblyName(path)
-                        .FullName == name.FullName &&
-                        (
-                        signedFramework ||
-                            (originalPath != nil && Path.GetFullPath(originalPath) == Path.GetFullPath(path))
-                    )
-                } catch (error IOException) {
-                    return false
-                } catch (error BadImageFormatException) {
-                    return false
+                    using let document = JsonDocument.Parse(File.ReadAllText(runtimeManifest))
+                    for target in document.RootElement.GetProperty("targets").EnumerateObject() {
+                        for library in target.Value.EnumerateObject() {
+                            if library.Value.TryGetProperty("runtime", out var assets) {
+                                for asset in assets.EnumerateObject() {
+                                    supported.Add(Path.GetFileNameWithoutExtension(asset.Name))
+                                }
+                            }
+                        }
+                    }
+                } catch (error JsonException) { } catch (error IOException) { }
+            }
+            let dotnetRoot = Directory.GetParent(runtimeDirectory)?.Parent?.Parent?.FullName
+            if dotnetRoot != nil {
+                let pack = Path.Combine(dotnetRoot, "packs", "Microsoft.NETCore.App.Ref")
+                if Directory.Exists(pack) {
+                    for version in Directory.EnumerateDirectories(pack).OrderBy(
+                        (p string) -> p,
+                        StringComparer.Ordinal
+                    ) {
+                        let manifest = Path.Combine(version, "data", "FrameworkList.xml")
+                        if File.Exists(manifest) {
+                            for file in XDocument.Load(manifest).Descendants("File") {
+                                if file.Attribute("AssemblyName")?.Value is {} name {
+                                    supported.Add(name)
+                                }
+                            }
+                        }
+                        let refs = Path.Combine(version, "ref")
+                        if Directory.Exists(refs) {
+                            directories.AddRange(
+                                Directory.EnumerateDirectories(refs).OrderBy((p string) -> p, StringComparer.Ordinal)
+                            )
+                        }
+                    }
                 }
             }
-            return false
+            for directory in directories {
+                for path in Directory.EnumerateFiles(directory, "*.dll").OrderBy(
+                    (p string) -> p,
+                    StringComparer.Ordinal
+                ) {
+                    if !supported.Contains(Path.GetFileNameWithoutExtension(path)) {
+                        continue
+                    }
+                    try {
+                        let identity = AssemblyName.GetAssemblyName(path).FullName
+                        using let image = File.OpenRead(path)
+                        let hash = Convert.ToHexString(SHA256.HashData(image))
+                        if !result.TryGetValue(identity, out var hashes) {
+                            hashes = HashSet[string](StringComparer.Ordinal)
+                            result[identity] = hashes
+                        }
+                        hashes.Add(hash)
+                    } catch (error IOException) { } catch (error BadImageFormatException) { }
+                }
+            }
+            return result
         }
 
         /// Gets a resolver that searches only the assemblies referenced by file
@@ -1672,6 +1766,7 @@ class ReferenceResolver : IDisposable {
                     }
                 } catch (FileNotFoundException) { } catch (BadImageFormatException) { }
             }
+            let explicitAssemblies = ImmutableHashSet.CreateRange[Assembly](ReferenceEqualityComparer.Instance, builder)
             // ADR-0084 follow-on (issue #724). The user-supplied references
             // frequently sit on top of the BCL — Gsharp.Extensions.dll, for
             // example, surfaces helpers that take System.String / IEnumerable[T]
@@ -1707,7 +1802,8 @@ class ReferenceResolver : IDisposable {
             }
             if userHasNonBcl && !SuppliesDownlevelCoreLibrary(paths, resolver) {
                 for host in fallbackHostPaths {
-                    if !IsBclOrRuntimeAssemblyPath(host) {
+                    if !IsBclOrRuntimeAssemblyPath(host) ||
+                        !IsTrustedHostAssemblyIdentity(AssemblyName.GetAssemblyName(host), host) {
                         continue
                     }
                     try {
@@ -1724,6 +1820,7 @@ class ReferenceResolver : IDisposable {
                 loaded,
                 mlc,
                 missing,
+                explicitReferenceAssemblies: explicitAssemblies,
                 hostFallbackAssemblyNames: fallbackHostPaths
                     .Select(resolver.GetAssemblyNameFromPath)
                     .OfType[string]()

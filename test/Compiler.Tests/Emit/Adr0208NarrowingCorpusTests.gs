@@ -10714,7 +10714,10 @@ func Main() { Console.WriteLine(Run()) }`, "", "run", "4", "R6 (#5301)"}
             if string.IsNullOrEmpty(tpa) {
                 return Enumerable.Empty[string]()
             }
-            return tpa.Split(Path.PathSeparator).Where(File.Exists)
+            let framework = Path.GetDirectoryName(typeof(object).Assembly.Location)
+            return tpa.Split(Path.PathSeparator).Where(
+                (path string) -> File.Exists(path) && Path.GetDirectoryName(path) == framework
+            )
         }
     }
 }

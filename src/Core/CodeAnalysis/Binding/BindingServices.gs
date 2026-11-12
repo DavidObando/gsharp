@@ -70,7 +70,8 @@ internal class BindingServices {
     var HasCachedMethodsByName bool
     var CachedMethodsByNameStructs ImmutableArray[StructSymbol]
     var CachedMethodsByNameInterfaces ImmutableArray[InterfaceSymbol]
-    var CachedHasUnmodeledImportedComparer bool?
+    var CachedImportedComparerTargets List[(Target Type?, NonGeneric bool)]?
+    let CachedComparerStorage Dictionary[Type, int32] = Dictionary[Type, int32]()
     let CachedTrustedFrameworkAssemblies Dictionary[Assembly, bool] = Dictionary[Assembly, bool]()
     let CachedBoundCallEffectSummaries Dictionary[BoundExpression, CallEffectSummary] = Dictionary[
         BoundExpression,

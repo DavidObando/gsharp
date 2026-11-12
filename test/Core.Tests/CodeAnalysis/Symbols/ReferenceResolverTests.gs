@@ -10,6 +10,7 @@ import Microsoft.CodeAnalysis.CSharp
 import System
 import System.Buffers.Binary
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.Diagnostics
 import System.IO
 import System.Linq
@@ -20,6 +21,53 @@ import Xunit
 /// Tests for (cref:ReferenceResolver), the seam that `import`
 /// statements use to resolve CLR types.
 open class ReferenceResolverTests {
+    @Fact
+    func EffectTrust_RejectsSameIdentityReplacement() {
+        let host = typeof(Console).Assembly.GetName()
+        using let replacement = CSharpFixture(
+            "[assembly: System.Reflection.AssemblyVersion(\"" +
+                (host.Version ?? throw InvalidOperationException("host assembly must have a version")).ToString() +
+                "\")]\n" +
+                "namespace System.Custom { public static class Store { public static void Clear() {} } }",
+            assemblyName: host.Name,
+            publicKey: host.GetPublicKey().ToImmutableArray()
+        )
+        Assert.Equal(host.FullName, AssemblyName.GetAssemblyName(replacement.AssemblyPath).FullName)
+        Assert.False(ReferenceResolver.IsTrustedHostAssemblyIdentity(host, replacement.AssemblyPath))
+        Assert.True(ReferenceResolver.IsTrustedEffectAssembly(typeof(Console).Assembly))
+    }
+
+    @Fact
+    func EffectTrust_RejectsUnsignedHostDependency() {
+        Assert.Contains(
+            typeof(ReferenceResolverTests).Assembly.Location,
+            ReferenceResolver.HostTrustedPlatformAssemblyPaths()
+        )
+        Assert.False(ReferenceResolver.IsTrustedEffectAssembly(typeof(ReferenceResolverTests).Assembly))
+        Assert.False(
+            ReferenceResolver.IsTrustedHostAssemblyIdentity(
+                typeof(ReferenceResolverTests).Assembly.GetName(),
+                typeof(ReferenceResolverTests).Assembly.Location
+            )
+        )
+    }
+
+    @Fact
+    func ExplicitRuntimeReferences_DoNotLeakThroughRegisteredHostPaths() {
+        let host = typeof(ReferenceResolverTests).Assembly
+        let snapshot = ReferenceResolver.CaptureHostAssemblies()
+        using let before = ReferenceResolver.WithRuntimeReferences(Array.Empty[string](), snapshot)
+        Assert.False(before.IsExplicitReference(host))
+        using let supplied = ReferenceResolver.WithRuntimeReferences([]string{host.Location}, snapshot)
+        Assert.True(supplied.IsExplicitReference(host))
+        using let after = ReferenceResolver.WithRuntimeReferences(Array.Empty[string](), snapshot)
+        Assert.False(after.IsExplicitReference(host))
+        Assert.Equal(
+            before.Assemblies.Select((a Assembly) -> a.GetName().FullName),
+            after.Assemblies.Select((a Assembly) -> a.GetName().FullName)
+        )
+    }
+
     @Theory
     @InlineData(false)
     @InlineData(true)

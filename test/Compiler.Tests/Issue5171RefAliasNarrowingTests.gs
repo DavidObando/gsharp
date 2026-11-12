@@ -5,8 +5,10 @@
 package GSharp.Compiler.Tests
 
 import GSharp.Compiler
+import GSharp.Core.Tests
 import System
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.Diagnostics
 import System.IO
 import System.Linq
@@ -24,6 +26,38 @@ import Xunit
 /// code, the diagnostic and its location. Every accepted case compiles,
 /// IL-verifies, runs and asserts the output.
 open class Issue5171RefAliasNarrowingTests {
+    @Fact
+    func SameIdentityFrameworkReplacement_RemainsAnUnknownWriterInTheDriver() {
+        let host = typeof(Console).Assembly.GetName()
+        using let replacement = CSharpFixture(
+            "#nullable enable\n[assembly: System.Reflection.AssemblyVersion(\"" +
+                (host.Version ?? throw InvalidOperationException("host assembly must have a version")).ToString() +
+                "\")]\nnamespace System.Custom { public static class Store { " +
+                "private static string? value = \"safe\"; public static ref string? Slot() => ref value; " +
+                "public static void Clear() => value = null; } }",
+            assemblyName: host.Name,
+            publicKey: host.GetPublicKey().ToImmutableArray()
+        )
+        let directory = Path.Combine(AppContext.BaseDirectory, "identity-effects", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let source = `import System.Custom
+func Run(ref text string?) int32 {
+    if text == nil { return 0 }
+    Store.Clear()
+    return text.Length
+}
+func Main() { let _ = Run(ref Store.Slot()) }`
+            let output = Path.Combine(directory, "Replacement.dll")
+            let (exit, log) = Compile(directory, source, output, []string{replacement.AssemblyPath})
+            Assert.NotEqual(0, exit)
+            Assert.False(File.Exists(output))
+            Assert.Contains(Path.Combine(directory, "Replacement.gs") + "(5,17,5,23): error GS0158", log)
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
     @Theory
     @InlineData("let")
     @InlineData("var")
@@ -2500,10 +2534,18 @@ Console.WriteLine(Run(ref globalC))
 `, []string{"1"}}
         }
 
-        private func Compile(dir string, source string, outPath string)(Exit int32, Log string) {
+        private func Compile(dir string, source string, outPath string, references IEnumerable[string]? = nil)(
+            Exit int32,
+            Log string
+        ) {
             let srcPath = Path.Combine(dir, Path.GetFileNameWithoutExtension(outPath) + ".gs")
             File.WriteAllText(srcPath, source)
             let args = List[string]{"/out:" + outPath, "/target:exe", "/targetframework:net10.0"}
+            if references != nil {
+                for reference in references {
+                    args.Add("/reference:" + reference)
+                }
+            }
             for reference in TrustedPlatformAssemblies() {
                 args.Add("/reference:" + reference)
             }
@@ -2544,7 +2586,10 @@ Console.WriteLine(Run(ref globalC))
             if string.IsNullOrEmpty(tpa) {
                 return Enumerable.Empty[string]()
             }
-            return tpa.Split(Path.PathSeparator).Where(File.Exists)
+            let framework = Path.GetDirectoryName(typeof(object).Assembly.Location)
+            return tpa.Split(Path.PathSeparator).Where(
+                (path string) -> File.Exists(path) && Path.GetDirectoryName(path) == framework
+            )
         }
     }
 }

@@ -358,6 +358,24 @@ Its translation retains a runtime assertion unless the program re-proves the fac
 Unknown-effect imported calls do not change overload selection; execution tests
 separately pin instance precedence and constant-narrowing overloads.
 
+Effect-model trust uses image fingerprints from the installed
+`Microsoft.NETCore.App` framework manifest, runtime, and reference packs.
+Matching a public-key token or assembly name is insufficient. Application
+dependencies on the host's trusted-platform list do not acquire a framework model.
+Loaded metadata images use their immutable snapshots. Explicit-reference membership
+belongs to each resolver, not the process-wide original-path registry.
+
+Comparer discovery examines all visible untrusted assemblies, including private
+implementations and unregistered host assemblies. A binding pass caches the
+inventory and matches callback targets to compared storage types. A lookup without
+stored comparers, such as `List<T>.Contains`, does not invoke unrelated comparers.
+
+The translator applies root-type storage effects to ordinary statements, condition
+operands, and loops. Source-call traversal shares the compiler's container, buffer,
+and callback-container rules. Resolved calls can still write aliased storage.
+Unknown callback arguments stay unknown; proven disjoint writes and pure callbacks
+retain the fact. Call and method indexes are compilation-scoped.
+
 **The conservative default.** The lists above and the proof rules of
 section 8 are closed. A fact survives a program point only when one of the
 listed proof rules shows that it does; a construct, statement kind, call,

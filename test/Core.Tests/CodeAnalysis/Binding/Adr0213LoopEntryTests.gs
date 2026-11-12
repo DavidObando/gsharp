@@ -14,6 +14,7 @@ import GSharp.Tests
 import System
 import System.Collections.Generic
 import System.Collections.Immutable
+import System.IO
 import System.Linq
 import Xunit
 
@@ -26,9 +27,20 @@ open class Adr0213LoopEntryTests {
     @Theory
     @MemberData("Rows")
     func EveryRow_GivesItsDiagnostics(name string, source string, expectedErrors string) {
+        // Precision controls reference the framework. Host-effect regressions below use actual host resolvers.
+        let references = ReferenceResolver.ResolveDriverReferencePaths(
+            Directory.GetFiles(Path.GetDirectoryName(typeof(object).Assembly.Location) ?? ".", "*.dll")
+        )
         let result = EmittedOracle.Evaluate(
             []string{source},
-            EmittedOracleOptions{IsLibrary: !source.Contains("func Main")}
+            EmittedOracleOptions{
+                IsLibrary: !source.Contains("func Main"),
+                References: references,
+                ResolverFactory: () -> ReferenceResolver.WithRuntimeReferences(
+                    references,
+                    ImmutableArray[System.Reflection.Assembly].Empty
+                )
+            }
         )
         // A rejection names each diagnostic and its source location (line:column), as CONTRIBUTING.md requires.
         let errors = result
@@ -114,6 +126,39 @@ let _ = Run(ref globalC, keys, counter)`
             .Select((d Diagnostic) -> "${d.Id}@${d.Location.StartLine + 1}:${d.Location.StartCharacter + 1}")
             .ToArray()
         Assert.Equal("GS0158@9:14", string.Join(" ", errors))
+    }
+
+    @Theory
+    @InlineData(false, "keys.ContainsKey(1)")
+    @InlineData(true, "keys.ContainsKey(1)")
+    @InlineData(false, "table.ContainsKey(1)")
+    @InlineData(true, "table.ContainsKey(1)")
+    @InlineData(false, "AmbientComparerStore.Clear()")
+    @InlineData(true, "AmbientComparerStore.Clear()")
+    func VisibleUnregisteredHostEffects_InvalidateRefStorage(runtimeReferences bool, call string) {
+        using let references = if runtimeReferences {
+            ReferenceResolver.WithRuntimeReferences(Array.Empty[string](), ReferenceResolver.CaptureHostAssemblies())
+        } else {
+            ReferenceResolver.Default()
+        }
+        let source = `package T
+import System.Collections.Generic
+import GSharp.Core.Tests.CodeAnalysis.Binding
+func Run(ref text string?, keys Dictionary[int32, int32], table System.Collections.Hashtable) int32 {
+    if text == nil { return 0 }
+    ` + call + `
+    return text.Length
+}`
+        let tree = SyntaxTree.Parse(SourceText.From(source))
+        let globalScope = Binder.BindGlobalScope(previous: nil, ImmutableArray.Create(tree), references)
+        let program = Binder.BindProgram(globalScope, references)
+        let errors = globalScope
+            .Diagnostics
+            .AddRange(program.Diagnostics)
+            .Where((d Diagnostic) -> d.IsError)
+            .Select((d Diagnostic) -> "${d.Id}@${d.Location.StartLine + 1}:${d.Location.StartCharacter + 1}")
+            .ToArray()
+        Assert.Equal("GS0158@7:17", string.Join(" ", errors))
     }
 
     @Theory
@@ -4334,6 +4379,41 @@ func Run(ref text string?) int32 {
 }
 func Main() { }`, "GS0158@10:16")
             return rows
+        }
+    }
+}
+
+class AmbientComparerStore {
+    shared {
+        private var value string? = "safe"
+        func Slot() ref string? {
+            return ref value
+        }
+
+        func Clear() {
+            value = nil
+        }
+
+        func Create() IEqualityComparer[int32] -> AmbientIntComparer()
+
+        func CreateUntyped() System.Collections.IEqualityComparer -> AmbientObjectComparer()
+    }
+}
+
+internal class AmbientIntComparer : IEqualityComparer[int32] {
+    func Equals(left int32, right int32) bool -> left == right
+
+    func GetHashCode(value int32) int32 {
+        AmbientComparerStore.Clear()
+        return value
+    }
+
+    internal class AmbientObjectComparer : System.Collections.IEqualityComparer {
+        func Equals(left object?, right object?) bool -> object.ReferenceEquals(left, right)
+
+        func GetHashCode(value object) int32 {
+            AmbientComparerStore.Clear()
+            return 0
         }
     }
 }

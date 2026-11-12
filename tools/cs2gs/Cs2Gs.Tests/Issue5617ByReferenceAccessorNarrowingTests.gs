@@ -1584,6 +1584,57 @@ public class Demo
     /// `QualifiedNs.StaticHolder.MakeSeed()`, an instance member call `box.InstanceParts()` or inferred generic
     /// `box.InstanceParts(1)` or chained `box.Self().InstanceParts(1)`, a source extension `word.WordParts()` or
     /// `values.Entries()`, or a pure string concatenation, the fact stays.
+    @Theory
+    @InlineData("SourceClear();", true)
+    @InlineData("values.Clear();", true)
+    @InlineData("cancellation.Cancel();", true)
+    @InlineData("Invoke(callback);", true)
+    @InlineData("Library.NoOp();", true)
+    @InlineData("if (Library.Check() && s.Length > 0) { total++; }", true)
+    @InlineData("for (int i = 0; i < 2; i++) { total += s.Length; SourceClear(); }", true)
+    @InlineData("for (int i = 0; i < 2; i++) { total += s.Length; values.Clear(); }", true)
+    @InlineData("for (int i = 0; i < 2; i++) { total += s.Length; cancellation.Cancel(); }", true)
+    @InlineData("Pure(); integers.Clear();", false)
+    @InlineData("Invoke(() => { });", false)
+    func RefParameter_UsesStorageEffectsAcrossCallsAndConditions(statement string, asserted bool) {
+        let printed = AssertRunsLikeCSharp(`
+using System;
+using System.Collections.Generic;
+using System.Threading;
+using CallEffectLibrary;
+public static class Demo {
+    private static string? global = "global";
+    private static ref string? Slot() => ref global;
+    private static void SourceClear() { global = null; }
+    private static void Pure() { }
+    private static void Invoke(Action callback) { callback(); }
+    private static int Guard(ref string? s, List<string?> values, List<int> integers, CancellationTokenSource cancellation, Action callback) {
+        if (s == null) return 0;
+        int total = 0;
+        ` + statement + `
+        return s.Length + total + 11;
+    }
+    public static string Run() {
+        string? value = "safe";
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Token.Register(() => { global = null; });
+        return Guard(ref value, new List<string?> { "item" }, new List<int> { 1 }, cancellation, () => { global = null; }).ToString();
+    }
+}`, library: `namespace CallEffectLibrary;
+public static class Library {
+    public static void NoOp() { }
+    public static bool Check() => true;
+}`)
+        Assert.Contains(
+            if asserted {
+                "return s!!.Length + total + 11"
+            } else {
+                "return s.Length + total + 11"
+            },
+            printed
+        )
+    }
+
     @Fact
     func RefParameter_ReadAroundAForEachOverACallWhoseLoopVariableIsRead_IsAsserted() {
         let printed = AssertRunsLikeCSharp(`

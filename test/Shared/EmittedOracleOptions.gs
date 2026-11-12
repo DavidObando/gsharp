@@ -4,6 +4,8 @@
 
 package GSharp.Tests
 
+import GSharp.Core.CodeAnalysis.Symbols
+import System
 import System.Collections.Generic
 
 /// Compilation-level knobs for (cref:EmittedOracle.Evaluate(IReadOnlyList{string},
@@ -13,6 +15,12 @@ import System.Collections.Generic
 /// (Phase 3b.2, issue #3176). Defaults reproduce the plain
 /// `EmittedOracle.Evaluate(source)` behavior exactly.
 class EmittedOracleOptions {
+    /// Gets an optional reference-set factory for tests that require a specific host boundary.
+    prop ResolverFactory Func[ReferenceResolver]? {
+        get;
+        init;
+    }
+
     /// Gets reference assembly paths resolvable at compile and run time (the
     /// `/r:` channel); may be `null`.
     prop References IReadOnlyList[string]? {
