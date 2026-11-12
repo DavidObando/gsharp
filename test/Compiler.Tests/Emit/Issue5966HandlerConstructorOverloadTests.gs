@@ -202,6 +202,13 @@ BoundaryEffects.DumpCaller(append)`, expected, ReferenceLibrary + AddressLibrary
         )
     }
 
+    @Fact
+    func FixedInStorage_IsForwardedAsTheOriginalAddress() {
+        AssertParity(`var value = true
+RefApi.WriteIn(value, "p${(value = false).ToString()}")`, `bool value = true;
+RefApi.WriteIn(value, $"p{(value = false).ToString()}")`, "CInTrue;Lp;FFalse;WInFalse;|0/0/2/0/0", ReferenceLibrary)
+    }
+
     shared {
         private func AssertParity(gsharp string, csharp string, expected string, additionalLibrary string = "") {
             using let fixture = NativeSliceLanguageTests.Fixture()

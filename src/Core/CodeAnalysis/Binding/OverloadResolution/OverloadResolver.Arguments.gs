@@ -1635,6 +1635,7 @@ internal partial class OverloadResolver {
                     implicitInSpill = true
                 } else if IsFixedStorageAddress(argument) {
                     replacements[slot] = argument
+                    sourceCaptures[sourceIndex] = argument
                     continue
                 } else if TryGetAddressInputs(argument, out var inputAddress, out var inputs) {
                     let inputTemps = Dictionary[BoundExpression, BoundExpression](ReferenceEqualityComparer.Instance)
@@ -1668,6 +1669,7 @@ internal partial class OverloadResolver {
                     } else {
                         argument
                     }
+                    sourceCaptures[sourceIndex] = replacements[slot]
                     continue
                 }
                 if argument.Type == TypeSymbol.Never {
