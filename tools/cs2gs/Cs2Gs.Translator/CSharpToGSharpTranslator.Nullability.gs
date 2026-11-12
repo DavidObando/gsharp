@@ -548,6 +548,13 @@ partial class CSharpToGSharpTranslator {
             awaitedType ITypeSymbol,
             symbol IMethodSymbol?
         ) GTypeReference? {
+            var envelope = envelope
+            // MaybeNull describes the declared envelope, not its awaited result.
+            if ObliviousNullabilityAnalyzer.HasMaybeNullReturnContract(symbol) && this.ShouldPromoteToNullableReference(
+                symbol
+            ) {
+                envelope = MakeNullable(envelope)
+            }
             if envelope is not NamedTypeReference{TypeArguments: {Count: 1}} named || named.IsNullable {
                 return envelope
             }
@@ -2330,6 +2337,13 @@ partial class CSharpToGSharpTranslator {
             // with the contract the referenced project actually emitted.
             if ObliviousNullabilityAnalyzer.HasAllowNullWriteContract(symbol) {
                 return true
+            }
+            if ObliviousNullabilityAnalyzer.HasMaybeNullReturnContract(symbol) {
+                return ObliviousNullabilityAnalyzer.CanPromoteTuplePosition(
+                    this.context.Compilation,
+                    symbol,
+                    string.Empty
+                )
             }
             // Issue #3726: a data-driving attribute is a null-WRITING site. An
             // xunit theory declared `[InlineData(null, …)] void T(string a, …)`

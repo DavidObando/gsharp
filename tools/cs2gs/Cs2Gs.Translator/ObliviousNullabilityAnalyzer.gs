@@ -996,6 +996,29 @@ internal shared class ObliviousNullabilityAnalyzer {
         return false
     }
 
+    /// Reads the nullable output contract of a source method and its inherited source signatures.
+    internal func HasMaybeNullReturnContract(symbol ISymbol?) bool {
+        if symbol is not IMethodSymbol method {
+            return false
+        }
+        let definition = (method.ReducedFrom ?? method).OriginalDefinition
+        if definition.DeclaringSyntaxReferences.Length == 0 {
+            return false
+        }
+        return CarriesMaybeNullReturn(definition) || InheritedDeclarations(definition).OfType[IMethodSymbol]().Any(
+            CarriesMaybeNullReturn
+        )
+    }
+
+    private func CarriesMaybeNullReturn(method IMethodSymbol) bool -> method
+        .DeclaringSyntaxReferences
+        .Length > 0 &&
+        method
+        .GetReturnTypeAttributes().Any(
+        (attribute AttributeData) ->
+        attribute.AttributeClass?.ToDisplayString() == "System.Diagnostics.CodeAnalysis.MaybeNullAttribute"
+    )
+
     /// Issue #3726: whether [`symbol`](paramref) is a parameter some
     /// DATA-DRIVING attribute on its own method supplies `null` for. An
     /// xunit theory's `[InlineData(null, "x")]` states outright that the
@@ -8447,7 +8470,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         return false
     }
 
-    private func CanPromoteTuplePosition(
+    internal func CanPromoteTuplePosition(
         compilation Compilation?,
         symbol ISymbol?,
         path string
@@ -8471,42 +8494,51 @@ internal shared class ObliviousNullabilityAnalyzer {
             symbol = property
         }
         symbol = OwningMember(symbol)
+        let contractSymbol ISymbol? = symbol
+        let contractPath = path
         if path.Length == 0 {
             // Scalar endpoints share the tuple ref-storage contract graph.
             let type = SymbolValueType(symbol)
-            return IsSourceAssembly(compilation, symbol?.ContainingAssembly) &&
-                type?.IsReferenceType == true &&
-                (
-                IsEligibleTupleLeaf(type) ||
-                    HasAllowNullWriteContract(symbol) ||
-                    HasNullDataRowArgument(symbol) ||
-                    IsNullArgumentTarget(compilation as CSharpCompilation, symbol, nil)
+            if !(
+                IsSourceAssembly(compilation, symbol?.ContainingAssembly) &&
+                    type?.IsReferenceType == true &&
+                    (
+                    IsEligibleTupleLeaf(type) ||
+                        HasAllowNullWriteContract(symbol) ||
+                        HasMaybeNullReturnContract(symbol) ||
+                        HasNullDataRowArgument(symbol) ||
+                        IsNullArgumentTarget(compilation as CSharpCompilation, symbol, nil)
+                )
+            ) {
+                return false
+            }
+            if !HasMaybeNullReturnContract(symbol) {
+                return true
+            }
+        } else {
+            let declaredPosition ITypeSymbol? = TuplePositionType(Canonical(symbol), path)
+            symbol, path = ProjectTupleContractPosition(symbol, path)
+            let sourceOwnedContract = contractSymbol != nil &&
+                IsSourceAssembly(compilation, contractSymbol.ContainingAssembly)
+            // A caller owns nested tuple leaves, not a native reference slot itself.
+            let position ITypeSymbol? = TuplePositionType(
+                symbol,
+                path,
+                requireTuple: symbol is INamedTypeSymbol && !sourceOwnedContract
             )
-        }
-        let contractSymbol ISymbol? = symbol
-        let contractPath = path
-        let declaredPosition ITypeSymbol? = TuplePositionType(Canonical(symbol), path)
-        symbol, path = ProjectTupleContractPosition(symbol, path)
-        let sourceOwnedContract = contractSymbol != nil &&
-            IsSourceAssembly(compilation, contractSymbol.ContainingAssembly)
-        // A caller owns nested tuple leaves, not a native reference slot itself.
-        let position ITypeSymbol? = TuplePositionType(
-            symbol,
-            path,
-            requireTuple: symbol is INamedTypeSymbol && !sourceOwnedContract
-        )
-        if !IsEligibleTupleLeaf(position) ||
-            (declaredPosition != nil && !IsEligibleTupleLeaf(declaredPosition)) ||
-            (symbol is not INamedTypeSymbol && declaredPosition == nil) {
-            return false
-        }
-        // Constructed type arguments belong to their source use, not to the
-        // imported generic definition. Member signatures retain their owner.
-        if contractSymbol is INamedTypeSymbol || (symbol is INamedTypeSymbol && !sourceOwnedContract) {
-            return true
-        }
-        if !sourceOwnedContract {
-            return false
+            if !IsEligibleTupleLeaf(position) ||
+                (declaredPosition != nil && !IsEligibleTupleLeaf(declaredPosition)) ||
+                (symbol is not INamedTypeSymbol && declaredPosition == nil) {
+                return false
+            }
+            // Constructed type arguments belong to their source use, not to the
+            // imported generic definition. Member signatures retain their owner.
+            if contractSymbol is INamedTypeSymbol || (symbol is INamedTypeSymbol && !sourceOwnedContract) {
+                return true
+            }
+            if !sourceOwnedContract {
+                return false
+            }
         }
         if !visited.Add(contractSymbol!!) {
             return true
@@ -9493,7 +9525,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         let type = SymbolValueType(symbol)
         let target = SymbolValueType(contract)
         let comparison = TupleContractComparisonType(symbol, type, contract)
-        if SymbolEqualityComparer.Default.Equals(comparison, target) ||
+        if path.Length == 0 || SymbolEqualityComparer.Default.Equals(comparison, target) ||
             (type is INamedTypeSymbol{IsTupleType: true} && target is INamedTypeSymbol{IsTupleType: true}) {
             return TupleContractPositionAcceptsNil(compilation, contract, path) ||
                 CanPromoteTuplePosition(compilation, contract, path, visited)

@@ -367,7 +367,7 @@ internal shared class LiteralConstructionRuntimeParity {
         }
     }
 
-    private func RunDotnet(arguments[]string, printed string = "") string {
+    private func RunDotnet(arguments[]string, printed string = "")[]uint8 {
         let start = ProcessStartInfo("dotnet"){
             UseShellExecute = false,
             RedirectStandardOutput = true,
@@ -377,16 +377,21 @@ internal shared class LiteralConstructionRuntimeParity {
             start.ArgumentList.Add(argument)
         }
         using let process = Process.Start(start) ?? throw InvalidOperationException("Could not start dotnet.")
-        let stdout = process.StandardOutput.ReadToEndAsync()
+        using let stdout = MemoryStream()
+        let copyStdout = process.StandardOutput.BaseStream.CopyToAsync(stdout)
         let stderr = process.StandardError.ReadToEndAsync()
         if !process.WaitForExit(120000) {
             process.Kill(entireProcessTree: true)
             process.WaitForExit()
             Assert.Fail("dotnet process timed out.")
         }
-        let output = stdout.GetAwaiter().GetResult()
+        copyStdout.GetAwaiter().GetResult()
+        let output = stdout.ToArray()
         let errors = stderr.GetAwaiter().GetResult()
-        Assert.True(process.ExitCode == 0, "dotnet failed:\n" + output + errors + "\n" + printed)
+        Assert.True(
+            process.ExitCode == 0,
+            "dotnet failed:\n" + Encoding.UTF8.GetString(output) + errors + "\n" + printed
+        )
         return output
     }
 
