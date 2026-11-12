@@ -22,6 +22,37 @@ import Xunit
 /// Tests for (cref:ReferenceResolver), the seam that `import`
 /// statements use to resolve CLR types.
 open class ReferenceResolverTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func PackRootEnumerationFault_PreservesDiscoveredRuntimeImagesAndCache(access bool) {
+        let supported = HashSet[string](StringComparer.Ordinal){typeof(Console).Assembly.GetName().Name!!}
+        let directories = List[string]{Path.GetDirectoryName(typeof(Console).Assembly.Location)!!}
+        let enumerate = func (path string) sequence[string] {
+            yield path
+            if access {
+                throw UnauthorizedAccessException("root listing denied")
+            }
+            throw IOException("root listing interrupted")
+        }
+        let cache = Lazy[int32](
+            () -> {
+                ReferenceResolver.DiscoverTrustedEffectReferencePacks(
+                    "missing-pack-root",
+                    supported,
+                    directories,
+                    (path string) -> enumerate(path)
+                )
+                return directories.Count
+            }
+        )
+        Assert.Equal(1, cache.Value)
+        Assert.Equal(1, cache.Value)
+        Assert.Single(supported)
+        Assert.Equal(Path.GetDirectoryName(typeof(Console).Assembly.Location), Assert.Single(directories))
+        Assert.True(ReferenceResolver.IsTrustedEffectAssembly(typeof(Console).Assembly))
+    }
+
     @Fact
     func RuntimeEffectTrust_ReusesTheVerifiedAssemblyImage() {
         Assert.True(ReferenceResolver.IsTrustedEffectAssembly(typeof(Console).Assembly))

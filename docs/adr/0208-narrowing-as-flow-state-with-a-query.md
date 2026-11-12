@@ -410,6 +410,18 @@ Deferred-factory models require verified framework images after the cheap shape 
 Unreadable reference-pack manifests contribute no trust or reference directories, and do not poison other packs.
 Runtime image verification caches immutable assembly fingerprints across compilation queries.
 
+Operation callbacks include contextual implicit conversions, not only explicit invocation syntax.
+Inherited and synthesized callback implementations participate in the same target proof.
+A visible comparer inventory cannot close a public input contract against separately compiled callers.
+Externally supplied stored comparers and open collection dispatch therefore have unknown effects.
+Owned construction and default-comparer proofs remain distinct from static receiver types and join summary cache keys.
+Framework image verification establishes provenance, not method purity. Shared positive method models provide the remaining effect proof.
+Pack-root enumeration failures retain previously discovered runtime images and do not poison the trust cache.
+
+The original open-comparer corpus row `h1_by_ref_param_survives_calls` now records its exact rejection diagnostics.
+The disjoint out-parameter execution control re-proves its fact around unknown comparer calls.
+This keeps the disjoint-write coverage without assuming that an externally supplied comparer is pure.
+
 **The conservative default.** The lists above and the proof rules of
 section 8 are closed. A fact survives a program point only when one of the
 listed proof rules shows that it does; a construct, statement kind, call,

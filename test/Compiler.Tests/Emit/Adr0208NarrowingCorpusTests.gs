@@ -1602,7 +1602,7 @@ func Main() {
     var p P? = nil
     var t string? = nil
     Console.WriteLine(Find(frames, c, out p, out t))
-}`, "", "run", "True", "R12 amendment A3 (#5292)"}
+}`, "GS0155@11:34 GS0154@12:26 GS0158@12:39", "reject", "", "R12 amendment A3; unknown externally supplied comparer (#5326)"}
             yield []object{"h2_limitation_call_with_container_operand", `class C {
     var Value int32 = 1
 }

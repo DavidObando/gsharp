@@ -5898,7 +5898,8 @@ internal partial class StatementBinder {
                     argTypes,
                     impInst.TypeArgumentSymbols,
                     includeOverrides: !impInst.IsNonVirtualBaseCall,
-                    visiting
+                    visiting,
+                    receiverHasDefaultComparer: BoundOwnedConstruction(impInst.Receiver, true)
                 )
                 return ResolveBoundCallCallbackEffects(raw, impInst.Arguments, visiting)
             }
@@ -5910,7 +5911,11 @@ internal partial class StatementBinder {
                     argTypes,
                     default(ImmutableArray[TypeSymbol?]),
                     includeOverrides: false,
-                    visiting
+                    visiting,
+                    exactEnumeration: clrStatic.Arguments.All(
+                        (argument BoundExpression) ->
+                        argument.Type is ArrayTypeSymbol || BoundOwnedConstruction(argument, false)
+                    )
                 )
                 return ResolveBoundCallCallbackEffects(raw, clrStatic.Arguments, visiting)
             }
@@ -5974,7 +5979,70 @@ internal partial class StatementBinder {
         for arg in arguments {
             result.Add(arg.Type)
         }
+
         return result
+    }
+
+    private func BoundOwnedConstruction(expression BoundExpression, defaultComparer bool) bool {
+        var current = expression
+        while current is BoundConversionExpression conversion {
+            current = conversion.Expression
+        }
+        if !defaultComparer && !HasClosedFrameworkEnumerationModel(current.Type) {
+            return false
+        }
+        if current is BoundVariableExpression variable && variable.Variable.IsReadOnly {
+            var origin = variable.Variable.DeclaringSyntax
+            while origin != nil && origin is not VariableDeclarationSyntax {
+                origin = origin.Parent
+            }
+            if origin is VariableDeclarationSyntax declaration && !declaration.HasRefKindModifier {
+                return if defaultComparer {
+                    IsDefaultCallbackConstructionSyntax(declaration.Initializer)
+                } else {
+                    IsCalleeFreshAllocationSyntax(declaration.Initializer)
+                }
+            }
+        }
+        return current.Syntax is ExpressionSyntax syntax &&
+            (
+            if defaultComparer {
+                IsDefaultCallbackConstructionSyntax(syntax)
+            } else {
+                IsCalleeFreshAllocationSyntax(syntax)
+            }
+        )
+    }
+
+    private func HasClosedFrameworkEnumerationModel(type TypeSymbol?) bool {
+        let stripped = StripAllNullability(type) ?? type
+        if stripped is ArrayTypeSymbol {
+            return true
+        }
+        if stripped?.ClrType is not{} clr {
+            return false
+        }
+        let name = (
+            if clr.IsGenericType {
+                clr.GetGenericTypeDefinition()
+            } else {
+                clr
+            }
+        ).FullName ??
+            ""
+        return IsMutableGenericContainerTypeName(name) && IsModeledFrameworkType(clr, name)
+    }
+
+    private func IsDefaultCallbackConstructionSyntax(expression ExpressionSyntax?) bool {
+        var current = expression
+        while current is ParenthesizedExpressionSyntax parent {
+            current = parent.Expression
+        }
+        return current is CallExpressionSyntax call &&
+            call
+            .Arguments
+            .Count == 0 &&
+            IsCalleeFreshAllocationSyntax(current)
     }
 
     private func ResolveBoundCallCallbackEffects(
@@ -6934,7 +7002,8 @@ internal partial class StatementBinder {
         argumentTypes List[TypeSymbol?]?,
         visiting HashSet[FunctionSymbol],
         summary CallEffectSummary,
-        comparerKinds int32 = 0
+        comparerKinds int32 = 0,
+        defaultComparer bool = false
     ) {
         let isOrdered = (
             methodName is "Sort" or
@@ -7035,12 +7104,12 @@ internal partial class StatementBinder {
         if declFullName == "System.Linq.Enumerable" && argumentTypes == nil {
             kinds |= 3
         }
-        if kinds != 0 && HasUnmodeledImportedComparer(comparedTypes, includeNonGeneric: (kinds & 2) != 0) {
+        if kinds != 0 && !defaultComparer {
             summary.WritesAnyStorage = true
             return
         }
         let hasUnknownType = comparedTypes.Count == 0 || comparedTypes.Any((t TypeSymbol?) -> t == nil)
-        if hasUnknownType || comparedTypes.Count > 0 {
+        if !defaultComparer && (hasUnknownType || comparedTypes.Count > 0) {
             MergeCreatedComparerCallbackEffects(comparedTypes, hasUnknownType, visiting, summary)
             if summary.WritesAnyStorage {
                 return
@@ -7584,7 +7653,9 @@ internal partial class StatementBinder {
         typeArguments ImmutableArray[TypeSymbol?],
         includeOverrides bool,
         visiting HashSet[FunctionSymbol],
-        receiverIsFreshLocal bool = false
+        receiverIsFreshLocal bool = false,
+        receiverHasDefaultComparer bool = false,
+        exactEnumeration bool = false
     ) CallEffectSummary {
         let summary = CallEffectSummary()
         let declType = method.DeclaringType
@@ -7644,6 +7715,15 @@ internal partial class StatementBinder {
 
         // 2b. Unmodeled external types or types with mutable static fields (Finding 4):
         if !IsModeledFrameworkType(declType, declFullName) {
+            summary.WritesAnyStorage = true
+            return summary
+        }
+        let modeledOwner = if declType is {IsGenericType: true} genericOwner {
+            genericOwner.GetGenericTypeDefinition().FullName ?? declFullName
+        } else {
+            declFullName
+        }
+        if !HasFrameworkMethodEffectModel(modeledOwner, methodName, HasIntrinsicFrameworkValueLayout(declType)) {
             summary.WritesAnyStorage = true
             return summary
         }
@@ -7746,7 +7826,8 @@ internal partial class StatementBinder {
                 argumentTypes,
                 visiting,
                 summary,
-                comparerKinds
+                comparerKinds,
+                receiverHasDefaultComparer
             )
         }
         if MayInvokeToStringCallback(declFullName, methodName) {
@@ -7756,6 +7837,7 @@ internal partial class StatementBinder {
             let hasLazySource = IsLazyEnumerableType(receiverType) ||
                 (argumentTypes != nil && argumentTypes.Any((a TypeSymbol?) -> IsLazyEnumerableType(a)))
             if hasLazySource &&
+                !exactEnumeration &&
                 (
                 visiting.Count == 0 ||
                     CompilationHasGlobalOrStaticEnumerable() ||
@@ -8602,7 +8684,62 @@ internal partial class StatementBinder {
         return true
     }
 
+    private func HasIntrinsicFrameworkValueLayout(type Type?, seen HashSet[Type]? = nil) bool {
+        if type == nil {
+            return false
+        }
+        let reflected = ReflectionType(type) ?? type
+        if reflected.IsPrimitive || reflected.IsEnum || reflected.FullName == "System.String" {
+            return true
+        }
+        if !reflected.IsValueType || reflected.ContainsGenericParameters {
+            return false
+        }
+        let visited = seen ?? HashSet[Type]()
+        if !visited.Add(reflected) {
+            return true
+        }
+        try {
+            return reflected.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic).All(
+                (field FieldInfo) -> HasIntrinsicFrameworkValueLayout(field.FieldType, visited) &&
+                    field
+                    .FieldType
+                    .IsValueType
+            )
+        } catch (error NotSupportedException) {
+            return false
+        }
+    }
+
     shared {
+        internal func HasFrameworkMethodEffectModel(owner string, name string, intrinsicOwner bool) bool ->
+        intrinsicOwner ||
+            IsMutableGenericContainerTypeName(owner) ||
+            IsMutableBufferTypeName(owner) ||
+            (owner is "System.Math" or "System.MathF" or "System.Text.StringBuilder") ||
+            (
+            (owner is "System.Enum" or "System.Delegate" or "System.MulticastDelegate") &&
+                name is "GetHashCode" or
+                "Equals" or
+                "ToString"
+        ) ||
+            owner == "System.Linq.Enumerable" ||
+            owner == "System.Array" ||
+            (
+            (
+                IsMutableBufferTypeName(owner) ||
+                    owner == "System.MemoryExtensions" ||
+                    owner == "System.Runtime.InteropServices.MemoryMarshal" ||
+                    owner == "System.Runtime.InteropServices.CollectionsMarshal"
+            ) &&
+                IsPureViewOrQueryMethodOnArrayOrSpan(owner, name)
+        ) ||
+            (owner == "System.Runtime.CompilerServices.Unsafe" && IsReadOnlyUnsafeMethod(name)) ||
+            (
+            (owner == "System.Console" || owner == "System.Text.StringBuilder") &&
+                MayInvokeToStringCallback(owner, name)
+        )
+
         internal func DefersImportedCallbackArguments(method MethodInfo) bool {
             if method.DeclaringType is not{} owner || owner.FullName != "System.Linq.Enumerable" {
                 return false
@@ -11901,7 +12038,17 @@ internal partial class StatementBinder {
                     memberCallSummary,
                     ref hitCycle,
                     allowUnresolvedFallback: true,
-                    receiverIsFreshLocal: recvIsFresh
+                    receiverIsFreshLocal: recvIsFresh,
+                    receiverHasDefaultComparer: IsDefaultCallbackConstructionSyntax(receiverExpr) ||
+                        (
+                        receiverExpr is NameExpressionSyntax name && refLocalsFromParams.Contains(
+                            "#default:" + name.IdentifierToken.ValueText
+                        )
+                    ),
+                    exactEnumeration: argTypes.All((type TypeSymbol?) -> HasClosedFrameworkEnumerationModel(type)) &&
+                        call
+                        .Arguments
+                        .All((argument ExpressionSyntax) -> IsCalleeFreshLocalExpression(argument, refLocalsFromParams))
                 )
                 ResolveCalleeSyntaxCallbackEffects(
                     memberCallSummary,
@@ -15017,8 +15164,16 @@ internal partial class StatementBinder {
         let nonFresh = HashSet[string](StringComparer.Ordinal)
         CollectCalleeFreshLocalsCore(body, candidates, nonFresh)
         for name in candidates {
-            if !nonFresh.Contains(name) {
+            let sourceName = if name.StartsWith("#default:", StringComparison.Ordinal) {
+                name.Substring(9)
+            } else {
+                name
+            }
+            if !nonFresh.Contains(sourceName) {
                 refLocalsFromParams.Add("#fresh:" + name)
+                if sourceName != name {
+                    refLocalsFromParams.Add(name)
+                }
             }
         }
     }
@@ -15042,6 +15197,12 @@ internal partial class StatementBinder {
                             IsCalleeFreshAllocationSyntax(varDecl.Initializer)
                     ) {
                         candidates.Add(name)
+                        if varDecl
+                            .Keyword
+                            ?.Kind == SyntaxKind.LetKeyword &&
+                            IsDefaultCallbackConstructionSyntax(varDecl.Initializer) {
+                            candidates.Add("#default:" + name)
+                        }
                     } else {
                         nonFresh.Add(name)
                     }
@@ -15181,7 +15342,9 @@ internal partial class StatementBinder {
         summary CallEffectSummary,
         ref hitCycle bool,
         allowUnresolvedFallback bool = true,
-        receiverIsFreshLocal bool = false
+        receiverIsFreshLocal bool = false,
+        receiverHasDefaultComparer bool = false,
+        exactEnumeration bool = false
     ) {
         let methodTypeArgs = ResolveCalleeTypeArgumentList(typeArgList, calleeTypeParams)
         let stripped = StripAllNullability(receiverType) ?? receiverType
@@ -15366,7 +15529,9 @@ internal partial class StatementBinder {
                                         .ToImmutableArray(),
                                     includeOverrides: !isStatic,
                                     visiting,
-                                    receiverIsFreshLocal: receiverIsFreshLocal
+                                    receiverIsFreshLocal: receiverIsFreshLocal,
+                                    receiverHasDefaultComparer: receiverHasDefaultComparer,
+                                    exactEnumeration: exactEnumeration
                                 )
                             )
                         }

@@ -2609,7 +2609,7 @@ func Run(ref text string?, dt DateTime, tok Token, dict Dictionary[Token, DateTi
     return n
 }
 func Main() { }`, "GS0158@15:16")
-            Add("inferred-and-substituted-type-arguments-keep-a-by-reference-fact (A3, #5662)", `package T
+            Add("open-stored-comparer-invalidates-a-by-reference-fact (A3)", `package T
 import System
 import System.Collections.Generic
 struct Token { var Raw int32 }
@@ -2624,7 +2624,7 @@ func Run(ref text string?, dt DateTime, tok Token, dict Dictionary[Token, DateTi
     }
     return n
 }
-func Main() { }`, "")
+func Main() { }`, "GS0158@9:16")
             Add("from-end-index-constructs-a-system-index (A3)", `package T
 import System
 import System.Text

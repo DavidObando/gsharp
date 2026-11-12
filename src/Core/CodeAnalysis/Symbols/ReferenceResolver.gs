@@ -1726,14 +1726,7 @@ class ReferenceResolver : IDisposable {
             let dotnetRoot = Directory.GetParent(runtimeDirectory)?.Parent?.Parent?.FullName
             if dotnetRoot != nil {
                 let pack = Path.Combine(dotnetRoot, "packs", "Microsoft.NETCore.App.Ref")
-                if Directory.Exists(pack) {
-                    for version in Directory.EnumerateDirectories(pack).OrderBy(
-                        (p string) -> p,
-                        StringComparer.Ordinal
-                    ) {
-                        AddTrustedEffectReferencePack(version, supported, directories)
-                    }
-                }
+                DiscoverTrustedEffectReferencePacks(pack, supported, directories)
             }
             for directory in directories {
                 var paths[]string
@@ -1766,6 +1759,24 @@ class ReferenceResolver : IDisposable {
                 }
             }
             return result
+        }
+
+        internal func DiscoverTrustedEffectReferencePacks(
+            root string,
+            supported HashSet[string],
+            directories List[string],
+            enumerate Func[string, IEnumerable[string]]? = nil
+        ) {
+            try {
+                let versions = if enumerate != nil {
+                    enumerate(root)
+                } else {
+                    Directory.EnumerateDirectories(root)
+                }
+                for version in versions {
+                    AddTrustedEffectReferencePack(version, supported, directories)
+                }
+            } catch (error IOException) { } catch (error UnauthorizedAccessException) { }
         }
 
         /// Gets a resolver that searches only the assemblies referenced by file

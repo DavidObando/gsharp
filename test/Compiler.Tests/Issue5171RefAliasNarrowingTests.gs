@@ -27,6 +27,28 @@ import Xunit
 /// code, the diagnostic and its location. Every accepted case compiles,
 /// IL-verifies, runs and asserts the output.
 open class Issue5171RefAliasNarrowingTests {
+    @Fact
+    func ExternallySuppliedStoredComparersRemainUnknownWithoutAVisibleImplementation() {
+        let directory = Path.Combine(AppContext.BaseDirectory, "external-comparer", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let source = `import System.Collections.Generic
+func Guard(ref text string?, dictionary Dictionary[int32, int32]) int32 {
+    if text == nil { return 0 }
+    let _ = dictionary.ContainsKey(1)
+    return text.Length
+}
+func Main() { }`
+            let output = Path.Combine(directory, "ExternalComparer.dll")
+            let (exit, log) = Compile(directory, source, output)
+            Assert.NotEqual(0, exit)
+            Assert.False(File.Exists(output))
+            Assert.Contains(Path.Combine(directory, "ExternalComparer.gs") + "(5,17,5,23): error GS0158", log)
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
     @Theory
     @InlineData("object")
     @InlineData("(object, int32)")
@@ -2309,7 +2331,7 @@ func Main() {
     Console.WriteLine(Run(out x))
 }
 `, []string{"6"}}
-            yield []object{"out-parameters-of-different-types-do-not-overlap", `
+            yield []object{"out-parameters-of-different-types-reprove-after-an-open-comparer", `
 import System
 import System.Collections.Generic
 
@@ -2324,7 +2346,11 @@ func Find(d Dictionary[C, string], c C?, out path C?, out text string?) bool {
         return false
     }
     for var i = 0; i < 2; i++ {
-        if Lookup(d, path, out text) {
+        if path == nil {
+            text = nil
+            return false
+        }
+        if Lookup(d, path, out text) && path != nil {
             return path.Value > 0
         }
     }

@@ -15126,6 +15126,9 @@ partial class CSharpToGSharpTranslator {
             node Microsoft.CodeAnalysis.SyntaxNode,
             rootType ITypeSymbol? = nil
         ) bool {
+            if this.NodeOperatorCallbacksMayWrite(node, rootType) {
+                return true
+            }
             switch node {
                 case assignment is Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax {
                     // A member initializer is part of the construction (#5562): a field keeps the fact, and a
@@ -15952,7 +15955,8 @@ partial class CSharpToGSharpTranslator {
                 .Expression
                 .DescendantNodesAndSelf()
                 .Any(
-                (node Microsoft.CodeAnalysis.SyntaxNode) -> this.NodeIsUnresolvedRegionCall(node, loop) ||
+                (node Microsoft.CodeAnalysis.SyntaxNode) -> this.NodeOperatorCallbacksMayWrite(node, rootType) ||
+                    this.NodeIsUnresolvedRegionCall(node, loop) ||
                     (
                     rootType != nil &&
                         node is InvocationExpressionSyntax or
@@ -15988,7 +15992,10 @@ partial class CSharpToGSharpTranslator {
                     !this.IsInForInitializer(loop, node) &&
                     (
                     node is CommonForEachStatementSyntax || this.NodeEmitsTypeConversionCall(node) ||
-                        this.NodeIsUnresolvedRegionCall(node, loop) ||
+                        this.NodeOperatorCallbacksMayWrite(node, rootType) || this.NodeIsUnresolvedRegionCall(
+                        node,
+                        loop
+                    ) ||
                         (
                         rootType != nil &&
                             node is InvocationExpressionSyntax or
@@ -18839,6 +18846,44 @@ partial class CSharpToGSharpTranslator {
         private let storageCallEffects Dictionary[ITypeSymbol, Dictionary[Microsoft.CodeAnalysis.SyntaxNode, bool]] =
         Dictionary[ITypeSymbol, Dictionary[Microsoft.CodeAnalysis.SyntaxNode, bool]](SymbolEqualityComparer.Default)
 
+        private let storageOperations Dictionary[Microsoft.CodeAnalysis.SyntaxNode, IOperation?] =
+        Dictionary[Microsoft.CodeAnalysis.SyntaxNode, IOperation?]()
+
+        private func OperationCallbackMethod(operation IOperation) IMethodSymbol? -> switch operation {
+            case binary is IBinaryOperation: binary.OperatorMethod
+            case unary is IUnaryOperation: unary.OperatorMethod
+            case conversion is IConversionOperation: conversion.OperatorMethod
+            case argument is IArgumentOperation: (argument.Value as IConversionOperation)?.OperatorMethod
+            case increment is IIncrementOrDecrementOperation: increment.OperatorMethod
+            default: default(IMethodSymbol?)
+        }
+
+        private func NodeOperatorCallbacksMayWrite(node Microsoft.CodeAnalysis.SyntaxNode, rootType ITypeSymbol?) bool {
+            if node is not Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax {
+                return false
+            }
+            if !this.storageOperations.TryGetValue(node, out var operation) {
+                operation = this
+                    .context
+                    .GetOwnedSemanticModel(node.SyntaxTree)
+                    .GetOperation(node, this.context.CancellationToken)
+                this.storageOperations[node] = operation
+            }
+            let visiting = HashSet[IMethodSymbol](SymbolEqualityComparer.Default)
+            while operation != nil {
+                let callback = this.OperationCallbackMethod(operation)
+                if callback != nil && this.MethodStorageMayWriteType(callback, rootType, visiting) {
+                    return true
+                }
+                let parent = operation.Parent
+                if parent == nil || !parent.IsImplicit || !object.ReferenceEquals(parent.Syntax, node) {
+                    break
+                }
+                operation = parent
+            }
+            return false
+        }
+
         private func InvocationStorageMayWriteType(
             invocation Microsoft.CodeAnalysis.SyntaxNode,
             rootType ITypeSymbol?
@@ -19194,6 +19239,17 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return true
             }
+            for value in values {
+                if value is INamedTypeSymbol named && this.ResolvedCallbackTargetsMayWrite(
+                    named,
+                    names,
+                    rootType,
+                    visiting,
+                    bindings
+                ) {
+                    return true
+                }
+            }
             if comparerKinds != 0 {
                 for comparer in this.ImportedComparersForEffects() {
                     if this.EffectComparerMatches(comparer, values, comparerKinds) {
@@ -19218,6 +19274,94 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             return false
+        }
+
+        private let activeCallbackTypes HashSet[INamedTypeSymbol] = HashSet[INamedTypeSymbol](
+            SymbolEqualityComparer.Default
+        )
+
+        private func ResolvedCallbackTargetsMayWrite(
+            type INamedTypeSymbol,
+            names[]string,
+            rootType ITypeSymbol?,
+            visiting HashSet[IMethodSymbol],
+            bindings Dictionary[IParameterSymbol, Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]?
+        ) bool {
+            if !this.activeCallbackTypes.Add(type) {
+                return false
+            }
+            try {
+                let slots = HashSet[string](StringComparer.Ordinal)
+                var current INamedTypeSymbol? = type
+                while current != nil {
+                    for name in names {
+                        for method in current.GetMembers(name).OfType[IMethodSymbol]() {
+                            if method.IsStatic {
+                                continue
+                            }
+                            let slot = name + "|" + string.Join(
+                                ";",
+                                method.Parameters.Select(
+                                    (p IParameterSymbol) -> p.Type.ToDisplayString(
+                                        SymbolDisplayFormat.FullyQualifiedFormat
+                                    )
+                                )
+                            )
+                            if !slots.Add(slot) {
+                                continue
+                            }
+                            if method.IsImplicitlyDeclared && method.ContainingType.IsRecord {
+                                for member in method.ContainingType.GetMembers() {
+                                    if member.IsStatic || member.DeclaredAccessibility != Accessibility.Public {
+                                        continue
+                                    }
+                                    let memberType = switch member {
+                                        case field is IFieldSymbol: field.Type
+                                        case property is IPropertySymbol: property.Type
+                                        default: default(ITypeSymbol?)
+                                    }
+                                    if memberType != nil && this.EffectFormattingMayWrite(
+                                        memberType,
+                                        rootType,
+                                        visiting,
+                                        bindings
+                                    ) {
+                                        return true
+                                    }
+                                    if member is IPropertySymbol property &&
+                                        property.GetMethod is {} getter &&
+                                        !getter.IsImplicitlyDeclared &&
+                                        this.MethodStorageMayWriteType(
+                                        getter,
+                                        rootType,
+                                        visiting,
+                                        bindings,
+                                        receiverType: type
+                                    ) {
+                                        return true
+                                    }
+                                }
+                            } else if this.IsSourceSymbol(method) {
+                                if this.MethodStorageMayWriteType(
+                                    method,
+                                    rootType,
+                                    visiting,
+                                    bindings,
+                                    receiverType: type
+                                ) {
+                                    return true
+                                }
+                            } else if !this.ImportedAssemblyHasTrustedEffectModel(method.ContainingAssembly) {
+                                return true
+                            }
+                        }
+                    }
+                    current = current.BaseType
+                }
+                return false
+            } finally {
+                this.activeCallbackTypes.Remove(type)
+            }
         }
 
         private func EffectMetadataTypeName(
@@ -19299,7 +19443,8 @@ partial class CSharpToGSharpTranslator {
             type ITypeSymbol?,
             rootType ITypeSymbol?,
             visiting HashSet[IMethodSymbol],
-            bindings Dictionary[IParameterSymbol, Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]?
+            bindings Dictionary[IParameterSymbol, Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]?,
+            exact bool = false
         ) bool {
             if type is IArrayTypeSymbol || type?.SpecialType == SpecialType.System_String {
                 return false
@@ -19314,7 +19459,7 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             if named.TypeKind == TypeKind.Interface || (!named.IsSealed && !named.IsValueType) {
-                if this.ImportedAssemblyHasTrustedEffectModel(named.ContainingAssembly) &&
+                if exact && this.ImportedAssemblyHasTrustedEffectModel(named.ContainingAssembly) &&
                     CoreStorageEffects.IsMutableGenericContainerTypeName(this.EffectTypeName(named)) {
                     return false
                 }
@@ -19349,6 +19494,60 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             return false
+        }
+
+        private func OwnedEffectConstruction(
+            operation IOperation?,
+            seen HashSet[ISymbol]? = nil
+        ) IObjectCreationOperation? {
+            if operation is IConversionOperation conversion {
+                return this.OwnedEffectConstruction(conversion.Operand, seen)
+            }
+            if operation is IObjectCreationOperation creation {
+                return creation
+            }
+            if operation is not ILocalReferenceOperation local {
+                return nil
+            }
+            let visited = seen ?? HashSet[ISymbol](SymbolEqualityComparer.Default)
+            if !visited.Add(local.Local) {
+                return nil
+            }
+            for reference in local.Local.DeclaringSyntaxReferences {
+                if reference.GetSyntax(this.context.CancellationToken) is not VariableDeclaratorSyntax declaration ||
+                    declaration.Initializer is not{} initializer {
+                    continue
+                }
+                let owner = declaration.Ancestors().FirstOrDefault(
+                    (node Microsoft.CodeAnalysis.SyntaxNode) ->
+                    node is BaseMethodDeclarationSyntax or
+                        LocalFunctionStatementSyntax or
+                        AnonymousFunctionExpressionSyntax
+                )
+                using let model = this.context.UseSemanticModelFor(declaration.SyntaxTree)
+                if owner == nil || this.IsSymbolReassigned(local.Local, owner) {
+                    return nil
+                }
+                return this.OwnedEffectConstruction(
+                    this.context.SemanticModel.GetOperation(initializer.Value, this.context.CancellationToken),
+                    visited
+                )
+            }
+            return nil
+        }
+
+        private func HasDefaultEffectComparer(operation IOperation?) bool {
+            let creation = this.OwnedEffectConstruction(operation)
+            return creation != nil && creation.Arguments.All(
+                (argument IArgumentOperation) ->
+                argument
+                    .Parameter
+                    ?.Type is not INamedTypeSymbol contract ||
+                    (
+                    CoreStorageEffects.GetComparerContractKind(this.EffectTypeName(contract)) == 0 &&
+                        contract.TypeKind != TypeKind.Delegate
+                )
+            )
         }
 
         private prop effectDeferredFactories List[InvocationExpressionSyntax]? {
@@ -19686,7 +19885,20 @@ partial class CSharpToGSharpTranslator {
                         visiting,
                         callBindings,
                         values,
-                        this.EffectStorageType(invocation.Instance?.Type)
+                        this.EffectStorageType(invocation.Instance?.Type),
+                        exactReceiver: this.OwnedEffectConstruction(invocation.Instance) != nil,
+                        defaultComparer: this.HasDefaultEffectComparer(invocation.Instance),
+                        exactEnumeration: invocation.Arguments.All(
+                            (argument IArgumentOperation) ->
+                            argument
+                                .Parameter
+                                ?.Type is not INamedTypeSymbol parameter ||
+                                !CoreStorageEffects.IsEnumerableEffectTypeName(this.EffectTypeName(parameter)) ||
+                                this.OwnedEffectConstruction(argument.Value) != nil ||
+                                argument
+                                .Value
+                                .Type is IArrayTypeSymbol
+                        )
                     ) {
                         return true
                     }
@@ -19830,14 +20042,7 @@ partial class CSharpToGSharpTranslator {
                 ) {
                     return true
                 }
-                let callback = switch operation {
-                    case binary is IBinaryOperation: binary.OperatorMethod
-                    case unary is IUnaryOperation: unary.OperatorMethod
-                    case conversion is IConversionOperation: conversion.OperatorMethod
-                    case argument is IArgumentOperation: (argument.Value as IConversionOperation)?.OperatorMethod
-                    case increment is IIncrementOrDecrementOperation: increment.OperatorMethod
-                    default: default(IMethodSymbol?)
-                }
+                let callback = this.OperationCallbackMethod(operation)
                 if callback != nil && this.MethodStorageMayWriteType(callback, rootType, visiting) {
                     return true
                 }
@@ -19864,7 +20069,10 @@ partial class CSharpToGSharpTranslator {
             bindings Dictionary[IParameterSymbol, Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]? = nil,
             values List[ITypeSymbol?]? = nil,
             receiverType ITypeSymbol? = nil,
-            enumerating bool = false
+            enumerating bool = false,
+            exactReceiver bool = false,
+            defaultComparer bool = false,
+            exactEnumeration bool = false
         ) bool {
             this.context.CancellationToken.ThrowIfCancellationRequested()
             let method = this.CloseEffectMethod(method)
@@ -19887,7 +20095,8 @@ partial class CSharpToGSharpTranslator {
                     .TypeKind == TypeKind.Interface
             ) &&
                 !(
-                dispatchType is IArrayTypeSymbol ||
+                exactReceiver ||
+                    dispatchType is IArrayTypeSymbol ||
                     dispatchType is INamedTypeSymbol{IsSealed: true} ||
                     dispatchType.IsValueType
             ) {
@@ -19908,6 +20117,8 @@ partial class CSharpToGSharpTranslator {
             this.effectTypeArguments = substitutions
             try {
                 let key = this.StorageEffectKey(method, rootType, bindings) + "|" + enumerating.ToString() +
+                    "|" +
+                    exactReceiver.ToString() + "|" + defaultComparer.ToString() + "|" + exactEnumeration.ToString() +
                     "|" +
                     string.Join(
                     ";",
@@ -19934,7 +20145,15 @@ partial class CSharpToGSharpTranslator {
                             break
                         }
                     }
-                    result = result || this.ComputeMethodStorageEffects(method, rootType, visiting, bindings, values)
+                    result = result || this.ComputeMethodStorageEffects(
+                        method,
+                        rootType,
+                        visiting,
+                        bindings,
+                        values,
+                        defaultComparer,
+                        exactEnumeration
+                    )
                     if result || version == this.effectCycleVersion {
                         this.completedStorageEffects[key] = result
                     }
@@ -19952,7 +20171,9 @@ partial class CSharpToGSharpTranslator {
             rootType ITypeSymbol?,
             visiting HashSet[IMethodSymbol],
             bindings Dictionary[IParameterSymbol, Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]? = nil,
-            values List[ITypeSymbol?]? = nil
+            values List[ITypeSymbol?]? = nil,
+            defaultComparer bool = false,
+            exactEnumeration bool = false
         ) bool {
             let method = method.ReducedFrom ?? method
             if method.MethodKind == MethodKind.DelegateInvoke {
@@ -20056,6 +20277,13 @@ partial class CSharpToGSharpTranslator {
                 let owner = method.ContainingType
                 let name = this.EffectTypeName(owner)
                 let constructor = method.MethodKind == MethodKind.Constructor
+                if !CoreStorageEffects.HasFrameworkMethodEffectModel(
+                    name,
+                    method.Name,
+                    owner.IsUnmanagedType || owner.SpecialType == SpecialType.System_String
+                ) {
+                    return true
+                }
                 let enumerates = method.Parameters.Any(
                     (parameter IParameterSymbol) -> parameter.Type is INamedTypeSymbol enumerable &&
                         CoreStorageEffects.IsEnumerableEffectTypeName(this.EffectTypeName(enumerable))
@@ -20065,7 +20293,7 @@ partial class CSharpToGSharpTranslator {
                         return true
                     }
                     for value in values {
-                        if this.EnumerationValueMayWrite(value, rootType, visiting, bindings) {
+                        if this.EnumerationValueMayWrite(value, rootType, visiting, bindings, exactEnumeration) {
                             return true
                         }
                     }
@@ -20155,6 +20383,9 @@ partial class CSharpToGSharpTranslator {
                 }
                 let callbackValues = List[ITypeSymbol?]()
                 var comparerKinds = this.EffectStoredComparerKinds(owner)
+                if equalityCallbacks && comparerKinds != 0 && !defaultComparer && !constructor {
+                    return true
+                }
                 for parameter in method.Parameters {
                     if parameter.Type is INamedTypeSymbol contract {
                         comparerKinds |= CoreStorageEffects.GetComparerContractKind(this.EffectTypeName(contract))
@@ -20185,14 +20416,18 @@ partial class CSharpToGSharpTranslator {
                     visiting,
                     bindings,
                     if equalityCallbacks {
-                        comparerKinds
+                        if defaultComparer {
+                            0
+                        } else {
+                            comparerKinds
+                        }
                     } else {
                         0
                     }
                 ) {
                     return true
                 }
-                if equalityCallbacks && this.DeferredEffectCallbacksMayWrite(
+                if equalityCallbacks && !defaultComparer && this.DeferredEffectCallbacksMayWrite(
                     rootType,
                     visiting,
                     bindings,

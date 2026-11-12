@@ -1978,6 +1978,133 @@ public static class Demo {
         Assert.Contains("return value!!.Length + 47", printed)
     }
 
+    @Theory
+    @InlineData("_ = token + token;", true)
+    @InlineData("for (var i = 0; i < 1; i++) { _ = token + token; }", true)
+    @InlineData("int converted = token;", true)
+    @InlineData("_ = $\"{leaf}\";", true)
+    @InlineData("_ = $\"{wrapped}\";", true)
+    @InlineData("_ = dictionary.ContainsKey(1);", true)
+    @InlineData("_ = values.Count();", true)
+    @InlineData("_ = ownedList.Count();", false)
+    @InlineData("_ = ownedDictionary.ContainsKey(1);", false)
+    @InlineData("_ = $\"{ownedRecord}\";", false)
+    @InlineData("stream.CopyTo(Stream.Null);", true)
+    @InlineData("_ = property.GetValue(getter);", true)
+    func RefParameter_ActualCallbackTargetsAndOperandProvenance(statement string, asserted bool) {
+        let printed = AssertRunsLikeCSharp(`
+using System;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Collections.Generic;
+using ExternalEffects;
+public static class Demo {
+    private struct Token {
+        public static Token operator +(Token x, Token y) { Store.Value = null; return x; }
+        public static implicit operator int(Token x) { Store.Value = null; return 1; }
+    }
+    private sealed class Leaf : Base { }
+    private sealed record Wrapper(Noisy Value);
+    private sealed record CleanWrapper(int Value);
+    private sealed class Noisy { public override string ToString() { Store.Value = null; return "noisy"; } }
+    private static int Guard(ref string? value, Token token, Leaf leaf, Wrapper wrapped,
+        Dictionary<int,int> dictionary, List<int> values, Stream stream, PropertyInfo property, Getter getter) {
+        var ownedList = new List<int> { 1 };
+        var ownedDictionary = new Dictionary<int,int>();
+        var ownedRecord = new CleanWrapper(1);
+        if (value == null) return 0;
+        ` + statement + `
+        return value.Length + 53;
+    }
+    public static string Run() {
+        var leaf = new Leaf(); var wrapped = new Wrapper(new Noisy()); var dictionary = new Dictionary<int,int>();
+        var values = Factory.Values(); var stream = Factory.Stream(); var getter = new Getter();
+        var property = typeof(Getter).GetProperty("Value")!;
+        Store.Value = "safe";
+        try { return Guard(ref Store.Value, default, leaf, wrapped, dictionary, values, stream, property, getter).ToString(); }
+        catch (NullReferenceException) { return "cleared"; }
+    }
+}`, library: `
+using System;
+using System.IO;
+using System.Collections.Generic;
+namespace ExternalEffects;
+public static class Store { public static string? Value; }
+public class Base { public override string ToString() { Store.Value = null; return "base"; } }
+public sealed class Getter { public int Value { get { Store.Value = null; return 1; } } }
+public static class Factory {
+    private sealed class ValuesList : List<int>, ICollection<int> {
+        int ICollection<int>.Count { get { Store.Value = null; return 1; } }
+    }
+    private sealed class ForwardingStream : MemoryStream {
+        public override void CopyTo(Stream destination, int bufferSize) { Store.Value = null; }
+    }
+    public static List<int> Values() => new ValuesList();
+    public static Stream Stream() => new ForwardingStream();
+}
+`)
+        Assert.True(
+            printed.Contains(
+                if asserted {
+                    "return value!!.Length + 53"
+                } else {
+                    "return value.Length + 53"
+                },
+                StringComparison.Ordinal
+            ),
+            printed
+        )
+    }
+
+    @Fact
+    func RefParameter_ComparerFromAnUnreferencedCallerCannotEstablishPurity() {
+        let printed = AssertRunsLikeCSharp(`
+using System;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Collections.Generic;
+public static class Demo {
+    private static string? global;
+    public static int Guard(ref string? value, Dictionary<int,int> dictionary) {
+        if (value == null) return 0;
+        _ = dictionary.ContainsKey(1);
+        return value.Length;
+    }
+    public static string Run() {
+        var caller = AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(x => x.GetName().Name == "Lib5617")
+            ?? Assembly.LoadFrom(Path.Combine(AppContext.BaseDirectory, "Lib5617.dll"));
+        var dictionary = (Dictionary<int,int>)caller.GetType("Caller")!.GetMethod("Create")!
+            .Invoke(null, new object[] { (Action)(() => global = null) })!;
+        global = "safe";
+        try { return Guard(ref global, dictionary).ToString(); }
+        catch (NullReferenceException) { return "cleared"; }
+    }
+}`, library: `
+using System;
+using System.Collections.Generic;
+public static class Caller {
+    private sealed class Comparer : IEqualityComparer<int> {
+        private readonly Action clear;
+        public Comparer(Action clear) { this.clear = clear; }
+        public bool Equals(int x, int y) => x == y;
+        public int GetHashCode(int x) { clear(); return x; }
+    }
+    public static Dictionary<int,int> Create(Action clear) => new Dictionary<int,int>(new Comparer(clear)) { [1] = 1 };
+}`, runtimeOnlyLibrary: true, inspect: (
+                context TranslationContext
+            ) -> {
+                Assert
+                    .DoesNotContain(
+                    context.Compilation.References,
+                    (reference MetadataReference) ->
+                    context.Compilation.GetAssemblyOrModuleSymbol(reference)?.Name == "Lib5617"
+                )
+            })
+        Assert.Contains("return value!!.Length", printed)
+    }
+
     @Fact
     func RefParameter_CanceledStorageTraversalDoesNotPublishASummary() {
         using let cancellation = CancellationTokenSource()
@@ -3580,7 +3707,8 @@ public class Demo
             source string,
             library string? = nil,
             inspect Action[TranslationContext]? = nil,
-            cancellationToken CancellationToken = default(CancellationToken)
+            cancellationToken CancellationToken = default(CancellationToken),
+            runtimeOnlyLibrary bool = false
         ) string {
             let libraryImage = if library == nil {
                 Array.Empty[byte]()
@@ -3588,7 +3716,7 @@ public class Demo
                 EmitCSharp("Lib5617", library)
             }
             let references = List[MetadataReference](CSharpProjectLoader.RuntimeReferences())
-            if libraryImage.Length > 0 {
+            if libraryImage.Length > 0 && !runtimeOnlyLibrary {
                 references.Add(MetadataReference.CreateFromImage(libraryImage))
             }
             let tree = CSharpSyntaxTree.ParseText(
@@ -3629,7 +3757,7 @@ public class Demo
                 )
                 let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
                 inspect?.Invoke(context)
-                Assert.Equal(expected, CompileAndRun(printed, libraryImage).Trim())
+                Assert.Equal(expected, CompileAndRun(printed, libraryImage, runtimeOnlyLibrary).Trim())
                 return printed
             } finally {
                 loadContext.Unload()
@@ -3651,7 +3779,7 @@ public class Demo
             return stream.ToArray()
         }
 
-        private func CompileAndRun(printed string, libraryImage[]byte) string {
+        private func CompileAndRun(printed string, libraryImage[]byte, runtimeOnlyLibrary bool = false) string {
             let compiler string? = FindCompiler()
             Assert.True(
                 compiler != nil,
@@ -3676,7 +3804,9 @@ public class Demo
                 if libraryImage.Length > 0 {
                     let libraryPath = Path.Combine(workDir, "Lib5617.dll")
                     File.WriteAllBytes(libraryPath, libraryImage)
-                    arguments.Add("/r:" + libraryPath)
+                    if !runtimeOnlyLibrary {
+                        arguments.Add("/r:" + libraryPath)
+                    }
                 }
                 let (compileExit, compileOutput) = RunDotnet(arguments.ToArray())
                 Assert.True(
