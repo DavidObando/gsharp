@@ -1663,6 +1663,8 @@ partial class CSharpToGSharpTranslator {
             public let Local ILocalSymbol
             public let Initializer Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
             public let IsArray bool
+            public var TerminalKnown bool = false
+            public var Terminal Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = nil
 
             init(local ILocalSymbol, initializer Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax) {
                 this.Local = local
@@ -1699,25 +1701,96 @@ partial class CSharpToGSharpTranslator {
             return alias
         }
 
+        private func GetRawProjectedInitializerTerminal(
+            initializer Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+        ) Microsoft
+            .CodeAnalysis
+            .CSharp
+            .Syntax
+            .ExpressionSyntax? {
+            var source = Unparenthesize(initializer)
+            let first = this.GetProjectedInitializerAlias(source)
+            if first == nil {
+                return source
+            }
+            if first.TerminalKnown {
+                return first.Terminal
+            }
+            let path = List[ProjectedInitializerAlias]()
+            var alias ProjectedInitializerAlias? = first
+            var complete = false
+            try {
+                while alias != nil && !alias.TerminalKnown {
+                    CompilationMeasurements.Count("translation.projection_alias_terminal_build_visits")
+                    // A known null terminal marks a raw declaration cycle, not a live projection answer.
+                    path.Add(alias)
+                    alias.TerminalKnown = true
+                    source = Unparenthesize(alias.Initializer)
+                    alias = this.GetProjectedInitializerAlias(source)
+                }
+                let terminal = if alias == nil {
+                    source
+                } else {
+                    alias.Terminal
+                }
+                for entry in path {
+                    entry.Terminal = terminal
+                    CompilationMeasurements.Count("translation.projection_alias_terminal_entries")
+                }
+                complete = true
+                return terminal
+            } finally {
+                if !complete {
+                    for entry in path {
+                        entry.TerminalKnown = false
+                    }
+                }
+            }
+        }
+
         private func GetManagedReferenceArrayProjectedInitializerType(
             initializer Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
         ) ITypeSymbol? {
+            CompilationMeasurements.Count("translation.projection_initializer_queries")
             var source = Unparenthesize(initializer)
-            while this.GetProjectedInitializerAlias(source) is {} alias &&
-                !this
+            // Empty live boundary sets permit raw path compression. Evaluate the terminal projection on every query.
+            if this
                 .state
                 .ProjectedQueryBindingType
-                .ContainsKey(alias.Local) &&
-                !this
+                .Count == 0 &&
+                this
                 .state
                 .ManagedReferenceArrayNullable
                 .ManagedReferenceArrayProjectedLocalType
-                .ContainsKey(alias.Local) &&
-                !this
+                .Count == 0 &&
+                this
                 .state
                 .ManagedReferenceArrayProjectedLocalTypeInProgress
-                .Contains(alias.Local) {
-                source = Unparenthesize(alias.Initializer)
+                .Count == 0 {
+                source = this.GetRawProjectedInitializerTerminal(initializer)
+            } else {
+                while this.GetProjectedInitializerAlias(source) is {} alias {
+                    CompilationMeasurements.Count("translation.projection_alias_live_boundary_visits")
+                    if this
+                        .state
+                        .ProjectedQueryBindingType
+                        .ContainsKey(alias.Local) ||
+                        this
+                        .state
+                        .ManagedReferenceArrayNullable
+                        .ManagedReferenceArrayProjectedLocalType
+                        .ContainsKey(alias.Local) ||
+                        this
+                        .state
+                        .ManagedReferenceArrayProjectedLocalTypeInProgress
+                        .Contains(alias.Local) {
+                        break
+                    }
+                    source = Unparenthesize(alias.Initializer)
+                }
+            }
+            if source == nil {
+                return nil
             }
             let projected = this.GetManagedReferenceArrayProjectedExpressionType(source)
             if projected == nil {
