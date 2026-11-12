@@ -11503,6 +11503,9 @@ partial class CSharpToGSharpTranslator {
                             this.CoalesceAssignmentValueIsStaticallyNonNull(assignment.Right, targetType)
                         }
                     }
+                    if this.AssignmentStoreUsesNarrowedReadType(assignment) {
+                        return this.GSharpExpressionIsStaticallyNonNull(assignment.Left)
+                    }
                     if !this.AssignmentResultHasNonNullStaticType(assignment) {
                         return false
                     }
@@ -14415,7 +14418,7 @@ partial class CSharpToGSharpTranslator {
         /// and INSERTS `!!` (the opposite of this method), so the two are
         /// deliberately disjoint, not overlapping fallbacks.
         ///
-        /// Purely syntactic — not gated on Roslyn's flow state, unlike
+        /// Operator-aware, but not gated on Roslyn's flow state, unlike
         /// (cref:IsGSharpFlowNarrowedLocal) — because it must also
         /// suppress the oblivious-analysis promoted-nullable / obliviously-
         /// annotated rules below (issues #2506, #3683), which fire on ANY
@@ -14521,7 +14524,7 @@ partial class CSharpToGSharpTranslator {
             return false
         }
 
-        // The syntactic counterpart of IsNullCheckOf/IsNonNullCheckOf, but
+        // The operator-aware counterpart of IsNullCheckOf/IsNonNullCheckOf, but
         // returning the checked EXPRESSION rather than testing it against a
         // known symbol — used by IsGSharpFlowNarrowedFieldOrPropertyInSameCondition,
         // which needs to compare the full receiver PATH (not just the leaf
@@ -14543,7 +14546,9 @@ partial class CSharpToGSharpTranslator {
                     } else {
                         Microsoft.CodeAnalysis.CSharp.SyntaxKind.EqualsExpression
                     }
-                ) {
+                ) &&
+                    !this
+                    .NullComparisonUsesUserOperator(binary) {
                     if IsNullLiteral(binary.Right) {
                         operand = binary.Left
                         return true
@@ -14798,7 +14803,8 @@ partial class CSharpToGSharpTranslator {
         ) bool {
             if !comparison.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.EqualsExpression) && !comparison.IsKind(
                 Microsoft.CodeAnalysis.CSharp.SyntaxKind.NotEqualsExpression
-            ) {
+            ) ||
+                this.NullComparisonUsesUserOperator(comparison) {
                 whenTrue = false
                 return false
             }
@@ -14809,6 +14815,22 @@ partial class CSharpToGSharpTranslator {
             whenTrue = comparison.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.NotEqualsExpression)
             return comparesSymbolToNull
         }
+
+        private func NullComparisonUsesUserOperator(
+            comparison Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax
+        ) bool ->
+        (
+            comparison.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.EqualsExpression) || comparison.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.NotEqualsExpression
+            )
+        ) &&
+            this
+            .context
+            .SemanticModel
+            .GetOperation(comparison) is IBinaryOperation{IsLifted: false, OperatorMethod: {} method} &&
+            method
+            .ContainingType
+            .SpecialType != SpecialType.System_String
 
         /// ADR-0208 R15 (#5237): gsc kills the narrowing of a local that a CLOSURE
         /// assigns at every node that runs source code, because that code may run a
@@ -19354,17 +19376,12 @@ partial class CSharpToGSharpTranslator {
                                 !this.IsInSiblingBranchOfRead(node, use, $scope)
                         )
                     } else {
-                        (
-                            node.SpanStart >= narrowingGuard.Span.End || this.AssignmentStoreCompletesAfterProof(
-                                node,
-                                narrowingGuard,
-                                includeReferenceStorageWrites: byReference
-                            ) ||
-                                this.CleanupCompletesAfterProof(node, narrowingGuard, use)
+                        this.EffectCompletesBetween(
+                            node,
+                            narrowingGuard,
+                            use,
+                            includeReferenceStorageWrites: byReference
                         ) &&
-                            node
-                            .Span
-                            .End <= use.SpanStart &&
                             (RunsSourceCode(node) || WritesReferenceStorage(node)) &&
                             !this.IsInSiblingBranchOfRead(node, use, $scope)
                     }
@@ -20038,25 +20055,7 @@ partial class CSharpToGSharpTranslator {
                                 !this.IsInSiblingBranchOfRead(node, use!!, $scope)
                         )
                     } else {
-                        (
-                            node.SpanStart > start
-                                .Span
-                                .End ||
-                                (
-                                node is Microsoft
-                                    .CodeAnalysis
-                                    .CSharp
-                                    .Syntax
-                                    .AssignmentExpressionSyntax assigned &&
-                                    assigned
-                                    .Right
-                                    .Span
-                                    .Contains(start.Span)
-                            )
-                        ) &&
-                            node
-                            .Span
-                            .End <= use!!.SpanStart &&
+                        this.EffectCompletesBetween(node, start, use!!, includeDirectStores: true) &&
                             !this.IsInSiblingBranchOfRead(node, use!!, $scope)
                     }
                 ) &&
@@ -20100,16 +20099,12 @@ partial class CSharpToGSharpTranslator {
                     .Any(
                     (node Microsoft.CodeAnalysis.SyntaxNode) -> (
                         (
-                            (
-                                node.SpanStart >= effectiveStartEnd || this.AssignmentStoreCompletesAfterProof(
-                                    node,
-                                    start,
-                                    includeReferenceStorageWrites: true
-                                )
-                            ) &&
-                                node
-                                .Span
-                                .End <= use!!.SpanStart
+                            this.EffectCompletesBetween(
+                                node,
+                                exitedLoop ?? start,
+                                use!!,
+                                includeReferenceStorageWrites: true
+                            )
                         ) ||
                             (
                             node is Microsoft
@@ -22203,8 +22198,7 @@ partial class CSharpToGSharpTranslator {
                 case binary is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax when binary.IsKind(
                     Microsoft.CodeAnalysis.CSharp.SyntaxKind.EqualsExpression
                 ) {
-                    return (IsNullLiteral(binary.Right) && this.BindsToGuardSymbol(binary.Left, symbol)) ||
-                        (IsNullLiteral(binary.Left) && this.BindsToGuardSymbol(binary.Right, symbol))
+                    return this.TryGetNullComparisonNonNullPolarity(binary, symbol, out var whenTrue) && !whenTrue
                 }
                 case isPattern is IsPatternExpressionSyntax when this.BindsToGuardSymbol(isPattern.Expression, symbol) {
                     return IsNullConstantPattern(isPattern.Pattern) && !(isPattern.Pattern is UnaryPatternSyntax)
@@ -22227,8 +22221,7 @@ partial class CSharpToGSharpTranslator {
                 case binary is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax when binary.IsKind(
                     Microsoft.CodeAnalysis.CSharp.SyntaxKind.NotEqualsExpression
                 ) {
-                    return (IsNullLiteral(binary.Right) && this.BindsToGuardSymbol(binary.Left, symbol)) ||
-                        (IsNullLiteral(binary.Left) && this.BindsToGuardSymbol(binary.Right, symbol))
+                    return this.TryGetNullComparisonNonNullPolarity(binary, symbol, out var whenTrue) && whenTrue
                 }
                 case isPattern is IsPatternExpressionSyntax when this.BindsToGuardSymbol(isPattern.Expression, symbol) {
                     return IsNullConstantPattern(isPattern.Pattern) && isPattern.Pattern is UnaryPatternSyntax

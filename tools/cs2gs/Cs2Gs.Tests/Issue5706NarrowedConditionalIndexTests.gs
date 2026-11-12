@@ -20,9 +20,169 @@ import Xunit
 /// On cadefd047, the five nested-store, coalescing-arm, and incoming-contract regressions fail.
 /// On 6326b12f6, compound results throw, incoming coalescing values warn, and disposal exits lose nullable storage.
 /// The same head fails the by-reference join control. Shared-query mutants reject the bridge regression cases.
+/// On 9897d36fc, adjacent effects, initializer mutations and overloaded-null tests fail; the loop-entry mutant fails too.
 /// The C# output oracle also rejects erased null guards and throwing bridges on nullable stores.
 /// Each test also compares the translated program's output with C#.
 open class Issue5706NarrowedConditionalIndexTests {
+    @Fact
+    func LoopJoins_DoNotRebaseInvalidInheritedProofs() {
+        let printed = AssertRunsWithoutConditionalIndexWarning(`
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        static string Read()
+        {
+            string? s = null;
+            string result = "";
+            s = "a";
+            for (int i = 0; i < 2; i++)
+            {
+                if (i == 0) s = "b";
+                result += s?[0] + "|";
+                s = null;
+            }
+            return result;
+        }
+        static string Stable()
+        {
+            string? s = null;
+            string result = "";
+            s = "a";
+            for (int i = 0; i < 2; i++)
+            {
+                if (i == 0) s = "s"; else s = "t";
+                result += s?[0] + "|";
+            }
+            return result;
+        }
+        public static string Run() => Read() + "|" + Stable();
+    }
+}`)
+        Assert.Contains("s?[0]", printed)
+        Assert.Contains("cast[char?](s[0])", printed)
+    }
+
+    @Fact
+    func AdjacentEffects_InvalidateProofsAtExclusiveSpanEnds() {
+        let printed = Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using ObLib5936;
+public static class Demo
+{
+    static int indices;
+    static int Index() { indices++; return 0; }
+    static char? Read()
+    {
+        Box? s = null;
+        s = new Box();s -= new Box();return s?[Index()];
+    }
+    static char? Nested()
+    {
+        Box? s = null, other = null;
+        other = new Box();s = (other -= new Box());return s?[Index()];
+    }
+    public static string Run() => Read() + "|" + Nested() + "|" + indices + ":" + Box.Calls;
+}`, `
+#nullable enable
+namespace ObLib5936;
+public sealed class Box
+{
+    public static int Calls;
+    public static Box operator -(Box left, Box right) { Calls++; return (Box)(object?)null; }
+    public char this[int index] => 'x';
+}`, rejectConditionalIndexWarnings: true)
+        Assert.Contains("object.ReferenceEquals", printed)
+    }
+
+    @Fact
+    func InitializerMutations_FollowEvaluationOrderAndKeepLaterInvalidation() {
+        let printed = AssertRunsWithoutConditionalIndexWarning(`
+#nullable enable
+using System;
+namespace Demo
+{
+    public static class P
+    {
+        static int Reset(Action clear) { clear(); return 0; }
+        static char? Assigned() { string? s = null; var value = (s ??= "a"); return s?[0]; }
+        static char? Nested() { string? s = null; var value = ((s ??= "n"), 0); return s?[0]; }
+        static char? Conditional(bool flag)
+        {
+            string? s = null;
+            var value = flag ? (s ??= "t") : "u";
+            return s?[0];
+        }
+        static char? Switched(bool flag)
+        {
+            string? s = null;
+            var value = flag switch { true => (s ??= "t"), false => (s ??= "f") };
+            return s?[0];
+        }
+        static char? Replaced()
+        {
+            string? s = null;
+            string? first = (s ??= "a"), second = (s = null);
+            return s?[0];
+        }
+        static char? LaterCall()
+        {
+            string? s = null;
+            var value = ((s ??= "a"), Reset(() => s = null));
+            return s?[0];
+        }
+        static char? EarlierCall()
+        {
+            string? s = null;
+            var value = (Reset(() => s = null), (s ??= "e"));
+            return s?[0];
+        }
+        static char? DeclarationOnly() { string? s = "i"; return s?[0]; }
+        public static string Run() =>
+            Assigned() + "|" + Nested() + "|" + Conditional(true) + "|" + Conditional(false) + "|" +
+            Switched(true) + "|" + Switched(false) + "|" + Replaced() + "|" + LaterCall() + "|" +
+            EarlierCall() + "|" + DeclarationOnly();
+    }
+}`)
+        Assert.Contains("cast[char?](s[0])", printed)
+        Assert.Contains("s?[0]", printed)
+    }
+
+    @Fact
+    func EqualityGuards_RejectOverloadedNullTestsButKeepNullPatterns() {
+        let printed = Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using ObLib5936;
+public static class Demo
+{
+    static char? Equal() { Box? s = null; if (s == null) { s = new Box(); } return s?[0]; }
+    static char? Unequal() { Box? s = null; if (s != null) {} else { s = new Box(); } return s?[0]; }
+    static char? InBranch() { Box? s = null; if (s != null) { return s?[0]; } return null; }
+    static char? LeftEqual() { Box? s = null; if (null == s) { s = new Box(); } return s?[0]; }
+    static char? LeftUnequal() { Box? s = null; if (null != s) {} else { s = new Box(); } return s?[0]; }
+    static char? NullPattern() { Box? s = null; if (s is null) { s = new Box(); } return s?[0]; }
+    static char? NotNullPattern() { Box? s = null; if (s is not null) {} else { s = new Box(); } return s?[0]; }
+    static char? String() { string? s = null; if (s == null) { s = "s"; } return s?[0]; }
+    public static string Run() =>
+        Equal() + "|" + Unequal() + "|" + InBranch() + "|" + LeftEqual() + "|" + LeftUnequal() + "|" +
+        NullPattern() + "|" + NotNullPattern() + "|" + String() + "|" + Box.Calls;
+}`, `
+#nullable enable
+namespace ObLib5936;
+public sealed class Box
+{
+    public static int Calls;
+    public static bool operator ==(Box left, Box right) { Calls++; return false; }
+    public static bool operator !=(Box left, Box right) { Calls++; return true; }
+    public override bool Equals(object? other) => false;
+    public override int GetHashCode() => 0;
+    public char this[int index] => 'x';
+}`, rejectConditionalIndexWarnings: true)
+        Assert.Contains("s?[0]", printed)
+        Assert.Contains("s[0]", printed)
+    }
+
     @Fact
     func ReferenceAssignmentJoins_KeepStorageAndReadFactsSeparate() {
         let printed = AssertRunsWithoutConditionalIndexWarning(`

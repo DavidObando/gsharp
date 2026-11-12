@@ -367,8 +367,8 @@ namespace Demo
     }
 
     @Fact
-    func GuardedProperty_SameConditionOr_GuardedRootKeepsStableMemberPath() {
-        // The exit guard keeps the root bare, so the member guard narrows the same stable path.
+    func GuardedProperty_SameConditionOr_OverloadedComparisonKeepsRequiredMemberAssertion() {
+        // The exit guard keeps the root bare. System.Type equality calls an operator, which does not narrow its operand.
         let printed = TranslateUnit(`
 namespace Demo
 {
@@ -385,8 +385,8 @@ namespace Demo
         }
     }
 }`)
-        Assert.Contains("type.ClrType.IsValueType", printed)
-        Assert.DoesNotContain("type.ClrType!!", printed)
+        Assert.Contains("type.ClrType!!.IsValueType", printed)
+        Assert.Contains("cast[Type?](nil)", printed)
         Assert.DoesNotContain("type!!.ClrType", printed)
     }
 

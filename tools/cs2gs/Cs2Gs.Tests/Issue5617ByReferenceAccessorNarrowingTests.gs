@@ -2935,7 +2935,10 @@ public class Demo
                         printed
                 )
                 if rejectConditionalIndexWarnings {
-                    Assert.DoesNotContain("GS0300", compileOutput)
+                    Assert.True(
+                        !compileOutput.Contains("GS0300", StringComparison.Ordinal),
+                        compileOutput + "\n" + printed
+                    )
                 }
                 // A `!!` on the by-reference read where gsc keeps the fact is GS0536.
                 let lines = printed.Replace("\r\n", "\n").Split('\n')

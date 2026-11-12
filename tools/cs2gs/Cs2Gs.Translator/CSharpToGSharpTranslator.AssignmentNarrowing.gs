@@ -134,6 +134,37 @@ partial class CSharpToGSharpTranslator {
             if statement is LocalFunctionStatementSyntax {
                 return inherited
             }
+            if statement is LocalDeclarationStatementSyntax declaration {
+                var proof = inherited
+                for variable in declaration.Declaration.Variables {
+                    if variable.Initializer is not{} initializer {
+                        continue
+                    }
+                    // gsc collects initializer mutations only when the expression contains a coalescing assignment.
+                    if initializer
+                        .Value
+                        .DescendantNodesAndSelf((node SyntaxNode) -> !this.IsClosureBoundary(node))
+                        .Any((node SyntaxNode) -> node.IsKind(SyntaxKind.CoalesceAssignmentExpression)) {
+                        proof = this.GetGSharpInitializerMutationProof(
+                            initializer.Value,
+                            symbol,
+                            use,
+                            $scope,
+                            proof,
+                            requireRuntimeNonNullProof
+                        )
+                    } else if proof != nil && !this.AssignmentNarrowingSurvivesToRead(
+                        symbol,
+                        proof,
+                        use,
+                        use,
+                        initializer
+                    ) {
+                        proof = nil
+                    }
+                }
+                return proof
+            }
             if statement is LabeledStatementSyntax labeled {
                 let incoming = if inherited != nil && this.AssignmentNarrowingSurvivesToRead(
                     symbol,
@@ -174,13 +205,14 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             if statement is IfStatementSyntax conditional {
-                let entry = if inherited != nil && !this.SymbolIsWrittenBetween(
+                let entry = if this.AssignmentNarrowingReachesEntry(symbol, inherited, conditional.Condition, $scope) &&
+                    !this
+                    .AssignmentRegionInvalidatesNarrowing(
                     symbol,
-                    inherited,
-                    use,
-                    conditional.Condition
-                ) &&
-                    !this.ClosureAssignedLocalLosesNarrowing(symbol, inherited, use, conditional.Condition) {
+                    conditional.Condition,
+                    conditional.Condition.SpanStart,
+                    conditional.Condition.Span.End
+                ) {
                     inherited
                 } else {
                     default(SyntaxNode?)
@@ -231,13 +263,19 @@ partial class CSharpToGSharpTranslator {
                 case assigned is AssignmentExpressionSyntax: assigned
                 default: default(AssignmentExpressionSyntax?)
             }
-            if assignment != nil &&
-                (
-                assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) || assignment.IsKind(
-                    SyntaxKind.CoalesceAssignmentExpression
-                )
-            ) {
+            if assignment != nil {
                 if this.BindsTo(assignment.Left, symbol) {
+                    if !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) && !assignment.IsKind(
+                        SyntaxKind.CoalesceAssignmentExpression
+                    ) {
+                        // Compound stores use the narrowed read type, except delegate combination's nullable storage.
+                        return if !requireRuntimeNonNullProof && this.AssignmentStoreUsesNarrowedReadType(assignment) &&
+                            this.AssignmentNarrowingReachesEntry(symbol, inherited, assignment.Left, $scope) {
+                            cast[SyntaxNode](statement)
+                        } else {
+                            default(SyntaxNode?)
+                        }
+                    }
                     if assignment.IsKind(SyntaxKind.CoalesceAssignmentExpression) &&
                         inherited != nil &&
                         this.AssignmentNarrowingSurvivesToRead(
@@ -319,6 +357,183 @@ partial class CSharpToGSharpTranslator {
                 statement
             ) {
                 inherited
+            } else {
+                default(SyntaxNode?)
+            }
+        }
+
+        private func AssignmentNarrowingReachesEntry(
+            symbol ISymbol,
+            proof SyntaxNode?,
+            expression ExpressionSyntax,
+            $scope SyntaxNode
+        ) bool ->
+        proof != nil && this.AssignmentNarrowingSurvivesToRead(symbol, proof, expression, expression, $scope)
+
+        private func AssignmentStoreUsesNarrowedReadType(assignment AssignmentExpressionSyntax) bool ->
+        !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) && !assignment.IsKind(
+            SyntaxKind.CoalesceAssignmentExpression
+        ) &&
+            this
+            .GetDeclaredValueType(assignment.Left)?.TypeKind != TypeKind.Delegate
+
+        private func GetGSharpInitializerMutationProof(
+            node SyntaxNode,
+            symbol ISymbol,
+            use ExpressionSyntax,
+            $scope SyntaxNode,
+            inherited SyntaxNode?,
+            requireRuntimeNonNullProof bool
+        ) SyntaxNode? {
+            var inherited = inherited
+            if this.IsClosureBoundary(node) {
+                return inherited
+            }
+            if node is ExpressionSyntax expression && !this.AssignmentNarrowingReachesEntry(
+                symbol,
+                inherited,
+                expression,
+                $scope
+            ) {
+                inherited = nil
+            }
+            if node is ConditionalExpressionSyntax conditional {
+                let entry = this.GetGSharpInitializerMutationProof(
+                    conditional.Condition,
+                    symbol,
+                    use,
+                    $scope,
+                    inherited,
+                    requireRuntimeNonNullProof
+                )
+                let thenProof = this.GetGSharpInitializerMutationProof(
+                    conditional.WhenTrue,
+                    symbol,
+                    use,
+                    $scope,
+                    entry,
+                    requireRuntimeNonNullProof
+                )
+                let elseProof = this.GetGSharpInitializerMutationProof(
+                    conditional.WhenFalse,
+                    symbol,
+                    use,
+                    $scope,
+                    entry,
+                    requireRuntimeNonNullProof
+                )
+                return if (thenProof != nil || conditional.WhenTrue is ThrowExpressionSyntax) &&
+                    (elseProof != nil || conditional.WhenFalse is ThrowExpressionSyntax) {
+                    cast[SyntaxNode](conditional)
+                } else {
+                    default(SyntaxNode?)
+                }
+            }
+            if node is SwitchExpressionSyntax switched {
+                let proof = this.GetGSharpInitializerMutationProof(
+                    switched.GoverningExpression,
+                    symbol,
+                    use,
+                    $scope,
+                    inherited,
+                    requireRuntimeNonNullProof
+                )
+                // gsc exports discriminant assignments, not assignments that occur only in switch arms.
+                return if proof != nil && !this.AssignmentRegionInvalidatesNarrowing(
+                    symbol,
+                    switched,
+                    switched.GoverningExpression.Span.End,
+                    switched.Span.End
+                ) {
+                    proof
+                } else {
+                    default(SyntaxNode?)
+                }
+            }
+            if node is BinaryExpressionSyntax binary &&
+                (
+                binary.IsKind(SyntaxKind.LogicalAndExpression) || binary.IsKind(SyntaxKind.LogicalOrExpression) ||
+                    binary.IsKind(SyntaxKind.CoalesceExpression)
+            ) {
+                let proof = this.GetGSharpInitializerMutationProof(
+                    binary.Left,
+                    symbol,
+                    use,
+                    $scope,
+                    inherited,
+                    requireRuntimeNonNullProof
+                )
+                return if proof != nil && !this.AssignmentRegionInvalidatesNarrowing(
+                    symbol,
+                    binary.Right,
+                    binary.Right.SpanStart,
+                    binary.Right.Span.End
+                ) {
+                    proof
+                } else {
+                    default(SyntaxNode?)
+                }
+            }
+            if node is ConditionalAccessExpressionSyntax conditionalAccess {
+                let proof = this.GetGSharpInitializerMutationProof(
+                    conditionalAccess.Expression,
+                    symbol,
+                    use,
+                    $scope,
+                    inherited,
+                    requireRuntimeNonNullProof
+                )
+                return if proof != nil && !this.AssignmentRegionInvalidatesNarrowing(
+                    symbol,
+                    conditionalAccess.WhenNotNull,
+                    conditionalAccess.WhenNotNull.SpanStart,
+                    conditionalAccess.WhenNotNull.Span.End
+                ) {
+                    proof
+                } else {
+                    default(SyntaxNode?)
+                }
+            }
+            var proof = inherited
+            // Syntax children follow operand evaluation order. Apply each node's own effect after its operands.
+            for child in node.ChildNodes() {
+                proof = this.GetGSharpInitializerMutationProof(
+                    child,
+                    symbol,
+                    use,
+                    $scope,
+                    proof,
+                    requireRuntimeNonNullProof
+                )
+            }
+            if node is AssignmentExpressionSyntax assignment && this.BindsTo(assignment.Left, symbol) {
+                return this.GetGSharpAssignmentNarrowingProof(
+                    assignment,
+                    symbol,
+                    use,
+                    $scope,
+                    proof,
+                    requireRuntimeNonNullProof
+                )
+            }
+            let completesEffect = proof != nil &&
+                (
+                node is not AssignmentExpressionSyntax || this.AssignmentStoreCompletesAfterProof(
+                    node,
+                    proof,
+                    includeReferenceStorageWrites: true
+                )
+            )
+            return if proof != nil &&
+                (
+                !completesEffect || !this.NodeInvalidatesAssignmentNarrowing(
+                    node,
+                    symbol,
+                    this.IsClosureAssignedVariable(symbol),
+                    this.IsByReferenceVariable(symbol)
+                )
+            ) {
+                proof
             } else {
                 default(SyntaxNode?)
             }
@@ -406,16 +621,19 @@ partial class CSharpToGSharpTranslator {
                     node
                     .Span
                     .End <= end &&
-                    (
-                    this.SyntaxNodeWritesSymbol(node, symbol) ||
-                        (closureAssigned && this.NodeMayRunEscapedClosure(node)) ||
-                        (
-                        byReference &&
-                            (this.NodeRunsStaticTypeInitializer(node) || this.NodeMayWriteReferenceStorage(node))
-                    )
-                )
+                    this.NodeInvalidatesAssignmentNarrowing(node, symbol, closureAssigned, byReference)
             )
         }
+
+        private func NodeInvalidatesAssignmentNarrowing(
+            node SyntaxNode,
+            symbol ISymbol,
+            closureAssigned bool,
+            byReference bool
+        ) bool ->
+        this.SyntaxNodeWritesSymbol(node, symbol) ||
+            (closureAssigned && this.NodeMayRunEscapedClosure(node)) ||
+            (byReference && (this.NodeRunsStaticTypeInitializer(node) || this.NodeMayWriteReferenceStorage(node)))
 
         // Chained stores complete conversions, setters, and reference-storage effects after their inner assignment.
         private func AssignmentStoreCompletesAfterProof(
@@ -440,6 +658,33 @@ partial class CSharpToGSharpTranslator {
                 .IsUserDefined ||
                 this.NodeRunsStaticTypeInitializer(assignment.Left) ||
                 (includeReferenceStorageWrites && this.NodeMayWriteReferenceStorage(assignment))
+        )
+
+        // Spans are half-open. An effect at the exclusive proof end is the next effect, not part of the proof.
+        private func EffectCompletesBetween(
+            node SyntaxNode,
+            proof SyntaxNode,
+            use SyntaxNode,
+            includeDirectStores bool = false,
+            includeReferenceStorageWrites bool = false
+        ) bool ->
+        node
+            .Span
+            .End <= use.SpanStart &&
+            (
+            node.SpanStart >= proof
+                .Span
+                .End ||
+                (
+                includeDirectStores &&
+                    node is AssignmentExpressionSyntax assignment &&
+                    assignment
+                    .Right
+                    .Span
+                    .Contains(proof.Span)
+            ) ||
+                this.AssignmentStoreCompletesAfterProof(node, proof, includeReferenceStorageWrites) ||
+                this.CleanupCompletesAfterProof(node, proof, use)
         )
 
         private func CleanupCompletesAfterProof(node SyntaxNode, proof SyntaxNode, use SyntaxNode) bool {

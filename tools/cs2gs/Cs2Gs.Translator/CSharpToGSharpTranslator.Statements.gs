@@ -5966,6 +5966,11 @@ partial class CSharpToGSharpTranslator {
             var left GExpression? = this.TranslateExpression(binary.Left)
             let op = binary.OperatorToken.Text
             var right GExpression? = this.TranslateBinaryRightOperand(binary)
+            if this.NullComparisonUsesUserOperator(binary) {
+                // Preserve C#'s selected operator. An untyped G# nil comparison uses the built-in null test.
+                left = this.PreserveUserOperatorNullOperand(binary.Left, left)
+                right = this.PreserveUserOperatorNullOperand(binary.Right, right)
+            }
             if op == "&&" && (left is LiteralExpression && left.Kind == LiteralKind.Bool && left.Value == "true") {
                 return right
             }
@@ -6117,6 +6122,25 @@ partial class CSharpToGSharpTranslator {
                 right = this.CoerceOperandTo(right, rightConverted, binary.Right.GetLocation())
             }
             return BinaryExpression(left, op, right)
+        }
+
+        private func PreserveUserOperatorNullOperand(value ExpressionSyntax, translated GExpression?) GExpression? ->
+        if IsNullLiteral(Unparenthesize(value)) {
+            cast[GExpression](
+                ConversionExpression(
+                    MakeNullable(
+                        this.typeMapper.Map(
+                            this.context.GetTypeInfo(value).ConvertedType,
+                            this.context,
+                            value.GetLocation()
+                        )
+                    ),
+                    translated,
+                    isCheckedReferenceCast: true
+                )
+            )
+        } else {
+            translated
         }
 
         // Issue #4350: whether C# binary numeric promotion widened the
