@@ -16,7 +16,7 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
-- Reduce `cs2gs` scalar-alias allocations by sharing immutable syntax facts and invalidating only dependent promoted-local answers. Share scope, write, closure, and guard censuses while retaining live projection bindings and dynamic flow checks. Whole-pipeline allocation bounds cover chains and switch fan-out. Live alias walks remain repeated, and whole-pipeline switch fan-out allocation remains superlinear. (Part of #5962)
+- Reduce `cs2gs` scalar-alias allocations by sharing immutable syntax facts and invalidating only dependent promoted-local answers. Share scope, write, closure, and guard censuses while retaining live projection bindings and dynamic flow checks. Stop write-index receiver traversal at known reference boundaries, preserving value-type ancestors without retaining every distinct reference-field prefix. Whole-pipeline allocation bounds cover chains and switch fan-out. Live alias walks remain repeated, and whole-pipeline switch fan-out allocation remains superlinear. (Part of #5962)
 - Infer inline `out` locals from substituted generic function parameters, preserving closed reference and value types and caller type parameters. (Fixes #5971)
 - Accept return-target attributes on delegates and emit them on `Invoke` return parameters. Preserve type and parameter attributes. Reject unsupported delegate return `MarshalAs` with `GS0360` instead of omitting required marshalling metadata. (Fixes #5967)
 

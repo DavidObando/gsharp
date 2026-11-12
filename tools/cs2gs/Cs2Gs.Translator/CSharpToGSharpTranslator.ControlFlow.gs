@@ -2312,11 +2312,19 @@ partial class CSharpToGSharpTranslator {
                         this.IndexScopeWriteTarget(candidates, bindings, write, argument.Expression)
                     }
                 }
-                current = switch current {
+                let receiver ExpressionSyntax? = switch current {
                     case member is MemberAccessExpressionSyntax: member.Expression
                     case element is ElementAccessExpressionSyntax: element.Expression
                     default: default(ExpressionSyntax?)
                 }
+                if receiver != nil {
+                    CompilationMeasurements.Count("translation.reassignment_receiver_type_queries")
+                    // Unknown receiver types stay conservative in this index.
+                    if CSharpToGSharpTranslator.IsReferenceStorageBoundary(this.context.GetTypeInfo(receiver).Type) {
+                        return
+                    }
+                }
+                current = receiver
             }
         }
 
@@ -2937,6 +2945,8 @@ partial class CSharpToGSharpTranslator {
             return false
         }
 
+        private func IsReferenceStorageBoundary(type ITypeSymbol?) bool -> type?.IsReferenceType == true
+
         private func WritesStorageOf(target ExpressionSyntax?, symbol ISymbol?, model SemanticModel) bool {
             var target = target
             while true {
@@ -2952,7 +2962,11 @@ partial class CSharpToGSharpTranslator {
                     case element is ElementAccessExpressionSyntax: element.Expression
                     default: default(ExpressionSyntax?)
                 }
-                if receiver == nil || model.GetTypeInfo(receiver).Type is not{IsReferenceType: false} {
+                if receiver == nil {
+                    return false
+                }
+                let receiverType = model.GetTypeInfo(receiver).Type
+                if receiverType == nil || IsReferenceStorageBoundary(receiverType) {
                     return false
                 }
                 target = receiver

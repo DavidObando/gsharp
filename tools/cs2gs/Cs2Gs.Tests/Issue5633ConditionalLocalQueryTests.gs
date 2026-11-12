@@ -10,6 +10,7 @@ import Cs2Gs.Translator
 import Cs2Gs.Translator.Loading
 import GSharp.Tests
 import Microsoft.CodeAnalysis
+import Microsoft.CodeAnalysis.CSharp.Syntax
 import System
 import System.Diagnostics
 import System.IO
@@ -334,6 +335,134 @@ open class Issue5633ConditionalLocalQueryTests {
         Assert.True(
             work[0] > 0 && work[1] <= work[0] * 3 && work[2] <= work[1] * 3,
             "Independent writes need a per-symbol census, not a shared list rescanned for every local: ${work[0]} -> ${work[1]} -> ${work[2]}."
+        )
+    }
+
+    @Fact
+    func DistinctReferenceMemberChains_IndexPrefixesAndRetainedEntriesScale() {
+        let prefixes = System.Collections.Generic.List[int64]()
+        let retained = System.Collections.Generic.List[int64]()
+        for links in[]int32{16, 32, 64, 128} {
+            let fields = StringBuilder()
+            let initialize = StringBuilder()
+            let chain = StringBuilder("x")
+            for var i = 1; i <= links; i++ {
+                fields.AppendLine("public Node P$i;")
+                initialize.AppendLine("P$i = this;")
+                chain.Append(".P$i")
+            }
+            let printed = this.TranslateWithinBound(
+                "#nullable enable\nnamespace Demo { public class Node {\n" + fields.ToString() +
+                    "public Node() {\n" +
+                    initialize.ToString() +
+                    "}\npublic int Read() => 7;\n}\n" +
+                    "public static class P { public static int Run(Node input) {\n" +
+                    "var x = input; return $chain.Read();\n} } }",
+                enabled: true,
+                measureWork: true
+            )
+            Assert.Contains(".P$links", printed)
+            TranslationTestValidation.AssertBinds(printed)
+            if links == 128 {
+                LocalFunctionHoistTranslationTests.CompileAndRun(
+                    printed,
+                    "System.Console.WriteLine(P.Run(Node()))",
+                    "7"
+                )
+            }
+            if links == 16 {
+                continue
+            }
+            prefixes.Add(this.translationWork["reassignment_storage_target_visits"])
+            retained.Add(this.translationWork["scope_write_candidates"])
+            this.output.WriteLine(
+                "$links distinct reference fields: ${this.translationAllocatedBytes} allocated bytes; " +
+                    "${prefixes[prefixes.Count - 1]} prefix visits; ${retained[retained.Count - 1]} retained candidates; " +
+                    "${this.translationWork["reassignment_node_visits"]} scope/candidate visits"
+            )
+        }
+        Assert.True(
+            prefixes[0] > 0 &&
+                retained[0] > 0 &&
+                prefixes[1] <= prefixes[0] * 3 &&
+                prefixes[2] <= prefixes[1] * 3 &&
+                retained[1] <= retained[0] * 3 &&
+                retained[2] <= retained[1] * 3,
+            "Distinct reference fields must not retain or revisit all receiver prefixes: " +
+                "visits ${prefixes[0]} -> ${prefixes[1]} -> ${prefixes[2]}; " +
+                "entries ${retained[0]} -> ${retained[1]} -> ${retained[2]}."
+        )
+    }
+
+    @Theory
+    @InlineData("value", true, 1)
+    @InlineData("readonly", false, 0)
+    @InlineData("reference", false, 1)
+    @InlineData("unknown", true, 1)
+    func StorageReceiverBoundaries_PreserveCanonicalMatchesAndRuntime(shape string, writesRoot bool, expected int32) {
+        let method = switch shape {
+            case "value":
+            "public static int Run() { var root = new Outer(); root.Middle.Inner.Bump(); return root.Middle.Inner.Value; }"
+            case "readonly":
+            "public static int Run() { var root = new ReadOnlyOuter(); return root.Middle.Inner.Read(); }"
+            case "reference":
+            "public static int Run() { var root = new Holder(new ReferenceRoot()); " +
+                "ref int alias = ref root.Reference.Middle.Inner.Value; alias++; return root.Reference.Middle.Inner.Value; }"
+            default:
+            "public static int Run<T>(T input) where T : ICounter { var root = new Box<T>(input); " +
+                "root.Value.Bump(); return root.Value.Read(); }"
+        }
+        let source = `
+#nullable enable
+namespace Demo {
+public interface ICounter { void Bump(); int Read(); }
+public struct Leaf : ICounter {
+    public int Value;
+    public void Bump() { Value++; }
+    public int Read() => Value;
+}
+public struct Middle { public Leaf Inner; }
+public struct Outer { public Middle Middle; }
+public readonly struct ReadOnlyLeaf { public int Read() => 0; }
+public struct ReadOnlyMiddle { public ReadOnlyLeaf Inner; }
+public struct ReadOnlyOuter { public ReadOnlyMiddle Middle; }
+public class ReferenceRoot { public Middle Middle; }
+public struct Holder {
+    public ReferenceRoot Reference;
+    public Holder(ReferenceRoot value) { Reference = value; }
+}
+public struct Box<T> where T : ICounter {
+    public T Value;
+    public Box(T value) { Value = value; }
+}
+public static class P {
+` + method + "\n} }"
+        let project = CSharpProjectLoader.LoadInMemory([](string, string){("Boundary.cs", source)})
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        let document = Assert.Single(project.Documents)
+        let root = document.SyntaxTree.GetRoot()
+        let declaration = root
+            .DescendantNodes()
+            .OfType[VariableDeclaratorSyntax]()
+            .Single((candidate VariableDeclaratorSyntax) -> candidate.Identifier.ValueText == "root")
+        let local = Assert.IsAssignableFrom[ILocalSymbol](document.SemanticModel.GetDeclaredSymbol(declaration))
+        Assert.Equal(
+            writesRoot,
+            root.DescendantNodes().Any(
+                (node SyntaxNode) -> CSharpToGSharpTranslator.SyntaxNodeWritesSymbol(
+                    node,
+                    local,
+                    document.SemanticModel
+                )
+            )
+        )
+        let printed = this.TranslateWithinBound(source, enabled: true, measureWork: true)
+        Assert.Contains("${if writesRoot { "var" } else { "let" }} root", printed)
+        TranslationTestValidation.AssertBinds(printed)
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "System.Console.WriteLine(${if shape == "unknown" { "P.Run(Leaf{})" } else { "P.Run()" }})",
+            expected.ToString()
         )
     }
 
@@ -751,6 +880,7 @@ namespace Demo
             "reassignment_write_probes",
             "reassignment_storage_target_visits",
             "reassignment_symbol_queries",
+            "reassignment_receiver_type_queries",
             "storage_write_target_probes",
             "storage_write_tuple_visits",
             "guard_scope_node_visits",
@@ -840,6 +970,7 @@ namespace Demo
                         "reassignment_write_probes",
                         "reassignment_storage_target_visits",
                         "reassignment_symbol_queries",
+                        "reassignment_receiver_type_queries",
                         "storage_write_target_probes",
                         "storage_write_tuple_visits",
                         "guard_scope_node_visits",
