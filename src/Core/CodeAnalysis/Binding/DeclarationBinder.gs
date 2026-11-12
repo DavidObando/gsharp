@@ -171,6 +171,7 @@ internal partial class DeclarationBinder {
     ]()
     private let nestedStructPackages Dictionary[StructSymbol, PackageSymbol] = Dictionary[StructSymbol, PackageSymbol]()
     private let boundStructBodies HashSet[StructSymbol] = HashSet[StructSymbol]()
+    private let bindingStructBodies HashSet[StructSymbol] = HashSet[StructSymbol]()
     private let boundNestedTypeContainers HashSet[StructSymbol] = HashSet[StructSymbol]()
 
     private let nestedInterfaceShells Dictionary[InterfaceDeclarationSyntax, InterfaceSymbol] = Dictionary[

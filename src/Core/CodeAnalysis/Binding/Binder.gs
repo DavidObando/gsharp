@@ -7435,6 +7435,7 @@ partial class Binder {
                     () -> binder.declarations.BindStructDeclarationBody(structSyntax, owningPackage, structSymbol)
                 )
             }
+            binder.declarations.CheckPendingAttributeUsage()
             binder.FlushPendingObsoleteUseChecks()
             binder.declarations.ReportExplicitLayoutReferenceOverlaps(
                 declaredStructs.Select(

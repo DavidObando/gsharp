@@ -1671,9 +1671,8 @@ class StructSymbol : TypeSymbol {
     func MarkCompleteReifiedTypeParameterVector() -> HasCompleteReifiedTypeParameterVector = true
 
     /// Marks this class as an `@Attribute`-sugar attribute type per
-    /// ADR-0047 §5. Intended to be called once by the binder after
-    /// (cref:Symbol.SetAttributes) when the bound annotation list
-    /// contains the `@Attribute` marker.
+    /// ADR-0047 §5. The binder consumes the marker before binding
+    /// attribute applications within this declaration.
     func SetIsAttributeClass() {
         IsAttributeClass = true
     }

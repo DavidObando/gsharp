@@ -67,6 +67,7 @@ internal partial class DeclarationBinder {
                 this.binderCtx.CurrentTypeParameters = nil
             }
             if shouldBindOwnBody {
+                bindingStructBodies.Add(structSymbol)
                 // Issue #2519: aggregate shells carry bare type parameters so every
                 // same-compilation constraint target can be published first.
                 // Resolve constraints now, with the declaring shell and all sibling
@@ -84,6 +85,9 @@ internal partial class DeclarationBinder {
                 BindNestedTypeBodies(syntax, $package)
             }
         } finally {
+            if shouldBindOwnBody {
+                bindingStructBodies.Remove(structSymbol)
+            }
             this.binderCtx.CurrentTypeParameters = previousTypeParameters
             this.binderCtx.CurrentContainingType = previousContainingType
         }
@@ -202,6 +206,9 @@ internal partial class DeclarationBinder {
         // of its members (field types, method signatures, …) within an unsafe
         // context, so they may use unmanaged raw pointers (`*T`).
         using let unsafeContext = binderCtx.PushUnsafeContext(syntax.IsUnsafe)
+        if syntax.IsClass && HasAttributeSugarMarker(syntax.Annotations) {
+            structSymbol.SetIsAttributeClass()
+        }
         // Issue #950: `protected` is only meaningful on members of an
         // inheritable `open class`. Reject it on members of a non-open class,
         // a struct (value types are not inheritable), or a sealed type before
@@ -209,7 +216,7 @@ internal partial class DeclarationBinder {
         ValidateProtectedMemberPlacement(syntax)
         let fieldBinding = BindStructFieldsAndPrimaryConstructor(syntax, $package, structSymbol)
         let baseBinding = BindStructBaseAndInterfaces(syntax, structSymbol, fieldBinding)
-        EnsureBaseStructBodyBound(baseBinding.BaseClass)
+        EnsureStructDeclarationBound(baseBinding.BaseClass)
         let memberBinding = CreateStructMemberBindingContext(structSymbol)
         BindStructInstanceMethods(syntax, $package, structSymbol, baseBinding, memberBinding)
         BindStructProperties(syntax, $package, structSymbol, memberBinding)
@@ -222,7 +229,7 @@ internal partial class DeclarationBinder {
         BindStructFinalMembers(syntax, $package, structSymbol, baseBinding, bindNestedTypes)
     }
 
-    private func EnsureBaseStructBodyBound(baseClass StructSymbol?) {
+    private func EnsureStructDeclarationBound(baseClass StructSymbol?) {
         if baseClass == nil {
             return
         }
@@ -802,6 +809,10 @@ internal partial class DeclarationBinder {
         // clause has been bound (the symbol itself was created earlier so it
         // could be referenced as a self type argument in that clause).
         structSymbol.SetBaseClass(baseClassSymbol)
+        if importedBaseType != nil {
+            structSymbol.SetImportedBaseType(importedBaseType)
+        }
+        EnsureStructDeclarationBound(baseClassSymbol)
         structSymbol.SetAttributes(
             BindAttributes(
                 syntax.Annotations,
@@ -825,19 +836,6 @@ internal partial class DeclarationBinder {
         // the right CLR TypeAttributes flag and emit the matching
         // ClassLayout / FieldLayout rows.
         StructLayoutBinder.ResolveLayoutAndFieldOffsets(structSymbol, Diagnostics)
-        if hasAttributeSugar && syntax.IsClass {
-            // Phase 4 of #141 / ADR-0047 §5: tag the class so the emitter
-            // overrides its CLR base type to System.Attribute.
-            structSymbol.SetIsAttributeClass()
-        }
-        if importedBaseType != nil {
-            // Issue #296: record the imported CLR base class so the emitter
-            // writes it as the TypeDef base type, chains the generated ctor to
-            // the CLR base's parameterless ctor, and member lookup walks into
-            // the CLR base for inherited members.
-            structSymbol.SetImportedBaseType(importedBaseType)
-        }
-        EnsureBaseStructBodyBound(baseClassSymbol)
         // Issue #4143: an attribute class's PRIMARY constructor parameters
         // are validated here, at the declaration, rather than left to fall
         // through to GS0584 at each use site (or GS9998 if nothing catches

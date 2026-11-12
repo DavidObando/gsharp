@@ -16,6 +16,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Bind source attribute declarations before validating applications, including delegate attributes, `@Attribute` sugar, and recursive attribute dependencies. (Fixes #5968)
+
 - Accept return-target attributes on delegates and emit them on `Invoke` return parameters. Preserve type and parameter attributes. Reject unsupported delegate return `MarshalAs` with `GS0360` instead of omitting required marshalling metadata. (Fixes #5967)
 
 - Share local default-value and deconstruction reachability through sparse alias dependencies and finite tuple-index summaries, including reassigned locals, split aliases, loop-carried cycles and tuple-unboxing cycles. (Fixes #5633)
