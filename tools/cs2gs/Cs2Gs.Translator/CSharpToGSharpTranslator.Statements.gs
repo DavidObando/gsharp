@@ -62,9 +62,16 @@ partial class CSharpToGSharpTranslator {
 
         private class DefaultOriginQuery {
             public let Source ExpressionSyntax?
-            public let Outgoing List[DefaultOriginEdge] = List[DefaultOriginEdge]()
-            public let Incoming List[DefaultOriginEdge] = List[DefaultOriginEdge]()
-            public let PushParents List[(int32, DefaultOriginQuery)] = List[(int32, DefaultOriginQuery)]()
+            public let ConsumingOutgoing List[DefaultOriginEdge] = List[DefaultOriginEdge]()
+            public let ConsumingByIndex Dictionary[int32, List[DefaultOriginEdge]] = Dictionary[
+                int32,
+                List[DefaultOriginEdge]
+            ]()
+            public let EpsilonIncoming List[DefaultOriginEdge] = List[DefaultOriginEdge]()
+            public let PushParents Dictionary[int32, List[DefaultOriginQuery]] = Dictionary[
+                int32,
+                List[DefaultOriginQuery]
+            ]()
             public var Witness ExpressionSyntax? = nil
             public var ProjectedNullDefault ExpressionSyntax? = nil
 
@@ -88,7 +95,7 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
-        // Count insertion and evidence-propagation attempts, including duplicates, to detect dense-closure regressions.
+        // Count adjacency visits and insertion/evidence attempts, including duplicates, to detect dense-closure and rejected-scan regressions.
         func GetDefaultOriginMetrics()(SourceCount int32, EdgeCount int32, OperationCount int64) -> (
             this.defaultOriginQueries.Count,
             this.defaultOriginEdgeKeys.Count,
@@ -740,39 +747,32 @@ partial class CSharpToGSharpTranslator {
             while this.defaultOriginEdges.Count > 0 || this.defaultOriginPositive.Count > 0 {
                 if this.defaultOriginEdges.TryDequeue(out var edge) {
                     if edge.Index < 0 {
-                        for suffix in edge.To.Outgoing.ToArray() {
-                            if suffix.Index >= 0 {
-                                this.AddDefaultOriginEdge(
-                                    edge.From,
-                                    suffix.To,
-                                    suffix.Index,
-                                    edge.Witness ?? suffix.Witness
-                                )
-                            }
+                        for suffix in edge.To.ConsumingOutgoing.ToArray() {
+                            this.defaultOriginOperations++
+                            this.AddDefaultOriginEdge(
+                                edge.From,
+                                suffix.To,
+                                suffix.Index,
+                                edge.Witness ?? suffix.Witness
+                            )
                         }
                     } else {
-                        for prefix in edge.From.Incoming.ToArray() {
-                            if prefix.Index < 0 {
-                                this.AddDefaultOriginEdge(
-                                    prefix.From,
-                                    edge.To,
-                                    edge.Index,
-                                    prefix.Witness ?? edge.Witness
-                                )
-                            }
+                        for prefix in edge.From.EpsilonIncoming.ToArray() {
+                            this.defaultOriginOperations++
+                            this.AddDefaultOriginEdge(prefix.From, edge.To, edge.Index, prefix.Witness ?? edge.Witness)
                         }
                         // Matching summaries represent unbounded projection depth without enumerating concrete paths.
-                        for push in edge.From.PushParents.ToArray() {
-                            if push.Item1 == edge.Index {
-                                this.AddDefaultOriginEdge(push.Item2, edge.To, -1, edge.Witness)
+                        if edge.From.PushParents.TryGetValue(edge.Index, out var parents) {
+                            for parent in parents.ToArray() {
+                                this.defaultOriginOperations++
+                                this.AddDefaultOriginEdge(parent, edge.To, -1, edge.Witness)
                             }
                         }
                     }
                 } else if this.defaultOriginPositive.TryDequeue(out var positive) {
-                    for incoming in positive.Incoming {
-                        if incoming.Index < 0 {
-                            this.MarkDefaultOrigin(incoming.From, incoming.Witness ?? positive.Witness)
-                        }
+                    for incoming in positive.EpsilonIncoming {
+                        this.defaultOriginOperations++
+                        this.MarkDefaultOrigin(incoming.From, incoming.Witness ?? positive.Witness)
                     }
                 }
             }
@@ -784,8 +784,9 @@ partial class CSharpToGSharpTranslator {
             for index in path {
                 let next = Dictionary[DefaultOriginQuery, ExpressionSyntax?]()
                 for state in states {
-                    for edge in state.Key.Outgoing {
-                        if edge.Index == index {
+                    if state.Key.ConsumingByIndex.TryGetValue(index, out var matching) {
+                        for edge in matching {
+                            this.defaultOriginOperations++
                             next.TryAdd(edge.To, state.Value ?? edge.Witness)
                         }
                     }
@@ -815,8 +816,16 @@ partial class CSharpToGSharpTranslator {
                 return
             }
             let edge = DefaultOriginEdge(from, to, index, witness)
-            from.Outgoing.Add(edge)
-            to.Incoming.Add(edge)
+            if index < 0 {
+                to.EpsilonIncoming.Add(edge)
+            } else {
+                from.ConsumingOutgoing.Add(edge)
+                if !from.ConsumingByIndex.TryGetValue(index, out var matching) {
+                    matching = List[DefaultOriginEdge]()
+                    from.ConsumingByIndex.Add(index, matching)
+                }
+                matching.Add(edge)
+            }
             this.defaultOriginEdges.Enqueue(edge)
             if index < 0 {
                 this.MarkDefaultOrigin(from, witness ?? to.Witness)
@@ -846,9 +855,14 @@ partial class CSharpToGSharpTranslator {
 
         private func AddDefaultOriginPush(from DefaultOriginQuery, to DefaultOriginQuery, index int32) {
             this.AddDefaultOriginIndex(index)
-            to.PushParents.Add((index, from))
-            for edge in to.Outgoing.ToArray() {
-                if edge.Index == index {
+            if !to.PushParents.TryGetValue(index, out var parents) {
+                parents = List[DefaultOriginQuery]()
+                to.PushParents.Add(index, parents)
+            }
+            parents.Add(from)
+            if to.ConsumingByIndex.TryGetValue(index, out var matching) {
+                for edge in matching.ToArray() {
+                    this.defaultOriginOperations++
                     this.AddDefaultOriginEdge(from, edge.To, -1, edge.Witness)
                 }
             }

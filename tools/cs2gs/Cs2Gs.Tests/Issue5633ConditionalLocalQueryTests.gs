@@ -176,18 +176,32 @@ open class Issue5633ConditionalLocalQueryTests {
     }
 
     @Theory
-    @InlineData(false)
-    @InlineData(true)
-    func LargeScalarAliasChain_RetainsSparseLinearQueryWork(hasDefault bool) {
+    @InlineData(false, false)
+    @InlineData(true, false)
+    @InlineData(false, true)
+    @InlineData(true, true)
+    func LargeScalarAliases_RetainSparseLinearQueryWork(hasDefault bool, fanOut bool) {
         let metrics = System.Collections.Generic.List[(SourceCount int32, EdgeCount int32, OperationCount int64)]()
         for links in[]int32{16, 128, 256, 512} {
-            let body = StringBuilder("var x0 = ${if hasDefault { "default(T)" } else { "p" }};\n")
-            for var i = 1; i <= links; i++ {
-                body.AppendLine("var x$i = x${i - 1};")
+            let body = StringBuilder()
+            if fanOut {
+                body.AppendLine("var hub = choice switch {")
+                for var i = 0; i < links - 1; i++ {
+                    body.AppendLine("$i => ${if hasDefault && i == 0 { "default(T)" } else { "p" }},")
+                }
+                body.AppendLine("_ => p };")
+                for var i = 0; i <= links; i++ {
+                    body.AppendLine("var x$i = hub;")
+                }
+            } else {
+                body.AppendLine("var x0 = ${if hasDefault { "default(T)" } else { "p" }};")
+                for var i = 1; i <= links; i++ {
+                    body.AppendLine("var x$i = x${i - 1};")
+                }
             }
             let printed = this.TranslateWithinBound(
                 "#nullable enable\nnamespace Demo { public static class P {\n" +
-                    "static T? Chain<T>(T p) {\n" +
+                    "static T? Chain<T>(T p, int choice) {\n" +
                     body.ToString() + "return x$links;\n} } }",
                 enabled: true
             )
@@ -203,9 +217,9 @@ open class Issue5633ConditionalLocalQueryTests {
             )
             Assert.Contains(
                 if hasDefault {
-                    "let x$links T? = x${links - 1}"
+                    "let x$links T? = ${if fanOut { "hub" } else { "x${links - 1}" }}"
                 } else {
-                    "let x$links = x${links - 1}"
+                    "let x$links = ${if fanOut { "hub" } else { "x${links - 1}" }}"
                 },
                 printed
             )
