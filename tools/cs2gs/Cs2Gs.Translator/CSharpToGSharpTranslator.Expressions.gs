@@ -19688,7 +19688,7 @@ partial class CSharpToGSharpTranslator {
                     dispatchType is INamedTypeSymbol{IsSealed: true} ||
                     dispatchType.IsValueType
             ) {
-                    return true
+                return true
             }
             let previous = this.effectTypeArguments
             let substitutions = Dictionary[ITypeParameterSymbol, ITypeSymbol](previous, SymbolEqualityComparer.Default)
