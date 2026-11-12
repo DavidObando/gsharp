@@ -73,6 +73,7 @@ internal class BindingServices {
     var CachedImportedComparerTargets List[(Target Type?, NonGeneric bool)]?
     let CachedComparerStorage Dictionary[Type, int32] = Dictionary[Type, int32]()
     let CachedTrustedFrameworkAssemblies Dictionary[Assembly, bool] = Dictionary[Assembly, bool]()
+    let CachedIntrinsicFrameworkLayouts Dictionary[Type, bool] = Dictionary[Type, bool]()
     let CachedBoundCallEffectSummaries Dictionary[BoundExpression, CallEffectSummary] = Dictionary[
         BoundExpression,
         CallEffectSummary

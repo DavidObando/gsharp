@@ -27,6 +27,76 @@ import Xunit
 /// code, the diagnostic and its location. Every accepted case compiles,
 /// IL-verifies, runs and asserts the output.
 open class Issue5171RefAliasNarrowingTests {
+    @Theory
+    @InlineData("int32", "1")
+    @InlineData("TimeSpan", "TimeSpan.FromSeconds(1)")
+    @InlineData("TimeSpan?", "TimeSpan.FromSeconds(1)")
+    func ClosedIntrinsicAndLiftedOperatorsKeepTheirGuardedRead(type string, value string) {
+        let directory = Path.Combine(AppContext.BaseDirectory, "pure-operator-effects", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let source = `import System
+func Guard(ref text string?, left ` + type + `, right ` + type + `) int32 {
+    if text == nil { return 0 }
+    let _ = left + right
+    return text.Length
+}
+func Main() {
+    var text string? = "safe"
+    Console.WriteLine(Guard(ref text, ` + value + `, ` + value + `))
+}`
+            let output = Path.Combine(directory, "PureOperator.dll")
+            let (exit, log) = Compile(directory, source, output)
+            Assert.True(exit == 0, log)
+            IlVerifier.Verify(output)
+            let (runExit, stdout) = RunDotnet(output)
+            Assert.Equal(0, runExit)
+            Assert.Equal(Encoding.UTF8.GetBytes("4" + Environment.NewLine), Encoding.UTF8.GetBytes(stdout))
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    @Theory
+    @InlineData("left + right")
+    @InlineData("-left")
+    func ImportedSelectedOperatorsInvalidateTheirAliasedStaticStorage(expression string) {
+        using let library = CSharpFixture(`
+namespace ExternalOperator;
+public static class Store { public static string? Value; }
+public readonly struct Token {
+    public static Token operator +(Token left, Token right) { Store.Value = null; return left; }
+    public static Token operator -(Token value) { Store.Value = null; return value; }
+}
+`)
+        let directory = Path.Combine(AppContext.BaseDirectory, "operator-effects", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let source = `import ExternalOperator
+func Guard(ref text string?, left Token, right Token) int32 {
+    if text == nil { return 0 }
+    let _ = ` + expression + `
+    return text.Length
+}
+func Main() { Store.Value = "safe"
+    let _ = Guard(ref Store.Value, default(Token), default(Token))
+}`
+            let output = Path.Combine(directory, "Operator.dll")
+            let (exit, log) = Compile(directory, source, output, []string{library.AssemblyPath})
+            Assert.NotEqual(0, exit)
+            Assert.False(File.Exists(output))
+            Assert.True(
+                log.Contains(
+                    Path.Combine(directory, "Operator.gs") + "(5,17,5,23): error GS0158",
+                    StringComparison.Ordinal
+                ),
+                log
+            )
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
     @Fact
     func ExternallySuppliedStoredComparersRemainUnknownWithoutAVisibleImplementation() {
         let directory = Path.Combine(AppContext.BaseDirectory, "external-comparer", Guid.NewGuid().ToString("N"))

@@ -5771,6 +5771,40 @@ internal partial class StatementBinder {
 
     private func AnalyzeBoundCallEffects(callNode BoundExpression, visiting HashSet[FunctionSymbol]) CallEffectSummary {
         switch callNode {
+            case binary is BoundClrBinaryOperatorExpression {
+                if binary.Method is {} method {
+                    return AnalyzeImportedMethodEffects(
+                        method,
+                        nil,
+                        List[TypeSymbol?]{binary.Left.Type, binary.Right.Type},
+                        default(ImmutableArray[TypeSymbol?]),
+                        includeOverrides: false,
+                        visiting
+                    )
+                }
+                if binary.Function is {} function {
+                    let raw = GetFunctionEffectSummaryCore(function, includeOverrides: false, visiting, out _)
+                    return ApplyReceiverAndMethodSubstitution(
+                        raw,
+                        binary.FunctionOwnerType,
+                        function,
+                        ImmutableArray[TypeSymbol].Empty
+                    )
+                }
+                let unknown = CallEffectSummary()
+                unknown.WritesAnyStorage = true
+                return unknown
+            }
+            case unary is BoundClrUnaryOperatorExpression {
+                return AnalyzeImportedMethodEffects(
+                    unary.Method,
+                    nil,
+                    List[TypeSymbol?]{unary.Operand.Type},
+                    default(ImmutableArray[TypeSymbol?]),
+                    includeOverrides: false,
+                    visiting
+                )
+            }
             case call is BoundCallExpression {
                 if call.IsConditionalElided {
                     return CallEffectSummary()
@@ -7685,6 +7719,19 @@ internal partial class StatementBinder {
                                         ImmutableArray[TypeSymbol].Empty
                                     )
                                 )
+                                var slot = m
+                                while slot.OverriddenMethod is {} parent {
+                                    slot = parent
+                                }
+                                if slot.ExternalOverriddenMethod is {} external && ClrTypeUtilities.IsSameAsCore(
+                                    external.DeclaringType,
+                                    method.DeclaringType,
+                                    external,
+                                    method
+                                ) &&
+                                    MemberLookup.HasSameSignature([]MethodInfo{external}, method) {
+                                    return summary
+                                }
                             }
                         }
                     }
@@ -8687,6 +8734,16 @@ internal partial class StatementBinder {
     private func HasIntrinsicFrameworkValueLayout(type Type?, seen HashSet[Type]? = nil) bool {
         if type == nil {
             return false
+        }
+        let cache = binderCtx.Services.CachedIntrinsicFrameworkLayouts
+        if seen == nil {
+            if cache.TryGetValue(type, out var cached) {
+                return cached
+            }
+            CompilationMeasurements.Count("narrowing.framework-value-layouts")
+            let result = HasIntrinsicFrameworkValueLayout(type, HashSet[Type]())
+            cache[type] = result
+            return result
         }
         let reflected = ReflectionType(type) ?? type
         if reflected.IsPrimitive || reflected.IsEnum || reflected.FullName == "System.String" {

@@ -2342,6 +2342,64 @@ public static class Demo {
     }
 
     @Fact
+    func RefParameter_ActualReferenceGraphOwnsProducerDefinedStorageWithSeparateSibling() {
+        let producerTree = CSharpSyntaxTree.ParseText(
+            "public sealed class Payload { public int Value => 1; } public static class Producer { public static Payload? Slot; public static void Clear() { Slot = null; } }",
+            path: "Producer.Payload.cs"
+        )
+        let options = CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+            NullableContextOptions.Enable
+        )
+        let producer = CSharpCompilation.Create(
+            "PayloadProducer5326",
+            []SyntaxTree{producerTree},
+            CSharpProjectLoader.RuntimeReferences(),
+            options
+        )
+        let sibling = CSharpCompilation.Create(
+            "PayloadProducer5326",
+            []SyntaxTree{producerTree},
+            CSharpProjectLoader.RuntimeReferences(),
+            options
+        )
+        let consumerTree = CSharpSyntaxTree.ParseText(
+            "using System; public static class Demo { private static int Guard(ref Payload? value) { if(value == null)return 0; Producer.Clear(); return value.Value; } public static string Run() { Producer.Slot = new Payload(); try { return Guard(ref Producer.Slot).ToString(); } catch(NullReferenceException) { return \"cleared\"; } } }",
+            path: "Consumer.Payload.cs"
+        )
+        let consumer = CSharpCompilation.Create(
+            "PayloadConsumer5326",
+            []SyntaxTree{consumerTree},
+            CSharpProjectLoader.RuntimeReferences().Append(cast[MetadataReference](producer.ToMetadataReference())),
+            options
+        )
+        let model = consumer.GetSemanticModel(consumerTree)
+        let context = TranslationContext(
+            consumer,
+            model,
+            consumerTree.FilePath,
+            siblingCompilations: []CSharpCompilation{sibling}
+        )
+        Assert.Same(producer, context.GetOwnedSemanticModel(producerTree).Compilation)
+        let consumerText = GSharpPrinter.Print(
+            CSharpToGSharpTranslator().TranslateDocument(
+                LoadedDocument(consumerTree.FilePath, consumerTree, model),
+                context
+            )
+        )
+        let producerText = GSharpPrinter.Print(
+            CSharpToGSharpTranslator().TranslateDocument(
+                LoadedDocument(producerTree.FilePath, producerTree, producer.GetSemanticModel(producerTree)),
+                TranslationContext(producer, producer.GetSemanticModel(producerTree), producerTree.FilePath)
+            )
+        )
+        Assert.Contains("return value!!.Value", consumerText)
+        let lines = (consumerText + "\n" + producerText).Split('\n')
+        let imports = lines.Where((line string) -> line.StartsWith("import ", StringComparison.Ordinal)).Distinct()
+        let bodies = lines.Where((line string) -> !line.StartsWith("import ", StringComparison.Ordinal))
+        Assert.Equal("cleared", CompileAndRun(string.Join("\n", imports.Concat(bodies)), Array.Empty[byte]()).Trim())
+    }
+
+    @Fact
     func RefParameter_CompilationIndexesAreSharedAcrossDocumentVisitors() {
         let trees = Enumerable
             .Range(0, 8)
@@ -2408,6 +2466,69 @@ public static class Demo {
         } finally {
             Directory.Delete(directory, recursive: true)
         }
+    }
+
+    @Fact
+    func RefParameter_CanceledComparerIndexPublishesNothingAndRetriesOnce() {
+        let tree = CSharpSyntaxTree.ParseText(`
+using System;
+using System.Linq;
+using System.Collections.Generic;
+public static class Demo {
+    private static string? global;
+    private static IEqualityComparer<int> Make() => EqualityComparer<int>.Create((x,y) => x == y, x => { global = null; return x; });
+    private static void Probe() { _ = Enumerable.Count(new[] { 1 }); }
+    private static int Guard(ref string? value) { if(value == null)return 0; Probe(); return value.Length; }
+    public static string Run() { global = "safe"; return Guard(ref global).ToString(); }
+}`, path: "IndexCancellation.cs")
+        let compilation = CSharpCompilation.Create(
+            "IndexCancellation5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+                NullableContextOptions.Enable
+            )
+        )
+        let model = compilation.GetSemanticModel(tree)
+        let document = LoadedDocument(tree.FilePath, tree, model)
+        using let cancellation = CancellationTokenSource()
+        using let entered = ManualResetEventSlim()
+        using let release = ManualResetEventSlim()
+        let context = TranslationContext(compilation, model, tree.FilePath, cancellationToken: cancellation.Token)
+        context.AfterStorageComparerFactory = () -> {
+            entered.Set()
+            if !release.Wait(TimeSpan.FromSeconds(15)) {
+                throw TimeoutException("Comparer index barrier was not released.")
+            }
+        }
+        let translation = Task.Run(() -> CSharpToGSharpTranslator().TranslateDocument(document, context))
+        try {
+            Assert.True(
+                entered.Wait(TimeSpan.FromSeconds(15)),
+                "The actual comparer index scan must reach its barrier."
+            )
+            cancellation.Cancel()
+        } finally {
+            release.Set()
+            Assert.Same(
+                translation,
+                Task.WhenAny(translation, Task.Delay(TimeSpan.FromSeconds(15))).GetAwaiter().GetResult()
+            )
+            context.AfterStorageComparerFactory = nil
+        }
+        Assert.ThrowsAny[OperationCanceledException](() -> translation.GetAwaiter().GetResult())
+        Assert.Null(context.EffectIndexes.DeferredIndex)
+        let retry = TranslationContext(compilation, model, tree.FilePath)
+        let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, retry))
+        let completed = Assert.IsType[TranslationContext.DeferredCallbackIndex](retry.EffectIndexes.DeferredIndex)
+        Assert.Single(completed.Comparers)
+        Assert.Empty(completed.Factories)
+        let again = TranslationContext(compilation, model, tree.FilePath)
+        let repeated = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, again))
+        Assert.Same(completed, again.EffectIndexes.DeferredIndex)
+        Assert.Equal(printed, repeated)
+        Assert.Contains("return value.Length", printed)
+        Assert.Equal("4", CompileAndRun(printed, Array.Empty[byte]()).Trim())
     }
 
     @Fact

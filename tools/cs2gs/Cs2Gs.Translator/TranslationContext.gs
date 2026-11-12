@@ -115,14 +115,25 @@ class TranslationContext {
     }
     internal var StorageEffectBodyVisits int32
     internal var BeforeStorageEffectBody Action?
+    internal var AfterStorageComparerFactory Action?
+
+    internal class DeferredCallbackIndex {
+        init(
+            factories List[Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax],
+            comparers List[Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax]
+        ) {
+            Factories = factories.ToImmutableArray()
+            Comparers = comparers.ToImmutableArray()
+        }
+        let Factories IReadOnlyList[Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax]
+        let Comparers IReadOnlyList[Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax]
+    }
 
     internal class StorageIndexes {
         var AliasedFields HashSet[IFieldSymbol]?
         var Methods Dictionary[string, List[IMethodSymbol]]?
-        var DeferredFactories List[Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax]?
+        var DeferredIndex DeferredCallbackIndex?
         let Iterators HashSet[IMethodSymbol] = HashSet[IMethodSymbol](SymbolEqualityComparer.Default)
-        let ComparerFactories List[Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax] =
-        List[Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax]()
         var TreeVisits int32
         var ImportedComparers List[INamedTypeSymbol]?
         var IncompleteImportedComparers bool
@@ -184,26 +195,34 @@ class TranslationContext {
     /// @param tree The syntax tree the next node(s) to resolve belong to.
     /// @returns A scope that restores the previous active model on (cref:IDisposable.Dispose).
     func UseSemanticModelFor(tree SyntaxTree?) IDisposable {
-        if tree == nil || tree == this.SemanticModel.SyntaxTree {
+        if tree == nil {
             return NoOpScope.Instance
         }
-        this.modelsByTree.TryAdd(this.SemanticModel.SyntaxTree, this.SemanticModel)
-        var ownerCompilation CSharpCompilation = this.Compilation
-        if this.modelsByTree.TryGetValue(tree, out var model) {
-            ownerCompilation = (model.Compilation as CSharpCompilation) ?? ownerCompilation
-        } else {
-            if !ownerCompilation.ContainsSyntaxTree(tree) {
-                if this.rootCompilation.ContainsSyntaxTree(tree) {
-                    ownerCompilation = this.rootCompilation
-                } else {
-                    for candidate in this.SourceCompilations() {
-                        if candidate != nil && candidate.ContainsSyntaxTree(tree) {
-                            ownerCompilation = candidate
-                            break
-                        }
-                    }
+        if this.sourceOwners == nil {
+            let owners = Dictionary[SyntaxTree, CSharpCompilation]()
+            for compilation in this.SourceCompilations() {
+                for source in compilation.SyntaxTrees {
+                    owners.TryAdd(source, compilation)
                 }
             }
+            this.sourceOwners = owners
+        }
+        let owners = this.sourceOwners ?? throw InvalidOperationException("Source owners were not initialized.")
+        let ownerCompilation = if owners.TryGetValue(tree, out var owner) {
+            owner
+        } else {
+            this.rootCompilation
+        }
+        if tree == this.SemanticModel.SyntaxTree && object.ReferenceEquals(
+            this.SemanticModel.Compilation,
+            ownerCompilation
+        ) {
+            return NoOpScope.Instance
+        }
+        if !this.modelsByTree.TryGetValue(tree, out var model) || !object.ReferenceEquals(
+            model.Compilation,
+            ownerCompilation
+        ) {
             model = GetSemanticModel(ownerCompilation, tree)
             this.modelsByTree[tree] = model
         }
@@ -214,17 +233,20 @@ class TranslationContext {
         return RestoreModelScope(this, previousCompilation, previousModel)
     }
 
+    private var sourceOwners Dictionary[SyntaxTree, CSharpCompilation]?
+    private var actualSourceCompilations IReadOnlyList[CSharpCompilation]?
+
     internal func SourceCompilations(includeSiblingLookup bool = true) IReadOnlyList[CSharpCompilation] {
         let result = List[CSharpCompilation]()
         let pending = Queue[CSharpCompilation]()
         let seen = HashSet[CSharpCompilation](ReferenceEqualityComparer.Instance)
         pending.Enqueue(this.rootCompilation)
-        if includeSiblingLookup {
-            for compilation in(this.repositoryCompilations ?? Array.Empty[CSharpCompilation]()).Concat(
-                this.siblingCompilations ?? Array.Empty[CSharpCompilation]()
-            ) {
-                pending.Enqueue(compilation)
+        if this.actualSourceCompilations != nil {
+            result.AddRange(this.actualSourceCompilations)
+            for compilation in result {
+                seen.Add(compilation)
             }
+            pending.Clear()
         }
         while pending.Count > 0 {
             this.CancellationToken.ThrowIfCancellationRequested()
@@ -236,6 +258,27 @@ class TranslationContext {
             for reference in compilation.References.OfType[CompilationReference]() {
                 if reference.Compilation is CSharpCompilation source {
                     pending.Enqueue(source)
+                }
+            }
+        }
+        this.actualSourceCompilations = result.ToArray()
+        if includeSiblingLookup {
+            for compilation in(this.repositoryCompilations ?? Array.Empty[CSharpCompilation]()).Concat(
+                this.siblingCompilations ?? Array.Empty[CSharpCompilation]()
+            ) {
+                pending.Enqueue(compilation)
+            }
+            while pending.Count > 0 {
+                this.CancellationToken.ThrowIfCancellationRequested()
+                let compilation = pending.Dequeue()
+                if !seen.Add(compilation) {
+                    continue
+                }
+                result.Add(compilation)
+                for reference in compilation.References.OfType[CompilationReference]() {
+                    if reference.Compilation is CSharpCompilation source {
+                        pending.Enqueue(source)
+                    }
                 }
             }
         }

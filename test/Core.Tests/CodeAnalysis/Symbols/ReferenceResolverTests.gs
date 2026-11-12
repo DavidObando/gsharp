@@ -23,6 +23,39 @@ import Xunit
 /// statements use to resolve CLR types.
 open class ReferenceResolverTests {
     @Theory
+    @InlineData("{}")
+    @InlineData("{\"targets\":[]}")
+    @InlineData("{\"targets\":{\"ok\":{\"library\":{\"runtime\":{\"MustNotTrust.dll\":{}}}},\"bad\":[]}}")
+    func RuntimeManifestSchemas_PublishOnlyCompleteValidInputs(malformed string) {
+        let directory = Path.Combine(AppContext.BaseDirectory, "runtime-manifests", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let bad = Path.Combine(directory, "bad.json")
+            let healthy = Path.Combine(directory, "healthy.json")
+            File.WriteAllText(bad, malformed)
+            File.WriteAllText(healthy, "{\"targets\":{\"net10.0\":{\"library\":{\"runtime\":{\"Healthy.dll\":{}}}}}}")
+            let supported = HashSet[string](StringComparer.Ordinal){"Existing"}
+            let cache = Lazy[int32](
+                () -> {
+                    Assert.False(ReferenceResolver.TryAddRuntimeEffectManifest(bad, supported))
+                    Assert.Equal("Existing", Assert.Single(supported))
+                    Assert.True(ReferenceResolver.TryAddRuntimeEffectManifest(healthy, supported))
+                    return supported.Count
+                }
+            )
+            Assert.Equal(2, cache.Value)
+            Assert.Equal(2, cache.Value)
+            Assert.Equal(
+                []string{"Existing", "Healthy"},
+                supported.OrderBy((name string) -> name, StringComparer.Ordinal)
+            )
+            Assert.True(ReferenceResolver.IsTrustedEffectAssembly(typeof(Console).Assembly))
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    @Theory
     @InlineData(false)
     @InlineData(true)
     func PackRootEnumerationFault_PreservesDiscoveredRuntimeImagesAndCache(access bool) {

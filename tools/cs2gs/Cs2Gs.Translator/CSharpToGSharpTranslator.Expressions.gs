@@ -18937,6 +18937,7 @@ partial class CSharpToGSharpTranslator {
             lock this.context.EffectIndexes {
                 if this.effectSourceMethods == nil {
                     let result = Dictionary[string, List[IMethodSymbol]](StringComparer.Ordinal)
+                    let iterators = HashSet[IMethodSymbol](SymbolEqualityComparer.Default)
                     for tree in this
                         .context
                         .SourceCompilations(false)
@@ -18962,7 +18963,7 @@ partial class CSharpToGSharpTranslator {
                                         statement Microsoft.CodeAnalysis.CSharp.Syntax.YieldStatementSyntax
                                     ) -> FindNestedFunction(statement.Parent, declaration) == nil
                                 ) {
-                                    this.context.EffectIndexes.Iterators.Add(method.OriginalDefinition)
+                                    iterators.Add(method.OriginalDefinition)
                                 }
                                 if declaration is LocalFunctionStatementSyntax {
                                     continue
@@ -18982,6 +18983,8 @@ partial class CSharpToGSharpTranslator {
                             }
                         }
                     }
+                    this.context.CancellationToken.ThrowIfCancellationRequested()
+                    this.context.EffectIndexes.Iterators.UnionWith(iterators)
                     this.effectSourceMethods = result
                 }
             }
@@ -19550,9 +19553,8 @@ partial class CSharpToGSharpTranslator {
             )
         }
 
-        private prop effectDeferredFactories List[InvocationExpressionSyntax]? {
-            get -> this.context.EffectIndexes.DeferredFactories
-            set -> this.context.EffectIndexes.DeferredFactories = value
+        private prop effectDeferredFactories IReadOnlyList[InvocationExpressionSyntax]? {
+            get -> this.context.EffectIndexes.DeferredIndex?.Factories
         }
 
         private func DeferredEffectCallbacksMayWrite(
@@ -19566,6 +19568,7 @@ partial class CSharpToGSharpTranslator {
             lock this.context.EffectIndexes {
                 if this.effectDeferredFactories == nil {
                     let factories = List[InvocationExpressionSyntax]()
+                    let comparerFactories = List[InvocationExpressionSyntax]()
                     for tree in this
                         .context
                         .SourceCompilations(false)
@@ -19598,12 +19601,18 @@ partial class CSharpToGSharpTranslator {
                                         CoreStorageEffects.GetComparerContractKind(this.EffectTypeName(contract)) != 0
                                     )
                                 ) {
-                                    this.context.EffectIndexes.ComparerFactories.Add(call)
+                                    comparerFactories.Add(call)
+                                    this.context.AfterStorageComparerFactory?.Invoke()
+                                    this.context.CancellationToken.ThrowIfCancellationRequested()
                                 }
                             }
                         }
                     }
-                    this.effectDeferredFactories = factories
+                    this.context.CancellationToken.ThrowIfCancellationRequested()
+                    this.context.EffectIndexes.DeferredIndex = TranslationContext.DeferredCallbackIndex(
+                        factories,
+                        comparerFactories
+                    )
                 }
             }
             if !comparers {
@@ -19615,7 +19624,7 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             let selected = if comparers {
-                this.context.EffectIndexes.ComparerFactories
+                this.context.EffectIndexes.DeferredIndex!!.Comparers
             } else {
                 this.effectDeferredFactories!!
             }

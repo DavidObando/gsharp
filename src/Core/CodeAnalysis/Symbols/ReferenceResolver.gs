@@ -1707,22 +1707,7 @@ class ReferenceResolver : IDisposable {
             let directories = List[string]{runtimeDirectory}
             let supported = HashSet[string](StringComparer.Ordinal){typeof(object).Assembly.GetName().Name ?? ""}
             let runtimeManifest = Path.Combine(runtimeDirectory, "Microsoft.NETCore.App.deps.json")
-            if File.Exists(runtimeManifest) {
-                try {
-                    using let document = JsonDocument.Parse(File.ReadAllText(runtimeManifest))
-                    for target in document.RootElement.GetProperty("targets").EnumerateObject() {
-                        for library in target.Value.EnumerateObject() {
-                            if library.Value.TryGetProperty("runtime", out var assets) {
-                                for asset in assets.EnumerateObject() {
-                                    supported.Add(Path.GetFileNameWithoutExtension(asset.Name))
-                                }
-                            }
-                        }
-                    }
-                } catch (error JsonException) { } catch (error IOException) { } catch (
-                    error UnauthorizedAccessException
-                ) { }
-            }
+            TryAddRuntimeEffectManifest(runtimeManifest, supported)
             let dotnetRoot = Directory.GetParent(runtimeDirectory)?.Parent?.Parent?.FullName
             if dotnetRoot != nil {
                 let pack = Path.Combine(dotnetRoot, "packs", "Microsoft.NETCore.App.Ref")
@@ -1773,10 +1758,53 @@ class ReferenceResolver : IDisposable {
                 } else {
                     Directory.EnumerateDirectories(root)
                 }
+
                 for version in versions {
                     AddTrustedEffectReferencePack(version, supported, directories)
                 }
             } catch (error IOException) { } catch (error UnauthorizedAccessException) { }
+        }
+
+        internal func TryAddRuntimeEffectManifest(path string, supported HashSet[string]) bool {
+            try {
+                using let document = JsonDocument.Parse(File.ReadAllText(path))
+                let root = document.RootElement
+                if root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("targets", out var targets) ||
+                    targets.ValueKind != JsonValueKind.Object {
+                    return false
+                }
+                let names = HashSet[string](StringComparer.Ordinal)
+                for target in targets.EnumerateObject() {
+                    if target.Value.ValueKind != JsonValueKind.Object {
+                        return false
+                    }
+                    for library in target.Value.EnumerateObject() {
+                        if library.Value.ValueKind != JsonValueKind.Object {
+                            return false
+                        }
+                        if !library.Value.TryGetProperty("runtime", out var assets) {
+                            continue
+                        }
+                        if assets.ValueKind != JsonValueKind.Object {
+                            return false
+                        }
+                        for asset in assets.EnumerateObject() {
+                            if asset.Value.ValueKind != JsonValueKind.Object {
+                                return false
+                            }
+                            names.Add(Path.GetFileNameWithoutExtension(asset.Name))
+                        }
+                    }
+                }
+                supported.UnionWith(names)
+                return true
+            } catch (error JsonException) {
+                return false
+            } catch (error IOException) {
+                return false
+            } catch (error UnauthorizedAccessException) {
+                return false
+            }
         }
 
         /// Gets a resolver that searches only the assemblies referenced by file

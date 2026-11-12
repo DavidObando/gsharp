@@ -418,6 +418,14 @@ Owned construction and default-comparer proofs remain distinct from static recei
 Framework image verification establishes provenance, not method purity. Shared positive method models provide the remaining effect proof.
 Pack-root enumeration failures retain previously discovered runtime images and do not poison the trust cache.
 
+Selected imported unary and binary operator methods use the bound-call effect funnel, including lifted source operators.
+Source ownership prefers the root compilation's actual reference graph before separately loaded catalog compilations.
+The loader snapshots metadata across the reachable solution before constructing any project compilation.
+Snapshot I/O failures preserve the original untrusted reference and its Roslyn diagnostics.
+Runtime manifest names and callback inventories remain local until their complete input validates or their scan succeeds.
+Deferred and comparer indexes publish together as one immutable bundle; cancellation leaves no partial shared entries.
+An exact source override summary replaces its inherited declaration's fallback summary when the bound slot proves the target.
+
 The original open-comparer corpus row `h1_by_ref_param_survives_calls` now records its exact rejection diagnostics.
 The disjoint out-parameter execution control re-proves its fact around unknown comparer calls.
 This keeps the disjoint-write coverage without assuming that an externally supplied comparer is pure.

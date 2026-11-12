@@ -6196,7 +6196,11 @@ internal partial class StatementBinder {
                 }
             }
             if !isStableSystemIndexOp &&
-                node is BoundCallOperationExpression &&
+                (
+                node is BoundCallOperationExpression or
+                    BoundClrBinaryOperatorExpression or
+                    BoundClrUnaryOperatorExpression
+            ) &&
                 node is not BoundCallExpression{IsConditionalElided: true} &&
                 !IsCallableValueInvocation(node) {
                 MarkRunsEscapedClosure(invalidateCallableAliases: false)
