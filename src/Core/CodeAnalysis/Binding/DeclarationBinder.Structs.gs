@@ -140,42 +140,153 @@ internal partial class DeclarationBinder {
     }
 
     private func EnsureStructDeclarationHeaderBound(structSymbol StructSymbol) {
+        let definition = structSymbol.Definition ?? structSymbol
+        if readyStructHeaders.Contains(definition) || !nestedStructPackages.ContainsKey(definition) {
+            return
+        }
+        const requestHeader = 0
+        const bindHeader = 1
+        const requestConstraints = 2
+        const bindConstraints = 3
+        let work = Stack[(Symbol StructSymbol, Phase int32)]()
+        let activeHeaders = HashSet[StructSymbol]()
+        let activeConstraints = HashSet[StructSymbol]()
         let pending = List[StructSymbol]()
-        var current StructSymbol? = structSymbol.Definition ?? structSymbol
-        while current is {} symbol && symbol.Declaration != nil && nestedStructPackages.ContainsKey(symbol) &&
-            !readyStructHeaders
-            .Contains(symbol) {
-            if structBaseBindings.TryGetValue(symbol, out var cycleBinding) {
-                Diagnostics.ReportClassInheritanceCycle(GetBaseClauseLocation(symbol), symbol.Name)
-                symbol.SetBaseClass(nil)
-                structBaseBindings[symbol] = StructBaseBindingResult(
-                    nil,
-                    cycleBinding.ImportedBaseType,
-                    cycleBinding.ImplementedInterfaces,
-                    cycleBinding.ImplementedClrInterfaces
+        work.Push((definition, requestHeader))
+        while work.Count > 0 {
+            let (symbol, phase) = work.Pop()
+            if phase == requestHeader {
+                if readyStructHeaders.Contains(symbol) || structBaseBindings.ContainsKey(symbol) || !activeHeaders.Add(
+                    symbol
+                ) {
+                    continue
+                }
+                pending.Add(symbol)
+                work.Push((symbol, bindHeader))
+                work.Push((symbol, requestConstraints))
+                continue
+            }
+            if phase == requestConstraints {
+                if boundStructTypeParameterConstraints.Contains(symbol) || !activeConstraints.Add(symbol) {
+                    continue
+                }
+                work.Push((symbol, bindConstraints))
+                if symbol.ContainingType is StructSymbol enclosing {
+                    let enclosingDefinition = enclosing.Definition ?? enclosing
+                    if nestedStructPackages.ContainsKey(enclosingDefinition) {
+                        work.Push((enclosingDefinition, requestConstraints))
+                    }
+                }
+                continue
+            }
+            if phase == bindConstraints {
+                var dependency StructSymbol? = nil
+                RunInStructDeclarationContext(
+                    symbol,
+                    () -> {
+                        dependency = FindPendingConstraintHeader(symbol.Declaration!!, activeHeaders)
+                    }
                 )
-                break
+                let prerequisite = dependency
+                if prerequisite != nil {
+                    work.Push((symbol, bindConstraints))
+                    work.Push((prerequisite, requestHeader))
+                    continue
+                }
+                RunInStructDeclarationContext(
+                    symbol,
+                    () -> {
+                        let syntax = symbol.Declaration!!
+                        ResolvePartialTypeParameterConstraints(
+                            syntax.TypeParameterList,
+                            syntax.PartialTypeParameterLists,
+                            symbol.TypeParameters,
+                            symbol.Name,
+                            syntax.PartialPartLocations
+                        )
+                    }
+                )
+                boundStructTypeParameterConstraints.Add(symbol)
+                activeConstraints.Remove(symbol)
+                continue
             }
             RunInStructDeclarationContext(
                 symbol,
-                () -> {
-                    let syntax = symbol.Declaration!!
-                    ResolvePartialTypeParameterConstraints(
-                        syntax.TypeParameterList,
-                        syntax.PartialTypeParameterLists,
-                        symbol.TypeParameters,
-                        symbol.Name,
-                        syntax.PartialPartLocations
-                    )
-                    structBaseBindings.Add(symbol, BindStructBaseTypes(syntax, symbol))
-                }
+                () -> structBaseBindings.Add(symbol, BindStructBaseTypes(symbol.Declaration!!, symbol))
             )
-            pending.Add(symbol)
-            current = symbol.BaseClass?.Definition ?? symbol.BaseClass
+            let sourceBase = symbol.BaseClass?.Definition ?? symbol.BaseClass
+            if sourceBase is {} baseDefinition && nestedStructPackages.ContainsKey(baseDefinition) {
+                work.Push((baseDefinition, requestHeader))
+            }
         }
+        DetectClassInheritanceCycles(pending, includeNestedTypes: false)
         for symbol in pending {
+            let binding = structBaseBindings[symbol]
+            structBaseBindings[symbol] = StructBaseBindingResult(
+                symbol.BaseClass,
+                binding.ImportedBaseType,
+                binding.ImplementedInterfaces,
+                binding.ImplementedClrInterfaces
+            )
             readyStructHeaders.Add(symbol)
         }
+    }
+
+    private func FindPendingConstraintHeader(
+        syntax StructDeclarationSyntax,
+        activeHeaders HashSet[StructSymbol]
+    ) StructSymbol? {
+        let clauses = Stack[TypeClauseSyntax]()
+        let addConstraints = func (list TypeParameterListSyntax) {
+            for parameter in list.Parameters {
+                if parameter.ConstraintType is {} clause {
+                    clauses.Push(clause)
+                }
+                if parameter.ConstraintTypeArguments is {} arguments {
+                    for argument in arguments {
+                        clauses.Push(argument)
+                    }
+                }
+            }
+        }
+        if syntax.TypeParameterList is {} primary {
+            addConstraints(primary)
+        }
+        if !syntax.PartialTypeParameterLists.IsDefaultOrEmpty {
+            for list in syntax.PartialTypeParameterLists {
+                addConstraints(list)
+            }
+        }
+        while clauses.Count > 0 {
+            let clause = clauses.Pop()
+            let previousTree = $scope.SetCurrentReferencingSyntaxTree(clause.SyntaxTree)
+            try {
+                let segments = clause.DottedName.Split('.')
+                for var index = 0; index + 1 < segments.Length; index++ {
+                    let name = string.Join(".", segments, 0, index + 1)
+                    let arity = clause.GetSegmentTypeArguments(index)?.Count ?? -1
+                    var resolved TypeSymbol? = nil
+                    if arity >= 0 {
+                        $scope.TryLookupTypeAlias(name, arity, out resolved)
+                        resolved ??= ResolveNestedAttributeName(name, arity)
+                    }
+                    resolved ??= ResolveAttributeName(name)
+                    if resolved is StructSymbol container {
+                        let definition = container.Definition ?? container
+                        if nestedStructPackages.ContainsKey(definition) && !readyStructHeaders.Contains(definition) &&
+                            !structBaseBindings.ContainsKey(definition) && !activeHeaders.Contains(definition) {
+                            return definition
+                        }
+                    }
+                }
+            } finally {
+                $scope.SetCurrentReferencingSyntaxTree(previousTree)
+            }
+            for child in clause.GetChildren().OfType[TypeClauseSyntax]() {
+                clauses.Push(child)
+            }
+        }
+        return nil
     }
 
     /// Issue #950: reports GS0380 for any member declared `protected` when

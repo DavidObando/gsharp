@@ -356,20 +356,28 @@ class BAttribute : Attribute {}`
     }
 
     @Theory
-    @InlineData(false)
-    @InlineData(true)
-    func DeepAttributeDependencies_CompileAndRetainContractsOnSmallStacks(inheritance bool) {
+    @InlineData(false, false)
+    @InlineData(true, false)
+    @InlineData(false, true)
+    func DeepAttributeDependencies_CompileAndRetainContractsOnSmallStacks(inheritance bool, nested bool) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let driver = CompileBoundedStackDriver(fixture)
         let sourceFile = Path.Combine(fixture.Directory, "dependency.gs")
         let outputFile = Path.Combine(fixture.Directory, "dependency.dll")
+        let wrapSource = (source string) -> if nested {
+            source.Replace("import System\n", "import System\nclass Envelope {\n") + "\n}"
+        } else {
+            source
+        }
         File.WriteAllText(
             sourceFile,
-            if inheritance {
-                AttributeInheritanceChain(8)
-            } else {
-                AttributeChain(8)
-            }
+            wrapSource(
+                if inheritance {
+                    AttributeInheritanceChain(8)
+                } else {
+                    AttributeChain(8)
+                }
+            )
         )
         let (controlCode, controlOutput) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
             sourceFile,
@@ -378,11 +386,13 @@ class BAttribute : Attribute {}`
         )
         Assert.True(controlCode == 0, controlOutput)
         File.Delete(outputFile)
-        let source = if inheritance {
-            AttributeInheritanceChain(8192)
-        } else {
-            AttributeChain(8192)
-        }
+        let source = wrapSource(
+            if inheritance {
+                AttributeInheritanceChain(8192)
+            } else {
+                AttributeChain(8192)
+            }
+        )
         File.WriteAllText(sourceFile, source)
         let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
             sourceFile,
@@ -400,11 +410,18 @@ class BAttribute : Attribute {}`
             .TypeDefinitions
             .Select((handle TypeDefinitionHandle) -> metadata.GetTypeDefinition(handle))
             .Where((type TypeDefinition) -> metadata.GetString(type.Name).StartsWith("A", StringComparison.Ordinal))
+            .OrderBy((type TypeDefinition) -> int32.Parse(metadata.GetString(type.Name).Substring(1)))
             .ToArray()
         Assert.Equal(8192, definitions.Length)
         for var index = 0; index < definitions.Length; index++ {
             let definition = definitions[index]
             Assert.Equal("A" + index.ToString(), metadata.GetString(definition.Name))
+            if nested {
+                Assert.Equal(
+                    "Envelope",
+                    metadata.GetString(metadata.GetTypeDefinition(definition.GetDeclaringType()).Name)
+                )
+            }
             if inheritance && index + 1 < definitions.Length {
                 Assert.Equal(
                     "A" + (index + 1).ToString(),
@@ -596,6 +613,81 @@ class BAttribute : Attribute {}`
                         .Value
                 )
             }
+        }
+    }
+
+    @Fact
+    func HeaderConstraints_SeeInheritedNestedTypesInEitherDeclarationOrder() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let driver = CompileBoundedStackDriver(fixture)
+        let declarations = []string{
+            "class Derived[T Base.Nested] : Base {}",
+            "open class Base : Root {}",
+            "open class Root { public class Nested {} }"
+        }
+        for reverse in[]bool{false, true} {
+            let source = string.Join(
+                "\n",
+                if reverse {
+                    declarations.Reverse()
+                } else {
+                    declarations
+                }
+            )
+            let sourcePath = Path.Combine(fixture.Directory, "constraints.gs")
+            let dll = Path.Combine(fixture.Directory, "constraints-" + reverse.ToString() + ".dll")
+            File.WriteAllText(sourcePath, source)
+            let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+                sourcePath,
+                dll,
+                driver
+            )
+            Assert.True(code == 0, output)
+            IlVerifier.Verify(dll)
+            let types = EmittedFixture.Load(dll).GetTypes()
+            let nested = types.Single((type Type) -> type.Name == "Nested")
+            let derived = types.Single((type Type) -> type.Name == "Derived`1")
+            Assert.Equal(
+                nested,
+                Assert.Single(Assert.Single(derived.GetGenericArguments()).GetGenericParameterConstraints())
+            )
+            Assert.Equal("Base", derived.BaseType!!.Name)
+            Assert.NotNull(Activator.CreateInstance(derived.MakeGenericType(nested)))
+        }
+    }
+
+    @Fact
+    func NestedBaseMembers_SeeEnclosingConstraintsBeforeTheEnclosingBody() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let driver = CompileBoundedStackDriver(fixture)
+        let declarations = []string{
+            "class Derived : Outer[int32].Base {}",
+            "unsafe class Outer[T unmanaged] { public open class Base { public var Pointer *T } }"
+        }
+        for reverse in[]bool{false, true} {
+            let source = string.Join(
+                "\n",
+                if reverse {
+                    declarations.Reverse()
+                } else {
+                    declarations
+                }
+            )
+            let sourcePath = Path.Combine(fixture.Directory, "enclosing.gs")
+            let dll = Path.Combine(fixture.Directory, "enclosing-" + reverse.ToString() + ".dll")
+            File.WriteAllText(sourcePath, source)
+            let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+                sourcePath,
+                dll,
+                driver
+            )
+            Assert.True(code == 0, output)
+            IlVerifier.Verify(dll)
+            let derived = EmittedFixture.Load(dll).GetTypes().Single((type Type) -> type.Name == "Derived")
+            Assert.Equal("Base", derived.BaseType!!.Name)
+            Assert.Equal(typeof(int32), Assert.Single(derived.BaseType!!.GetGenericArguments()))
+            Assert.Equal(typeof(int32).MakePointerType(), derived.GetField("Pointer")!!.FieldType)
+            Assert.NotNull(Activator.CreateInstance(derived))
         }
     }
 

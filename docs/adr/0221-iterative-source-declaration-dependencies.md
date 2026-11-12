@@ -24,7 +24,11 @@ Separate source declaration scheduling into header, member, and usage-validation
 1. Complete headers with an explicit list of pending source base definitions.
    Resolve each header once in its captured declaration scope, package, tree, unsafe context, and type-parameter context.
    Publish resolved source and imported bases before attribute name resolution.
-2. Detect a repeated pending header as an inheritance cycle.
+   Schedule enclosing type-parameter constraints independently, without requiring the enclosing body's completion.
+   Complete source qualifier-container headers before binding named constraints that use inherited nested types.
+   Bind each complete constraint contract once, before the declaration's own base clauses.
+2. Check the completed source base relation for inheritance cycles.
+   Use the existing cycle checker on the discovered work, without repeating the compilation's nested-type census.
    Report the existing cycle diagnostic and break the offending base edge before member binding.
    Attribute applications do not create header edges and cannot create inheritance cycles.
 3. Use explicit work entries for member requests and their continuations.
