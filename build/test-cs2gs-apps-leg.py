@@ -11,6 +11,7 @@ its own non-zero exit status.
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import tempfile
 import zipfile
@@ -59,9 +60,131 @@ def result(d: Path, code: int, stats: object | None, **kw) -> dict:
     return json.loads(out.read_text())
 
 
+def sdk_failure_console(d: Path):
+    root = d / "sdk-console"
+    run_dir = root / "runs" / "r1"
+    run_dir.mkdir(parents=True)
+    entries = []
+    for name in ("Core", "Missing", "Blank", "Blocked", "Good"):
+        directory = run_dir / name
+        directory.mkdir()
+        category = "dependency-blocked" if name == "Blocked" else "compile-error"
+        item = app(f"src/{name}/{name}.csproj", *(GREEN if name == "Good" else COMPILE_RED),
+                   category=None if name == "Good" else category)
+        item["artifacts"] = [f"{name}/compile-probe.json"]
+        record = {"corpusAppId": item["appId"], "stage": "compile", "category": category,
+                  "diagnostic": {"id": "GS9999", "message": "existing synthetic diagnostic"}}
+        (directory / "compile-probe.json").write_text(json.dumps(record))
+        entries.append(item)
+    duplicate = run_dir / "Core" / "compile-second.json"
+    duplicate.write_bytes((run_dir / "Core" / "compile-probe.json").read_bytes())
+    entries[0]["artifacts"].append("Core/compile-second.json")
+    sdk_log = run_dir / "Core" / "sdk.build.log"
+    sdk_log.write_text("Build FAILED.\n" + "leading output\n" * 30 +
+                       "FIRST_CAUSE_MARKER\n::error::plain SDK log text\n")
+    (run_dir / "Blank" / "sdk.build.log").write_text(" \n")
+    (run_dir / "Blocked" / "sdk.build.log").write_text("BLOCKED_LOG_MUST_NOT_APPEAR\n")
+    (run_dir / "Good" / "sdk.build.log").write_text("SUCCESS_LOG_MUST_NOT_APPEAR\n")
+    run_path = run_dir / "run.json"
+    run_data = {"succeeded": False, "apps": entries}
+    run_path.write_text(json.dumps(run_data))
+    stats_path = root / "stats.json"
+    stats = {"green": 1, "total": 5, "floor": 5, "source": str(run_path)}
+    stats_path.write_text(json.dumps(stats))
+    (root / "leg.log").write_text("existing pipeline output\n")
+    (root / "migrate.log").write_text("existing migration output\n")
+    (run_dir / "report.html").write_text("existing report")
+    output = root / "result.json"
+
+    def invoke(code=1, app_name="oahu"):
+        before = {p: p.read_bytes() for p in root.rglob("*") if p.is_file() and p != output}
+        process = subprocess.run(
+            ["python3", str(HERE / "cs2gs-apps-leg.py"), "result", "--app", app_name,
+             "--exit-code", str(code), "--stats", str(stats_path), "--log", str(root / "leg.log"),
+             "--out", str(output)],
+            capture_output=True, text=True, check=True,
+        )
+        recorded = json.loads(output.read_text())
+        assert recorded == leg.leg_result(app_name, code, stats_path, "existing pipeline output\n", "",
+                                         "(see the workflow run)"), recorded
+        assert before == {p: p.read_bytes() for p in root.rglob("*") if p.is_file() and p != output}
+        assert "FIRST_CAUSE_MARKER" not in output.read_text()
+        return process
+
+    process = invoke()
+    assert "FIRST_CAUSE_MARKER" in process.stderr, "primary SDK first cause is absent from the job console"
+    assert process.stderr.count("SDK build log for 'src/Core/Core.csproj'") == 1, process.stderr
+    assert "missing or unreadable sdk.build.log" in process.stderr
+    assert "blank SDK log" in process.stderr
+    assert "BLOCKED_LOG_MUST_NOT_APPEAR" not in process.stderr
+    assert "SUCCESS_LOG_MUST_NOT_APPEAR" not in process.stderr
+    tokens = re.findall(r"^::stop-commands::([0-9a-f]{32})$", process.stderr, re.MULTILINE)
+    assert tokens
+    assert any(process.stderr.index("::stop-commands::" + token) <
+               process.stderr.index("::error::plain SDK log text") <
+               process.stderr.index("::" + token + "::") for token in tokens)
+    assert "FIRST_CAUSE_MARKER" in invoke(app_name="code-exploder").stderr
+    assert "FIRST_CAUSE_MARKER" not in invoke(app_name="gsharp-csharp").stderr
+    assert "FIRST_CAUSE_MARKER" in invoke(0).stderr
+
+    payload = (b"FIRST_CAUSE_MARKER\n" + b"head line\n" * 1800 + b"OMITTED_MIDDLE_MARKER\n" +
+               b"tail line\n" * 1800 + b"LAST_CAUSE_MARKER\n")
+    sdk_log.write_bytes(payload)
+    process = invoke()
+    assert "FIRST_CAUSE_MARKER" in process.stderr and "LAST_CAUSE_MARKER" in process.stderr
+    assert "OMITTED_MIDDLE_MARKER" not in process.stderr
+    counts = re.search(r"SDK build log for 'src/Core/Core.csproj': bytes=(\d+), shown=(\d+), "
+                       r"omitted=(\d+), complete=false", process.stderr)
+    assert counts, process.stderr
+    size, shown, omitted = map(int, counts.groups())
+    assert size == len(payload) and shown <= 16 * 1024 and omitted == size - shown and omitted > 0
+    body = process.stderr.split("SDK LOG BEGIN\n", 1)[1].split("\nSDK LOG END", 1)[0]
+    assert len(body.encode()) <= 16 * 1024 + 128
+    assert f"[{omitted} SDK log bytes omitted]" in body
+    assert "stdout followed by stderr; not chronological" in process.stderr
+
+    sdk_log.write_text("UTF8_HEAD\n" + "é" * 100 + "\n" + ("€" * 41 + "\n") * 250 + "UTF8_TAIL\n")
+    process = invoke()
+    assert "UTF8_HEAD" in process.stderr and "UTF8_TAIL" in process.stderr and "\ufffd" not in process.stderr
+    sdk_log.write_bytes(b"")
+    process = invoke()
+    assert "bytes=0, shown=0, omitted=0, complete=true" in process.stderr and "blank SDK log" in process.stderr
+    sdk_log.write_text("LONG_LINE_MARKER" + "x" * (20 * 1024))
+    process = invoke()
+    assert "LONG_LINE_MARKER" not in process.stderr and "no complete SDK log line retained" in process.stderr
+
+    foreign = root / "foreign"
+    foreign.mkdir()
+    (foreign / "compile-probe.json").write_bytes((run_dir / "Core" / "compile-probe.json").read_bytes())
+    (foreign / "sdk.build.log").write_text("OUTSIDE_LOG_MUST_NOT_APPEAR\n")
+    entries[0]["artifacts"] = ["../../foreign/compile-probe.json"]
+    run_path.write_text(json.dumps(run_data))
+    assert "OUTSIDE_LOG_MUST_NOT_APPEAR" not in invoke().stderr
+    entries[0]["artifacts"] = ["Core/compile-probe.json"]
+    run_path.write_text(json.dumps(run_data))
+    sdk_log.unlink()
+    sdk_log.symlink_to(foreign / "sdk.build.log")
+    process = invoke()
+    assert "OUTSIDE_LOG_MUST_NOT_APPEAR" not in process.stderr
+    assert "missing or unreadable sdk.build.log" in process.stderr
+    sdk_log.unlink()
+    sdk_log.write_text("FIRST_CAUSE_MARKER\n")
+
+    successful = {"succeeded": True, "apps": [app(item["appId"], *GREEN) for item in entries]}
+    run_path.write_text(json.dumps(successful))
+    stats_path.write_text(json.dumps({**stats, "green": 5}))
+    process = invoke(0)
+    assert "SDK build log" not in process.stderr and "FIRST_CAUSE_MARKER" not in process.stderr
+    assert process.stdout.startswith("cs2gs-apps-leg result: oahu is green: leg exited 0;")
+    stats_path.unlink()
+    process = invoke()
+    assert "SDK failure diagnostics unavailable" in process.stderr and "Traceback" not in process.stderr
+
+
 def main():
     with tempfile.TemporaryDirectory() as tmp:
         d = Path(tmp)
+        sdk_failure_console(d)
         # stats: newest run under --runs-dir, per-stage counts, red apps, extras.
         (d / "runs" / "2026-01-01").mkdir(parents=True)
         (d / "runs" / "2026-01-01" / "run.json").write_text(json.dumps({"apps": []}))
