@@ -1211,12 +1211,13 @@ class Conversion {
             // same symbolic argument. Comparing the SYMBOLIC type arguments — rather
             // than the erased `ClrType` — lets `let ch Channel[BufferEntry] = ...`
             // bind even though `BufferEntry` has a null `ClrType` during binding.
+            // Read arguments from the annotated types; the peeled bases erase imported tuple leaf contracts (#5956).
             if from is ImportedTypeSymbol fromGeneric &&
                 to is ImportedTypeSymbol toGeneric &&
                 fromGeneric.OpenDefinition != nil &&
                 toGeneric.OpenDefinition != nil &&
                 (fromGeneric.HasSubstitutableTypeArgument || toGeneric.HasSubstitutableTypeArgument) &&
-                AreConstructedGenericsIdentical(fromGeneric, toGeneric) {
+                AreConstructedGenericsIdentical(annotatedFrom!!, annotatedTo!!) {
                 return Conversion.Identity
             }
             // Issue #1420: identity between a CLR-backed closed constructed generic
@@ -1254,7 +1255,7 @@ class Conversion {
             // method arguments, nested generic arguments, and cross-context CLR
             // identities.
             if (from is ImportedTypeSymbol || from is SequenceTypeSymbol || from is AsyncSequenceTypeSymbol) &&
-                TryClassifyConstructedImportedReferenceConversion(from, to) {
+                TryClassifyConstructedImportedReferenceConversion(annotatedFrom, annotatedTo) {
                 return Conversion.Implicit
             }
             // Phase 3.C.1 / ADR-0001: T → T? is an implicit widening; T? → T?
@@ -4049,7 +4050,7 @@ class Conversion {
                         nominalOnly
                     )
                 }
-                if from is not ImportedTypeSymbol importedSource {
+                if MemberLookup.GetProjectionReceiverImportedType(from) is not{} importedSource {
                     return false
                 }
                 for arguments in MemberLookup.EnumerateConstructedTypeArgumentsThroughHierarchy(

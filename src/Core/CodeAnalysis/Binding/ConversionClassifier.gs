@@ -5678,7 +5678,7 @@ internal class ConversionClassifier {
         // spilled into (see CreateImplicitInReference / IsImplicitInTemp).
         private const ImplicitInTempPrefix string = "<inArgument"
 
-        private func CreateImplicitInTemporary(
+        internal func CreateImplicitInTemporary(
             value BoundExpression,
             parameterType TypeSymbol,
             tempName string

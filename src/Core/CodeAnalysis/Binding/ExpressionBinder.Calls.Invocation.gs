@@ -4171,14 +4171,27 @@ internal partial class ExpressionBinder {
         @NotNullWhen(true) out result BoundExpression?
     ) bool {
         result = nil
-        if methodName != "GetValueOrDefault" || ce.TypeArgumentList != nil {
+        // Symbolic storage does not grant source value types the CLR Nullable member surface (#3034).
+        if ce.TypeArgumentList != nil ||
+            (methodName != "GetValueOrDefault" && nullableReceiver.UnderlyingType is not TupleTypeSymbol) {
             return false
         }
         if !$scope.References!!.TryGetMemberLookupType(typeof(System.Nullable[_]), out var openNullable) ||
             openNullable == nil {
-            Diagnostics.ReportTargetFrameworkMemberUnavailable(ce.Location, "System.Nullable`1.GetValueOrDefault")
+            Diagnostics.ReportTargetFrameworkMemberUnavailable(ce.Location, "System.Nullable`1." + methodName)
             result = BoundErrorExpression(nil)
             return true
+        }
+        if methodName != "GetValueOrDefault" {
+            return TryBindInheritedClrInstanceCall(
+                receiver,
+                openNullable,
+                methodName,
+                arguments,
+                ce,
+                out result,
+                argumentNames: argumentNames
+            )
         }
         var openMethod MethodInfo? = nil
         for candidate in openNullable.GetMethods(BindingFlags.Public | BindingFlags.Instance) {
