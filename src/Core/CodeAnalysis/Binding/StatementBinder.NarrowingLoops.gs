@@ -6359,6 +6359,34 @@ internal partial class StatementBinder {
         if call.Arguments.Count == 0 {
             return nil
         }
+        let needsOperatorResults = call.ArgumentForms.Any(
+            (form RegionArgumentForm) ->
+            form is RegionArgumentForm.StringByForm or RegionArgumentForm.BuiltInByForm
+        )
+        let operatorResultsKnown = !needsOperatorResults ||
+            (!inOperatorsRunUserCode && !OperatorsRunUserCode(effects, false))
+        if TryBuildCallArgumentInfo(
+            call.Arguments,
+            call.ArgumentForms,
+            call.Syntax,
+            effects,
+            operatorResultsKnown,
+            out var typedArguments,
+            out _,
+            out _
+        ) {
+            let typed = List[TypeSymbol?](typedArguments.Count)
+            for alternatives in typedArguments {
+                typed.Add(
+                    if alternatives != nil && alternatives.Count == 1 {
+                        alternatives[0]
+                    } else {
+                        default(TypeSymbol?)
+                    }
+                )
+            }
+            return typed
+        }
         let result = List[TypeSymbol?](call.Arguments.Count)
         for argPath in call.Arguments {
             if argPath != nil && ConversionTypes(argPath, effects) is {} convTypes && convTypes.Count > 0 {
