@@ -106,6 +106,10 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func ComputeIsUsedAsNullable(symbol ISymbol?, $scope SyntaxNode?) bool {
+            if symbol != nil {
+                using let ownerScope = this.context.UseSemanticModelForSymbol($scope!!.SyntaxTree, symbol)
+                return ownerScope != nil && ScopeUsesAsNullable(this.context.SemanticModel, symbol, $scope)
+            }
             // A source-backed ProjectReference can expose declaration syntax
             // owned by the referenced project's separate compilation. Its
             // whole-program taint result was already checked by the caller;
@@ -2705,7 +2709,7 @@ partial class CSharpToGSharpTranslator {
             this.linkedRefStoragePromotions = cache.LinkedPromotions
             for tree in compilation.SyntaxTrees {
                 let model = TranslationContext.GetSemanticModel(compilation, tree)
-                using let modelScope = this.context.UseSemanticModelFor(tree)
+                using let modelScope = this.context.UseSemanticModelFor(tree, compilation)
                 for reference in tree.GetRoot().DescendantNodes().OfType[RefExpressionSyntax]() {
                     if this.RefStorageDestination(reference, model) is {} destination {
                         this.ConnectRefStorage(this.GetRefStorageSlot(destination, 0), reference.Expression, model)
@@ -2813,7 +2817,10 @@ partial class CSharpToGSharpTranslator {
                             if tree == nil || !source.context.Compilation.ContainsSyntaxTree(tree) {
                                 continue
                             }
-                            using let modelScope = source.context.UseSemanticModelFor(tree)
+                            using let modelScope = source.context.UseSemanticModelForSymbol(tree, slot.Symbol)
+                            if modelScope == nil {
+                                continue
+                            }
                             if source.RefStorageIsNullable(slot, includeArrays: true) {
                                 if !promotions.TryGetValue(slot.Symbol.OriginalDefinition, out var positions) {
                                     positions = HashSet[int32]()
@@ -3012,12 +3019,15 @@ partial class CSharpToGSharpTranslator {
                 .FirstOrDefault()
                 ?.GetSyntax() is VariableDeclaratorSyntax{
                 Parent: VariableDeclarationSyntax{Type: {IsVar: true}}
-            } declaration &&
-                !TranslationContext
-                .GetSemanticModel(this.context.Compilation, declaration.SyntaxTree)
-                .GetNullableContext(declaration.SpanStart)
-                .HasFlag(NullableContext.AnnotationsEnabled) {
-                return false
+            } declaration {
+                let owner = this.context.SourceCompilation(local)
+                if owner == nil ||
+                    !TranslationContext
+                    .GetSemanticModel(owner, declaration.SyntaxTree)
+                    .GetNullableContext(declaration.SpanStart)
+                    .HasFlag(NullableContext.AnnotationsEnabled) {
+                    return false
+                }
             }
             return !(slot.Depth == 1 && this.IsGeneratedArrayElementPromotedSink(slot.Symbol)) &&
                 !this
@@ -3558,7 +3568,10 @@ partial class CSharpToGSharpTranslator {
                         reference.GetSyntax() is not PropertyDeclarationSyntax declaration {
                         continue
                     }
-                    using let modelScope = this.context.UseSemanticModelFor(reference.SyntaxTree)
+                    using let modelScope = this.context.UseSemanticModelForSymbol(reference.SyntaxTree, property)
+                    if modelScope == nil {
+                        continue
+                    }
                     if declaration
                         .DescendantNodes()
                         .OfType[IdentifierNameSyntax]()

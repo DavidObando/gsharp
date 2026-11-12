@@ -2013,13 +2013,7 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
-        private func KnownCompilations() IEnumerable[CSharpCompilation] -> []CSharpCompilation{
-            this.context.RootCompilation,
-            this.context.Compilation
-        }
-            .Concat(this.context.SiblingCompilations ?? Array.Empty[CSharpCompilation]())
-            .Concat(this.context.RepositoryCompilations ?? Array.Empty[CSharpCompilation]())
-            .Distinct()
+        private func KnownCompilations() IEnumerable[CSharpCompilation] -> this.context.SourceCompilations()
 
         private func CanonicalExtensionSignature(method IMethodSymbol?) string -> this.CanonicalEmittedType(
             method!!.Parameters[0].Type,
@@ -2085,33 +2079,14 @@ partial class CSharpToGSharpTranslator {
                 original!!.ContainingAssembly,
                 this.context.Compilation.Assembly
             ) {
-                let owner CSharpCompilation? = this
-                    .KnownCompilations()
-                    .Concat(
-                    this
-                        .context
-                        .Compilation
-                        .References
-                        .OfType[CompilationReference]()
-                        .Select((reference CompilationReference) -> reference.Compilation)
-                        .OfType[CSharpCompilation]()
-                )
-                    .FirstOrDefault(
-                    (compilation CSharpCompilation) -> SameAssembly(compilation.Assembly, original!!.ContainingAssembly)
-                )
-                let id string? = original!!.OriginalDefinition.GetDocumentationCommentId()
-                if owner != nil && id != nil && DocumentationCommentId.GetFirstSymbolForDeclarationId(
-                    id,
-                    owner
-                ) is IMethodSymbol declared &&
-                    declared
-                    .DeclaringSyntaxReferences
-                    .FirstOrDefault() is SyntaxReference reference {
+                let owner = this.context.SourceCompilation(original!!)
+                let declared = original!!.OriginalDefinition
+                if owner != nil && declared.DeclaringSyntaxReferences.FirstOrDefault() is SyntaxReference reference {
                     // Ask the declaring project's registry and eligibility reader,
                     // including its body-based suspension/nullability context.
                     let ownerContext = TranslationContext(
                         owner,
-                        owner.GetSemanticModel(reference.SyntaxTree),
+                        TranslationContext.GetSemanticModel(owner, reference.SyntaxTree),
                         reference.SyntaxTree.FilePath,
                         this.context.SiblingCompilations,
                         this.context.RepositoryCompilations

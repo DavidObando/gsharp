@@ -580,7 +580,14 @@ partial class CSharpToGSharpTranslator {
                 }
                 // Issue #1910: a merged-in static constructor from another
                 // partial part/file lives in a different `SyntaxTree`.
-                using let modelScope = this.context.UseSemanticModelFor(ctor.SyntaxTree)
+                using let modelScope = if typeSymbol == nil {
+                    this.context.UseSemanticModelFor(ctor.SyntaxTree)
+                } else {
+                    this.context.UseSemanticModelForSymbol(ctor.SyntaxTree, typeSymbol)
+                }
+                if modelScope == nil {
+                    continue
+                }
                 if !this.IsFoldableStaticConstructor(ctor, typeSymbol) {
                     continue
                 }
@@ -1112,6 +1119,14 @@ partial class CSharpToGSharpTranslator {
             iteratorBodySource MethodDeclarationSyntax? = nil,
             preserveEnvelope bool = false
         ) GTypeReference? {
+            using let ownerScope = if symbol != nil && !symbol.DeclaringSyntaxReferences.IsDefaultOrEmpty {
+                this.context.UseSemanticModelForSymbol(node.SyntaxTree, symbol)
+            } else {
+                default(IDisposable?)
+            }
+            if symbol != nil && !symbol.DeclaringSyntaxReferences.IsDefaultOrEmpty && ownerScope == nil {
+                return this.typeMapper.Map(symbol.ReturnType, this.context, node.ReturnType.GetLocation())
+            }
             var iteratorBodySource = iteratorBodySource
             // ADR-0192: a partial method's declaring part spells its return
             // type at the definition (`node`) but takes the iterator fact from
@@ -1771,7 +1786,10 @@ partial class CSharpToGSharpTranslator {
                     )
                 }
             }
-            using let fallbackScope = this.context.UseSemanticModelFor(current.SyntaxTree)
+            using let fallbackScope = this.context.UseSemanticModelFor(
+                current.SyntaxTree,
+                cast[CSharpCompilation](attributeModel.Compilation)
+            )
             return this.TranslateExpression(current)
         }
 
@@ -2385,7 +2403,10 @@ partial class CSharpToGSharpTranslator {
                     nil
                 )
                 for part in parts {
-                    using let loweredModelScope = this.context.UseSemanticModelFor(part.SyntaxTree)
+                    using let loweredModelScope = this.context.UseSemanticModelForSymbol(part.SyntaxTree, partialSymbol)
+                    if loweredModelScope == nil {
+                        continue
+                    }
                     for loweredCandidate in part
                         .Members
                         .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.PropertyDeclarationSyntax]() {
@@ -2419,7 +2440,14 @@ partial class CSharpToGSharpTranslator {
             )
             let paramList = GetPrimaryConstructorParameterList(symbol) ?? node?.ParameterList
             if paramList != nil {
-                using let primaryModelScope = this.context.UseSemanticModelFor(paramList.SyntaxTree)
+                using let primaryModelScope = if symbol == nil {
+                    this.context.UseSemanticModelFor(paramList.SyntaxTree)
+                } else {
+                    this.context.UseSemanticModelForSymbol(paramList.SyntaxTree, symbol)
+                }
+                if primaryModelScope == nil {
+                    return names
+                }
                 for parameter in paramList.Parameters {
                     if this.context.GetDeclaredSymbol(parameter) is IParameterSymbol paramSymbol {
                         names.Add(this.EmittedName(paramSymbol, parameter.Identifier.ValueText)!!)
@@ -2487,7 +2515,10 @@ partial class CSharpToGSharpTranslator {
             this.state.UnsupportedSuspendingRefCaptureLocalFunctions.Clear()
             try {
                 for part in parts {
-                    using let modelScope = this.context.UseSemanticModelFor(part.SyntaxTree)
+                    using let modelScope = this.context.UseSemanticModelForSymbol(part.SyntaxTree, aggregate)
+                    if modelScope == nil {
+                        continue
+                    }
                     this.PreallocateLiftedLocalFunctionsInContainer(part)
                 }
                 for ownedMethod in this.GetAbsorbedOwnedExtensions(aggregate.OriginalDefinition) {
@@ -2868,7 +2899,10 @@ partial class CSharpToGSharpTranslator {
                 $scope!!.DeclaringSyntaxReferences.AsEnumerable()
             }
             for reference in references {
-                using let scopeModel = this.context.UseSemanticModelFor(reference.SyntaxTree)
+                using let scopeModel = this.context.UseSemanticModelForSymbol(reference.SyntaxTree, $scope)
+                if scopeModel == nil {
+                    continue
+                }
                 symbols.AddRange(
                     reference
                         .GetSyntax()
@@ -3472,7 +3506,13 @@ partial class CSharpToGSharpTranslator {
                         enclosingTypeParameters.UnionWith(type.TypeParameters)
                     }
                 }
-                using let modelScope = this.context.UseSemanticModelFor(candidate.Syntax.SyntaxTree)
+                using let modelScope = this.context.UseSemanticModelForSymbol(
+                    candidate.Syntax.SyntaxTree,
+                    candidate.Symbol
+                )
+                if modelScope == nil {
+                    return true
+                }
                 if this
                     .context
                     .SemanticModel
@@ -3573,7 +3613,10 @@ partial class CSharpToGSharpTranslator {
             )
             let edges = Dictionary[IMethodSymbol, HashSet[IMethodSymbol]](SymbolEqualityComparer.Default)
             for pair in localFunctions {
-                using let modelScope = this.context.UseSemanticModelFor(pair.Syntax.SyntaxTree)
+                using let modelScope = this.context.UseSemanticModelForSymbol(pair.Syntax.SyntaxTree, pair.Symbol)
+                if modelScope == nil {
+                    return
+                }
                 let dependencies = HashSet[IMethodSymbol](SymbolEqualityComparer.Default)
                 for node in pair.Syntax.DescendantNodes() {
                     if this.context.GetSymbolInfo(node).Symbol is IMethodSymbol dependency && symbols.Contains(
@@ -3735,7 +3778,13 @@ partial class CSharpToGSharpTranslator {
                 )
             }
             let CapturesOuterValue = func (candidate(Syntax LocalFunctionStatementSyntax, Symbol IMethodSymbol)) bool {
-                using let modelScope = this.context.UseSemanticModelFor(candidate.Syntax.SyntaxTree)
+                using let modelScope = this.context.UseSemanticModelForSymbol(
+                    candidate.Syntax.SyntaxTree,
+                    candidate.Symbol
+                )
+                if modelScope == nil {
+                    return true
+                }
                 if !candidate
                     .Symbol
                     .IsStatic &&
@@ -4093,7 +4142,10 @@ partial class CSharpToGSharpTranslator {
             )
             let edges = Dictionary[IMethodSymbol, HashSet[IMethodSymbol]](SymbolEqualityComparer.Default)
             for (syntax, symbol) in functions {
-                using let modelScope = this.context.UseSemanticModelFor(syntax.SyntaxTree)
+                using let modelScope = this.context.UseSemanticModelForSymbol(syntax.SyntaxTree, symbol)
+                if modelScope == nil {
+                    continue
+                }
                 let dependencies = HashSet[IMethodSymbol](SymbolEqualityComparer.Default)
                 for node in syntax.DescendantNodes() {
                     if this
@@ -4182,7 +4234,10 @@ partial class CSharpToGSharpTranslator {
             )
             let callers = Dictionary[IMethodSymbol, HashSet[IMethodSymbol]](SymbolEqualityComparer.Default)
             for (syntax, symbol) in allFunctionPairs {
-                using let modelScope = this.context.UseSemanticModelFor(syntax.SyntaxTree)
+                using let modelScope = this.context.UseSemanticModelForSymbol(syntax.SyntaxTree, symbol)
+                if modelScope == nil {
+                    continue
+                }
                 for node in syntax.DescendantNodes() {
                     var dependency IMethodSymbol? = this.context.GetSymbolInfo(node).Symbol as IMethodSymbol
                     if dependency != nil && allSymbols.Contains(dependency.OriginalDefinition) &&
@@ -4210,7 +4265,10 @@ partial class CSharpToGSharpTranslator {
                     names.Add(syntax.Identifier.ValueText)
                     return
                 }
-                using let modelScope = this.context.UseSemanticModelFor(syntax.SyntaxTree)
+                using let modelScope = this.context.UseSemanticModelForSymbol(syntax.SyntaxTree, symbol)
+                if modelScope == nil {
+                    return
+                }
                 let parameterTypes = List[GTypeReference]()
                 for parameter in syntax.ParameterList.Parameters {
                     parameterTypes.Add(this.MapLambdaParameter(parameter).Type)

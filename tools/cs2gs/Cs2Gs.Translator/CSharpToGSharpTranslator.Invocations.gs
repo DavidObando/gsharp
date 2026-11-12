@@ -4176,7 +4176,7 @@ partial class CSharpToGSharpTranslator {
                         "a G# struct literal cannot express its logic (issue #1739; issue #2435)."
                     return false
                 }
-                if !this.TryGetStructConstructorSemanticModel(ctorSyntax, out var ctorModel) {
+                if !this.TryGetStructConstructorSemanticModel(ctorSymbol, ctorSyntax, out var ctorModel) {
                     unsupportedReason = "struct constructor syntax belongs to no reachable compilation; " +
                         "its body cannot be analyzed for a G# struct literal (issue #1739; issue #2435)."
                     return false
@@ -4321,22 +4321,13 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func TryGetStructConstructorSemanticModel(
+            ctorSymbol IMethodSymbol,
             ctorSyntax Microsoft.CodeAnalysis.CSharp.Syntax.ConstructorDeclarationSyntax,
             out ctorModel SemanticModel?
         ) bool {
-            if this.context.Compilation.ContainsSyntaxTree(ctorSyntax.SyntaxTree) {
-                ctorModel = this.context.Compilation.GetSemanticModel(ctorSyntax.SyntaxTree)
-                return true
-            }
-            let owningCompilation Compilation? = this
-                .context
-                .Compilation
-                .References
-                .OfType[CompilationReference]()
-                .Select((reference CompilationReference) -> cast[Compilation](reference.Compilation))
-                .FirstOrDefault((candidate Compilation) -> candidate.ContainsSyntaxTree(ctorSyntax.SyntaxTree))
-            if owningCompilation != nil {
-                ctorModel = owningCompilation.GetSemanticModel(ctorSyntax.SyntaxTree)
+            let owningCompilation = this.context.SourceCompilation(ctorSymbol)
+            if owningCompilation != nil && owningCompilation.ContainsSyntaxTree(ctorSyntax.SyntaxTree) {
+                ctorModel = TranslationContext.GetSemanticModel(owningCompilation, ctorSyntax.SyntaxTree)
                 return true
             }
             ctorModel = nil
@@ -4440,7 +4431,12 @@ partial class CSharpToGSharpTranslator {
                     .CSharp
                     .Syntax
                     .ExpressionSyntax? = initialization.FixedExpression
-                if !this.context.Compilation.ContainsSyntaxTree(fixedExpression!!.SyntaxTree) {
+                let constructorOwner = if plan!!.Constructor is {} constructor {
+                    this.context.SourceCompilation(constructor)
+                } else {
+                    nil
+                }
+                if !object.ReferenceEquals(constructorOwner, this.context.Compilation) {
                     unsupportedReason = "a source struct constructor in another compilation contains a fixed initializer " +
                         "expression; that expression cannot yet be rebound safely at this call site (issue #2435)."
                     fieldInitializers = nil
@@ -6734,10 +6730,10 @@ partial class CSharpToGSharpTranslator {
             if this.state.ManagedReferenceArrayNullable.ProjectedBaseIndex is {} activeIndex {
                 return activeIndex
             }
-            let knownCompilations = this.KnownCompilations().ToArray()
-            let index = ProjectedBaseCompilationIndex.For(this.context.RootCompilation)
+            let knownCompilations = this.context.SourceCompilations()
+            let index = ProjectedBaseCompilationIndex.For(this.context.OwnershipIndexIdentity)
             this.state.ManagedReferenceArrayNullable.ProjectedBaseIndex = index
-            if index.IsIndexed && index.IndexedCompilations.Count == knownCompilations.Length && knownCompilations.All(
+            if index.IsIndexed && index.IndexedCompilations.Count == knownCompilations.Count && knownCompilations.All(
                 (compilation CSharpCompilation) -> index.IndexedCompilations.Contains(
                     compilation,
                     ReferenceEqualityComparer.Instance
@@ -6760,11 +6756,11 @@ partial class CSharpToGSharpTranslator {
                         continue
                     }
                     if !index.MemberConsumersByCandidate.TryGetValue(candidate, out var consumers) {
-                        consumers = List[Microsoft.CodeAnalysis.SyntaxNode]()
+                        consumers = List[(CSharpCompilation, Microsoft.CodeAnalysis.SyntaxNode)]()
                         index.MemberConsumersByCandidate.Add(candidate, consumers)
                     }
-                    if !consumers.Contains(consumer) {
-                        consumers.Add(consumer)
+                    if !consumers.Contains((this.context.Compilation, consumer)) {
+                        consumers.Add((this.context.Compilation, consumer))
                     }
                 }
             }
@@ -6790,11 +6786,13 @@ partial class CSharpToGSharpTranslator {
                         CSharpToGSharpTranslator
                         .TypeContainsRecognizedManagedReferenceConsumer(candidate.BaseType, this.context.Compilation) {
                         if !index.ConversionsByCandidate.TryGetValue(candidate, out var expressions) {
-                            expressions = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
+                            expressions = List[
+                                (CSharpCompilation, Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax)
+                            ]()
                             index.ConversionsByCandidate.Add(candidate, expressions)
                         }
-                        if !expressions.Contains(expression) {
-                            expressions.Add(expression)
+                        if !expressions.Contains((this.context.Compilation, expression)) {
+                            expressions.Add((this.context.Compilation, expression))
                         }
                     }
                 }
@@ -6839,6 +6837,7 @@ partial class CSharpToGSharpTranslator {
                     if !index.GenericInstantiationsByCandidate.TryGetValue(candidate, out var instantiations) {
                         instantiations = List[
                             (
+                                CSharpCompilation,
                                 Microsoft.CodeAnalysis.SyntaxTree,
                                 ImmutableArray[ITypeParameterSymbol],
                                 ImmutableArray[ITypeSymbol]
@@ -6846,7 +6845,7 @@ partial class CSharpToGSharpTranslator {
                         ]()
                         index.GenericInstantiationsByCandidate.Add(candidate, instantiations)
                     }
-                    instantiations.Add((tree, typeParameters, typeArguments))
+                    instantiations.Add((this.context.Compilation, tree, typeParameters, typeArguments))
                 }
                 for argument in named.TypeArguments {
                     AddGenericInstantiationCandidates(argument, tree, typeParameters, typeArguments, visited)
@@ -6915,7 +6914,8 @@ partial class CSharpToGSharpTranslator {
             }
             for compilation in knownCompilations {
                 for tree in compilation.SyntaxTrees {
-                    using let _ = this.context.UseSemanticModelFor(tree)
+                    this.context.CancellationToken.ThrowIfCancellationRequested()
+                    using let _ = this.context.UseSemanticModelFor(tree, compilation)
                     for node in tree.GetRoot().DescendantNodes() {
                         if node is TypeDeclarationSyntax declaredTypeSyntax && this.context.GetDeclaredSymbol(
                             declaredTypeSyntax
@@ -7135,8 +7135,10 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
             }
-            index.IsIndexed = true
+            this.context.CancellationToken.ThrowIfCancellationRequested()
             index.IndexedCompilations = knownCompilations
+            index.IsIndexed = true
+            ProjectedBaseCompilationIndex.Publish(this.context.OwnershipIndexIdentity, index)
             return index
         }
 
@@ -7534,8 +7536,8 @@ partial class CSharpToGSharpTranslator {
                 let openDefinitionBase = definitionBase.OriginalDefinition
                 let previousBodyScope = this.state.CurrentBodyScope
                 try {
-                    for node in memberConsumers {
-                        using let _ = this.context.UseSemanticModelFor(node.SyntaxTree)
+                    for (owner, node) in memberConsumers {
+                        using let _ = this.context.UseSemanticModelFor(node.SyntaxTree, owner)
                         if node is InvocationExpressionSyntax invocation &&
                             this
                             .context
@@ -7926,8 +7928,8 @@ partial class CSharpToGSharpTranslator {
                 ResetSpeculativeCaches()
                 index.ReplacementsByType[definition] = replacements
                 try {
-                    for consumer in memberConsumers {
-                        using let _ = this.context.UseSemanticModelFor(consumer.SyntaxTree)
+                    for (owner, consumer) in memberConsumers {
+                        using let _ = this.context.UseSemanticModelFor(consumer.SyntaxTree, owner)
                         this.state.CurrentBodyScope = GetEnclosingProjectionBodyScope(consumer)
                         if !this.MemberConsumerMatchesProjectedBase(
                             consumer,
@@ -7941,8 +7943,8 @@ partial class CSharpToGSharpTranslator {
                         }
                     }
                     if index.ConversionsByCandidate.TryGetValue(definition, out var conversions) {
-                        for expression in conversions {
-                            using let _ = this.context.UseSemanticModelFor(expression.SyntaxTree)
+                        for (owner, expression) in conversions {
+                            using let _ = this.context.UseSemanticModelFor(expression.SyntaxTree, owner)
                             this.state.CurrentBodyScope = GetEnclosingProjectionBodyScope(expression)
                             if !this.ExpressionFitsProjectedBaseDestination(
                                 expression,
@@ -7957,8 +7959,8 @@ partial class CSharpToGSharpTranslator {
                         }
                     }
                     if index.GenericInstantiationsByCandidate.TryGetValue(definition, out var instantiations) {
-                        for (instantiationTree, typeParameters, typeArguments) in instantiations {
-                            using let _ = this.context.UseSemanticModelFor(instantiationTree)
+                        for (owner, instantiationTree, typeParameters, typeArguments) in instantiations {
+                            using let _ = this.context.UseSemanticModelFor(instantiationTree, owner)
                             if !this.GenericInstantiationMatchesProjectedBase(
                                 typeParameters,
                                 typeArguments,

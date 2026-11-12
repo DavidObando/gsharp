@@ -7894,16 +7894,7 @@ internal partial class StatementBinder {
             }
         }
 
-        let resultType = method.ReturnType
-        let resultName = (
-            if resultType.IsGenericType {
-                resultType.GetGenericTypeDefinition()
-            } else {
-                resultType
-            }
-        ).FullName ??
-            ""
-        if !IsDeferredEnumerableFactory(declFullName, resultName) {
+        if !DefersImportedCallbackArguments(method) {
             for p in method.GetParameters() {
                 if ClrTypeUtilities.IsDelegateType(p.ParameterType) {
                     summary.InvokesCallbackParameter = true
@@ -8009,9 +8000,7 @@ internal partial class StatementBinder {
                 enumerableType = importedEnumerable ?? enumerableType
             }
             for method in enumerableType.GetMethods(BindingFlags.Public | BindingFlags.Static) {
-                let result = method.ReturnType
-                if result.IsGenericType && result.GetGenericTypeDefinition().FullName is
-                "System.Collections.Generic.IEnumerable`1" or "System.Linq.IOrderedEnumerable`1" {
+                if DefersImportedCallbackArguments(method) {
                     names.Add(method.Name)
                     if !callbackPositions.TryGetValue(method.Name, out var positions) {
                         positions = HashSet[int32]()
@@ -8802,7 +8791,12 @@ internal partial class StatementBinder {
             if method.DeclaringType is not{} owner || owner.FullName != "System.Linq.Enumerable" {
                 return false
             }
-            let result = method.ReturnType
+            let definition = if method.IsGenericMethod {
+                method.GetGenericMethodDefinition()
+            } else {
+                method
+            }
+            let result = definition.ReturnType
             let resultName = (
                 if result.IsGenericType {
                     result.GetGenericTypeDefinition()
@@ -8815,8 +8809,9 @@ internal partial class StatementBinder {
                 ReferenceResolver.IsTrustedEffectAssembly(owner.Assembly)
         }
 
-        internal func IsDeferredEnumerableFactory(owner string, result string) bool ->
-        owner == "System.Linq.Enumerable" && IsEnumerableEffectTypeName(result)
+        // Use the unsubstituted method definition's return contract, not a closed type argument.
+        internal func IsDeferredEnumerableFactory(owner string, declaredResult string) bool ->
+        owner == "System.Linq.Enumerable" && IsEnumerableEffectTypeName(declaredResult)
 
         internal func IsMutableBufferTypeName(name string) bool -> name is "System.Span`1" or
             "System.Memory`1" or

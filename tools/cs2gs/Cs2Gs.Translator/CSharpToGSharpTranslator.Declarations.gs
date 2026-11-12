@@ -2360,7 +2360,10 @@ partial class CSharpToGSharpTranslator {
                     syntax.Initializer != nil {
                     return false
                 }
-                using let modelScope = this.context.UseSemanticModelFor(syntax.SyntaxTree)
+                using let modelScope = this.context.UseSemanticModelForSymbol(syntax.SyntaxTree, constructor)
+                if modelScope == nil {
+                    return false
+                }
                 var overwritten = false
                 for statement in syntax.Body!!.Statements {
                     if statement is not Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionStatementSyntax expression {

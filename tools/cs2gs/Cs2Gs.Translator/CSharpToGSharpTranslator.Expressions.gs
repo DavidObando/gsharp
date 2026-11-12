@@ -2044,7 +2044,7 @@ partial class CSharpToGSharpTranslator {
                         }
                     }
                 }
-                invokedMethod = invokedMethod?.ReducedFrom ?? invokedMethod?.OriginalDefinition
+                invokedMethod = invokedMethod?.ReducedFrom ?? invokedMethod
                 if invokedMethod?.ReturnType is IArrayTypeSymbol{
                     ElementType: {IsReferenceType: true} returnElement
                 } returnArray &&
@@ -2054,7 +2054,13 @@ partial class CSharpToGSharpTranslator {
                     ?.GetSyntax() is MethodDeclarationSyntax declaration {
                     var mappedReturn GTypeReference?
                     {
-                        using let _ = this.context.UseSemanticModelFor(declaration.SyntaxTree)
+                        using let modelScope = this.context.UseSemanticModelForSymbol(
+                            declaration.SyntaxTree,
+                            invokedMethod
+                        )
+                        if modelScope == nil {
+                            return nil
+                        }
                         mappedReturn = this.MapReturnType(invokedMethod, declaration)
                     }
                     if mappedReturn is ArrayTypeReference && mappedReturn.ElementType.IsNullable == true {
@@ -19259,7 +19265,10 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func IsDeferredEffectFactory(method IMethodSymbol) bool ->
-        method.ReturnType is INamedTypeSymbol result && CoreStorageEffects.IsDeferredEnumerableFactory(
+        method
+            .OriginalDefinition
+            .ReturnType is INamedTypeSymbol result &&
+            CoreStorageEffects.IsDeferredEnumerableFactory(
             this.EffectTypeName(method.ContainingType),
             this.EffectTypeName(result)
         ) &&
@@ -19645,7 +19654,10 @@ partial class CSharpToGSharpTranslator {
                         LocalFunctionStatementSyntax or
                         AnonymousFunctionExpressionSyntax
                 )
-                using let model = this.context.UseSemanticModelFor(declaration.SyntaxTree)
+                using let model = this.context.UseSemanticModelForSymbol(declaration.SyntaxTree, local.Local)
+                if model == nil {
+                    return nil
+                }
                 if owner == nil || this.IsSymbolReassigned(local.Local, owner) {
                     return nil
                 }

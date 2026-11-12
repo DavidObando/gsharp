@@ -28,6 +28,66 @@ import Xunit
 /// IL-verifies, runs and asserts the output.
 open class Issue5171RefAliasNarrowingTests {
     @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func EnumerableReturningAggregateExecutesItsCallbackImmediately(inHelper bool) {
+        let directory = Path.Combine(
+            AppContext.BaseDirectory,
+            "immediate-aggregate-effects",
+            Guid.NewGuid().ToString("N")
+        )
+        Directory.CreateDirectory(directory)
+        try {
+            let callback = "(left IEnumerable[int32], right IEnumerable[int32]) -> {\n globalText = nil\n return left\n}"
+            let call = "let _ = Enumerable.Aggregate[IEnumerable[int32]](values, $callback)"
+            let source = `import System
+import System.Collections.Generic
+import System.Linq
+var globalText string? = "safe"
+func Probe(values List[IEnumerable[int32]], callback Func[IEnumerable[int32], IEnumerable[int32], IEnumerable[int32]]) {
+    let _ = Enumerable.Aggregate[IEnumerable[int32]](values, callback)
+}
+func Guard(ref text string?, values List[IEnumerable[int32]]) int32 {
+    if text == nil { return 0 }
+    ` + if inHelper {
+                "Probe(values, $callback)"
+            } else {
+                call
+            } + `
+    return text.Length
+}
+func Main() {
+    globalText = "safe"
+    let values = List[IEnumerable[int32]](){[]int32{1}, []int32{2}}
+    try { Console.WriteLine(Guard(ref globalText, values)) }
+    catch (error NullReferenceException) { Console.WriteLine("cleared") }
+}
+Main()`
+            let output = Path.Combine(directory, "ImmediateAggregate.dll")
+            let (exit, log) = Compile(directory, source, output)
+            Assert.NotEqual(0, exit)
+            Assert.False(File.Exists(output))
+            let line = source.Substring(0, source.LastIndexOf("return text.Length", StringComparison.Ordinal)).Count(
+                (value char) -> value == '\n'
+            ) +
+                1
+            Assert.True(
+                log.Contains(Path.Combine(directory, "ImmediateAggregate.gs") + "($line,17,$line,23): error GS0158"),
+                log
+            )
+            let asserted = source.Replace("return text.Length", "return text!!.Length")
+            let (assertedExit, assertedLog) = Compile(directory, asserted, output)
+            Assert.True(assertedExit == 0, assertedLog)
+            IlVerifier.Verify(output)
+            let (runExit, stdout) = RunDotnet(output)
+            Assert.Equal(0, runExit)
+            Assert.Equal(Encoding.UTF8.GetBytes("cleared" + Environment.NewLine), Encoding.UTF8.GetBytes(stdout))
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    @Theory
     @InlineData("int32", "1")
     @InlineData("TimeSpan", "TimeSpan.FromSeconds(1)")
     @InlineData("TimeSpan?", "TimeSpan.FromSeconds(1)")

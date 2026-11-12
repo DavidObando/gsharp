@@ -6861,7 +6861,10 @@ partial class CSharpToGSharpTranslator {
             candidate string,
             isOriginalStem bool
         ) bool {
-            using let modelScope = this.context.UseSemanticModelFor(body.SyntaxTree)
+            using let modelScope = this.context.UseSemanticModelForSymbol(body.SyntaxTree, local)
+            if modelScope == nil {
+                return true
+            }
             for token in body.DescendantTokens() {
                 if !token.IsKind(SyntaxKind.IdentifierToken) {
                     continue

@@ -437,6 +437,16 @@ operation and callback summary keys include ownership. Active owned models take 
 O(1) fast path. Immutable ownership indexes are weakly shared by actual root graph
 and catalog identity/version, rather than copied per document. Cancellation stages
 the graph locally and publishes no partial index or failed lazy value.
+Deferred framework execution uses the selected method definition's unsubstituted
+return contract. Substituting `IEnumerable<T>` for an immediate method's type
+parameter does not make its callback deferred. Region analysis, bound summaries,
+and translator queries share this policy after image verification.
+Symbol-owned projection, signature, constructor, and initializer queries use the
+same compilation-owner lookup. Projection inventories retain each consumer's
+compilation and publish only completed indexes for that graph/catalog version.
+Corrupt owned file inputs retain their original untrusted references and Roslyn
+diagnostics. File-input tests require cache-backed replacement and continued
+healthy snapshots; unchanged references alone are not snapshot evidence.
 
 The original open-comparer corpus row `h1_by_ref_param_survives_calls` now records its exact rejection diagnostics.
 The disjoint out-parameter execution control re-proves its fact around unknown comparer calls.

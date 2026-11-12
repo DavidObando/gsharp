@@ -1812,7 +1812,9 @@ shared class CSharpProjectLoader {
                     reference is PortableExecutableReference{FilePath: {} path} {
                     try {
                         owned = TranslationContext.CreateOwnedMetadataReference(path, reference.Properties, images)
-                    } catch (error IOException) { } catch (error UnauthorizedAccessException) { }
+                    } catch (error IOException) { } catch (error UnauthorizedAccessException) { } catch (
+                        error BadImageFormatException
+                    ) { }
                 }
                 if seen.Add(owned) {
                     references.Add(owned)

@@ -30,6 +30,119 @@ import Xunit
 /// too. Each test translates the C#, compiles the G# with the repository's `gsc.dll`, runs it, and compares the
 /// output with the output of the C#.
 open class Issue5617ByReferenceAccessorNarrowingTests {
+    @Theory
+    @InlineData("values.Aggregate((left, right) => { global = null; return left; });", true)
+    @InlineData("values.Where(value => { global = null; return true; });", false)
+    func RefParameter_DeclaredEnumerableExecutionContractsPreserveClosedControls(statement string, immediate bool) {
+        let printed = AssertRunsLikeCSharp(
+            "using System; using System.Linq; using System.Collections.Generic; public static class Demo { private static string? global; private static int Guard(ref string? text, List<int> values) { if(text == null)return 0; _ = " +
+                statement +
+                " return text.Length; } public static string Run() { global = \"safe\"; try { return Guard(ref global, new List<int>{1,2}).ToString(); } catch(NullReferenceException) { return \"cleared\"; } } }"
+        )
+        Assert.Contains(
+            if immediate {
+                "return text!!.Length"
+            } else {
+                "return text.Length"
+            },
+            printed
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RefParameter_ProjectedArrayHelperRetainsSelectedSharedTreeOwner(consumerSharesTree bool) {
+        let shared = CSharpSyntaxTree.ParseText(
+            "namespace Lib5617 { public class SharedArrayBase { public static string[] Get() { Helper.Touch(); return new[] {\"item\"}; } public static T[] GetGeneric<T>(T value) where T : class { Helper.Touch(); return new[] {value}; } } }",
+            path: "SharedArray.cs"
+        )
+        let producerBody = CSharpSyntaxTree.ParseText(
+            "namespace Lib5617 { internal static class Helper { public static void Touch() { Store.Value = null; } } public static class Store { public static string? Value; } public class ProducerBridge : SharedArrayBase {} }",
+            path: "ProducerArray.cs"
+        )
+        let rootHelper = CSharpSyntaxTree.ParseText(
+            "namespace Lib5617 { internal static class Helper { public static void Touch() {} } }",
+            path: "ConsumerArrayHelper.cs"
+        )
+        let source = CSharpSyntaxTree.ParseText(
+            "using System; using Lib5617; public class SourceLeaf : ProducerBridge {} public static class Demo { private static int Guard(ref string? text) { if(text == null)return 0; var items = SourceLeaf.Get(); var genericItems = SourceLeaf.GetGeneric(\"generic\"); return text.Length + items[0].Length + genericItems[0].Length; } public static string Run() { Store.Value = \"safe\"; try { return Guard(ref Store.Value).ToString(); } catch(NullReferenceException) { return \"cleared\"; } } }",
+            path: "ConsumerArray.cs"
+        )
+        let options = CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+            NullableContextOptions.Enable
+        )
+        let producer = CSharpCompilation.Create(
+            "Lib5617",
+            []SyntaxTree{shared, producerBody},
+            CSharpProjectLoader.RuntimeReferences(),
+            options
+        )
+        let other = CSharpCompilation.Create(
+            "OtherArrayOwner5326",
+            []SyntaxTree{shared, rootHelper},
+            CSharpProjectLoader.RuntimeReferences(),
+            options
+        )
+        let trees = if consumerSharesTree {
+            []SyntaxTree{source, shared, rootHelper}
+        } else {
+            []SyntaxTree{source}
+        }
+        let references = CSharpProjectLoader.RuntimeReferences().Concat(
+            []MetadataReference{
+                producer.ToMetadataReference(),
+                other.ToMetadataReference(aliases: ImmutableArray.Create("Unused"))
+            }
+        )
+        let consumer = CSharpCompilation.Create("ArrayOwnerConsumer5326", trees, references, options)
+        Assert.Empty(
+            consumer.GetDiagnostics().Where((diagnostic Diagnostic) -> diagnostic.Severity == DiagnosticSeverity.Error)
+        )
+        let document = LoadedDocument(source.FilePath, source, consumer.GetSemanticModel(source))
+        let context = TranslationContext(consumer, document.SemanticModel, document.FilePath)
+        let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+        Assert.Contains("return text!!.Length", printed)
+        using let image = MemoryStream()
+        let emitted = producer.Emit(image)
+        Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics))
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("cleared"),
+            Encoding.UTF8.GetBytes(CompileAndRun(printed, image.ToArray()).Trim())
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RefParameter_EnumerableReturningAggregateExecutesItsCallbackImmediately(inHelper bool) {
+        let call = "_ = values.Aggregate((left, right) => { global = null; return left; });"
+        let printed = AssertRunsLikeCSharp(`
+using System;
+using System.Linq;
+using System.Collections.Generic;
+public static class Demo {
+    private static string? global;
+    private static void Probe(List<IEnumerable<int>> values, Func<IEnumerable<int>,IEnumerable<int>,IEnumerable<int>> callback) { _ = values.Aggregate(callback); }
+    private static int Guard(ref string? text, List<IEnumerable<int>> values) {
+        if(text == null) return 0;
+        ` + if inHelper {
+                "Probe(values, (left, right) => { global = null; return left; });"
+            } else {
+                call
+            } + `
+        return text.Length;
+    }
+    public static string Run() {
+        global = "safe";
+        var values = new List<IEnumerable<int>> { new[] {1}, new[] {2} };
+        try { return Guard(ref global, values).ToString(); }
+        catch(NullReferenceException) { return "cleared"; }
+    }
+}`)
+        Assert.Contains("return text!!.Length", printed)
+    }
+
     @Fact
     func RefParameter_AdjacentGotoCase_KeepsThePrecedingSectionEffects() {
         let printed = AssertRunsLikeCSharp(`

@@ -173,7 +173,7 @@ open class CSharpProjectLoaderDiagnosticsTests {
         try {
             let path = Path.Combine(directory, "System.Console.dll")
             File.Copy(typeof(Console).Assembly.Location, path)
-            let original = TranslationContext.CreateOwnedMetadataReference(path)
+            let original = MetadataReference.CreateFromFile(path)
             let references = CSharpProjectLoader
                 .RuntimeReferences()
                 .Where(
@@ -226,7 +226,40 @@ open class CSharpProjectLoaderDiagnosticsTests {
                 .AddProjectReference(consumerId, ProjectReference(producerId))
             let root = solution.GetProject(consumerId) ?? throw InvalidOperationException("consumer missing")
             let images = Dictionary[string, PortableExecutableReference](StringComparer.Ordinal)
-            let frozen = CSharpProjectLoader.SnapshotProjectGraph(root, images)
+            let fileInputs = HashSet[MetadataReference](ReferenceEqualityComparer.Instance)
+            for inputProject in[]Project{root, root.Solution.GetProject(producerId)!!} {
+                fileInputs.UnionWith(
+                    inputProject
+                        .MetadataReferences
+                        .OfType[PortableExecutableReference]()
+                        .Where((reference PortableExecutableReference) -> reference.FilePath == path)
+                )
+            }
+            Assert.Equal(2, fileInputs.Count)
+            let frozen = CSharpProjectLoader.SnapshotProjectGraph(root, images, fileInputs: fileInputs)
+            Assert.True(images.ContainsKey(Path.GetFullPath(path)))
+            let snapshot = images[Path.GetFullPath(path)]
+            Assert.NotSame(original, snapshot)
+            Assert.Contains(
+                frozen.MetadataReferences,
+                (reference MetadataReference) -> object.ReferenceEquals(reference, snapshot)
+            )
+            let producerSnapshot = Assert.Single(
+                frozen.Solution.GetProject(producerId)!!
+                    .MetadataReferences
+                    .OfType[PortableExecutableReference]()
+                    .Where((reference PortableExecutableReference) -> reference.FilePath == path)
+            )
+            Assert.NotSame(
+                Assert.Single(
+                    fileInputs.Where(
+                        (reference MetadataReference) ->
+                        reference.Properties.EmbedInteropTypes
+                    )
+                ),
+                producerSnapshot
+            )
+            Assert.Same(snapshot.GetMetadata().Id, producerSnapshot.GetMetadata().Id)
             File.WriteAllBytes(path, []byte{0})
             let consumer = Assert.IsType[CSharpCompilation](await frozen.GetCompilationAsync())
             let producer = Assert.IsType[CSharpCompilation](
@@ -247,7 +280,7 @@ open class CSharpProjectLoaderDiagnosticsTests {
                     .OfType[PortableExecutableReference]()
                     .Where((reference PortableExecutableReference) -> reference.FilePath == path)
             )
-            Assert.Same(original, ownedRoot)
+            Assert.NotSame(original, ownedRoot)
             Assert.Same(ownedRoot.GetMetadata().Id, ownedProducer.GetMetadata().Id)
             Assert.Equal(original.Properties, ownedRoot.Properties)
             Assert.Equal(producerProperties, ownedProducer.Properties)
@@ -271,8 +304,8 @@ open class CSharpProjectLoaderDiagnosticsTests {
             AppContext.BaseDirectory,
             "missing-reference-" + Guid.NewGuid().ToString("N") + ".dll"
         )
-        let broken = MetadataReference.CreateFromImage([]byte{0}, filePath: missing)
-        let healthy = TranslationContext.CreateOwnedMetadataReference(typeof(Console).Assembly.Location)
+        let broken = FileInputReference(missing)
+        let healthy = MetadataReference.CreateFromFile(typeof(Console).Assembly.Location)
         let references = CSharpProjectLoader
             .RuntimeReferences()
             .Where(
@@ -293,12 +326,17 @@ open class CSharpProjectLoaderDiagnosticsTests {
         )
         let project = solution.GetProject(id) ?? throw InvalidOperationException("project missing")
         let images = Dictionary[string, PortableExecutableReference](StringComparer.Ordinal)
-        let frozen = CSharpProjectLoader.SnapshotProjectGraph(project, images)
+        let frozen = CSharpProjectLoader.SnapshotProjectGraph(
+            project,
+            images,
+            fileInputs: HashSet[MetadataReference](ReferenceEqualityComparer.Instance){broken, healthy}
+        )
         Assert.Contains(
             frozen.MetadataReferences,
             (reference MetadataReference) -> object.ReferenceEquals(reference, broken)
         )
         Assert.False(images.ContainsKey(missing))
+        Assert.True(images.ContainsKey(Path.GetFullPath(healthy.FilePath!!)))
         Assert.False(TranslationContext.HasTrustedEffectImage(broken, typeof(Console).Assembly.FullName!!))
         let ownedHealthy = Assert.Single(
             frozen
@@ -311,8 +349,77 @@ open class CSharpProjectLoaderDiagnosticsTests {
         Assert.NotNull(compilation)
         Assert.Contains(
             compilation!!.GetDiagnostics(),
-            (diagnostic Diagnostic) -> diagnostic.Id == "CS0009" && diagnostic.Severity == DiagnosticSeverity.Error
+            (diagnostic Diagnostic) -> diagnostic.Id == "CS0006" && diagnostic.Severity == DiagnosticSeverity.Error
         )
+    }
+
+    @Fact
+    async func CorruptFileInput_PreservesRoslynDiagnosticAndContinuesHealthySnapshots() {
+        let directory = Path.Combine(AppContext.BaseDirectory, "corrupt-file-input", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let path = Path.Combine(directory, "Corrupt.dll")
+            File.WriteAllBytes(path, []byte{0, 1, 2, 3})
+            let broken = FileInputReference(path)
+            let healthy = MetadataReference.CreateFromFile(typeof(Console).Assembly.Location)
+            using let workspace = AdhocWorkspace()
+            let id = ProjectId.CreateNewId()
+            let project = workspace
+                .CurrentSolution
+                .AddProject(
+                ProjectInfo.Create(
+                    id,
+                    VersionStamp.Create(),
+                    "CorruptInput",
+                    "CorruptInput",
+                    LanguageNames.CSharp,
+                    compilationOptions: CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary),
+                    metadataReferences: CSharpProjectLoader
+                        .RuntimeReferences()
+                        .Where(
+                        (reference MetadataReference) ->
+                        (reference as PortableExecutableReference)?.FilePath != healthy.FilePath
+                    )
+                        .Concat([]MetadataReference{broken, healthy})
+                )
+            )
+                .GetProject(id)!!
+            let images = Dictionary[string, PortableExecutableReference](StringComparer.Ordinal)
+            let frozen = CSharpProjectLoader.SnapshotProjectGraph(
+                project,
+                images,
+                fileInputs: HashSet[MetadataReference](ReferenceEqualityComparer.Instance){broken, healthy}
+            )
+            Assert.Contains(
+                frozen.MetadataReferences,
+                (reference MetadataReference) -> object.ReferenceEquals(reference, broken)
+            )
+            Assert.False(images.ContainsKey(path))
+            Assert.True(images.ContainsKey(Path.GetFullPath(healthy.FilePath!!)))
+            Assert.False(TranslationContext.HasTrustedEffectImage(broken, typeof(Console).Assembly.FullName!!))
+            let compilation = await frozen.GetCompilationAsync()
+            Assert.Contains(
+                compilation!!.GetDiagnostics(),
+                (diagnostic Diagnostic) ->
+                diagnostic.Id == "CS0009" && diagnostic.Severity == DiagnosticSeverity.Error
+            )
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    private class FileInputReference : PortableExecutableReference {
+        init(path string, properties MetadataReferenceProperties = default(MetadataReferenceProperties))
+        : base(properties, path) { }
+
+        protected override func GetMetadataImpl() Metadata -> AssemblyMetadata.CreateFromFile(this.FilePath!!)
+
+        protected override func CreateDocumentationProvider() DocumentationProvider -> DocumentationProvider.Default
+
+        protected override func WithPropertiesImpl(
+            properties MetadataReferenceProperties
+        ) PortableExecutableReference ->
+        FileInputReference(this.FilePath!!, properties)
     }
 
     /// A project whose `ProjectReference` points at a file that does not

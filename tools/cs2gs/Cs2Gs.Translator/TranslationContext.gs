@@ -232,10 +232,26 @@ class TranslationContext {
 
     internal func SourceCompilation(symbol ISymbol) CSharpCompilation? {
         let assembly = symbol as IAssemblySymbol ?? symbol.ContainingAssembly
+        if assembly != nil && SymbolEqualityComparer.Default.Equals(assembly, this.Compilation.Assembly) {
+            return this.Compilation
+        }
         return if assembly == nil {
             nil
         } else {
             this.SourceOwners(true).Owner(assembly)
+        }
+    }
+
+    internal func UseSemanticModelForSymbol(tree SyntaxTree, symbol ISymbol?) IDisposable? {
+        let owner = if symbol == nil {
+            nil
+        } else {
+            this.SourceCompilation(symbol)
+        }
+        return if owner == nil || !owner.ContainsSyntaxTree(tree) {
+            nil
+        } else {
+            this.UseSemanticModelFor(tree, owner)
         }
     }
 
@@ -562,9 +578,17 @@ class TranslationContext {
             }
             let image = ImmutableArray.CreateRange(File.ReadAllBytes(path))
             let reference = MetadataReference.CreateFromImage(image, properties: properties, filePath: path)
+            let metadata = reference.GetMetadata()
+            if metadata is AssemblyMetadata assembly {
+                for module in assembly.GetModules() {
+                    let _ = module.GetMetadataReader()
+                }
+            } else if metadata is ModuleMetadata module {
+                let _ = module.GetMetadataReader()
+            }
             let ownedFingerprint = StrongBox[string](Convert.ToHexString(SHA256.HashData(image.AsSpan())))
             OwnedEffectImages.Add(reference, ownedFingerprint)
-            OwnedEffectMetadata.Add(reference.GetMetadata().Id, ownedFingerprint)
+            OwnedEffectMetadata.Add(metadata.Id, ownedFingerprint)
             if snapshots != nil {
                 snapshots[key] = reference
             }
