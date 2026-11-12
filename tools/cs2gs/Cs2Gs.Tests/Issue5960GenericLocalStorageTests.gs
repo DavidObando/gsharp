@@ -5,7 +5,9 @@
 package Cs2Gs.Tests
 
 import Cs2Gs.Cli
+import Cs2Gs.CodeModel.Printing
 import Cs2Gs.Pipeline
+import Cs2Gs.Translator
 import Cs2Gs.Translator.Loading
 import GSharp.Tests
 import Microsoft.CodeAnalysis
@@ -15,12 +17,23 @@ import System.Linq
 import System.Text
 import System.Threading.Tasks
 import Xunit
+import Xunit.Abstractions
 
 open class Issue5960GenericLocalStorageTests {
+    private let output ITestOutputHelper
+
+    init(output ITestOutputHelper) {
+        this.output = output
+    }
+
     @Theory
-    @InlineData(false)
-    @InlineData(true)
-    async func ExplicitGenericStorage_PreservesNativeRuntimeBytes(effectful bool) {
+    @InlineData("exact")
+    @InlineData("effectful")
+    @InlineData("fixed-consumers")
+    @InlineData("captured")
+    async func ExplicitGenericStorage_PreservesNativeRuntimeBytes(shape string) {
+        let effectful = shape == "effectful"
+        let fixedConsumers = shape == "fixed-consumers"
         let compiler = LocalFunctionHoistTranslationTests.FindCompiler()
         Assert.NotNull(compiler)
         let repository = GsharpTestProjectRunner.FindRepoRoot()
@@ -37,7 +50,12 @@ open class Issue5960GenericLocalStorageTests {
                 Path.Combine(projectRoot, "Probe.csproj"),
                 `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><OutputType>Exe</OutputType><Nullable>enable</Nullable></PropertyGroup></Project>`
             )
-            let source = if effectful {
+            let source = if fixedConsumers {
+                FixedConsumerSource
+            } else if shape == "captured" {
+                Source.Replace("string result = \"\";", "System.Func<string> loop = () => { string result = \"\";")
+                    .Replace("return result;", "return result; }; return loop();")
+            } else if effectful {
                 Source.Replace("T seed = replacement;", "T seed = Read(replacement);").Replace(
                     "seed = clear ? default(T) : flag ? a : b;",
                     "seed = clear ? default(T) : Read(flag ? a : b);"
@@ -63,18 +81,22 @@ open class Issue5960GenericLocalStorageTests {
             )
             let expected = Run(nativePath)
             Assert.NotEmpty(expected)
-            Assert.Contains("False:True:", expected)
-            Assert.Contains("False:False:", expected)
-            Assert.Contains("True:True:", expected)
-            Assert.Contains("zero=0", expected)
-            Assert.Contains(
-                if effectful {
-                    "reads=24"
-                } else {
-                    "reads=0"
-                },
-                expected
-            )
+            if fixedConsumers {
+                Assert.Equal(string.Concat(Enumerable.Repeat("True:0" + Environment.NewLine, 5)), expected)
+            } else {
+                Assert.Contains("False:True:", expected)
+                Assert.Contains("False:False:", expected)
+                Assert.Contains("True:True:", expected)
+                Assert.Contains("zero=0", expected)
+                Assert.Contains(
+                    if effectful {
+                        "reads=24"
+                    } else {
+                        "reads=0"
+                    },
+                    expected
+                )
+            }
 
             let destination = Path.Combine(directory, "translated")
             let originalOut = Console.Out
@@ -126,14 +148,82 @@ open class Issue5960GenericLocalStorageTests {
                 compile.Output + "\n" + printed
             )
             Assert.Equal(Encoding.UTF8.GetBytes(expected), Encoding.UTF8.GetBytes(Run(translatedPath)))
-            Assert.Contains("var seed T?", printed)
-            Assert.DoesNotContain("seed!!", printed)
+            if fixedConsumers {
+                Assert.DoesNotContain("value T?", printed)
+                Assert.DoesNotContain("!!", printed)
+            } else {
+                Assert.Contains("var seed T?", printed)
+                Assert.DoesNotContain("seed!!", printed)
+            }
         } finally {
             Directory.Delete(directory, recursive: true)
         }
     }
 
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ExplicitGenericLocals_IndexIdentifierAndSymbolScanWorkOnce(hasDefault bool) {
+        var previous int64 = 0
+        for count in[]int32{64, 128, 256} {
+            let declarations = StringBuilder()
+            let observations = StringBuilder()
+            for var i = 0; i < count; i++ {
+                declarations.AppendLine("T value$i = ${if hasDefault { "default(T)" } else { "replacement" }};")
+                if hasDefault {
+                    declarations.AppendLine("var alias$i = value$i; value$i = alias$i;")
+                }
+                if i > 0 {
+                    observations.Append(" + ")
+                }
+                observations.Append("IsNull(value$i)")
+            }
+            let source = "#nullable enable\npublic static class P {\n" +
+                "static string IsNull<T>(T value) => (value is null).ToString();\n" +
+                "public static string Run<T>(T replacement) {\n" +
+                declarations.ToString() + "System.Func<string> observe = () => " + observations.ToString() +
+                ";\nreturn observe();\n} }"
+            let project = CSharpProjectLoader.LoadInMemory([](string, string){("Scale.cs", source)})
+            Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+            let document = Assert.Single(project.Documents)
+            let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+            let translator = CSharpToGSharpTranslator()
+            let printed = GSharpPrinter.Print(translator.TranslateDocument(document, context))
+            TranslationTestValidation.AssertBinds(printed)
+            let work = translator.LastLocalStorageScanWork
+            this.output.WriteLine("$count locals, default=$hasDefault: $work identifier/symbol/read scan steps")
+            Assert.True(work > 0, "The resource oracle must count full identifier and symbol scans.")
+            if previous > 0 {
+                Assert.True(
+                    work <= previous * 3,
+                    "Doubling explicit generic locals must retain linear scan work: $previous -> $work."
+                )
+            }
+            previous = work
+        }
+    }
+
     shared {
+        private const FixedConsumerSource string = `
+#nullable enable
+public static class P
+{
+    static bool IsNull<T>(T value) => value is null;
+    static T Identity<T>(T value) => value;
+    static T Make<T>() { T value = default(T); return value; }
+    static T Select<T>(bool flag) { T value = default(T); return flag ? value : value; }
+    static T Pass<T>() { T value = default(T); return Identity<T>(value); }
+    static T Reset<T>() { T value = default(T); value = default(T); return value; }
+    public static void Main()
+    {
+        System.Console.WriteLine(IsNull(Make<string>()) + ":" + Make<int>());
+        System.Console.WriteLine(IsNull(Select<string>(true)) + ":" + Select<int>(true));
+        System.Console.WriteLine(IsNull(Select<string>(false)) + ":" + Select<int>(false));
+        System.Console.WriteLine(IsNull(Pass<string>()) + ":" + Pass<int>());
+        System.Console.WriteLine(IsNull(Reset<string>()) + ":" + Reset<int>());
+    }
+}`
+
         private func Run(path string) string {
             let result = ProcessRunner.Run("dotnet", []string{path}, timeout: TimeSpan.FromSeconds(30))
             Assert.False(result.TimedOut, result.Output)

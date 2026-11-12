@@ -51,6 +51,8 @@ partial class CSharpToGSharpTranslator {
         private let defaultOriginEdges Queue[DefaultOriginEdge] = Queue[DefaultOriginEdge]()
         private let defaultOriginPositive Queue[DefaultOriginQuery] = Queue[DefaultOriginQuery]()
         private var defaultOriginOperations int64 = 0
+        // Include full index construction, semantic lookups, and candidate reads in the resource oracle.
+        private var localStorageScanWork int64 = 0
         private let defaultOriginEdgeKeys HashSet[(DefaultOriginQuery, DefaultOriginQuery, int32)] = HashSet[
             (DefaultOriginQuery, DefaultOriginQuery, int32)
         ]()
@@ -101,6 +103,8 @@ partial class CSharpToGSharpTranslator {
             this.defaultOriginEdgeKeys.Count,
             this.defaultOriginOperations
         )
+
+        func GetLocalStorageScanWork() int64 -> this.localStorageScanWork
 
         private enum DelegateArgumentBehavior {
             NotObserved,
@@ -651,8 +655,29 @@ partial class CSharpToGSharpTranslator {
             }
             var result = false
             if scope_ != nil {
-                for read in scope_.DescendantNodes().OfType[IdentifierNameSyntax]() {
-                    if SymbolEqualityComparer.Default.Equals(this.context.GetSymbolInfo(read).Symbol, local) &&
+                let executable = scope_.AncestorsAndSelf().LastOrDefault(
+                    (node SyntaxNode) -> node is BaseMethodDeclarationSyntax ||
+                        node is AccessorDeclarationSyntax ||
+                        node is LocalFunctionStatementSyntax ||
+                        node is AnonymousFunctionExpressionSyntax
+                ) ??
+                    scope_
+                for read in this.GetProjectionConsumers(executable, local).OfType[IdentifierNameSyntax]() {
+                    this.localStorageScanWork++
+                    let sink = this.ResolveValueSink(read)
+                    // Fixed generic consumers retain T storage, including its default reference value.
+                    if sink != nil &&
+                        sink is not ILocalSymbol &&
+                        IsBareTypeParameter(
+                        this.GetFixedElementDestinationType(read, sink) ?? ObliviousNullabilityAnalyzer.SymbolValueType(
+                            sink
+                        )
+                    ) &&
+                        !this.SinkInfersTypeFromValue(sink, read) {
+                        this.state.ExplicitGenericLocalNullableStorage.Add(local, false)
+                        return false
+                    }
+                    if !result &&
                         this
                         .context
                         .GetTypeInfo(read)
@@ -663,7 +688,6 @@ partial class CSharpToGSharpTranslator {
                         .MaybeNull &&
                         this.FindDefaultOrigin(read, Array.Empty[int32]()) != nil {
                         result = true
-                        break
                     }
                 }
             }

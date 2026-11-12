@@ -6325,7 +6325,9 @@ partial class CSharpToGSharpTranslator {
                 }
                 index = Dictionary[ISymbol, List[Microsoft.CodeAnalysis.SyntaxNode]](SymbolEqualityComparer.Default)
                 for candidate in body.DescendantNodes() {
+                    this.localStorageScanWork++
                     if candidate is IdentifierNameSyntax identifier {
+                        this.localStorageScanWork++
                         AddConsumer(this.context.GetSymbolInfo(identifier).Symbol, identifier)
                     }
                     let receiverExpression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = switch candidate {
@@ -6347,6 +6349,7 @@ partial class CSharpToGSharpTranslator {
                     if receiverExpression == nil {
                         continue
                     }
+                    this.localStorageScanWork++
                     AddConsumer(this.context.GetSymbolInfo(Unparenthesize(receiverExpression)).Symbol, candidate)
                 }
                 this.state.ProjectionConsumersByBody.Add(body, index)
