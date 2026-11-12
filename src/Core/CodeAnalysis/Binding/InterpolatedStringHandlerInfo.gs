@@ -258,6 +258,7 @@ class InterpolatedStringHandlerInfo {
             }
             let names = ReadForwardedNames(parameter)
             let forwarded = ImmutableArray.CreateBuilder[BoundExpression](names.Length)
+            let forwardedRefKinds = ImmutableArray.CreateBuilder[RefKind](names.Length)
             let sources = ImmutableArray.CreateBuilder[int32](names.Length)
             for name in names {
                 if string.IsNullOrEmpty(name) {
@@ -266,6 +267,7 @@ class InterpolatedStringHandlerInfo {
                         return nil
                     }
                     forwarded.Add(receiver)
+                    forwardedRefKinds.Add(RefKind.None)
                     sources.Add(-1)
                     continue
                 }
@@ -293,10 +295,17 @@ class InterpolatedStringHandlerInfo {
                     return nil
                 }
                 forwarded.Add(arguments[sourceIndex])
+                // Preserve the source parameter's ref kind before capture changes the argument representation.
+                forwardedRefKinds.Add(RefCapabilities.GetParameterRefKind(parameters[index]))
                 sources.Add(sourceIndex)
             }
             let forwardedArgs = forwarded.ToImmutable()
-            let constructor ConstructorInfo? = SelectConstructor(peeled, forwardedArgs, out var hasOutBool)
+            let constructor ConstructorInfo? = SelectConstructor(
+                peeled,
+                forwardedArgs,
+                forwardedRefKinds.ToImmutable(),
+                out var hasOutBool
+            )
             if constructor == nil {
                 failure = "'${peeled.Name}' has no interpolated-string-handler constructor matching the forwarded arguments"
                 return nil
@@ -509,6 +518,7 @@ class InterpolatedStringHandlerInfo {
         private func SelectConstructor(
             handlerClrType Type,
             forwardedArgs ImmutableArray[BoundExpression],
+            forwardedRefKinds ImmutableArray[RefKind],
             out hasOutBool bool
         ) ConstructorInfo? {
             hasOutBool = false
@@ -525,11 +535,22 @@ class InterpolatedStringHandlerInfo {
                 }
                 var ok = true
                 for var i = 0; i < forwardedArgs.Length; i++ {
-                    var paramType = ps[2 + i].ParameterType
-                    if paramType.IsByRef {
-                        paramType = paramType.GetElementType()!!
-                    }
+                    let parameter = ps[2 + i]
+                    let paramType = parameter.ParameterType
                     let argType Type? = forwardedArgs[i].Type?.ClrType
+                    let parameterRefKind = RefCapabilities.GetParameterRefKind(parameter)
+                    if parameterRefKind != RefKind.None &&
+                        forwardedRefKinds[i] != RefKind.None &&
+                        parameterRefKind != forwardedRefKinds[i] {
+                        ok = false
+                        break
+                    }
+                    // Writable reference slots require addresses to writable storage, including another overload's out-bool gate.
+                    if (parameterRefKind is RefKind.Ref or RefKind.Out) &&
+                        (argType?.IsByRef != true || RefCapabilities.IsReadOnlyStorage(forwardedArgs[i])) {
+                        ok = false
+                        break
+                    }
                     if argType != nil && ClrOverloadResolution.ClassifyImplicit(
                         paramType,
                         argType
@@ -547,7 +568,8 @@ class InterpolatedStringHandlerInfo {
                 var ctorOutBool bool
                 if remaining == 0 {
                     ctorOutBool = false
-                } else if remaining == 1 && ps[ps.Length - 1].IsOut && IsBoolean(ps[ps.Length - 1].ParameterType) {
+                } else if remaining == 1 && RefCapabilities.GetParameterRefKind(ps[ps.Length - 1]) == RefKind.Out &&
+                    IsBoolean(ps[ps.Length - 1].ParameterType) {
                     ctorOutBool = true
                 } else {
                     continue
