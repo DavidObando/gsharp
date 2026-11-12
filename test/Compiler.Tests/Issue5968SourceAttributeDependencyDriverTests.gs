@@ -207,6 +207,92 @@ class TagAttribute : Attribute {}`
     }
 
     @Fact
+    func DeferredImportedConstraints_RetainRichChildDiagnostics() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let driver = CompileBoundedStackDriver(fixture)
+        let library = fixture.CompileCSharp(
+            "namespace Contracts { public class NeedsCtor<T> where T : new() {} }",
+            "child-constructor-contracts"
+        )
+        const source = `import Contracts
+interface Reader { func Read(); }
+class Item(Value int32) {}
+class Holder {
+    let Value Reader = object : Reader {
+        func Read() { let invalid = NeedsCtor[Item]() }
+    }
+}`
+        let sourcePath = Path.Combine(fixture.Directory, "child.gs")
+        let response = Path.Combine(fixture.Directory, "child.rsp")
+        let dll = Path.Combine(fixture.Directory, "child.dll")
+        File.WriteAllText(sourcePath, source)
+        File.WriteAllText(response, "/reference:\"" + library + "\"\n\"" + sourcePath + "\"")
+        let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+            "@" + response,
+            dll,
+            driver
+        )
+        Assert.True(code == 1, output)
+        Assert.Equal([]string{"GS0152@6,37,6,46"}, DiagnosticLocations(output))
+        Assert.False(File.Exists(dll))
+    }
+
+    @Fact
+    func HeaderPointerArguments_ValidateCompleteSourcePointees() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let driver = CompileBoundedStackDriver(fixture)
+        let declarations = []string{
+            "struct Payload { var Text string }",
+            "unsafe open class GenericBase[T] {}",
+            "unsafe class Derived : GenericBase[[]*Payload] {}"
+        }
+        for reverse in[]bool{false, true} {
+            let sourcePath = Path.Combine(fixture.Directory, "pointer-contract.gs")
+            let dll = Path.Combine(fixture.Directory, "pointer-contract-" + reverse.ToString() + ".dll")
+            File.WriteAllText(
+                sourcePath,
+                string.Join(
+                    "\n",
+                    if reverse {
+                        declarations.Reverse()
+                    } else {
+                        declarations
+                    }
+                )
+            )
+            let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+                sourcePath,
+                dll,
+                driver
+            )
+            Assert.True(code == 1, output)
+            let line = if reverse {
+                "1"
+            } else {
+                "3"
+            }
+            Assert.Equal([]string{"GS0398@" + line + ",39," + line + ",46"}, DiagnosticLocations(output))
+            Assert.False(File.Exists(dll))
+            File.WriteAllText(sourcePath, File.ReadAllText(sourcePath).Replace("var Text string", "var Number int32"))
+            let (validCode, validOutput) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+                sourcePath,
+                dll,
+                driver
+            )
+            Assert.True(validCode == 0, validOutput)
+            IlVerifier.Verify(dll)
+            let derived = EmittedFixture.Load(dll).GetTypes().Single((type Type) -> type.Name == "Derived")
+            let array = Assert.Single(derived.BaseType!!.GetGenericArguments())
+            Assert.True(array.IsArray)
+            Assert.True(array.GetElementType()!!.IsPointer)
+            let pointee = array.GetElementType()!!.GetElementType()!!
+            Assert.Equal("Payload", pointee.Name)
+            Assert.Equal(typeof(int32), pointee.GetField("Number")!!.FieldType)
+            Assert.NotNull(Activator.CreateInstance(derived))
+        }
+    }
+
+    @Fact
     func NestedBaseLookup_UsesTheCompletedEnclosingHierarchy() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let driver = CompileBoundedStackDriver(fixture)

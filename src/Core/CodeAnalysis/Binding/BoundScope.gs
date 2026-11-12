@@ -1995,10 +1995,7 @@ partial class BoundScope {
         )!!
     }
 
-    /// Issues #4089/#4090: whether a G#-declared generic type-clause constraint
-    /// check must be QUEUED rather than answered where it is written, because
-    /// same-compilation declarations may not have their type-parameter
-    /// constraints resolved yet.
+    /// Gets whether declaration type contracts must wait for complete source signatures, members, and layouts.
     /// @remarks Defaults to `false` — answer in place — and is set only
     /// for the DECLARATION phase's own scope chain, by `BindGlobalScope`.
     /// The default direction is load-bearing: `BindProgram` derives a

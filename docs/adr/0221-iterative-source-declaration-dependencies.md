@@ -53,6 +53,8 @@ Separate source declaration scheduling into header, member, and usage-validation
    Constructor argument encoding continues to use the completed constructor contracts before emission.
    Imported generic constraint checks share the existing deferred constraint queue.
    Drain them after source constructors, members, and interface contracts are complete.
+   Validate source pointer pointees after their complete field layouts exist through the same post-member queue.
+   Forward late child-binder diagnostics to the compilation bag after child snapshots have been published.
    Partial-declaration rollback and failure cleanup apply to both source and imported checks.
 
 All work and readiness state belongs to one declaration binder.

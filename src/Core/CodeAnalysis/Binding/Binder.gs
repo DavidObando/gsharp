@@ -4623,30 +4623,27 @@ partial class Binder {
                 // it may not be dereferenced/indexed/advanced (the binder
                 // rejects those — GS0403) but it round-trips through
                 // `nint`/`IntPtr` and casts to/from typed pointers `*T`.
-                if pointeeType != TypeSymbol.Void && !TypeSymbol.IsLegalPointeeType(pointeeType) &&
-                    !(pointeeType is PointerTypeSymbol) &&
-                    !BlittableDetector.IsBlittableValueStructPointee(pointeeType) &&
-                    !(pointeeType is TypeParameterSymbol && pointeeType.HasUnmanagedConstraint == true) {
-                    // ADR-0122 §4 / issue #1034: a pointer to a blittable user
-                    // struct (`*Point`) is legal — accepted by the
-                    // BlittableDetector check above. Issue #1336: a pointer to a
-                    // generic type parameter constrained `unmanaged` (`*T`) is
-                    // likewise legal — the `unmanaged` constraint guarantees the
-                    // pointee is a GC-free value type, exactly as in C#. A
-                    // pointer to a non-blittable struct (one that contains a
-                    // managed reference / string / class field) or to any
-                    // managed reference type is still rejected here with GS0398,
-                    // matching C#'s unmanaged-type rule.
-                    Diagnostics.ReportUnmanagedPointerIllegalPointee(
-                        Invariant.Required(
-                            syntax.PointerPointeeType,
-                            "IsPointer implies the parser set PointerPointeeType",
-                            expression: "syntax.PointerPointeeType"
+                let location = Invariant.Required(
+                    syntax.PointerPointeeType,
+                    "IsPointer implies the parser set PointerPointeeType",
+                    expression: "syntax.PointerPointeeType"
+                )
+                    .Location
+                if pointeeType is StructSymbol sourcePointee &&
+                    sourcePointee.Declaration != nil &&
+                    $scope
+                    .IsDeferringUserGenericConstraintChecks() {
+                    $scope.GetPendingUserGenericConstraintChecks().Add(
+                        PendingUserGenericConstraintCheck(
+                            Diagnostics,
+                            ImmutableArray[TypeParameterSymbol].Empty,
+                            ImmutableArray.Create[TypeSymbol](pointeeType),
+                            location,
+                            () -> ReportIllegalUnmanagedPointee(pointeeType, location)
                         )
-                            .Location,
-                        pointeeType.Name
                     )
-                    return PointerTypeSymbol.Get(pointeeType)
+                } else {
+                    ReportIllegalUnmanagedPointee(pointeeType, location)
                 }
                 return PointerTypeSymbol.Get(pointeeType)
             }
@@ -5035,6 +5032,17 @@ partial class Binder {
             return nil
         }
         return ArrayTypeSymbol.Get(element, length)
+    }
+
+    private func ReportIllegalUnmanagedPointee(pointeeType TypeSymbol, location TextLocation) bool {
+        if pointeeType == TypeSymbol.Void || TypeSymbol.IsLegalPointeeType(pointeeType) ||
+            pointeeType is PointerTypeSymbol ||
+            BlittableDetector.IsBlittableValueStructPointee(pointeeType) ||
+            (pointeeType is TypeParameterSymbol && pointeeType.HasUnmanagedConstraint == true) {
+            return false
+        }
+        Diagnostics.ReportUnmanagedPointerIllegalPointee(location, pointeeType.Name)
+        return true
     }
 
     private func BindTypeClause(syntax TypeClauseSyntax?) TypeSymbol? {
@@ -6700,10 +6708,7 @@ partial class Binder {
         BodyBindResult
     ] { }
 
-    /// Issues #4089/#4090: one G#-declared generic TYPE-CLAUSE construction
-    /// whose constraint check has been recorded but not yet answered, because
-    /// at the construction site the definition's own type-parameter constraints
-    /// may not be resolved yet.
+    /// Records a declaration type-contract check until source signatures, members, and layouts are complete.
     /// @remarks The (cref:DiagnosticBag) is captured rather than looked up at
     /// flush time: a binder's bag is its own, and a type clause bound inside a
     /// field initializer or a lambda during the declaration phase belongs to a
@@ -7420,7 +7425,7 @@ partial class Binder {
             // order — see CheckUserGenericTypeClauseConstraints. Constructions bound
             // after this point (method bodies, later passes) are answered in
             // place.
-            FlushPendingUserGenericConstraintChecks(binder.$scope)
+            FlushPendingUserGenericConstraintChecks(binder.$scope, binder.Diagnostics)
             // ADR-0149: bind every explicit-interface qualifier clause
             // (`func (IFoo) M(...)` / `prop (IFoo) P T`) to its target interface
             // before VerifyInterfaceImplementations resolves them against each
@@ -12417,9 +12422,7 @@ partial class Binder {
             return false
         }
 
-        /// Issues #4089/#4090: answers every queued G#-declared generic
-        /// type-clause constraint check and latches the queue closed, so any later
-        /// construction is answered at its own site.
+        /// Validates queued declaration type contracts after member binding and closes the queue.
         /// @remarks Called from `BindGlobalScope` after
         /// `ExpandStructInterfaceClosures`. The BINDING constraint is the
         /// interface-members loop just above it: that is where an interface's own
@@ -12451,7 +12454,8 @@ partial class Binder {
         /// the error-path counterpart of the two speculative rollback sites in
         /// `ResolvePartialTypeParameterConstraints`.
         /// @param scope Any scope in the compilation's chain.
-        internal func FlushPendingUserGenericConstraintChecks($scope BoundScope) {
+        /// @param diagnostics The compilation diagnostic bag, including late reports from child binders.
+        internal func FlushPendingUserGenericConstraintChecks($scope BoundScope, diagnostics DiagnosticBag? = nil) {
             let pending = $scope.GetPendingUserGenericConstraintChecks()
             // Clear the latch FIRST: anything the reports themselves bind is
             // answered in place rather than re-queued behind a flush that has
@@ -12464,7 +12468,11 @@ partial class Binder {
             let draining = pending.ToArray()
             pending.Clear()
             for check in draining {
+                let diagnosticMark = check.Diagnostics.Count
                 RunUserGenericTypeClauseConstraintCheck(check)
+                if diagnostics != nil && !object.ReferenceEquals(diagnostics, check.Diagnostics) {
+                    diagnostics.AddRange(check.Diagnostics.VisibleSince(diagnosticMark))
+                }
             }
         }
 
