@@ -1,0 +1,34 @@
+package Demo
+
+import System.Linq
+
+open class Node {
+    func Read() int32 -> 7
+}
+
+shared class P {
+    func Run(flag bool) int32 {
+        let seed Node? = if flag { Node() } else { default(Node?) }
+        let query = System.Linq.Enumerable.Cast[(Node?, int32)]([]Node?{seed}.Select((value Node?) -> {
+            return (value, if value is Node nested { nested.Read() } else { 0 })
+        })).Select(((value Node?, code int32)) -> code)
+        var total = query.Single()
+        {
+            let item Node? = seed
+            if item != nil {
+                total += item.Read()
+            }
+        }
+        {
+            var item Node? = Node()
+            let Clear = func () {
+                item = nil
+            }
+            Clear()
+            if item == nil {
+                total += 1
+            }
+        }
+        return total
+    }
+}

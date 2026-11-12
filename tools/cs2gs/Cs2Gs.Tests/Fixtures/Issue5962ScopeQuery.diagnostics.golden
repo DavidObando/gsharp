@@ -1,0 +1,1 @@
+Chain.cs(7,5): info: ClassDeclaration: C# 'static class P' is mapped to a G# 'shared class' whose members sit directly in its body, with no 'shared { }' block (ADR-0195 / ADR-0115 §B.11).

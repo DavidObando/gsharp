@@ -4,14 +4,17 @@
 
 package Cs2Gs.Tests
 
+import CompilationMeasurements = GSharp.Core.CodeAnalysis.Compilation.CompilationMeasurements
 import Cs2Gs.CodeModel.Printing
 import Cs2Gs.Translator
 import Cs2Gs.Translator.Loading
 import GSharp.Tests
 import Microsoft.CodeAnalysis
+import Microsoft.CodeAnalysis.CSharp.Syntax
 import System
 import System.Diagnostics
 import System.IO
+import System.Linq
 import System.Text
 import System.Threading.Tasks
 import Xunit
@@ -22,6 +25,17 @@ import Xunit.Abstractions
 open class Issue5633ConditionalLocalQueryTests {
     private let output ITestOutputHelper
     private var translationAllocatedBytes int64 = 0
+    private var translatorAllocatedBytes int64 = 0
+    private var printerAllocatedBytes int64 = 0
+    private var translationElapsedMilliseconds float64 = 0
+    private var translationDiagnosticText string = ""
+    private let translationWork System
+        .Collections
+        .Generic
+        .Dictionary[string, int64] = System
+        .Collections
+        .Generic
+        .Dictionary[string, int64]()
     private var translationOriginMetrics(SourceCount int32, EdgeCount int32, OperationCount int64)
 
     init(output ITestOutputHelper) {
@@ -180,8 +194,12 @@ open class Issue5633ConditionalLocalQueryTests {
     @InlineData(true, false)
     @InlineData(false, true)
     @InlineData(true, true)
-    func LargeScalarAliases_RetainSparseLinearQueryWork(hasDefault bool, fanOut bool) {
+    func LargeScalarAliases_BoundWholePipelineAllocationsAndRetainSparseQueryWork(hasDefault bool, fanOut bool) {
         let metrics = System.Collections.Generic.List[(SourceCount int32, EdgeCount int32, OperationCount int64)]()
+        let allocations = System.Collections.Generic.List[int64]()
+        let keyVisits = System.Collections.Generic.List[int64]()
+        let promotedEvaluations = System.Collections.Generic.List[int64]()
+        let scopeWork = System.Collections.Generic.List[int64]()
         for links in[]int32{16, 128, 256, 512} {
             let body = StringBuilder()
             if fanOut {
@@ -203,18 +221,29 @@ open class Issue5633ConditionalLocalQueryTests {
                 "#nullable enable\nnamespace Demo { public static class P {\n" +
                     "static T? Chain<T>(T p, int choice) {\n" +
                     body.ToString() + "return x$links;\n} } }",
-                enabled: true
+                enabled: true,
+                measureWork: true
             )
             if links == 16 {
                 continue
             }
             metrics.Add(this.translationOriginMetrics)
+            allocations.Add(this.translationAllocatedBytes)
+            keyVisits.Add(this.translationWork["tuple_state_key_node_visits"])
+            promotedEvaluations.Add(this.translationWork["promoted_value_evaluations"])
+            scopeWork.Add(this.ScopeCensusWork())
             this.output.WriteLine(
                 "$links links: ${this.translationAllocatedBytes} allocated bytes; " +
                     "${this.translationOriginMetrics.SourceCount} sources; " +
                     "${this.translationOriginMetrics.EdgeCount} edges; " +
                     "${this.translationOriginMetrics.OperationCount} graph operations"
             )
+            this.output.WriteLine(
+                "Translator: ${this.translatorAllocatedBytes} bytes; printer: ${this.printerAllocatedBytes} bytes"
+            )
+            for counter in this.translationWork {
+                this.output.WriteLine("${counter.Key}: ${counter.Value}")
+            }
             Assert.Contains(
                 if hasDefault {
                     "let x$links T? = ${if fanOut { "hub" } else { "x${links - 1}" }}"
@@ -226,11 +255,328 @@ open class Issue5633ConditionalLocalQueryTests {
             TranslationTestValidation.AssertBinds(printed)
         }
         Assert.True(
+            allocations[1] <= allocations[0] * 3 && allocations[2] <= allocations[1] * 3,
+            "Doubling aliases must not quadruple whole translator/printer allocations: ${allocations[0]} -> ${allocations[1]} -> ${allocations[2]}."
+        )
+        Assert.True(keyVisits[0] > 0 && promotedEvaluations[0] > 0)
+        Assert.True(
+            keyVisits[2] <= keyVisits[0] * 5 && promotedEvaluations[2] <= promotedEvaluations[0] * 5,
+            "Syntax-key scans and promoted-value evaluations must scale with source size."
+        )
+        Assert.True(
+            scopeWork[0] > 0 && scopeWork[1] <= scopeWork[0] * 3 && scopeWork[2] <= scopeWork[1] * 3,
+            "Scope construction, candidates, and semantic write probes must not rescan every local's body: ${scopeWork[0]} -> ${scopeWork[1]} -> ${scopeWork[2]}."
+        )
+        Assert.True(
             metrics[2].SourceCount <= metrics[0].SourceCount * 5 &&
                 metrics[2].EdgeCount <= metrics[0].EdgeCount * 5 &&
                 metrics[1].OperationCount <= metrics[0].OperationCount * 3 &&
                 metrics[2].OperationCount <= metrics[1].OperationCount * 3,
             "Quadrupling links must retain linear source/edge counts and sub-quadratic graph work: ${metrics[0]} -> ${metrics[2]}."
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func IndependentLocalCensuses_IndexWorkScalesWithSourceSize(guards bool) {
+        let work = System.Collections.Generic.List[int64]()
+        for links in[]int32{16, 128, 256, 512} {
+            let body = StringBuilder()
+            for var i = 0; i <= links; i++ {
+                body.AppendLine(
+                    if guards {
+                        "var x$i = p; if (x$i != null) { _ = x$i.ToString(); }"
+                    } else {
+                        "var x$i = $i; x$i++;"
+                    }
+                )
+            }
+            let printed = this.TranslateWithinBound(
+                "namespace Demo { public static class P { public static int Run(object? p) {\n" + body.ToString() +
+                    "return ${if guards { "0" } else { "x$links" }}; } } }",
+                enabled: true,
+                measureWork: true
+            )
+            Assert.True(
+                printed.Contains(
+                    if guards {
+                        "let x$links"
+                    } else {
+                        "var x$links = $links"
+                    }
+                ),
+                printed
+            )
+            TranslationTestValidation.AssertBinds(printed)
+            if links == 16 {
+                continue
+            }
+            let scanned = this.ScopeCensusWork()
+            work.Add(scanned)
+            this.output.WriteLine(
+                "$links independent writes: $scanned visits; ${this.translationWork["reassignment_write_probes"]} write probes"
+            )
+            for counter in this.translationWork {
+                if counter.Key.StartsWith("guard", StringComparison.Ordinal) || counter.Key.StartsWith(
+                    "reassignment",
+                    StringComparison.Ordinal
+                ) ||
+                    counter
+                    .Key
+                    .StartsWith("storage_write", StringComparison.Ordinal) || counter.Key.StartsWith(
+                    "scope_",
+                    StringComparison.Ordinal
+                ) {
+                    this.output.WriteLine("${counter.Key}: ${counter.Value}")
+                }
+            }
+        }
+        Assert.True(
+            work[0] > 0 && work[1] <= work[0] * 3 && work[2] <= work[1] * 3,
+            "Independent writes need a per-symbol census, not a shared list rescanned for every local: ${work[0]} -> ${work[1]} -> ${work[2]}."
+        )
+    }
+
+    @Fact
+    func DistinctReferenceMemberChains_IndexPrefixesAndRetainedEntriesScale() {
+        let prefixes = System.Collections.Generic.List[int64]()
+        let retained = System.Collections.Generic.List[int64]()
+        for links in[]int32{16, 32, 64, 128} {
+            let fields = StringBuilder()
+            let initialize = StringBuilder()
+            let chain = StringBuilder("x")
+            for var i = 1; i <= links; i++ {
+                fields.AppendLine("public Node P$i;")
+                initialize.AppendLine("P$i = this;")
+                chain.Append(".P$i")
+            }
+            let printed = this.TranslateWithinBound(
+                "#nullable enable\nnamespace Demo { public class Node {\n" + fields.ToString() +
+                    "public Node() {\n" +
+                    initialize.ToString() +
+                    "}\npublic int Read() => 7;\n}\n" +
+                    "public static class P { public static int Run(Node input) {\n" +
+                    "var x = input; return $chain.Read();\n} } }",
+                enabled: true,
+                measureWork: true
+            )
+            Assert.Contains(".P$links", printed)
+            TranslationTestValidation.AssertBinds(printed)
+            if links == 128 {
+                LocalFunctionHoistTranslationTests.CompileAndRun(
+                    printed,
+                    "System.Console.WriteLine(P.Run(Node()))",
+                    "7"
+                )
+            }
+            if links == 16 {
+                continue
+            }
+            prefixes.Add(this.translationWork["reassignment_storage_target_visits"])
+            retained.Add(this.translationWork["scope_write_candidates"])
+            this.output.WriteLine(
+                "$links distinct reference fields: ${this.translationAllocatedBytes} allocated bytes; " +
+                    "${prefixes[prefixes.Count - 1]} prefix visits; ${retained[retained.Count - 1]} retained candidates; " +
+                    "${this.translationWork["reassignment_node_visits"]} scope/candidate visits"
+            )
+        }
+        Assert.True(
+            prefixes[0] > 0 &&
+                retained[0] > 0 &&
+                prefixes[1] <= prefixes[0] * 3 &&
+                prefixes[2] <= prefixes[1] * 3 &&
+                retained[1] <= retained[0] * 3 &&
+                retained[2] <= retained[1] * 3,
+            "Distinct reference fields must not retain or revisit all receiver prefixes: " +
+                "visits ${prefixes[0]} -> ${prefixes[1]} -> ${prefixes[2]}; " +
+                "entries ${retained[0]} -> ${retained[1]} -> ${retained[2]}."
+        )
+    }
+
+    @Theory
+    @InlineData("value", true, 1)
+    @InlineData("readonly", false, 0)
+    @InlineData("reference", false, 1)
+    @InlineData("unknown", true, 1)
+    func StorageReceiverBoundaries_PreserveCanonicalMatchesAndRuntime(shape string, writesRoot bool, expected int32) {
+        let method = switch shape {
+            case "value":
+            "public static int Run() { var root = new Outer(); root.Middle.Inner.Bump(); return root.Middle.Inner.Value; }"
+            case "readonly":
+            "public static int Run() { var root = new ReadOnlyOuter(); return root.Middle.Inner.Read(); }"
+            case "reference":
+            "public static int Run() { var root = new Holder(new ReferenceRoot()); " +
+                "ref int alias = ref root.Reference.Middle.Inner.Value; alias++; return root.Reference.Middle.Inner.Value; }"
+            default:
+            "public static int Run<T>(T input) where T : ICounter { var root = new Box<T>(input); " +
+                "root.Value.Bump(); return root.Value.Read(); }"
+        }
+        let source = `
+#nullable enable
+namespace Demo {
+public interface ICounter { void Bump(); int Read(); }
+public struct Leaf : ICounter {
+    public int Value;
+    public void Bump() { Value++; }
+    public int Read() => Value;
+}
+public struct Middle { public Leaf Inner; }
+public struct Outer { public Middle Middle; }
+public readonly struct ReadOnlyLeaf { public int Read() => 0; }
+public struct ReadOnlyMiddle { public ReadOnlyLeaf Inner; }
+public struct ReadOnlyOuter { public ReadOnlyMiddle Middle; }
+public class ReferenceRoot { public Middle Middle; }
+public struct Holder {
+    public ReferenceRoot Reference;
+    public Holder(ReferenceRoot value) { Reference = value; }
+}
+public struct Box<T> where T : ICounter {
+    public T Value;
+    public Box(T value) { Value = value; }
+}
+public static class P {
+` + method + "\n} }"
+        let project = CSharpProjectLoader.LoadInMemory([](string, string){("Boundary.cs", source)})
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        let document = Assert.Single(project.Documents)
+        let root = document.SyntaxTree.GetRoot()
+        let declaration = root
+            .DescendantNodes()
+            .OfType[VariableDeclaratorSyntax]()
+            .Single((candidate VariableDeclaratorSyntax) -> candidate.Identifier.ValueText == "root")
+        let local = Assert.IsAssignableFrom[ILocalSymbol](document.SemanticModel.GetDeclaredSymbol(declaration))
+        Assert.Equal(
+            writesRoot,
+            root.DescendantNodes().Any(
+                (node SyntaxNode) -> CSharpToGSharpTranslator.SyntaxNodeWritesSymbol(
+                    node,
+                    local,
+                    document.SemanticModel
+                )
+            )
+        )
+        let printed = this.TranslateWithinBound(source, enabled: true, measureWork: true)
+        Assert.Contains("${if writesRoot { "var" } else { "let" }} root", printed)
+        TranslationTestValidation.AssertBinds(printed)
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "System.Console.WriteLine(${if shape == "unknown" { "P.Run(Leaf{})" } else { "P.Run()" }})",
+            expected.ToString()
+        )
+    }
+
+    @Fact
+    func ScopeCensuses_PreserveCapturedWritesRefStorageAndGuardBoundaries() {
+        let printed = this.TranslateWithinBound(`
+#nullable enable
+namespace Demo
+{
+    public class Node { public int Read() => 7; }
+    public struct Counter
+    {
+        public int Value;
+        public int Touch() => ++Value;
+        public int Next { get { Value++; return Value; } }
+        public int this[int ignored] { get { Value++; return Value; } }
+    }
+    public static class P
+    {
+        static void Bump(ref int value) { value++; }
+        public static string Run(bool flag)
+        {
+            var captured = 1;
+            void Change() { captured++; }
+            Change();
+            ref int alias = ref captured;
+            Bump(ref alias);
+            var (left, right) = (0, 0);
+            (left, right) = (3, 4);
+            var caller = new Counter();
+            _ = caller.Touch();
+            var accessor = new Counter();
+            _ = accessor.Next;
+            var indexed = new Counter();
+            _ = indexed[0];
+            Node? current = flag ? new Node() : null;
+            System.Func<int> read = () =>
+            {
+                if (current is Node nested) return nested.Read();
+                return 0;
+            };
+            int result = read();
+            while (current is Node outer)
+            {
+                result += outer.Read();
+                current = null;
+            }
+            goto Done;
+        Done:
+            return captured + ":" + left + ":" + right + ":" +
+                (caller.Value + accessor.Value + indexed.Value) + ":" + result;
+        }
+    }
+}`, enabled: true, measureWork: true)
+        GoldenFile.AssertMatches(
+            Path.Combine(AppContext.BaseDirectory, "Fixtures", "Issue5962ScopeCensus.golden"),
+            printed
+        )
+        GoldenFile.AssertMatches(
+            Path.Combine(AppContext.BaseDirectory, "Fixtures", "Issue5962ScopeCensus.diagnostics.golden"),
+            this.translationDiagnosticText
+        )
+        TranslationTestValidation.AssertBinds(printed)
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "System.Console.WriteLine(P.Run(true))\nSystem.Console.WriteLine(P.Run(false))",
+            "3:3:4:3:14" + Environment.NewLine + "3:3:4:3:0"
+        )
+    }
+
+    @Fact
+    func ScopeCensuses_PreserveSiblingNamesAndSynthesizedQueryBoundaries() {
+        let printed = this.TranslateWithinBound(`
+#nullable enable
+using System.Linq;
+namespace Demo
+{
+    public class Node { public int Read() => 7; }
+    public static class P
+    {
+        public static int Run(bool flag)
+        {
+            Node? seed = flag ? new Node() : null;
+            var query = from value in new[] { seed }
+                        let code = value is Node nested ? nested.Read() : 0
+                        select code;
+            int total = query.Single();
+            {
+                Node? item = seed;
+                if (item != null) total += item.Read();
+            }
+            {
+                Node? item = new Node();
+                void Clear() { item = null; }
+                Clear();
+                if (item == null) total += 1;
+            }
+            return total;
+        }
+    }
+}`, enabled: true, measureWork: true)
+        GoldenFile.AssertMatches(
+            Path.Combine(AppContext.BaseDirectory, "Fixtures", "Issue5962ScopeQuery.golden"),
+            printed
+        )
+        GoldenFile.AssertMatches(
+            Path.Combine(AppContext.BaseDirectory, "Fixtures", "Issue5962ScopeQuery.diagnostics.golden"),
+            this.translationDiagnosticText
+        )
+        TranslationTestValidation.AssertBinds(printed)
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "System.Console.WriteLine(P.Run(true))\nSystem.Console.WriteLine(P.Run(false))",
+            "15" + Environment.NewLine + "1"
         )
     }
 
@@ -527,7 +873,30 @@ namespace Demo
         TranslationTestValidation.AssertBinds(printed)
     }
 
-    private func TranslateWithinBound(source string, enabled bool) string {
+    private func ScopeCensusWork() int64 {
+        var total int64 = 0
+        for counter in[]string{
+            "reassignment_node_visits",
+            "reassignment_write_probes",
+            "reassignment_storage_target_visits",
+            "reassignment_symbol_queries",
+            "reassignment_receiver_type_queries",
+            "storage_write_target_probes",
+            "storage_write_tuple_visits",
+            "guard_scope_node_visits",
+            "guard_candidate_visits",
+            "guard_subject_symbol_queries",
+            "scope_declaration_symbol_queries",
+            "scope_address_node_visits",
+            "scope_boundary_visits",
+            "scope_namesake_visits"
+        } {
+            total += this.translationWork[counter]
+        }
+        return total
+    }
+
+    private func TranslateWithinBound(source string, enabled bool, measureWork bool = false) string {
         let project = CSharpProjectLoader.LoadInMemory([](string, string){("Chain.cs", source)})
         Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
         let compilation = project.Compilation.WithOptions(
@@ -553,20 +922,77 @@ namespace Demo
             compilation.GetSemanticModel(original.SyntaxTree)
         )
         let context = TranslationContext(compilation, document.SemanticModel, document.FilePath)
-        let elapsed = Stopwatch.StartNew()
         let translation = Task.Run(
             () -> {
+                let started = Stopwatch.GetTimestamp()
                 let before = GC.GetAllocatedBytesForCurrentThread()
                 let translator = CSharpToGSharpTranslator()
-                let printed = GSharpPrinter.Print(translator.TranslateDocument(document, context))
+                let unit = translator.TranslateDocument(document, context)
+                let afterTranslation = GC.GetAllocatedBytesForCurrentThread()
+                let printed = GSharpPrinter.Print(unit)
                 this.translationAllocatedBytes = GC.GetAllocatedBytesForCurrentThread() - before
+                this.translationElapsedMilliseconds = Stopwatch.GetElapsedTime(started).TotalMilliseconds
+                this.translatorAllocatedBytes = afterTranslation - before
+                this.printerAllocatedBytes = this.translationAllocatedBytes - this.translatorAllocatedBytes
                 this.translationOriginMetrics = translator.LastDefaultOriginMetrics
+                this.translationDiagnosticText = string.Join(
+                    "\n",
+                    context.Diagnostics.Select((diagnostic TranslationDiagnostic) -> diagnostic.ToString())
+                )
+                if measureWork {
+                    // Measure work separately so opt-in counter overhead cannot change the allocation oracle.
+                    using let measurements = CompilationMeasurements.Start("scalar-alias-work")
+                    let measuredContext = TranslationContext(compilation, document.SemanticModel, document.FilePath)
+                    let measured = GSharpPrinter.Print(
+                        CSharpToGSharpTranslator().TranslateDocument(document, measuredContext)
+                    )
+                    Assert.Equal(Encoding.UTF8.GetBytes(printed), Encoding.UTF8.GetBytes(measured))
+                    Assert.Equal(
+                        this.translationDiagnosticText,
+                        string.Join(
+                            "\n",
+                            measuredContext.Diagnostics.Select(
+                                (diagnostic TranslationDiagnostic) -> diagnostic.ToString()
+                            )
+                        )
+                    )
+                    for counter in[]string{
+                        "tuple_state_keys",
+                        "tuple_state_key_characters",
+                        "tuple_state_key_node_visits",
+                        "projection_alias_facts",
+                        "projection_alias_visits",
+                        "promoted_value_evaluations",
+                        "promoted_value_dependency_reads",
+                        "promoted_value_invalidation_visits",
+                        "promoted_value_retained_dependencies",
+                        "reassignment_node_visits",
+                        "reassignment_write_probes",
+                        "reassignment_storage_target_visits",
+                        "reassignment_symbol_queries",
+                        "reassignment_receiver_type_queries",
+                        "storage_write_target_probes",
+                        "storage_write_tuple_visits",
+                        "guard_scope_node_visits",
+                        "guard_candidate_visits",
+                        "guard_subject_symbol_queries",
+                        "scope_declaration_symbol_queries",
+                        "scope_address_node_visits",
+                        "scope_boundary_visits",
+                        "scope_namesake_visits",
+                        "scope_write_indexes",
+                        "scope_write_candidates",
+                        "scope_guard_indexes",
+                        "scope_guard_candidates"
+                    } {
+                        this.translationWork[counter] = measurements.GetCounter("translation." + counter)
+                    }
+                }
                 return printed
             }
         )
         Assert.True(translation.Wait(TimeSpan.FromSeconds(10)), "Translation took over 10 seconds.")
-        elapsed.Stop()
-        this.output.WriteLine("Translation: ${elapsed.Elapsed.TotalMilliseconds} ms")
+        this.output.WriteLine("Translation: ${this.translationElapsedMilliseconds} ms")
         return translation.Result
     }
 }

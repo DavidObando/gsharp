@@ -1549,9 +1549,8 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func ScopeSynthesizesLoopContinueLabel(body SyntaxNode) bool {
-            for node in body.DescendantNodes(
-                (child SyntaxNode) -> object.ReferenceEquals(child, body) || !this.IsClosureBoundary(child)
-            ) {
+            for node in this.GetScopeGotoIndex(body).LoopLabelCandidates {
+                GSharp.Core.CodeAnalysis.Compilation.CompilationMeasurements.Count("translation.guard_candidate_visits")
                 if node is DoStatementSyntax doLoop && this.LoopConditionLowersOutOfHeader(doLoop, doLoop.Condition) &&
                     BodyContainsOwnLoopContinue(doLoop.Statement) {
                     return true
