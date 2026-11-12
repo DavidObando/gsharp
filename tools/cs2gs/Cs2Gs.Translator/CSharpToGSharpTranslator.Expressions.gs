@@ -19522,16 +19522,28 @@ partial class CSharpToGSharpTranslator {
                 }
                 let compared = contract.TypeArguments[0]
                 if values.Any(
-                    (value ITypeSymbol?) -> SymbolEqualityComparer.Default.Equals(value, compared) ||
-                        (
-                        value?.IsReferenceType == true &&
-                            compared.IsReferenceType &&
-                            this
-                            .context
-                            .Compilation
-                            .ClassifyCommonConversion(value, compared)
-                            .IsImplicit
-                    )
+                    (value ITypeSymbol?) -> {
+                        if value == nil {
+                            return true
+                        }
+                        let substitution = Dictionary[ITypeParameterSymbol, ITypeSymbol](SymbolEqualityComparer.Default)
+                        this.InferExtensionReceiverTypeArguments(compared, value, substitution)
+                        if this.SubstituteTypeParameters(candidate, substitution) is INamedTypeSymbol closed &&
+                            !this.ConstructedNamedTypeSatisfiesConstraints(closed) {
+                            return false
+                        }
+                        let effective = this.SubstituteTypeParameters(compared, substitution)
+                        return SymbolEqualityComparer.Default.Equals(value, effective) ||
+                            (
+                            value.IsReferenceType &&
+                                effective.IsReferenceType &&
+                                this
+                                .context
+                                .Compilation
+                                .ClassifyCommonConversion(value, effective)
+                                .IsImplicit
+                        )
+                    }
                 ) {
                     return true
                 }
@@ -20142,6 +20154,12 @@ partial class CSharpToGSharpTranslator {
                     Array.Empty[string]()
                 }
                 let callbackValues = List[ITypeSymbol?]()
+                var comparerKinds = this.EffectStoredComparerKinds(owner)
+                for parameter in method.Parameters {
+                    if parameter.Type is INamedTypeSymbol contract {
+                        comparerKinds |= CoreStorageEffects.GetComparerContractKind(this.EffectTypeName(contract))
+                    }
+                }
                 if equalityCallbacks && !owner.TypeArguments.IsEmpty {
                     this.AddEffectValueTypes(
                         callbackValues,
@@ -20167,7 +20185,7 @@ partial class CSharpToGSharpTranslator {
                     visiting,
                     bindings,
                     if equalityCallbacks {
-                        this.EffectStoredComparerKinds(owner)
+                        comparerKinds
                     } else {
                         0
                     }
@@ -20180,7 +20198,7 @@ partial class CSharpToGSharpTranslator {
                     bindings,
                     comparers: true,
                     comparedValues: callbackValues,
-                    comparerKinds: this.EffectStoredComparerKinds(owner)
+                    comparerKinds: comparerKinds
                 ) {
                     return true
                 }

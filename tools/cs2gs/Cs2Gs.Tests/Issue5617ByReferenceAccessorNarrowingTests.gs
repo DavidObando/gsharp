@@ -1930,16 +1930,16 @@ public sealed class Key {
     public override int GetHashCode() => 1;
 }
 public static class Factory {
-    private sealed class Comparer : IEqualityComparer<int> {
-        public bool Equals(int x, int y) => x == y;
-        public int GetHashCode(int x) { Store.Value = null; return x; }
+    private sealed class Comparer<T> : IEqualityComparer<T> {
+        public bool Equals(T? x, T? y) => EqualityComparer<T>.Default.Equals(x, y);
+        public int GetHashCode(T x) { Store.Value = null; return x!.GetHashCode(); }
     }
     private sealed class SequenceValue : IEnumerable<int> {
         public IEnumerator<int> GetEnumerator() { Store.Value = null; return ((IEnumerable<int>)new[] { 1 }).GetEnumerator(); }
         IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
     }
     public static IEnumerable<int> Sequence() => new SequenceValue();
-    public static Dictionary<int,int> Dictionary() => new Dictionary<int,int>(new Comparer()) { [1] = 1 };
+    public static Dictionary<int,int> Dictionary() => new Dictionary<int,int>(new Comparer<int>()) { [1] = 1 };
 }
 `)
         Assert.Contains("return value!!.Length + 43", printed)
