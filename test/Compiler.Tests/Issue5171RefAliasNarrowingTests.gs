@@ -13,6 +13,7 @@ import System.Diagnostics
 import System.IO
 import System.Linq
 import System.Text
+import System.Text.RegularExpressions
 import Xunit
 
 /// Issue #5171 (ADR-0208 row R12): a `ref` local and the variable it aliases
@@ -175,7 +176,36 @@ Run()
         }
     }
 
+    @Fact
+    func UnmodeledVirtualDispatchInvalidatesItsAliasedOutReceiver() {
+        let directory = Path.Combine(AppContext.BaseDirectory, "open-dispatch-effects", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let (exit, log) = Compile(directory, OpenDispatchSource, Path.Combine(directory, "OpenDispatch.dll"))
+            Assert.Equal(1, exit)
+            Assert.Contains("(12,19,12,29): error GS0159", log)
+            Assert.Equal(1, Regex.Matches(log, ": error GS").Count)
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
     shared {
+        private let OpenDispatchSource string = `
+import System
+
+func Describe(items []IDisposable?, out symbol IDisposable?, out name string?) bool {
+    symbol = nil
+    name = nil
+    symbol = items[0]
+    if symbol == nil {
+        return false
+    }
+    name = symbol.ToString()
+    return symbol.ToString() == name
+}
+func Main() { }
+`
         /// Builds the diagnostic location of the unique `.Value` read, or the read after `/* expect GS0158 */`.
         private func ExpectedDiagnostic(path string, source string) string {
             let marker = "/* expect GS0158 */"
@@ -2170,16 +2200,17 @@ func Describe(items []IDisposable?, out symbol IDisposable?, out name string?) b
     if symbol == nil {
         return false
     }
-    name = symbol.ToString()
-    return symbol.ToString() == name
+    name = "known"
+    return HasValue(symbol)
 }
+func HasValue(symbol IDisposable) bool { return true }
 func Main() {
     var symbol IDisposable? = nil
     var name string? = nil
-    let items = []IDisposable?{nil}
-    Console.WriteLine(Describe(items, out symbol, out name))
+    Console.WriteLine(Describe([]IDisposable?{nil}, out symbol, out name))
+    Console.WriteLine(Describe([]IDisposable?{System.IO.MemoryStream()}, out symbol, out name))
 }
-`, []string{"False"}}
+`, []string{"False", "True"}}
             yield []object{"ref-argument-to-another-variable-keeps-fact", `
 import System
 

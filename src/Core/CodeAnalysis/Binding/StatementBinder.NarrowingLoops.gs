@@ -7336,6 +7336,9 @@ internal partial class StatementBinder {
         }
         let combined = CallEffectSummary()
         combined.MergeFrom(directSummary)
+        if orig.ReceiverType is InterfaceSymbol{Accessibility: Accessibility.Public} {
+            combined.WritesAnyStorage = true
+        }
         if !combined.WritesAnyStorage {
             let index = GetCompilationMethodsByName()
             if index.TryGetValue(orig.Name, out var candidates) {
@@ -7581,10 +7584,11 @@ internal partial class StatementBinder {
                         }
                     }
                 }
-            } else if strippedRecv is ArrayTypeSymbol or SliceTypeSymbol or RectangularArrayTypeSymbol || object.Equals(
-                strippedRecv,
-                TypeSymbol.String
-            ) {
+            } else if strippedRecv?.IsValueType == true ||
+                strippedRecv is ArrayTypeSymbol or
+                SliceTypeSymbol or
+                RectangularArrayTypeSymbol ||
+                object.Equals(strippedRecv, TypeSymbol.String) {
                 canDispatchToCompilationOverride = false
             } else if strippedRecv?.ClrType is {} recvClr &&
                 ReflectionType(recvClr) is {} reflectedRecv &&
@@ -7593,23 +7597,8 @@ internal partial class StatementBinder {
                 canDispatchToCompilationOverride = false
             }
             if canDispatchToCompilationOverride {
-                let index = GetCompilationMethodsByName()
-                if index.TryGetValue(methodName, out var candidates) {
-                    for candidate in candidates {
-                        if CandidateMayOverrideOrImplementClr(candidate, method, receiverType) {
-                            let candSummary = GetFunctionEffectSummaryCore(
-                                candidate,
-                                includeOverrides: false,
-                                visiting,
-                                out _
-                            )
-                            summary.MergeFrom(candSummary)
-                            if summary.WritesAnyStorage {
-                                return summary
-                            }
-                        }
-                    }
-                }
+                summary.WritesAnyStorage = true
+                return summary
             }
         }
 
@@ -8581,7 +8570,7 @@ internal partial class StatementBinder {
 
     shared {
         internal func DefersImportedCallbackArguments(method MethodInfo) bool {
-            if method.DeclaringType is not{} owner || !ReferenceResolver.IsTrustedEffectAssembly(owner.Assembly) {
+            if method.DeclaringType is not{} owner || owner.FullName != "System.Linq.Enumerable" {
                 return false
             }
             let result = method.ReturnType
@@ -8593,7 +8582,8 @@ internal partial class StatementBinder {
                 }
             ).FullName ??
                 ""
-            return IsDeferredEnumerableFactory(owner.FullName ?? "", resultName)
+            return IsDeferredEnumerableFactory(owner.FullName ?? "", resultName) &&
+                ReferenceResolver.IsTrustedEffectAssembly(owner.Assembly)
         }
 
         internal func IsDeferredEnumerableFactory(owner string, result string) bool ->

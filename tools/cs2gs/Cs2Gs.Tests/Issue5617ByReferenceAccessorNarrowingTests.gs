@@ -1666,8 +1666,8 @@ public interface IGenericExplicit<T> { void Touch(T value); }
 public sealed class ExplicitWriter : IExplicit {
     void IExplicit.Touch() { Demo.ClearGlobal(); }
 }
-public sealed class GenericExplicitWriter : IGenericExplicit<int> {
-    void IGenericExplicit<int>.Touch(int value) { Demo.ClearGlobal(); }
+public sealed class GenericExplicitWriter<T> : IGenericExplicit<T> {
+    void IGenericExplicit<T>.Touch(T value) { Demo.ClearGlobal(); }
 }
 public sealed class Disposer : IDisposable {
     public void Dispose() { Demo.ClearGlobal(); }
@@ -1719,7 +1719,7 @@ public static class Demo {
         global = "safe"; box.Text = "safe"; cells[0].Text = "safe"; HandlerStore.Value = "safe";
         buffer[0] = "safe"; buffer[1] = null;
         var sequence = new[] { 1 }.Where(x => { ClearGlobal(); return true; });
-        try { return Guard(ref ` + root + `, new ExplicitWriter(), new GenericExplicitWriter(), new Disposer(), sequence, dictionary).ToString(); }
+        try { return Guard(ref ` + root + `, new ExplicitWriter(), new GenericExplicitWriter<int>(), new Disposer(), sequence, dictionary).ToString(); }
         catch (NullReferenceException) { return "cleared"; }
     }
 }`, library: `
@@ -1766,6 +1766,130 @@ public ref struct EffectHandler {
         )
         Assert.Contains("return s.Length", printed)
         Assert.InRange(visits, depth + 1, (depth + 1) * 3)
+    }
+
+    @Theory
+    @InlineData(
+        "private static event Action Changed { add { global = null; } remove { global = null; } } private static void Handler() {} private static void Probe() { Changed += Handler; }",
+        "global"
+    )
+    @InlineData("private static int count; private static void Probe() { (global, count) = (null, 0); }", "global")
+    @InlineData(
+        "private sealed class Initialized { public int P { get; } = Clear(); public Initialized() {} } private static int Clear() { global = null; return 1; } private static void Probe() { _ = new Initialized(); }",
+        "global"
+    )
+    @InlineData(
+        "private static void Probe() { _ = new List<int>(new[] { 1 }.Where(x => { global = null; return true; })); }",
+        "global"
+    )
+    @InlineData("private static void Probe() { Array.Clear(items, 0, items.Length); }", "items[0]")
+    @InlineData(
+        "private static readonly Dictionary<int,int> dictionary = new Dictionary<int,int>(EqualityComparer<int>.Create((x,y) => x == y, x => { global = null; return x; })); private static void Probe() { _ = dictionary.ContainsKey(1); }",
+        "global"
+    )
+    func RefParameter_ImplicitOperationEdges(members string, root string) {
+        let printed = AssertRunsLikeCSharp(`
+using System;
+using System.Collections.Generic;
+using System.Linq;
+public static class Demo {
+    private static string? global;
+    private static string?[] items = new string?[1];
+    ` + members + `
+    private static int Guard(ref string? value) {
+        if (value == null) return 0;
+        Probe();
+        return value.Length + 31;
+    }
+    public static string Run() {
+        global = "safe"; items[0] = "safe";
+        try { return Guard(ref ` + root + `).ToString(); }
+        catch (NullReferenceException) { return "cleared"; }
+    }
+}`)
+        Assert.Contains("return value!!.Length + 31", printed)
+    }
+
+    @Theory
+    @InlineData(
+        "private static IEnumerable<object> Create() { global = null; yield return 1; }",
+        "_ = pending.Count();"
+    )
+    @InlineData(
+        "private sealed class Key { public override int GetHashCode() { global = null; return 1; } } private static IEnumerable<object> Create() => new[] { new Key() }.Distinct();",
+        "_ = pending.Count();"
+    )
+    @InlineData(
+        "private sealed class Key { public override int GetHashCode() { global = null; return 1; } } private static IEnumerable<object> Create() => new[] { new Key() };",
+        "_ = new Dictionary<object,int>(pending.Select(x => new KeyValuePair<object,int>(x, 1)));"
+    )
+    func RefParameter_StoredSequencesExecuteCallbacksAtEnumeration(members string, consume string) {
+        let printed = AssertRunsLikeCSharp(`
+using System;
+using System.Linq;
+using System.Collections.Generic;
+public static class Demo {
+    private static string? global;
+    ` + members + `
+    private static int Guard(ref string? value, IEnumerable<object> pending) {
+        if (value == null) return 0;
+        ` + consume + `
+        return value.Length + 37;
+    }
+    public static string Run() {
+        var pending = Create();
+        global = "safe";
+        try { return Guard(ref global, pending).ToString(); }
+        catch (NullReferenceException) { return "cleared"; }
+    }
+}`)
+        Assert.Contains("return value!!.Length + 37", printed)
+    }
+
+    @Fact
+    func RefParameter_MoreThan128PureCallbackContextsRemainPure() {
+        let statements = string.Concat(Enumerable.Repeat("Invoke(() => { });", 160))
+        let printed = AssertRunsLikeCSharp(`
+public static class Demo {
+    private static void Invoke(System.Action action) { action(); }
+    private static int Guard(ref string? value) {
+        if (value == null) return 0;
+        ` + statements + `
+        return value.Length;
+    }
+    public static string Run() { string? text = "safe"; return Guard(ref text).ToString(); }
+}`)
+        Assert.Contains("return value.Length", printed)
+        Assert.DoesNotContain("value!!", printed)
+    }
+
+    @Theory
+    @InlineData("disposable.Dispose();")
+    @InlineData("_ = $\"{formatted}\";")
+    @InlineData("_ = $\"{(formatted, 1)}\";")
+    func RefParameter_UntrustedRuntimeImplementationsRemainUnknown(statement string) {
+        let printed = AssertRunsLikeCSharp(`
+using System;
+using ExternalEffects;
+public static class Demo {
+    private static void Probe(IDisposable disposable, Formatted formatted) { ` + statement + ` }
+    private static int Guard(ref string? value, IDisposable disposable, Formatted formatted) {
+        if (value == null) return 0;
+        Probe(disposable, formatted);
+        return value.Length + 41;
+    }
+    public static string Run() {
+        var disposable = new Disposer(); var formatted = new Formatted(); Store.Value = "safe";
+        try { return Guard(ref Store.Value, disposable, formatted).ToString(); }
+        catch (NullReferenceException) { return "cleared"; }
+    }
+}`, library: `
+namespace ExternalEffects;
+public static class Store { public static string? Value; }
+public sealed class Disposer : System.IDisposable { public void Dispose() { Store.Value = null; } }
+public sealed class Formatted { public override string ToString() { Store.Value = null; return "formatted"; } }
+`)
+        Assert.Contains("return value!!.Length + 41", printed)
     }
 
     @Fact
@@ -1923,6 +2047,154 @@ public static class Demo {
         )
         Assert.Contains("return s.Length + 1", printed)
         Assert.Contains("return s!!.Length + 2", printed)
+    }
+
+    @Fact
+    func RefParameter_ReferencedSourceProjectAndCrossTreeCallbackUseOwningModels() {
+        let producerTrees = []SyntaxTree{
+            CSharpSyntaxTree.ParseText(
+                "using System; using System.Linq; public static partial class Producer { public static string? Value; public static void Probe(Func<int,bool> predicate) { _ = new[] {1}.Where(predicate).Count(); } }",
+                path: "Producer.cs"
+            ),
+            CSharpSyntaxTree.ParseText(
+                "public static partial class Producer { public static void Clear() { Value = null; } }",
+                path: "Producer.Clear.cs"
+            )
+        }
+        let options = CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+            NullableContextOptions.Enable
+        )
+        let producer = CSharpCompilation.Create(
+            "Producer5326",
+            producerTrees,
+            CSharpProjectLoader.RuntimeReferences(),
+            options
+        )
+        let consumerTrees = []SyntaxTree{
+            CSharpSyntaxTree.ParseText(
+                "using System; public static partial class Demo { private static int Guard(ref string? value) { if(value == null) return 0; Producer.Probe(Predicate); return value.Length; } public static string Run() { Producer.Value = \"safe\"; try { return Guard(ref Producer.Value).ToString(); } catch(NullReferenceException) { return \"cleared\"; } } }",
+                path: "Consumer.cs"
+            ),
+            CSharpSyntaxTree.ParseText(
+                "public static partial class Demo { private static bool Predicate(int item) { Producer.Clear(); return true; } }",
+                path: "Consumer.Callback.cs"
+            )
+        }
+        let consumer = CSharpCompilation.Create(
+            "Consumer5326",
+            consumerTrees,
+            CSharpProjectLoader.RuntimeReferences().Append(cast[MetadataReference](producer.ToMetadataReference())),
+            options
+        )
+        Assert.Empty(
+            consumer.GetDiagnostics().Where((diagnostic Diagnostic) -> diagnostic.Severity == DiagnosticSeverity.Error)
+        )
+        var expected string? = nil
+        let native = AssemblyLoadContext("SourceOwner5326", isCollectible: true)
+        try {
+            for compilation in[]CSharpCompilation{producer, consumer} {
+                using let image = MemoryStream()
+                let emitted = compilation.Emit(image)
+                Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics))
+                image.Position = 0
+                let assembly = native.LoadFromStream(image)
+                if object.ReferenceEquals(compilation, consumer) {
+                    expected = cast[string](assembly.GetType("Demo", true)!!.GetMethod("Run")!!.Invoke(nil, nil))
+                }
+            }
+        } finally {
+            native.Unload()
+        }
+        Assert.Equal("cleared", expected)
+        let texts = List[string]()
+        for compilation in[]CSharpCompilation{consumer, producer} {
+            for tree in compilation.SyntaxTrees {
+                let model = compilation.GetSemanticModel(tree)
+                let document = LoadedDocument(tree.FilePath, tree, model)
+                texts.Add(
+                    GSharpPrinter.Print(
+                        CSharpToGSharpTranslator().TranslateDocument(
+                            document,
+                            TranslationContext(compilation, model, document.FilePath)
+                        )
+                    )
+                )
+            }
+        }
+        Assert.Contains("return value!!.Length", texts[0])
+        let lines = texts.SelectMany((text string) -> text.Split('\n')).ToArray()
+        let imports = lines.Where((line string) -> line.StartsWith("import ", StringComparison.Ordinal)).Distinct()
+        let bodies = lines.Where((line string) -> !line.StartsWith("import ", StringComparison.Ordinal))
+        Assert.Equal(expected, CompileAndRun(string.Join("\n", imports.Concat(bodies)), Array.Empty[byte]()).Trim())
+    }
+
+    @Fact
+    func RefParameter_CompilationIndexesAreSharedAcrossDocumentVisitors() {
+        let trees = Enumerable
+            .Range(0, 8)
+            .Select(
+            (index int32) -> cast[SyntaxTree](
+                CSharpSyntaxTree.ParseText(
+                    "using System.Linq; public static class Part" + index.ToString() +
+                        " { private static string? text; private static ref string? Slot() => ref text; private static void Clear() { text = null; } " +
+                        "private static int Guard(ref string? value) { if(value == null) return 0; Clear(); _ = new[] {1}.Where(x => true).Count(); return value.Length; } }",
+                    path: "Part" + index.ToString() + ".cs"
+                )
+            )
+        )
+            .ToArray()
+        let compilation = CSharpCompilation.Create(
+            "IndexSharing5326",
+            trees,
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+                NullableContextOptions.Enable
+            )
+        )
+        var first TranslationContext? = nil
+        for tree in trees {
+            let model = compilation.GetSemanticModel(tree)
+            let context = TranslationContext(compilation, model, tree.FilePath)
+            let initial = first ?? context
+            first = initial
+            Assert.Same(initial.EffectIndexes, context.EffectIndexes)
+            let printed = GSharpPrinter.Print(
+                CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, model), context)
+            )
+            Assert.Contains("return value!!.Length", printed)
+        }
+        Assert.InRange(first!!.EffectIndexes.TreeVisits, trees.Length, trees.Length * 3)
+    }
+
+    @Fact
+    func RefParameter_LoadOwnedImagesShareMetadataAndPreserveReferenceProperties() {
+        let directory = Path.Combine(AppContext.BaseDirectory, "SharedImages5326", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let path = Path.Combine(directory, "System.Console.dll")
+            File.Copy(typeof(Console).Assembly.Location, path)
+            let snapshots = Dictionary[string, PortableExecutableReference](StringComparer.Ordinal)
+            let first = TranslationContext.CreateOwnedMetadataReference(path, snapshots: snapshots)
+            File.WriteAllBytes(path, []byte{0})
+            for var index = 0; index < 16; index++ {
+                let properties = MetadataReferenceProperties
+                    .Assembly
+                    .WithAliases(ImmutableArray.Create("framework"))
+                    .WithEmbedInteropTypes(index % 2 == 0)
+                let reference = TranslationContext.CreateOwnedMetadataReference(path, properties, snapshots)
+                Assert.Equal(properties, reference.Properties)
+                Assert.Same(first.GetMetadata().Id, reference.GetMetadata().Id)
+                let compilation = CSharpCompilation.Create(
+                    "ImageProject" + index.ToString(),
+                    references: []MetadataReference{reference}
+                )
+                Assert.NotNull(compilation.GetAssemblyOrModuleSymbol(reference))
+                Assert.True(TranslationContext.HasTrustedEffectImage(reference, typeof(Console).Assembly.FullName!!))
+            }
+            Assert.Single(snapshots)
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
     }
 
     @Fact
@@ -2425,13 +2697,13 @@ namespace OtherNs
         Assert.Contains("return s!!.Length + 17", printed)
         Assert.Contains("return s!!.Length + 18", printed)
         Assert.Contains("return s.Length + 19", printed)
-        Assert.Contains("return s.Length + 15", printed)
+        Assert.Contains("return s!!.Length + 15", printed)
         Assert.Contains("return s!!.Length + total + 16", printed)
         Assert.Contains("return s.Length + total + 1", printed)
         Assert.Contains("return s!!.Length + total + 2", printed)
         Assert.Contains("return s.Length + total + 4", printed)
         Assert.Contains("return s!!.Length + total + 23", printed)
-        Assert.Equal(14, Regex.Matches(printed, `s!!`).Count)
+        Assert.Equal(15, Regex.Matches(printed, `s!!`).Count)
     }
 
     /// Issue #5697: gsc narrows after a `do ... while`, `while`, or `for` loop whose exit condition proves non-null
@@ -2871,10 +3143,10 @@ public partial class Demo
         Assert.Contains("return s!!.Length + 24", printed)
         Assert.Contains("return s!!.Length + 25", printed)
         Assert.Contains("return s!!.Length + 26", printed)
-        Assert.Contains("return s.Length + 29", printed)
+        Assert.Contains("return s!!.Length + 29", printed)
         Assert.Contains("return s!!.Length + 27", printed)
         Assert.Contains("obj!!.GetHashCode()", printed)
-        Assert.Equal(19, Regex.Matches(printed, `s!!`).Count)
+        Assert.Equal(20, Regex.Matches(printed, `s!!`).Count)
     }
 
     /// Issues #5637 and #5238: an accessor in an earlier operand of the same expression removes a by-reference fact

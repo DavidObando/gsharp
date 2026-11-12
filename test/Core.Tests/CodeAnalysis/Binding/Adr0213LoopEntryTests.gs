@@ -1468,7 +1468,7 @@ func Run(ref text string?, values []int32) int32 {
     return n
 }
 func Main() { }`, "")
-            Add("interface-method-member-call-keeps-a-by-reference-fact (A3)", `package T
+            Add("open-interface-dispatch-invalidates-a-by-reference-fact", `package T
 import System
 interface IWork {
     func Do();
@@ -1485,8 +1485,8 @@ func Run(ref text string?, work IWork) int32 {
     }
     return n
 }
-func Main() { }`, "")
-            Add("inherited-interface-method-member-call-keeps-a-by-reference-fact (A3)", `package T
+func Main() { }`, "GS0158@12:16")
+            Add("inherited-open-interface-dispatch-invalidates-a-by-reference-fact", `package T
 import System
 interface IWork {
     func Do();
@@ -1501,8 +1501,8 @@ func Run(ref text string?, work IChild) int32 {
     }
     return n
 }
-func Main() { }`, "")
-            Add("imported-interface-method-member-call-keeps-a-by-reference-fact (A3)", `package T
+func Main() { }`, "GS0158@10:16")
+            Add("unmodeled-imported-interface-dispatch-invalidates-a-by-reference-fact", `package T
 import System
 import System.Collections.Generic
 func Run(ref text string?, values IList[int32]) int32 {
@@ -1514,8 +1514,8 @@ func Run(ref text string?, values IList[int32]) int32 {
     }
     return n
 }
-func Main() { }`, "")
-            Add("object-method-on-an-interface-keeps-a-by-reference-fact (A3)", `package T
+func Main() { }`, "GS0158@7:16")
+            Add("open-object-method-on-interface-invalidates-a-by-reference-fact", `package T
 import System
 interface IWork {
     func Do();
@@ -1529,8 +1529,8 @@ func Run(ref text string?, work IWork) int32 {
     }
     return n
 }
-func Main() { }`, "")
-            Add("constraint-method-member-call-keeps-a-by-reference-fact (A3)", `package T
+func Main() { }`, "GS0158@9:16")
+            Add("open-constraint-dispatch-invalidates-a-by-reference-fact", `package T
 import System
 interface IWork {
     func Do();
@@ -1544,7 +1544,7 @@ func Run[W IWork](ref text string?, work W) int32 {
     }
     return n
 }
-func Main() { }`, "")
+func Main() { }`, "GS0158@9:16")
             Add("extension-method-member-call-keeps-a-by-reference-fact (A3)", `package T
 import System
 import System.Collections.Generic
@@ -2145,7 +2145,7 @@ func Run(ref a string?, ref b string?) int32 {
     return n
 }
 func Main() { }`, "GS0158@7:13")
-            Add("member-of-a-source-interface-with-an-imported-base-resolves (A3)", `package T
+            Add("open-source-interface-with-imported-base-invalidates-a-by-reference-fact", `package T
 import System
 class Holder {
     func Do() { }
@@ -2162,7 +2162,7 @@ func Run(ref s string?, box IBox) int32 {
     }
     return n
 }
-func Main() { }`, "")
+func Main() { }`, "GS0158@12:13")
             Add("imported-getter-with-user-code-removes-a-by-reference-fact (R16)", `package T
 import System
 import System.Collections.Generic

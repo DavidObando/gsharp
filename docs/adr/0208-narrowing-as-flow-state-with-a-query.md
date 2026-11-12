@@ -388,6 +388,19 @@ Changed recursive bindings remain unknown; cyclic incomplete negatives are not c
 Traversal observes the translation cancellation token and bounds context growth.
 An open value argument can contain guarded reference storage, including imported structs.
 
+An imported interface declaration does not prove its runtime implementation.
+Unmodeled open dispatch has unknown effects. Proven closed receivers retain their selected summaries.
+Operation traversal uses the owning source compilation, including referenced source projects.
+Event accessors, deconstruction leaves, instance property initializers, and actual buffer operands participate in storage effects.
+Enumeration executes source iterator bodies, deferred callbacks, and applicable stored comparer factories.
+Creating a deferred sequence does not execute its body.
+
+Each project load owns one immutable metadata snapshot per referenced image.
+Reference properties can differ while sharing that snapshot and its verified provenance.
+Compilation-wide indexes use weak compilation ownership; document visitors retain separate mutable summaries.
+Completed summaries do not consume the active recursion budget.
+Cheap deferred-factory shape checks precede framework image verification.
+
 **The conservative default.** The lists above and the proof rules of
 section 8 are closed. A fact survives a program point only when one of the
 listed proof rules shows that it does; a construct, statement kind, call,

@@ -115,6 +115,18 @@ class TranslationContext {
     }
     internal var StorageEffectBodyVisits int32
 
+    internal class StorageIndexes {
+        var AliasedFields HashSet[IFieldSymbol]?
+        var Methods Dictionary[string, List[IMethodSymbol]]?
+        var DeferredFactories List[Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax]?
+        let Iterators HashSet[IMethodSymbol] = HashSet[IMethodSymbol](SymbolEqualityComparer.Default)
+        let ComparerFactories List[Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax] =
+        List[Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax]()
+        var TreeVisits int32
+    }
+
+    internal prop EffectIndexes StorageIndexes -> StorageIndexesByCompilation.GetOrCreateValue(this.rootCompilation)
+
     /// Gets the owning C# compilation.
     prop Compilation CSharpCompilation {
         get;
@@ -178,9 +190,7 @@ class TranslationContext {
                 if this.rootCompilation.ContainsSyntaxTree(tree) {
                     ownerCompilation = this.rootCompilation
                 } else {
-                    for candidate in(this.repositoryCompilations ?? Array.Empty[CSharpCompilation]()).Concat(
-                        this.siblingCompilations ?? Array.Empty[CSharpCompilation]()
-                    ) {
+                    for candidate in this.SourceCompilations() {
                         if candidate != nil && candidate.ContainsSyntaxTree(tree) {
                             ownerCompilation = candidate
                             break
@@ -196,6 +206,39 @@ class TranslationContext {
         this.Compilation = ownerCompilation
         this.SemanticModel = model
         return RestoreModelScope(this, previousCompilation, previousModel)
+    }
+
+    internal func SourceCompilations(includeSiblingLookup bool = true) IReadOnlyList[CSharpCompilation] {
+        let result = List[CSharpCompilation]()
+        let pending = Queue[CSharpCompilation]()
+        let seen = HashSet[CSharpCompilation](ReferenceEqualityComparer.Instance)
+        pending.Enqueue(this.rootCompilation)
+        if includeSiblingLookup {
+            for compilation in(this.repositoryCompilations ?? Array.Empty[CSharpCompilation]()).Concat(
+                this.siblingCompilations ?? Array.Empty[CSharpCompilation]()
+            ) {
+                pending.Enqueue(compilation)
+            }
+        }
+        while pending.Count > 0 {
+            this.CancellationToken.ThrowIfCancellationRequested()
+            let compilation = pending.Dequeue()
+            if !seen.Add(compilation) {
+                continue
+            }
+            result.Add(compilation)
+            for reference in compilation.References.OfType[CompilationReference]() {
+                if reference.Compilation is CSharpCompilation source {
+                    pending.Enqueue(source)
+                }
+            }
+        }
+        return result
+    }
+
+    internal func GetOwnedSemanticModel(tree SyntaxTree) SemanticModel {
+        using let owner = this.UseSemanticModelFor(tree)
+        return this.SemanticModel
     }
 
     /// Resolves the declared symbol for a declaration node via the active model.
@@ -347,17 +390,35 @@ class TranslationContext {
     }
 
     shared {
+        private let StorageIndexesByCompilation ConditionalWeakTable[CSharpCompilation, StorageIndexes] =
+        ConditionalWeakTable[CSharpCompilation, StorageIndexes]()
         private let OwnedEffectImages ConditionalWeakTable[PortableExecutableReference, StrongBox[string]] =
         ConditionalWeakTable[PortableExecutableReference, StrongBox[string]]()
 
         /// Bind and verify the same immutable bytes; a caller-supplied path is not image provenance.
         func CreateOwnedMetadataReference(
             path string,
-            properties MetadataReferenceProperties = default(MetadataReferenceProperties)
+            properties MetadataReferenceProperties = default(MetadataReferenceProperties),
+            snapshots Dictionary[string, PortableExecutableReference]? = nil
         ) PortableExecutableReference {
+            let key = Path.GetFullPath(path)
+            if snapshots != nil && snapshots.TryGetValue(key, out var snapshot) && OwnedEffectImages.TryGetValue(
+                snapshot,
+                out var fingerprint
+            ) {
+                if snapshot.Properties.Equals(properties) {
+                    return snapshot
+                }
+                let projected = snapshot.WithProperties(properties)
+                OwnedEffectImages.Add(projected, fingerprint)
+                return projected
+            }
             let image = ImmutableArray.CreateRange(File.ReadAllBytes(path))
             let reference = MetadataReference.CreateFromImage(image, properties: properties, filePath: path)
             OwnedEffectImages.Add(reference, StrongBox[string](Convert.ToHexString(SHA256.HashData(image.AsSpan()))))
+            if snapshots != nil {
+                snapshots[key] = reference
+            }
             return reference
         }
 
