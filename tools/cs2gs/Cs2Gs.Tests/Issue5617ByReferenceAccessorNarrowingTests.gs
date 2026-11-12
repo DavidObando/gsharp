@@ -2827,7 +2827,11 @@ public class Demo
     shared {
         /// Runs `Demo.Run()` of the C# and of its translation and compares the output. [`library`](paramref) is C#
         /// that both reference as a prebuilt assembly (`Lib5617`), so its types are imported in the G#.
-        private func AssertRunsLikeCSharp(source string, library string? = nil) string {
+        internal func AssertRunsLikeCSharp(
+            source string,
+            library string? = nil,
+            rejectConditionalIndexWarnings bool = false
+        ) string {
             let libraryImage = if library == nil {
                 Array.Empty[byte]()
             } else {
@@ -2869,7 +2873,7 @@ public class Demo
                 let document = LoadedDocument("Snippet.cs", tree, model)
                 let context = TranslationContext(compilation, model, document.FilePath)
                 let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
-                Assert.Equal(expected, CompileAndRun(printed, libraryImage).Trim())
+                Assert.Equal(expected, CompileAndRun(printed, libraryImage, rejectConditionalIndexWarnings).Trim())
                 return printed
             } finally {
                 loadContext.Unload()
@@ -2891,7 +2895,11 @@ public class Demo
             return stream.ToArray()
         }
 
-        private func CompileAndRun(printed string, libraryImage[]byte) string {
+        private func CompileAndRun(
+            printed string,
+            libraryImage[]byte,
+            rejectConditionalIndexWarnings bool = false
+        ) string {
             let compiler string? = FindCompiler()
             Assert.True(
                 compiler != nil,
@@ -2926,6 +2934,12 @@ public class Demo
                         "\n\nTranslated G#:\n" +
                         printed
                 )
+                if rejectConditionalIndexWarnings {
+                    Assert.True(
+                        !compileOutput.Contains("GS0300", StringComparison.Ordinal),
+                        compileOutput + "\n" + printed
+                    )
+                }
                 // A `!!` on the by-reference read where gsc keeps the fact is GS0536.
                 let lines = printed.Replace("\r\n", "\n").Split('\n')
                 for diagnostic in Regex.Matches(compileOutput, `Snippet\.gs\((\d+),\d+,\d+,\d+\): warning GS0536`) {

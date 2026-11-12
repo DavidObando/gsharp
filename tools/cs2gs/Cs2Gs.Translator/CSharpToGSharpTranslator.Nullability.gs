@@ -699,8 +699,10 @@ partial class CSharpToGSharpTranslator {
                 case EqualsValueClauseSyntax{Parent: PropertyDeclarationSyntax property} {
                     return this.context.GetDeclaredSymbol(property)
                 }
-                case assignment is AssignmentExpressionSyntax when assignment.IsKind(
-                    SyntaxKind.SimpleAssignmentExpression
+                case assignment is AssignmentExpressionSyntax when(
+                    assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) || assignment.IsKind(
+                        SyntaxKind.CoalesceAssignmentExpression
+                    )
                 ) &&
                     assignment.Right == node {
                     let assigned = this.context.GetSymbolInfo(assignment.Left).Symbol

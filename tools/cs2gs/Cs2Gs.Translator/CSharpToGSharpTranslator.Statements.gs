@@ -5916,18 +5916,28 @@ partial class CSharpToGSharpTranslator {
                 this.TryTranslateIfLetBooleanExpression(binary, out var ifLet) {
                 return ifLet
             }
-            // ADR-0159 / issue #3501: C# guards a `params` array against an
-            // explicit null argument (`args != null`), but a G# variadic
-            // parameter always materializes an array, so gsc rejects the
-            // always-decided nil compare (GS0523). Fold the test to its
-            // constant value; the `&&`/`||` simplification below then absorbs
-            // it so no literal `true &&` survives in the output.
-            if this.TryFoldParamsArrayNullCheck(binary, out var foldedParamsCheck) {
-                return foldedParamsCheck
+            // External CLR callers can supply a null params carrier. Retain its identity check without GS0523.
+            if this.TryTranslateParamsArrayNullCheck(binary, out var paramsCheck) {
+                return paramsCheck
             }
-            var left GExpression? = this.TranslateExpression(binary.Left)
+            // C# suppression is erased. Normalize null before preserving the selected comparison operator.
+            let equality = binary.IsKind(SyntaxKind.EqualsExpression) || binary.IsKind(SyntaxKind.NotEqualsExpression)
+            var left GExpression? = if equality && IsNullOrSuppressedNull(binary.Left) {
+                LiteralExpression.Null()
+            } else {
+                this.TranslateExpression(binary.Left)
+            }
             let op = binary.OperatorToken.Text
-            var right GExpression? = this.TranslateBinaryRightOperand(binary)
+            var right GExpression? = if equality && IsNullOrSuppressedNull(binary.Right) {
+                LiteralExpression.Null()
+            } else {
+                this.TranslateBinaryRightOperand(binary)
+            }
+            if this.NullComparisonUsesUserOperator(binary) {
+                // Preserve C#'s selected operator. An untyped G# nil comparison uses the built-in null test.
+                left = this.PreserveUserOperatorNullOperand(binary.Left, left)
+                right = this.PreserveUserOperatorNullOperand(binary.Right, right)
+            }
             if op == "&&" && (left is LiteralExpression && left.Kind == LiteralKind.Bool && left.Value == "true") {
                 return right
             }
@@ -6079,6 +6089,25 @@ partial class CSharpToGSharpTranslator {
                 right = this.CoerceOperandTo(right, rightConverted, binary.Right.GetLocation())
             }
             return BinaryExpression(left, op, right)
+        }
+
+        private func PreserveUserOperatorNullOperand(value ExpressionSyntax, translated GExpression?) GExpression? ->
+        if IsNullOrSuppressedNull(value) {
+            cast[GExpression](
+                ConversionExpression(
+                    MakeNullable(
+                        this.typeMapper.Map(
+                            this.context.GetTypeInfo(value).ConvertedType,
+                            this.context,
+                            value.GetLocation()
+                        )
+                    ),
+                    translated,
+                    isCheckedReferenceCast: true
+                )
+            )
+        } else {
+            translated
         }
 
         // Issue #4350: whether C# binary numeric promotion widened the
@@ -7318,45 +7347,61 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
-        /// ADR-0159 / issue #3501: folds `args == null` /
-        /// `args != null` where `args` is the enclosing method's
-        /// C# `params` array to its constant value — a G# variadic
-        /// parameter always materializes an array, so gsc rejects the
-        /// always-decided nil compare (GS0523).
-        private func TryFoldParamsArrayNullCheck(binary BinaryExpressionSyntax, out folded GExpression?) bool {
-            folded = nil
-            let isEquals = binary.IsKind(SyntaxKind.EqualsExpression)
+        /// A CLR caller can pass a null params carrier. Test its identity without a bare-array GS0523 comparison.
+        private func TryTranslateParamsArrayNullCheck(binary BinaryExpressionSyntax, out translated GExpression?) bool {
+            translated = nil
+            if !this.TryGetParamsArrayNullCheck(binary, out var operand, out var isEquals) {
+                return false
+            }
+            translated = this.BuildParamsArrayNullTest(this.TranslateExpression(operand), !isEquals)
+            return true
+        }
+
+        private func TryGetParamsArrayNullCheck(
+            binary BinaryExpressionSyntax,
+            out operand ExpressionSyntax?,
+            out isEquals bool
+        ) bool {
+            operand = nil
+            isEquals = binary.IsKind(SyntaxKind.EqualsExpression)
             if !isEquals && !binary.IsKind(SyntaxKind.NotEqualsExpression) {
                 return false
             }
-            let operand ExpressionSyntax? = if binary.Right.IsKind(SyntaxKind.NullLiteralExpression) {
+            operand = if IsNullOrSuppressedNull(binary.Right) {
                 binary.Left
             } else {
                 (
-                    if binary.Left.IsKind(SyntaxKind.NullLiteralExpression) {
+                    if IsNullOrSuppressedNull(binary.Left) {
                         binary.Right
                     } else {
                         default(ExpressionSyntax?)
                     }
                 )
             }
-            if !this.IsParamsArrayOperand(operand) {
-                return false
-            }
-            folded = LiteralExpression.Bool(!isEquals)
-            return true
+            return this.IsParamsArrayOperand(operand) && !this.NullComparisonUsesUserOperator(binary)
         }
 
-        /// ADR-0159 / issue #3501: true when [`operand`](paramref) reads a
-        /// C# `params` parameter. Such a parameter translates to a G#
-        /// variadic, which always materializes an array, so any nil comparison
-        /// against it is statically decided and gsc reports GS0523. Shared by
-        /// the `args == null` binary spelling
-        /// ((cref:TryFoldParamsArrayNullCheck)) and the `args is
-        /// null` / `args is not null` pattern spelling
-        /// (`TranslatePatternTest` / `TranslateNotPatternTest`).
-        private func IsParamsArrayOperand(operand ExpressionSyntax?) bool -> operand != nil &&
-            (this.context.GetSymbolInfo(operand).Symbol is IParameterSymbol and {IsParams: true})
+        private func BuildParamsArrayNullTest(receiver GExpression?, nonNull bool) GExpression ->
+        BinaryExpression(
+            ConversionExpression(NamedTypeReference("object"), receiver),
+            if nonNull {
+                "!="
+            } else {
+                "=="
+            },
+            LiteralExpression.Null()
+        )
+
+        /// Identifies a params carrier, not a proof of its runtime value. External CLR callers can supply null.
+        private func IsParamsArrayOperand(operand ExpressionSyntax?) bool {
+            var operand = Unparenthesize(operand)
+            while operand is PostfixUnaryExpressionSyntax suppression && suppression.IsKind(
+                SyntaxKind.SuppressNullableWarningExpression
+            ) {
+                operand = Unparenthesize(suppression.Operand)
+            }
+            return operand != nil && this.context.GetSymbolInfo(operand).Symbol is IParameterSymbol{IsParams: true}
+        }
 
         /// Resolves the (cref:SwitchLabelSyntax) that a `goto case
         /// K;` / `goto default;` statement targets, by walking up to

@@ -674,8 +674,14 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func ConditionalIndexReceiverIsFlowNarrowed(
-            receiver ExpressionSyntax
-        ) bool -> this.IsGSharpFlowNarrowedLocal(receiver, requireRoslynFlowNotNull: false) ||
+            receiver ExpressionSyntax,
+            requireRuntimeNonNullProof bool = false
+        ) bool -> this
+            .IsGSharpFlowNarrowedLocal(
+            receiver,
+            requireRoslynFlowNotNull: false,
+            requireRuntimeNonNullProof: requireRuntimeNonNullProof
+        ) ||
             this.IsGSharpFlowNarrowedFieldOrPropertyInSameCondition(receiver)
 
         private func ConditionalIndexNeedsRuntimeGuard(conditionalAccess ConditionalAccessExpressionSyntax) bool {
@@ -695,7 +701,8 @@ partial class CSharpToGSharpTranslator {
                 )
             ) &&
                 this.GSharpExpressionIsStaticallyNonNull(receiver) && !this.ConditionalIndexReceiverIsFlowNarrowed(
-                receiver
+                receiver,
+                requireRuntimeNonNullProof: true
             )
         }
 
@@ -1484,11 +1491,9 @@ partial class CSharpToGSharpTranslator {
         /// `null!`-initialized), so the guard is omitted only when G# itself proves
         /// the value non-nil, or when emitting it is rejected outright:
         ///   1. a non-nullable value type (never null; `Nullable<T>` is not one);
-        ///   2. a `params` array subject (a G# variadic always materializes an
-        ///      array; the guard is GS0523);
-        ///   3. a range slice of a built-in array or string (`xs[1..^1]`), which slicing never
+        ///   2. a range slice of a built-in array or string (`xs[1..^1]`), which slicing never
         ///      makes nil (a custom `Slice` method can return null, so it keeps the guard);
-        ///   4. a declared bare-slice slot, i.e. a field/property read registered
+        ///   3. a declared bare-slice slot, i.e. a field/property read registered
         ///      by RegisterPatternMemberShape (G# zero value is an empty slice, so the
         ///      guard is dead; GS0523).
         /// Anything else keeps the guard, including a list element (`new int[1][]`
@@ -1513,7 +1518,7 @@ partial class CSharpToGSharpTranslator {
                 return true
             }
             if receiverSyntax != nil && this.IsParamsArrayOperand(receiverSyntax) {
-                return true
+                return false
             }
             if receiver is IndexExpression index &&
                 index.Index is RangeIndexExpression &&
@@ -1537,7 +1542,14 @@ partial class CSharpToGSharpTranslator {
         /// type may genuinely be null (a fresh `new int[1][]`), and a bare-typed
         /// `!= nil` is the dead-check warning GS0523, so that one spelling compares
         /// the element as `object`, which G# accepts without the warning.
-        private func BuildReceiverNullGuard(receiver GExpression?, receiverType ITypeSymbol?) GExpression {
+        private func BuildReceiverNullGuard(
+            receiver GExpression?,
+            receiverType ITypeSymbol?,
+            receiverSyntax ExpressionSyntax? = nil
+        ) GExpression {
+            if this.IsParamsArrayOperand(receiverSyntax) {
+                return this.BuildParamsArrayNullTest(receiver, nonNull: true)
+            }
             if receiver != nil &&
                 (receiver is IndexExpression || this.state.BareSliceElementReads.Contains(receiver)) &&
                 receiverType is IArrayTypeSymbol &&
@@ -1820,15 +1832,8 @@ partial class CSharpToGSharpTranslator {
             }
             switch pattern {
                 case paramsNull is ConstantPatternSyntax when this.IsNullPatternValue(paramsNull.Expression) &&
-                    this
-                    .IsParamsArrayOperand(receiverSyntax) {
-                    // ADR-0159 / issue #3501: `args is null` where `args` is a
-                    // C# `params` array. A G# variadic parameter always
-                    // materializes an array, so the compare is statically
-                    // decided and gsc reports GS0523 — fold it the same way the
-                    // `args == null` spelling is folded (see
-                    // TryFoldParamsArrayNullCheck).
-                    return LiteralExpression.Bool(false)
+                    this.IsParamsArrayOperand(receiverSyntax) {
+                    return this.BuildParamsArrayNullTest(receiver, nonNull: false)
                 }
                 case constant is ConstantPatternSyntax when this.IsNullPatternValue(constant.Expression) &&
                     !isNestedPatternMember &&
@@ -2405,13 +2410,8 @@ partial class CSharpToGSharpTranslator {
             }
             switch inner {
                 case paramsNull is ConstantPatternSyntax when this.IsNullPatternValue(paramsNull.Expression) &&
-                    this
-                    .IsParamsArrayOperand(receiverSyntax) {
-                    // ADR-0159 / issue #3501: `args is not null` on a C#
-                    // `params` array — always true for a G# variadic, which
-                    // materializes an array; the `!= nil` spelling would be
-                    // GS0523 (see TryFoldParamsArrayNullCheck).
-                    return LiteralExpression.Bool(true)
+                    this.IsParamsArrayOperand(receiverSyntax) {
+                    return this.BuildParamsArrayNullTest(receiver, nonNull: true)
                 }
                 case constant is ConstantPatternSyntax when this.IsNullPatternValue(constant.Expression) {
                     // `x is not null` → `x != nil`.
@@ -2904,7 +2904,8 @@ partial class CSharpToGSharpTranslator {
                         this.BuildTypeTestExpression(receiver, recursive.Type, recursive)
                     } else {
                         default(GExpression?)
-                    }
+                    },
+                    receiverSyntax
                 )
             } else if recursive.Type != nil {
                 this.BuildTypeTestExpression(receiver, recursive.Type, recursive)
@@ -2913,7 +2914,7 @@ partial class CSharpToGSharpTranslator {
                     if guardIsRedundant {
                         default(GExpression?)
                     } else {
-                        this.BuildReceiverNullGuard(receiver, receiverType)
+                        this.BuildReceiverNullGuard(receiver, receiverType, receiverSyntax)
                     }
                 )
             }
@@ -5248,15 +5249,7 @@ partial class CSharpToGSharpTranslator {
             if this.CoalesceAssignmentTargetIsNonNullInGSharp(assignment) {
                 return false
             }
-            let target ISymbol? = this.GetProjectedAssignmentTarget(left, this.context.GetSymbolInfo(left).Symbol)
-            if this.IsGSharpFlowNarrowedLocal(left, requireRoslynFlowNotNull: false) ||
-                this.IsGSharpFlowNarrowedFieldOrPropertyInSameCondition(left) ||
-                (
-                (target is ILocalSymbol || target is IParameterSymbol) && this.IsDominatedByNullCheckGuard(left, target)
-            ) {
-                return false
-            }
-            return true
+            return !this.CoalesceAssignmentTargetIsFlowNarrowed(assignment)
         }
 
         private func TranslateCoalescingAssignmentAsExpression(assignment AssignmentExpressionSyntax) GExpression? {
@@ -5279,33 +5272,24 @@ partial class CSharpToGSharpTranslator {
                     cast[GExpression](BlockExpression(statements, value))
                 }
             }
-            // Issue #3774: G# `!!` is a CHECKED assertion that THROWS on nil, not
-            // C#'s erased `!`, so an assertion here is faithful only when the
-            // `??=` expression's value genuinely cannot be nil — and its value is
-            // nil exactly when the right-hand side is. Roslyn's flow state proves
-            // that in a nullable-ENABLED compilation, and
-            // `NullableReferenceValueMayBeNull` reads the C# annotations. Neither
-            // says anything in an OBLIVIOUS compilation, where a same-project
-            // member the whole-program taint analysis promoted to `T?` still reads
-            // as non-null — so `cache ??= Make()` (C#: yields null) gained a
-            // guaranteed throw. Consult the promotion result too in that mode,
-            // which is the same "can this be nil at runtime in G#" question the
-            // rest of the bridge already asks; a literal / provably non-null RHS
-            // keeps its assertion.
-            let rightHandSideMayBeNil = this.NullableReferenceValueMayBeNull(assignment.Right) ||
-                (this.IsObliviousCompilation() && this.IsNullablePromotedValue(assignment.Right))
-            let result GExpression? = if this
+            // Static contracts can preserve nil. Keep the result type without throwing before a conditional guard.
+            var result GExpression? = value
+            if this.GSharpValueHasRuntimeNonNullProof(assignment) {
+                result = EnsureNonNullAssertion(value)
+            } else if this.CoalesceAssignmentResultIsStaticallyNonNull(assignment) &&
+                this
                 .context
                 .GetTypeInfo(assignment)
-                .Nullability
-                .FlowState == Microsoft
-                .CodeAnalysis
-                .NullableFlowState
-                .NotNull ||
-                !rightHandSideMayBeNil {
-                EnsureNonNullAssertion(value)
-            } else {
-                cast[GExpression](value)
+                .Type is {IsReferenceType: true} resultType {
+                result = ConversionExpression(
+                    this.typeMapper.Map(
+                        resultType.WithNullableAnnotation(NullableAnnotation.NotAnnotated),
+                        this.context,
+                        assignment.GetLocation()
+                    ),
+                    value,
+                    isCheckedReferenceCast: true
+                )
             }
             return if statements.Count == 0 {
                 result
@@ -6520,7 +6504,8 @@ partial class CSharpToGSharpTranslator {
         private func BuildCachedSwitchNullGuard(
             receiver GExpression?,
             receiverType ITypeSymbol?,
-            guardOverride GExpression? = nil
+            guardOverride GExpression? = nil,
+            receiverSyntax ExpressionSyntax? = nil
         ) GExpression {
             let cache = this.activeSwitchEvaluationCache!!
             var flagName string
@@ -6557,7 +6542,7 @@ partial class CSharpToGSharpTranslator {
                             List[GStatement]{
                                 AssignmentStatement(
                                     IdentifierExpression(valueName),
-                                    guardOverride ?? this.BuildReceiverNullGuard(receiver, receiverType)
+                                    guardOverride ?? this.BuildReceiverNullGuard(receiver, receiverType, receiverSyntax)
                                 ),
                                 AssignmentStatement(IdentifierExpression(flagName), LiteralExpression.Bool(true))
                             }

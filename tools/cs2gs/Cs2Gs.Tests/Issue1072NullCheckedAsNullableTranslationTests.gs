@@ -118,7 +118,7 @@ namespace Demo
     }
 
     @Fact
-    func FlowNarrowedNullableValue_UsesGSharpSmartCastsAtNonNullSinks() {
+    func OperatorNullCheck_RetainsBridgesAtNonNullSinks() {
         let printed = TranslateUnit(`
 #nullable enable
 using System;
@@ -141,11 +141,47 @@ namespace Demo
         }
     }
 }`)
-        Assert.Contains("Use(next)", printed)
-        Assert.Contains("current = next", printed)
+        // System.Type equality is an operator call. It does not establish a native G# nil-check proof.
+        Assert.Contains("cast[Type?](nil)", printed)
+        Assert.Contains("Use(next!!)", printed)
+        Assert.Contains("current = next!!", printed)
         Assert.Contains("values[0] = next!!", printed)
-        Assert.DoesNotContain("Use(next!!)", printed)
-        Assert.DoesNotContain("current = next!!", printed)
+        Assert.DoesNotContain("Use(next)", printed)
+        Assert.DoesNotContain("current = next\n", printed.Replace("\r\n", "\n"))
+    }
+
+    @Fact
+    func SystemTypeOperatorGuards_PreserveSinkAndIteratorRuntimeContracts() {
+        let printed = Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System;
+using System.Collections.Generic;
+using System.Linq;
+namespace Demo
+{
+    public static class P
+    {
+        static string Use(Type value) => value.Name;
+        static string Read(Type? next)
+        {
+            if (next == null) return "nil";
+            Type current = next;
+            Type[] values = new Type[1];
+            values[0] = next;
+            return Use(next) + ":" + current.Name + ":" + values[0].Name;
+        }
+        static IEnumerable<Type> Hierarchy(Type? current)
+        {
+            while (current != null) { yield return current; current = current.BaseType; }
+        }
+        public static string Run() =>
+            Read(null) + "|" + Read(typeof(string)) + "|" +
+            string.Join(",", Hierarchy(typeof(List<int>)).Select(type => type.Name));
+    }
+}`, "nil|String:String:String|List`1,Object")
+        Assert.Contains("Use(next!!)", printed)
+        Assert.Contains("yield current!!", printed)
+        Assert.Contains("cast[Type?](nil)", printed)
     }
 
     @Fact
