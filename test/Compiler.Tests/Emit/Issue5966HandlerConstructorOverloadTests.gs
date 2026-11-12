@@ -336,6 +336,102 @@ ColdLedger.Dump()`
         AssertColdParity(gsharp, native, fault, expected)
     }
 
+    @Theory
+    @InlineData(true, false, "P0;SFalse;G;C90;T40;CRef;Lp;Hx;Fx;M7/False;End90/1/1/1;|0/1/2/0/0")
+    @InlineData(false, false, "C0;T40;CInTrue;Lp;Hx;Fx;M7/True;P90;SFalse;G;End90/1/1/1;|0/1/2/0/0")
+    @InlineData(true, true, "P0;SFalse;G;C90;TypeInitializationException;End40/0/1/1;|0/0/0/0/0")
+    @InlineData(false, true, "C0;ETrue;TypeInitializationException;End40/0/1/0;|0/0/0/0/0")
+    func SharedFieldCapture_AsyncSegment_EvaluatesBeforeTag(awaitBefore bool, fault bool, expected string) {
+        let mode = if awaitBefore {
+            "Ref"
+        } else {
+            "In"
+        }
+        let modifier = if awaitBefore {
+            "ref"
+        } else {
+            "in"
+        }
+        let gsharpCall = "ColdApi.Write" +
+            mode +
+            "(value: " +
+            modifier +
+            ` ColdLocal.Value, tag: ColdLedger.Tag(), handler: "p${Effects.Hole("x")}")`
+        let nativeCall = "ColdApi.Write" +
+            mode +
+            "(value: " +
+            modifier +
+            ` ColdLocal.Value, tag: ColdLedger.Tag(), handler: $"p{Effects.Hole("x")}")`
+        let gsharpBody = if awaitBefore {
+            "await ColdLedger.Pause()\n" + gsharpCall
+        } else {
+            gsharpCall + "\nawait ColdLedger.Pause()"
+        }
+        let nativeBody = if awaitBefore {
+            "await ColdLedger.Pause();\n" + nativeCall + ";"
+        } else {
+            nativeCall + ";\nawait ColdLedger.Pause();"
+        }
+        var gsharp = "async func Run() bool {\n" + gsharpBody + "\nreturn true\n}\nlet pending = Run()\n"
+        var native = "async System.Threading.Tasks.Task<bool> Run() {\n" +
+            nativeBody +
+            "\nreturn true;\n}\nvar pending = Run();\n"
+        if fault && !awaitBefore {
+            gsharp += "ColdLedger.Fault(pending.IsCompleted)\n"
+            native += "ColdLedger.Fault(pending.IsCompleted);\n"
+        } else {
+            gsharp += "ColdLedger.Pending(pending.IsCompleted)\nColdLedger.Release()\n"
+            native += "ColdLedger.Pending(pending.IsCompleted);\nColdLedger.Release();\n"
+        }
+        gsharp += `try { pending.GetAwaiter().GetResult() } catch (ex Exception) { Effects.Trace += ex.GetType().Name + ";" }
+ColdLedger.Dump()`
+        native += `try { pending.GetAwaiter().GetResult(); } catch (System.Exception ex) { Effects.Trace += ex.GetType().Name + ";"; }
+ColdLedger.Dump()`
+        AssertColdParity(gsharp, native, fault, expected)
+    }
+
+    @Theory
+    @InlineData(true, false, "P0;SFalse;G;C90;T40;M7/True;End90/1/1/1;|0/0/0/0/0")
+    @InlineData(false, true, "C0;ETrue;TypeInitializationException;End40/0/1/0;|0/0/0/0/0")
+    func SharedFieldAlias_AsyncSegment_RetainsDefinitionEffects(awaitBefore bool, fault bool, expected string) {
+        let gsharpSegment = `{
+let captured = &ColdLocal.Value
+let tag = ColdLedger.Tag()
+ColdApi.Consume(value: captured, tag: tag)
+}`
+        let nativeSegment = `{
+ref readonly bool captured = ref ColdLocal.Value;
+int tag = ColdLedger.Tag();
+ColdApi.Consume(value: in captured, tag: tag);
+}`
+        let gsharpBody = if awaitBefore {
+            "await ColdLedger.Pause()\n" + gsharpSegment
+        } else {
+            gsharpSegment + "\nawait ColdLedger.Pause()"
+        }
+        let nativeBody = if awaitBefore {
+            "await ColdLedger.Pause();\n" + nativeSegment
+        } else {
+            nativeSegment + "\nawait ColdLedger.Pause();"
+        }
+        var gsharp = "async func Run() bool {\n" + gsharpBody + "\nreturn true\n}\nlet pending = Run()\n"
+        var native = "async System.Threading.Tasks.Task<bool> Run() {\n" +
+            nativeBody +
+            "\nreturn true;\n}\nvar pending = Run();\n"
+        if fault && !awaitBefore {
+            gsharp += "ColdLedger.Fault(pending.IsCompleted)\n"
+            native += "ColdLedger.Fault(pending.IsCompleted);\n"
+        } else {
+            gsharp += "ColdLedger.Pending(pending.IsCompleted)\nColdLedger.Release()\n"
+            native += "ColdLedger.Pending(pending.IsCompleted);\nColdLedger.Release();\n"
+        }
+        gsharp += `try { pending.GetAwaiter().GetResult() } catch (ex Exception) { Effects.Trace += ex.GetType().Name + ";" }
+ColdLedger.Dump()`
+        native += `try { pending.GetAwaiter().GetResult(); } catch (System.Exception ex) { Effects.Trace += ex.GetType().Name + ";"; }
+ColdLedger.Dump()`
+        AssertColdParity(gsharp, native, fault, expected)
+    }
+
     shared {
         private func AssertColdParity(gsharp string, csharp string, fault bool, expected string) {
             using let fixture = NativeSliceLanguageTests.Fixture()

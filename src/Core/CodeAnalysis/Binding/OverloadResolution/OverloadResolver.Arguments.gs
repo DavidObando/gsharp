@@ -1536,7 +1536,7 @@ internal partial class OverloadResolver {
             IsFixedStorage(address.Operand, allowStaticFields: true)
 
         // A fixed location is not effect-free: taking a static-field address can initialize its type.
-        private func CanDeferAddressEvaluation(argument BoundExpression) bool -> argument is BoundAddressOfExpression{
+        internal func CanDeferAddressEvaluation(argument BoundExpression) bool -> argument is BoundAddressOfExpression{
             IsUnmanaged: false
         } address &&
             IsFixedStorage(address.Operand, allowStaticFields: false)

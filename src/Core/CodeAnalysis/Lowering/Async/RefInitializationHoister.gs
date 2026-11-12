@@ -5,6 +5,7 @@
 package GSharp.Core.CodeAnalysis.Lowering.Async
 
 import GSharp.Core.CodeAnalysis.Binding
+import GSharp.Core.CodeAnalysis.Binding.OverloadResolution
 import GSharp.Core.CodeAnalysis.Lowering
 import GSharp.Core.CodeAnalysis.Symbols
 import System.Collections.Generic
@@ -43,10 +44,12 @@ import System.Reflection
 shared class RefInitializationHoister {
     private class Rewriter : BoundTreeRewriter {
         private let refLocals Dictionary[LocalVariableSymbol, BoundAddressOfExpression]
+        private let crossing HashSet[VariableSymbol]
         private var tempCounter int32
 
-        init(refLocals Dictionary[LocalVariableSymbol, BoundAddressOfExpression]) {
+        init(refLocals Dictionary[LocalVariableSymbol, BoundAddressOfExpression], crossing HashSet[VariableSymbol]) {
             this.refLocals = refLocals
+            this.crossing = crossing
         }
 
         protected override func RewriteVariableDeclaration(node BoundVariableDeclaration) BoundStatement {
@@ -59,8 +62,13 @@ shared class RefInitializationHoister {
             if local != nil && local.Type is ByRefTypeSymbol && addressOf != nil && refLocals.ContainsKey(local) {
                 let prelude = ImmutableArray.CreateBuilder[BoundStatement]()
                 let template = HoistOperand(addressOf.Operand, prelude, captureComponents: true)
+                let rebuiltAddress = addressOf.Update(template)
+                // A reference used without suspension must retain its definition-time address effects.
+                let preserveDefinitionEffects = !crossing.Contains(local) &&
+                    !OverloadResolver.CanDeferAddressEvaluation(rebuiltAddress)
                 if (
-                    template is BoundTupleElementAccessExpression or
+                    preserveDefinitionEffects ||
+                        template is BoundTupleElementAccessExpression or
                         BoundIndexExpression or
                         BoundFieldAccessExpression and
                         {Receiver: not nil} or
@@ -68,9 +76,9 @@ shared class RefInitializationHoister {
                         BoundDereferenceExpression{Operand: BoundConditionalAddressExpression} or
                         BoundDereferenceExpression{Operand: BoundClrIndexExpression}
                 ) {
-                    prelude.Add(BoundExpressionStatement(node.Syntax, addressOf.Update(template)))
+                    prelude.Add(BoundExpressionStatement(node.Syntax, rebuiltAddress))
                 }
-                refLocals[local] = addressOf.Update(template)
+                refLocals[local] = rebuiltAddress
                 return BoundBlockStatement(nil, prelude.ToImmutable())
             }
             return base.RewriteVariableDeclaration(node)
@@ -431,7 +439,7 @@ shared class RefInitializationHoister {
         // declaration with a block containing the hoisting prelude and updates
         // the refLocals mapping to point at the side-effect-free template
         // expression that re-derives the lvalue from hoisted temporaries.
-        let rewriter = RefInitializationHoister.Rewriter(refLocals)
+        let rewriter = RefInitializationHoister.Rewriter(refLocals, crossing)
         let result = cast[BoundBlockStatement](rewriter.RewriteStatement(body))
         return result
     }
