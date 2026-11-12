@@ -939,9 +939,11 @@ partial class CSharpToGSharpTranslator {
         /// without a bridge. G# types a local by the storage that its declaration emitted, so a local
         /// that holds a `T?` value (`LocalHoldsPromotedValue`) has `T?` storage. A user-defined
         /// conversion still bridges the input of its operator.
-        private func LocalStoreAcceptsNil(target ISymbol?) bool -> this.IsObliviousCompilation() &&
-            target is ILocalSymbol local &&
-            this.LocalHoldsPromotedValue(local)
+        private func LocalStoreAcceptsNil(target ISymbol?) bool -> target is ILocalSymbol local &&
+            (
+            this.ShouldPromoteToNullableReference(local) ||
+                (this.IsObliviousCompilation() && this.LocalHoldsPromotedValue(local))
+        )
 
         // Issue #3676: whether <paramref name="expression"/> reads a
         // generated-code declaration that direct null evidence promoted to
@@ -1623,16 +1625,11 @@ partial class CSharpToGSharpTranslator {
             sink ISymbol?,
             value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
         ) bool {
-            if sink is not IParameterSymbol parameter || !this.IsInferredGenericParameterTarget(parameter, value) {
+            if sink is not IParameterSymbol parameter {
                 return false
             }
-            let declared = parameter.OriginalDefinition.Type
-            let inferred ITypeSymbol? = if this.IsExpandedParamsArgument(value, parameter) {
-                GetParamsElementType(parameter.OriginalDefinition) ?? declared
-            } else {
-                declared
-            }
-            return inferred is ITypeParameterSymbol typeParameter &&
+            let typeParameter = this.InferredGenericParameterTypeParameter(parameter, value)
+            return typeParameter != nil &&
                 !NullableTypeArgumentViolatesTranslatedConstraints(typeParameter) &&
                 !this.OtherArgumentFixesTypeParameterToNonNull(value, parameter, typeParameter)
         }
@@ -1731,7 +1728,11 @@ partial class CSharpToGSharpTranslator {
             }
             let callNode = argumentList.Parent!!
             let cacheKey = (callNode, parameter.Name, typeParameter.Ordinal)
-            if this.nonParamsTypeParameterBounds.TryGetValue(cacheKey, out var cached) {
+            // Storage evaluation can still fix a component. Cache bounds only after that evaluation completes.
+            if this.genericLocalStorageEvaluation == nil && this.nonParamsTypeParameterBounds.TryGetValue(
+                cacheKey,
+                out var cached
+            ) {
                 return cached
             }
             let computed = this.ComputeOtherArgumentFixesTypeParameterToNonNull(
@@ -1741,7 +1742,9 @@ partial class CSharpToGSharpTranslator {
                 parameter,
                 typeParameter
             )
-            this.nonParamsTypeParameterBounds[cacheKey] = computed
+            if this.genericLocalStorageEvaluation == nil {
+                this.nonParamsTypeParameterBounds[cacheKey] = computed
+            }
             return computed
         }
 
@@ -1779,6 +1782,13 @@ partial class CSharpToGSharpTranslator {
                     VarianceKind.Out
                 }
                 if receiverType != nil &&
+                    ParameterArgumentPreventsNullableInference(
+                    receiverParameter.Type,
+                    receiverType,
+                    nil,
+                    typeParameter,
+                    initialVariance
+                ) &&
                     ParameterArgumentPreventsNullableInference(
                     receiverParameter.Type,
                     receiverType,
@@ -1820,6 +1830,13 @@ partial class CSharpToGSharpTranslator {
                     VarianceKind.Out
                 }
                 if ParameterArgumentPreventsNullableInference(
+                    otherParameter.OriginalDefinition.Type,
+                    argumentType,
+                    nil,
+                    typeParameter,
+                    initialVariance
+                ) &&
+                    ParameterArgumentPreventsNullableInference(
                     otherParameter.OriginalDefinition.Type,
                     argumentType,
                     this.GetExpressionNullablePositions(otherArgument.Expression),
@@ -1875,6 +1892,19 @@ partial class CSharpToGSharpTranslator {
                 return nil
             }
             let symbol ISymbol? = this.context.GetSymbolInfo(unwrapped).Symbol
+            if symbol is ILocalSymbol genericLocal {
+                if this.TryGetEvaluatingGenericLocalStorage(genericLocal, out var nullableStorage) {
+                    if !suppressedTopLevel && nullableStorage {
+                        let positions = ObliviousPositionSet()
+                        positions.Nullable.Add("")
+                        return positions
+                    }
+                    return nil
+                }
+                if this.state.FixedGenericLocalStorage.Contains(genericLocal) {
+                    return nil
+                }
+            }
             if symbol is IMethodSymbol callableMethod &&
                 (
                 unwrapped is AnonymousFunctionExpressionSyntax ||
@@ -2116,8 +2146,53 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             let typeInfo = this.context.GetTypeInfo(current)
-            if typeInfo.Type != nil {
-                return typeInfo.Type
+            if current is DefaultExpressionSyntax typedDefault &&
+                this
+                .context
+                .GetTypeInfo(typedDefault.Type)
+                .Type is ITypeParameterSymbol defaultParameter {
+                // A written generic default keeps its declared type, not C#'s maybe-null flow annotation.
+                return defaultParameter
+            }
+            if current is LiteralExpressionSyntax defaultLiteral && defaultLiteral.IsKind(
+                SyntaxKind.DefaultLiteralExpression
+            ) &&
+                this
+                .TargetIsBareTypeParameter(defaultLiteral) {
+                return (typeInfo.Type ?? typeInfo.ConvertedType)?.WithNullableAnnotation(
+                    Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated
+                )
+            }
+            if this.context.GetSymbolInfo(current).Symbol is ILocalSymbol genericLocal {
+                if this.TryGetEvaluatingGenericLocalStorage(genericLocal, out var nullableStorage) {
+                    return typeInfo.Type?.WithNullableAnnotation(
+                        if nullableStorage {
+                            Microsoft.CodeAnalysis.NullableAnnotation.Annotated
+                        } else {
+                            Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated
+                        }
+                    )
+                }
+                if this.state.FixedGenericLocalStorage.Contains(genericLocal) {
+                    return typeInfo.Type?.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated)
+                }
+            }
+            let inferredType = typeInfo.Type
+            if inferredType != nil {
+                if inferredType is ITypeParameterSymbol && this.ComposedValueOperands(current) is {} operands &&
+                    operands.Count > 0 &&
+                    operands
+                    .All(
+                    (operand ExpressionSyntax) ->
+                    this.GetExpressionInferenceType(operand) is ITypeParameterSymbol argument &&
+                        IsBareTypeParameter(argument) &&
+                        SymbolEqualityComparer
+                        .Default
+                        .Equals(argument, inferredType)
+                ) {
+                    return inferredType.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated)
+                }
+                return inferredType
             }
             if current.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.DefaultLiteralExpression) {
                 return typeInfo.ConvertedType
@@ -2264,9 +2339,18 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func ShouldPromoteToNullableReference(symbol ISymbol?, checkRefStorage bool = true) bool {
+            if symbol is ILocalSymbol localStorage {
+                if this.TryGetEvaluatingGenericLocalStorage(localStorage, out var nullableStorage) {
+                    return nullableStorage
+                }
+                if this.GenericLocalStorageIsFixed(localStorage) {
+                    return false
+                }
+            }
             let declared ITypeSymbol? = PromotableDeclaredType(symbol)
-            if !(declared != nil && declared.IsReferenceType == true) ||
-                declared.NullableAnnotation == Microsoft
+            let genericLocal = symbol is ILocalSymbol local && this.ExplicitGenericLocalNeedsNullableStorage(local)
+            if (!genericLocal && !(declared != nil && declared.IsReferenceType == true)) ||
+                declared?.NullableAnnotation == Microsoft
                 .CodeAnalysis
                 .NullableAnnotation
                 .Annotated {
@@ -2279,16 +2363,14 @@ partial class CSharpToGSharpTranslator {
             // that is not constrained to a class (`T Value`) stays `T`, whatever
             // reference type the type argument substitutes, so a maybe-null
             // value stored into it keeps its bridge.
-            if PromotableDeclaredType(symbol?.OriginalDefinition)?.IsReferenceType != true {
+            if !genericLocal && PromotableDeclaredType(symbol?.OriginalDefinition)?.IsReferenceType != true {
                 return false
             }
             if checkRefStorage && this.TryGetRefStorageSlot(symbol, 0) is {} slot {
                 return this.RefStorageIsNullable(slot, includeArrays: true)
             }
-            if this.RefStorageContractIsFrozen(symbol, 0) || !this.ShouldPromoteToNullableReferenceCandidate(
-                symbol,
-                declared
-            ) {
+            if this.RefStorageContractIsFrozen(symbol, 0) ||
+                (!genericLocal && !this.ShouldPromoteToNullableReferenceCandidate(symbol, declared!!)) {
                 return false
             }
             return !ObliviousNullabilityAnalyzer.IsTupleContractFixed(
@@ -2925,6 +3007,11 @@ partial class CSharpToGSharpTranslator {
                 (
                 this.RefStoragePositionType(slot.Symbol.OriginalDefinition, slot.Depth)
                     ?.IsReferenceType != true &&
+                    !(
+                    slot.Depth == 0 &&
+                        slot.Symbol is ILocalSymbol local &&
+                        this.ExplicitGenericLocalNeedsNullableStorage(local)
+                ) &&
                     !(
                     slot.Depth == 0 && ObliviousNullabilityAnalyzer.IsSubstitutableMethodPosition(
                         slot.Symbol,

@@ -230,6 +230,15 @@ partial class CSharpToGSharpTranslator {
             return (nil, nil)
         }
 
+        private func ResolveValueStoreContract(value ExpressionSyntax?)(Store ISymbol?, SlotType ITypeSymbol?) {
+            let (store, knownSlot) = this.ResolveStoreAtNode(
+                OutermostTransparentNode(value, stopAtAssignment: true),
+                value
+            )
+            this.ClassifyGenericStoreSlot(value, store, knownSlot, out var slotType, out _)
+            return (store, slotType ?? knownSlot)
+        }
+
         private func ResolveStoreAtNode(node SyntaxNode?, value ExpressionSyntax?)(
             Store ISymbol?,
             SlotType ITypeSymbol?

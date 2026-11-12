@@ -875,97 +875,13 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
-        // Whether the slot `literal` flows into is DECLARED as an unannotated
-        // type parameter, in any of the three positions where a declaration
-        // settles it (issue #3676 for returns, #3907 for the other two).
+        // Use the same effective store contract for generic defaults and local storage.
         private func TargetIsBareTypeParameter(
             literal Microsoft.CodeAnalysis.CSharp.Syntax.LiteralExpressionSyntax
         ) bool {
-            return this.ReturnsBareTypeParameter(literal) || this.AssignedToBareTypeParameter(literal) ||
-                this.PassedToBareTypeParameter(literal)
-        }
-
-        // `value = default;` where `value` is declared `T` — most often an
-        // `[MaybeNullWhen(false)] out T`, whose attribute makes Roslyn's flow
-        // state maybe-null while the declared type stays a bare `T`.
-        private func AssignedToBareTypeParameter(
-            literal Microsoft.CodeAnalysis.CSharp.Syntax.LiteralExpressionSyntax
-        ) bool {
-            if literal.Parent is not Microsoft
-                .CodeAnalysis
-                .CSharp
-                .Syntax
-                .AssignmentExpressionSyntax assignment ||
-                !assignment.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleAssignmentExpression) ||
-                assignment.Right != literal {
-                return false
-            }
-            let target ISymbol? = this.context.GetSymbolInfo(assignment.Left).Symbol
-            let declared ITypeSymbol? = switch target {
-                case parameter is IParameterSymbol: parameter.Type
-                case local is ILocalSymbol: local.Type
-                case field is IFieldSymbol: field.Type
-                case property is IPropertySymbol: property.Type
-                default: default(ITypeSymbol?)
-            }
-            return IsBareTypeParameter(declared)
-        }
-
-        // `M(default)` where the parameter is declared `T`. The parameter type
-        // is read off the RESOLVED (substituted) symbol, so an explicitly
-        // nullable type argument — `Same<T?>(default)`, issue #2500 — presents
-        // as annotated and keeps its `?`.
-        private func PassedToBareTypeParameter(
-            literal Microsoft.CodeAnalysis.CSharp.Syntax.LiteralExpressionSyntax
-        ) bool {
-            if literal.Parent is not ArgumentSyntax argument ||
-                argument.Parent is not BaseArgumentListSyntax argumentList ||
-                argument.NameColon != nil {
-                return false
-            }
-            if this.context.GetSymbolInfo(argumentList.Parent).Symbol is not IMethodSymbol method {
-                return false
-            }
-            let index = argumentList.Arguments.IndexOf(argument)
-            if index < 0 || index >= method.Parameters.Length {
-                // A `params` tail, or an argument list this overload does not
-                // line up with positionally; not a slot a declaration settles.
-                return false
-            }
-            return IsBareTypeParameter(method.Parameters[index].Type)
-        }
-
-        // Whether `literal` is the value of a `return` in a method or local
-        // function whose DECLARED result is an unannotated type parameter. An
-        // async method's result is the awaited one (`async Task<T>` declares
-        // `T`), matching what `return default;` is target-typed to.
-        private func ReturnsBareTypeParameter(
-            literal Microsoft.CodeAnalysis.CSharp.Syntax.LiteralExpressionSyntax
-        ) bool {
-            if literal.Parent is not Microsoft.CodeAnalysis.CSharp.Syntax.ReturnStatementSyntax returnStatement {
-                return false
-            }
-            let owner Microsoft.CodeAnalysis.SyntaxNode? = returnStatement.Ancestors().FirstOrDefault(
-                (node Microsoft.CodeAnalysis.SyntaxNode) -> node is BaseMethodDeclarationSyntax ||
-                    node is LocalFunctionStatementSyntax ||
-                    node is AnonymousFunctionExpressionSyntax
-            )
-            if !((owner is BaseMethodDeclarationSyntax || owner is LocalFunctionStatementSyntax)) ||
-                this
-                .context
-                .GetDeclaredSymbol(owner) is not IMethodSymbol method {
-                return false
-            }
-            var declared = method.ReturnType
-            if method.IsAsync &&
-                declared is INamedTypeSymbol{IsGenericType: true, TypeArguments: {Length: 1}} awaitable {
-                declared = awaitable.TypeArguments[0]
-            }
-            return declared is ITypeParameterSymbol &&
-                declared.NullableAnnotation != Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .Annotated
+            let (store, slot) = this.ResolveValueStoreContract(literal)
+            return IsBareTypeParameter(slot) ||
+                (store is ILocalSymbol local && this.state.FixedGenericLocalStorage.Contains(local))
         }
 
         // C# infers the type of a suffix-less integer literal from its value: a
@@ -10176,6 +10092,19 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
                 return operatorOperand
+            }
+            if IsBareTypeParameter(targetType) && this.GetExpressionInferenceType(
+                value
+            ) is ITypeParameterSymbol actual &&
+                IsBareTypeParameter(actual) &&
+                SymbolEqualityComparer
+                .Default
+                .Equals(actual, targetType) && !this.YieldsValueNilableBeyondItsCSharpType(value) {
+                let positions = this.GetExpressionNullablePositions(value)
+                if positions == nil || (!positions.Nullable.Contains("") && !positions.Platform.Contains("")) {
+                    // Matching generic storage contracts need no runtime proof that their zero value is non-null.
+                    return translated
+                }
             }
             if !operatorInput && this.TryBridgeTupleValue(
                 value,
@@ -21041,23 +20970,46 @@ partial class CSharpToGSharpTranslator {
             parameter IParameterSymbol,
             callSite Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
         ) bool {
+            let typeParameter = this.InferredGenericParameterTypeParameter(parameter, callSite)
+            return typeParameter != nil &&
+                (
+                parameter
+                    .OriginalDefinition
+                    .Type is ITypeParameterSymbol ||
+                    (
+                    !NullableTypeArgumentViolatesTranslatedConstraints(typeParameter) &&
+                        !this.OtherArgumentFixesTypeParameterToNonNull(callSite, parameter, typeParameter)
+                )
+            )
+        }
+
+        private func InferredGenericParameterTypeParameter(
+            parameter IParameterSymbol,
+            callSite Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+        ) ITypeParameterSymbol? {
+            if ValueFeedsExplicitTypeArguments(callSite) {
+                return nil
+            }
             let declared = parameter.OriginalDefinition.Type
             // Only a METHOD type parameter is re-inferred from the argument. A
             // containing-type parameter is already fixed by the receiver
             // (`Box[C].Use(x)`), so its substituted type is the real target.
-            let IsMethodTypeParameter = func (candidate ITypeSymbol?) bool {
-                return candidate is ITypeParameterSymbol methodParameter &&
-                    methodParameter.TypeParameterKind == TypeParameterKind.Method
+            let MethodTypeParameter = func (candidate ITypeSymbol?) ITypeParameterSymbol? {
+                return if candidate is ITypeParameterSymbol methodParameter &&
+                    methodParameter.TypeParameterKind == TypeParameterKind.Method {
+                    methodParameter
+                } else {
+                    nil
+                }
             }
-            let generic = IsMethodTypeParameter(declared) ||
+            return MethodTypeParameter(declared) ??
                 (
-                this.IsExpandedParamsArgument(callSite, parameter) &&
-                    GetParamsElementType(parameter.OriginalDefinition) is ITypeParameterSymbol elementParameter &&
-                    elementParameter.TypeParameterKind == TypeParameterKind.Method &&
-                    !NullableTypeArgumentViolatesTranslatedConstraints(elementParameter) &&
-                    !this.OtherArgumentFixesTypeParameterToNonNull(callSite, parameter, elementParameter)
+                if this.IsExpandedParamsArgument(callSite, parameter) {
+                    MethodTypeParameter(GetParamsElementType(parameter.OriginalDefinition))
+                } else {
+                    nil
+                }
             )
-            return generic && !ValueFeedsExplicitTypeArguments(callSite)
         }
 
         private func IsExpandedParamsArgument(

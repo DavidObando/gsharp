@@ -74,6 +74,9 @@ internal class DocumentTranslationState {
         LocalHoldsPromotedValueInProgress = HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
         EmittedLocalTypeClauses = HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
         InferredLocalDefaultTypedDeclarations = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
+        GenericLocalStorageNullable = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
+        FixedGenericLocalStorage = HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
+        GenericLocalStorageBodies = HashSet[SyntaxNode]()
         VarCaptureInputNonNull = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         NilableOnlyInEmittedGSharpLocals = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         NilableOnlyInEmittedGSharpNodes = Dictionary[Microsoft.CodeAnalysis.SyntaxNode, bool]()
@@ -454,6 +457,18 @@ internal class DocumentTranslationState {
     // Issue #4445: semantic/CFG default provenance is invariant per local and
     // can be queried repeatedly while lowering one declaration.
     prop InferredLocalDefaultTypedDeclarations Dictionary[ILocalSymbol, bool] {
+        get;
+    }
+
+    prop GenericLocalStorageNullable Dictionary[ILocalSymbol, bool] {
+        get;
+    }
+
+    prop FixedGenericLocalStorage HashSet[ILocalSymbol] {
+        get;
+    }
+
+    prop GenericLocalStorageBodies HashSet[SyntaxNode] {
         get;
     }
 
