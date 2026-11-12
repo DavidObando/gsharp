@@ -354,13 +354,22 @@ class BAttribute : Attribute {}`
         Assert.Equal([]string{"GS0210@3,2,3," + (name.Length + 2).ToString()}, DiagnosticLocations(output))
     }
 
-    @Fact
-    func DeepAttributeDependencies_ReportLocatedDiagnosticWithoutCrashing() {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func DeepAttributeDependencies_ReportLocatedDiagnosticWithoutCrashing(inheritance bool) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let driver = CompileBoundedStackDriver(fixture)
         let sourceFile = Path.Combine(fixture.Directory, "dependency.gs")
         let outputFile = Path.Combine(fixture.Directory, "dependency.dll")
-        File.WriteAllText(sourceFile, AttributeChain(8))
+        File.WriteAllText(
+            sourceFile,
+            if inheritance {
+                AttributeInheritanceChain(8)
+            } else {
+                AttributeChain(8)
+            }
+        )
         let (controlCode, controlOutput) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
             sourceFile,
             outputFile,
@@ -368,7 +377,11 @@ class BAttribute : Attribute {}`
         )
         Assert.True(controlCode == 0, controlOutput)
         File.Delete(outputFile)
-        let source = AttributeChain(8192)
+        let source = if inheritance {
+            AttributeInheritanceChain(8192)
+        } else {
+            AttributeChain(8192)
+        }
         File.WriteAllText(sourceFile, source)
         let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
             sourceFile,
@@ -393,10 +406,15 @@ class BAttribute : Attribute {}`
             .ToArray()
         Assert.Equal(span[0], span[2])
         let line = source.Split('\n')[span[0] - 1].TrimEnd('\r')
-        let identifier = Regex.Match(line, "^class (A[0-9]+) : Attribute").Groups[1].Value
+        let identifier = Regex.Match(line, "^(?:open )?class (A[0-9]+) : ").Groups[1].Value
         Assert.NotEmpty(identifier)
-        Assert.Equal(7, span[1])
-        Assert.Equal(7 + identifier.Length, span[3])
+        let column = if inheritance {
+            12
+        } else {
+            7
+        }
+        Assert.Equal(column, span[1])
+        Assert.Equal(column + identifier.Length, span[3])
         Assert.False(File.Exists(outputFile))
     }
 
@@ -606,6 +624,25 @@ public static class Driver {
                     source.Append("@A").Append(index + 1).AppendLine()
                 }
                 source.Append("class A").Append(index).AppendLine(" : Attribute {}")
+            }
+            return source.ToString()
+        }
+
+        private func AttributeInheritanceChain(count int32) string {
+            let source = StringBuilder("import System\n@A0\ndelegate Reader() int32;\n")
+            for var index = 0; index < count; index++ {
+                source
+                    .Append("open class A")
+                    .Append(index)
+                    .Append(" : ")
+                    .Append(
+                    if index + 1 == count {
+                        "Attribute"
+                    } else {
+                        "A" + (index + 1).ToString()
+                    }
+                )
+                    .AppendLine(" {}")
             }
             return source.ToString()
         }

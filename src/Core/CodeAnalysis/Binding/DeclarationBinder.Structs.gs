@@ -299,11 +299,7 @@ internal partial class DeclarationBinder {
             out var basePackage
         ) {
             if !RuntimeHelpers.TryEnsureSufficientExecutionStack() {
-                if !reportedDeclarationDependencyStackLimit {
-                    reportedDeclarationDependencyStackLimit = true
-                    Diagnostics.ReportDeclarationDependencyTooDeep(baseSyntax.Identifier.Location)
-                }
-                return
+                throw DeclarationDependencyStackLimitException(baseSyntax.Identifier.Location)
             }
             let savedUnsafeDepth = binderCtx.UnsafeDepth
             var enclosingUnsafe = false

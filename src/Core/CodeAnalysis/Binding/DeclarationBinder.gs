@@ -174,7 +174,6 @@ internal partial class DeclarationBinder {
     private let bindingStructBodies HashSet[StructSymbol] = HashSet[StructSymbol]()
     private let completedStructBodies HashSet[StructSymbol] = HashSet[StructSymbol]()
     private let requestedNestedTypeBindings HashSet[StructSymbol] = HashSet[StructSymbol]()
-    private var reportedDeclarationDependencyStackLimit bool
     private let pendingStructMemberBindings Dictionary[StructSymbol, () -> void] = Dictionary[
         StructSymbol,
         () -> void
@@ -895,6 +894,17 @@ internal partial class DeclarationBinder {
             }
             return declaration.Identifier.Location
         }
+    }
+}
+
+// Resource failure must unwind every declaration consumer before any fallback or diagnostic formatting.
+internal class DeclarationDependencyStackLimitException : Exception {
+    init(location TextLocation) {
+        Location = location
+    }
+
+    internal prop Location TextLocation {
+        get;
     }
 }
 

@@ -7003,6 +7003,44 @@ partial class Binder {
             configureRoot((BoundScope) -> void)?,
             nativeCoverage ImmutableDictionary[string, bool]?
         ) BoundGlobalScope {
+            try {
+                return BindGlobalScopeCoreUnchecked(
+                    syntaxTrees,
+                    references,
+                    implicitSystemImport,
+                    preprocessorSymbols,
+                    isLibrary,
+                    configureRoot,
+                    nativeCoverage
+                )
+            } catch (failure DeclarationDependencyStackLimitException) {
+                // Discard incomplete symbols. Reporting after unwinding cannot re-enter their identity or base fallbacks.
+                let diagnostics = DiagnosticBag()
+                diagnostics.ReportDeclarationDependencyTooDeep(failure.Location)
+                let failedPackage = PackageSymbol("Default", nil)
+                return BoundGlobalScope(
+                    nil,
+                    failedPackage,
+                    ImmutableArray.Create[PackageSymbol](failedPackage),
+                    diagnostics.ToImmutableArray(),
+                    ImmutableArray[ImportSymbol].Empty,
+                    ImmutableArray[FunctionSymbol].Empty,
+                    ImmutableArray[VariableSymbol].Empty,
+                    nil,
+                    ImmutableArray[BoundStatement].Empty
+                )
+            }
+        }
+
+        private func BindGlobalScopeCoreUnchecked(
+            syntaxTrees ImmutableArray[SyntaxTree],
+            references ReferenceResolver?,
+            implicitSystemImport bool,
+            preprocessorSymbols ImmutableHashSet[string]?,
+            isLibrary bool,
+            configureRoot((BoundScope) -> void)?,
+            nativeCoverage ImmutableDictionary[string, bool]?
+        ) BoundGlobalScope {
             let parentScope = CreateRootScope(references, preprocessorSymbols)
             configureRoot?(parentScope)
             let binder = Binder(parentScope, function: nil)
