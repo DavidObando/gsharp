@@ -205,6 +205,83 @@ class BAttribute : Attribute {}`
         }
     }
 
+    @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func BaseAttributeApplications_SeePublishedOverrideMembers(property bool, memberApplication bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let baseMember = if property {
+            "open prop Value int32 -> 1"
+        } else {
+            "open func Value() int32 -> 1"
+        }
+        let derivedMember = if property {
+            "override prop Value int32 -> 2"
+        } else {
+            "override func Value() int32 -> 2"
+        }
+        let access = if property {
+            "value.Value"
+        } else {
+            "value.Value()"
+        }
+        const annotation = "@Derived(code: 7)\n"
+        let source = "import System\n" +
+            (
+            if memberApplication {
+                ""
+            } else {
+                annotation
+            }
+        ) +
+            "open class BaseAttribute : Attribute {\n" +
+            (
+            if memberApplication {
+                annotation
+            } else {
+                ""
+            }
+        ) +
+            baseMember +
+            "\n}\nclass DerivedAttribute : BaseAttribute {\ninit(code int32) {}\n" +
+            derivedMember +
+            "\n}\nfunc Main() {\nlet value BaseAttribute = DerivedAttribute(7)\nConsole.Write(" +
+            access +
+            ")\n}"
+        fixture.Compile(source.Replace(annotation, ""), "override-control5968", true)
+        let dll = fixture.Compile(source, "override5968", true)
+        IlVerifier.Verify(dll)
+        let assembly = EmittedFixture.Load(dll)
+        let baseType = assembly.GetTypes().Single((t Type) -> t.Name == "BaseAttribute")
+        let owner MemberInfo = if memberApplication {
+            if property {
+                cast[MemberInfo](baseType.GetProperty("Value")!!)
+            } else {
+                cast[MemberInfo](baseType.GetMethod("Value")!!)
+            }
+        } else {
+            baseType
+        }
+        let application = Assert.Single(
+            owner.GetCustomAttributesData(),
+            (a CustomAttributeData) -> a.AttributeType.Name == "DerivedAttribute"
+        )
+        Assert.Equal("DerivedAttribute", application.AttributeType.Name)
+        Assert.Equal(7, Assert.Single(application.ConstructorArguments).Value)
+        let derivedType = assembly.GetTypes().Single((t Type) -> t.Name == "DerivedAttribute")
+        let method = derivedType.GetMethod(
+            if property {
+                "get_Value"
+            } else {
+                "Value"
+            }
+        )!!
+        Assert.Equal(baseType, method.GetBaseDefinition().DeclaringType)
+        Assert.Equal(Encoding.UTF8.GetBytes("2"), fixture.RunBytes(dll))
+    }
+
     shared {
         private func AssertCodes(attributes[]CustomAttributeData, expected[]int32) {
             let tags = attributes.Where((a CustomAttributeData) -> a.AttributeType.Name == "TagAttribute").ToArray()

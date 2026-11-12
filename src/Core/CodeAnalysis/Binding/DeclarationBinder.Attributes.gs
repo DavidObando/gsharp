@@ -24,7 +24,12 @@ internal partial class DeclarationBinder {
 
     // Attribute classes can annotate each other. Validate a cycle only after their bound contracts exist.
     private func ValidateAttributeUsageWhenReady(attributeType TypeSymbol, validate() -> bool) bool {
-        if attributeType is StructSymbol source && bindingStructBodies.Contains(source.Definition ?? source) {
+        if attributeType is StructSymbol source &&
+            (
+            bindingStructBodies.Contains(source.Definition ?? source) || pendingStructMemberBindings.ContainsKey(
+                source.Definition ?? source
+            )
+        ) {
             pendingAttributeUsageChecks.Add(
                 () -> {
                     validate()

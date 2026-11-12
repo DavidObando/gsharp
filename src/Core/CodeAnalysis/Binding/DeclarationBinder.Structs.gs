@@ -33,10 +33,18 @@ internal partial class DeclarationBinder {
         syntax StructDeclarationSyntax,
         $package PackageSymbol,
         structSymbol StructSymbol,
-        bindNestedTypes bool = true
+        bindNestedTypes bool = true,
+        resumeMembers bool = false
     ) {
         let shouldBindOwnBody = boundStructBodies.Add(structSymbol)
-        if !shouldBindOwnBody && (!bindNestedTypes || boundNestedTypeContainers.Contains(structSymbol)) {
+        let shouldResumeMembers = resumeMembers && pendingStructMemberBindings.ContainsKey(structSymbol)
+        if !shouldBindOwnBody &&
+            !shouldResumeMembers &&
+            (
+            pendingStructMemberBindings.ContainsKey(structSymbol) ||
+                !bindNestedTypes ||
+                boundNestedTypeContainers.Contains(structSymbol)
+        ) {
             return
         }
         let previousTypeParameters = binderCtx.CurrentTypeParameters
@@ -66,8 +74,10 @@ internal partial class DeclarationBinder {
             } else {
                 this.binderCtx.CurrentTypeParameters = nil
             }
-            if shouldBindOwnBody {
+            if shouldBindOwnBody || shouldResumeMembers {
                 bindingStructBodies.Add(structSymbol)
+            }
+            if shouldBindOwnBody {
                 // Issue #2519: aggregate shells carry bare type parameters so every
                 // same-compilation constraint target can be published first.
                 // Resolve constraints now, with the declaring shell and all sibling
@@ -80,12 +90,17 @@ internal partial class DeclarationBinder {
                     syntax.PartialPartLocations
                 )
                 BindStructDeclarationBodyCore(syntax, $package, structSymbol, bindNestedTypes)
+            } else if shouldResumeMembers {
+                let bindMembers = pendingStructMemberBindings[structSymbol]
+                pendingStructMemberBindings.Remove(structSymbol)
+                using let _ = binderCtx.PushUnsafeContext(syntax.IsUnsafe)
+                bindMembers()
             } else if bindNestedTypes && boundNestedTypeContainers.Add(structSymbol) {
                 using let _ = binderCtx.PushUnsafeContext(syntax.IsUnsafe)
                 BindNestedTypeBodies(syntax, $package)
             }
         } finally {
-            if shouldBindOwnBody {
+            if shouldBindOwnBody || shouldResumeMembers {
                 bindingStructBodies.Remove(structSymbol)
             }
             this.binderCtx.CurrentTypeParameters = previousTypeParameters
@@ -217,6 +232,40 @@ internal partial class DeclarationBinder {
         let fieldBinding = BindStructFieldsAndPrimaryConstructor(syntax, $package, structSymbol)
         let baseBinding = BindStructBaseAndInterfaces(syntax, structSymbol, fieldBinding)
         EnsureStructDeclarationBound(baseBinding.BaseClass)
+        let baseDefinition = baseBinding.BaseClass?.Definition ?? baseBinding.BaseClass
+        if baseDefinition != nil && baseDefinition.Declaration != nil && !completedStructBodies.Contains(
+            baseDefinition
+        ) {
+            // An attribute can derive from the declaration that applies it. Publish contracts, then wait for base members.
+            pendingStructMemberBindings.Add(
+                structSymbol,
+                () -> BindStructDeclarationMembers(
+                    syntax,
+                    $package,
+                    structSymbol,
+                    fieldBinding,
+                    baseBinding,
+                    bindNestedTypes
+                )
+            )
+            if !pendingDerivedStructs.TryGetValue(baseDefinition, out var derived) {
+                derived = List[StructSymbol]()
+                pendingDerivedStructs.Add(baseDefinition, derived)
+            }
+            derived.Add(structSymbol)
+            return
+        }
+        BindStructDeclarationMembers(syntax, $package, structSymbol, fieldBinding, baseBinding, bindNestedTypes)
+    }
+
+    private func BindStructDeclarationMembers(
+        syntax StructDeclarationSyntax,
+        $package PackageSymbol,
+        structSymbol StructSymbol,
+        fieldBinding StructFieldBindingResult,
+        baseBinding StructBaseBindingResult,
+        bindNestedTypes bool
+    ) {
         let memberBinding = CreateStructMemberBindingContext(structSymbol)
         BindStructInstanceMethods(syntax, $package, structSymbol, baseBinding, memberBinding)
         BindStructProperties(syntax, $package, structSymbol, memberBinding)
@@ -227,14 +276,20 @@ internal partial class DeclarationBinder {
         RegisterStructDeferredInitializers($package, structSymbol, fieldBinding)
         RegisterStructInterfaceChecks(syntax, structSymbol, baseBinding)
         BindStructFinalMembers(syntax, $package, structSymbol, baseBinding, bindNestedTypes)
+        completedStructBodies.Add(structSymbol)
+        if pendingDerivedStructs.Remove(structSymbol, out var derived) {
+            for declaration in derived {
+                EnsureStructDeclarationBound(declaration, resumeMembers: true)
+            }
+        }
     }
 
-    private func EnsureStructDeclarationBound(baseClass StructSymbol?) {
+    private func EnsureStructDeclarationBound(baseClass StructSymbol?, resumeMembers bool = false) {
         if baseClass == nil {
             return
         }
         let baseDefinition = baseClass.Definition ?? baseClass
-        if boundStructBodies.Contains(baseDefinition) {
+        if boundStructBodies.Contains(baseDefinition) && !resumeMembers {
             return
         }
         if baseDefinition.Declaration is {} baseSyntax && nestedStructPackages.TryGetValue(
@@ -259,7 +314,13 @@ internal partial class DeclarationBinder {
             let previousPackage = $scope.SetCurrentDeclaringPackage(basePackage.Name)
             let previousTree = $scope.SetCurrentReferencingSyntaxTree(baseSyntax.SyntaxTree)
             try {
-                BindStructDeclarationBody(baseSyntax, basePackage, baseDefinition, bindNestedTypes: false)
+                BindStructDeclarationBody(
+                    baseSyntax,
+                    basePackage,
+                    baseDefinition,
+                    bindNestedTypes: false,
+                    resumeMembers: resumeMembers
+                )
             } finally {
                 binderCtx.UnsafeDepth = savedUnsafeDepth
                 $scope.SetCurrentDeclaringPackage(previousPackage)
