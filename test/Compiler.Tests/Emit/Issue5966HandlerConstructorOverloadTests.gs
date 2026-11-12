@@ -180,6 +180,28 @@ BoundaryEffects.DumpCaller(append)`, expected, ReferenceLibrary + AddressLibrary
         )
     }
 
+    @Theory
+    @InlineData(false, "E;CInTrue;Lp;Hx;Fx;WValueTrue;|1/1/2/0/0")
+    @InlineData(true, "N;IW7;Lp;Hx;Fx;WValue7;|0/1/2/0/0")
+    func ValueArguments_UseSelectedConstructorImplicitInConversion(widen bool, expected string) {
+        let value = if widen {
+            "BoundaryEffects.Number()"
+        } else {
+            `Effects.Flag("E", true)`
+        }
+        let method = if widen {
+            "WriteInWide"
+        } else {
+            "WriteInValue"
+        }
+        AssertParity(
+            "BoundaryEffects." + method + "(" + value + `, "p${Effects.Hole("x")}")`,
+            "BoundaryEffects." + method + "(" + value + `, $"p{Effects.Hole("x")}")`,
+            expected,
+            ReferenceLibrary + AddressLibrary + BoundaryLibrary
+        )
+    }
+
     shared {
         private func AssertParity(gsharp string, csharp string, expected string, additionalLibrary string = "") {
             using let fixture = NativeSliceLanguageTests.Fixture()
@@ -331,6 +353,14 @@ public struct WideHandler {
     public void AppendFormatted(string value) { Effects.Appends++; Effects.Trace += "F" + value + ";"; }
 }
 [InterpolatedStringHandler]
+public struct WideInHandler {
+    public WideInHandler(int literalLength, int formattedCount, in long value, out bool shouldAppend) {
+        shouldAppend = true; Effects.Trace += $"IW{value};";
+    }
+    public void AppendLiteral(string value) { Effects.Appends++; Effects.Trace += "L" + value + ";"; }
+    public void AppendFormatted(string value) { Effects.Appends++; Effects.Trace += "F" + value + ";"; }
+}
+[InterpolatedStringHandler]
 public struct ObjectRefHandler {
     public ObjectRefHandler(int literalLength, int formattedCount, ref object value, out bool shouldAppend) {
         value = new object(); shouldAppend = true;
@@ -360,6 +390,10 @@ public static class BoundaryEffects {
         [InterpolatedStringHandlerArgument("value")] ValueHandler handler) { Effects.Trace += $"WValue{value};"; }
     public static void WriteWide(in int value,
         [InterpolatedStringHandlerArgument("value")] WideHandler handler) { Effects.Trace += $"WValue{value};"; }
+    public static void WriteInValue(bool value,
+        [InterpolatedStringHandlerArgument("value")] InHandler handler) { Effects.Trace += $"WValue{value};"; }
+    public static void WriteInWide(int value,
+        [InterpolatedStringHandlerArgument("value")] WideInHandler handler) { Effects.Trace += $"WValue{value};"; }
     public static void WriteObject(int tag, ref object value,
         [InterpolatedStringHandlerArgument("value")] ObjectRefHandler handler) { }
     public static void WriteChoice(bool enabled, ref bool append,

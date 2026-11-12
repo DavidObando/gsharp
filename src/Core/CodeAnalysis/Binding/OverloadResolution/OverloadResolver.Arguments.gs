@@ -1142,6 +1142,22 @@ internal partial class OverloadResolver {
                     if !DeclarationBinder.TypeSignaturesEquivalent(captured.Type, parameterType) {
                         captured = BoundConversionExpression(captured.Syntax, parameterType, captured)
                     }
+                } else if captured.Type is not ByRefTypeSymbol && RefCapabilities.GetParameterRefKind(
+                    constructorParameters[2 + i]
+                ) == RefKind
+                    .In {
+                    var parameterType = ClrNullability.GetParameterTypeSymbol(constructorParameters[2 + i])
+                    if TypeSymbol.TryGetPointeeType(parameterType, out var pointeeType) {
+                        parameterType = pointeeType
+                    }
+                    if !DeclarationBinder.TypeSignaturesEquivalent(captured.Type, parameterType) {
+                        captured = BoundConversionExpression(captured.Syntax, parameterType, captured)
+                    }
+                    captured = ConversionClassifier.CreateImplicitInTemporary(
+                        captured,
+                        parameterType,
+                        "<inArgumentHandler${sourceIndex}_$i>"
+                    )
                 }
                 forwarded ??= handler.ForwardedArguments.ToBuilder()
                 forwarded!![i] = captured
