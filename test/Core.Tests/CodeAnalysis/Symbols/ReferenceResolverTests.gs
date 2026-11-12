@@ -4,6 +4,7 @@
 
 package GSharp.Core.Tests.CodeAnalysis.Symbols
 
+import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
@@ -21,6 +22,56 @@ import Xunit
 /// Tests for (cref:ReferenceResolver), the seam that `import`
 /// statements use to resolve CLR types.
 open class ReferenceResolverTests {
+    @Fact
+    func RuntimeEffectTrust_ReusesTheVerifiedAssemblyImage() {
+        Assert.True(ReferenceResolver.IsTrustedEffectAssembly(typeof(Console).Assembly))
+        using let measurements = CompilationMeasurements.Start("effect-image-cache")
+        for var i = 0; i < 100; i++ {
+            Assert.True(ReferenceResolver.IsTrustedEffectAssembly(typeof(Console).Assembly))
+        }
+        Assert.Equal(0L, measurements.GetCounter("reference.effect-image-hashes"))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func BrokenReferencePack_DoesNotPoisonHealthyManifestOrTheLocalCache(unreadable bool) {
+        let directory = Path.Combine(AppContext.BaseDirectory, "effect-packs", Guid.NewGuid().ToString("N"))
+        let bad = Path.Combine(directory, "bad")
+        let healthy = Path.Combine(directory, "healthy")
+        Directory.CreateDirectory(Path.Combine(bad, "data"))
+        Directory.CreateDirectory(Path.Combine(bad, "ref", "net10.0"))
+        Directory.CreateDirectory(Path.Combine(healthy, "data"))
+        Directory.CreateDirectory(Path.Combine(healthy, "ref", "net10.0"))
+        let manifest = Path.Combine(bad, "data", "FrameworkList.xml")
+        try {
+            if unreadable {
+                Directory.CreateDirectory(manifest)
+            } else {
+                File.WriteAllText(manifest, "<FileList><File AssemblyName=\"MustNotTrust\"/><broken")
+            }
+            File.WriteAllText(
+                Path.Combine(healthy, "data", "FrameworkList.xml"),
+                "<FileList><File AssemblyName=\"Healthy\"/></FileList>"
+            )
+            let supported = HashSet[string](StringComparer.Ordinal)
+            let directories = List[string]()
+            let cache = Lazy[int32](
+                () -> {
+                    ReferenceResolver.AddTrustedEffectReferencePack(bad, supported, directories)
+                    ReferenceResolver.AddTrustedEffectReferencePack(healthy, supported, directories)
+                    return supported.Count
+                }
+            )
+            Assert.Equal(1, cache.Value)
+            Assert.Equal(1, cache.Value)
+            Assert.Equal("Healthy", Assert.Single(supported))
+            Assert.Equal(Path.Combine(healthy, "ref", "net10.0"), Assert.Single(directories))
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
     @Fact
     func EffectTrust_RejectsSameIdentityReplacement() {
         let host = typeof(Console).Assembly.GetName()

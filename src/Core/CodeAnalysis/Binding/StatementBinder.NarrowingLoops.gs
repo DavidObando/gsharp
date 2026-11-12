@@ -6930,23 +6930,15 @@ internal partial class StatementBinder {
         if receiverType != nil {
             let strippedRecv = StripAllNullability(receiverType) ?? receiverType
             if GetContainerSlotTypes(strippedRecv) is {} slots && slots.Count > 0 {
-                if methodName == "ContainsValue" || declFullName.StartsWith(
-                    "System.Collections.Generic.PriorityQueue`",
-                    StringComparison.Ordinal
-                ) {
-                    AddComparedTypeWithTupleElements(comparedTypes, slots[slots.Count - 1].SlotType)
-                } else {
-                    AddComparedTypeWithTupleElements(comparedTypes, slots[0].SlotType)
-                }
+                AddComparedTypeWithTupleElements(
+                    comparedTypes,
+                    slots[GetComparedContainerSlotIndex(declFullName, methodName, slots.Count)].SlotType
+                )
             } else if strippedRecv is ImportedTypeSymbol imp && !imp.TypeArguments.IsDefaultOrEmpty {
-                if declFullName.StartsWith("System.Collections.Generic.PriorityQueue`", StringComparison.Ordinal) &&
-                    imp
-                    .TypeArguments
-                    .Length >= 2 {
-                    AddComparedTypeWithTupleElements(comparedTypes, imp.TypeArguments[1])
-                } else {
-                    AddComparedTypeWithTupleElements(comparedTypes, imp.TypeArguments[0])
-                }
+                AddComparedTypeWithTupleElements(
+                    comparedTypes,
+                    imp.TypeArguments[GetComparedContainerSlotIndex(declFullName, methodName, imp.TypeArguments.Length)]
+                )
             } else if declFullName != "System.Object" && declFullName != "System.Array" {
                 AddComparedTypeWithTupleElements(comparedTypes, strippedRecv)
             }
@@ -7181,9 +7173,23 @@ internal partial class StatementBinder {
         }
         for ft in formattedTypes {
             let s = StripAllNullability(ft) ?? ft
-            if s is ImportedTypeSymbol imp &&
-                imp.ClrType is {} clr &&
-                !IsModeledFrameworkType(clr, clr.FullName ?? "") {
+            if s == nil || object.Equals(s, TypeSymbol.Object) ||
+                s is InterfaceSymbol or
+                TypeParameterSymbol ||
+                (
+                s is StructSymbol source &&
+                    source.IsClass &&
+                    (source.IsOpen || source.IsAbstract || source.IsSealedHierarchy)
+            ) ||
+                (
+                s is ImportedTypeSymbol imp &&
+                    imp.ClrType is {} clr &&
+                    (
+                    !IsModeledFrameworkType(clr, clr.FullName ?? "") ||
+                        clr.IsInterface ||
+                        (!clr.IsSealed && !clr.IsValueType)
+                )
+            ) {
                 summary.WritesAnyStorage = true
                 return
             }
@@ -8866,6 +8872,16 @@ internal partial class StatementBinder {
                 "OrderByDescending" or
                 "ThenBy" or
                 "ThenByDescending"
+        }
+
+        internal func GetComparedContainerSlotIndex(owner string, method string, count int32) int32 ->
+        if method == "ContainsValue" || owner.StartsWith(
+            "System.Collections.Generic.PriorityQueue`",
+            StringComparison.Ordinal
+        ) {
+            count - 1
+        } else {
+            0
         }
 
         internal func MayInvokeToStringCallback(declFullName string, name string) bool -> (

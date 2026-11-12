@@ -1609,6 +1609,7 @@ class ReferenceResolver : IDisposable {
                 return false
             }
             try {
+                CompilationMeasurements.Count("reference.effect-image-hashes")
                 using let image = File.OpenRead(originalPath)
                 let hash = Convert.ToHexString(SHA256.HashData(image))
                 return hashes.Contains(hash)
@@ -1635,19 +1636,67 @@ class ReferenceResolver : IDisposable {
             }
             let runtimeDirectory = Path.GetDirectoryName(typeof(object).Assembly.Location)
             try {
-                return AssemblyLoadContext.GetLoadContext(assembly) != nil &&
-                    runtimeDirectory != nil &&
-                    Path.GetDirectoryName(assembly.Location) == runtimeDirectory &&
-                    IsTrustedHostAssemblyIdentity(name, assembly.Location)
+                if AssemblyLoadContext.GetLoadContext(assembly) == nil ||
+                    runtimeDirectory == nil ||
+                    Path.GetDirectoryName(assembly.Location) != runtimeDirectory {
+                    return false
+                }
+                let fingerprint = RuntimeEffectFingerprints.GetValue(
+                    assembly,
+                    (key Assembly) -> Lazy[string](
+                        () -> {
+                            CompilationMeasurements.Count("reference.effect-image-hashes")
+                            using let image = File.OpenRead(key.Location)
+                            return Convert.ToHexString(SHA256.HashData(image))
+                        }
+                    )
+                )
+                return hashes.Contains(fingerprint.Value)
             } catch (error NotSupportedException) {
                 return false
             } catch (error ArgumentException) {
+                return false
+            } catch (error IOException) {
+                return false
+            } catch (error UnauthorizedAccessException) {
                 return false
             }
         }
 
         private let TrustedEffectImages Lazy[Dictionary[string, HashSet[string]]] =
         Lazy[Dictionary[string, HashSet[string]]](BuildTrustedEffectImages)
+
+        internal func AddTrustedEffectReferencePack(
+            version string,
+            supported HashSet[string],
+            directories List[string]
+        ) {
+            try {
+                let manifest = XDocument.Load(Path.Combine(version, "data", "FrameworkList.xml"))
+                let names = manifest
+                    .Descendants("File")
+                    .Select((file XElement) -> file.Attribute("AssemblyName")?.Value)
+                    .Where((name string?) -> !string.IsNullOrEmpty(name))
+                    .ToArray()
+                let refs = Path.Combine(version, "ref")
+                let paths = if Directory.Exists(refs) {
+                    Directory
+                        .EnumerateDirectories(refs)
+                        .OrderBy((path string) -> path, StringComparer.Ordinal)
+                        .ToArray()
+                } else {
+                    Array.Empty[string]()
+                }
+                for name in names {
+                    if name != nil {
+                        supported.Add(name)
+                    }
+                }
+                directories.AddRange(paths)
+            } catch (error System.Xml.XmlException) { } catch (error IOException) { } catch (
+                error UnauthorizedAccessException
+            ) { }
+        }
 
         private func BuildTrustedEffectImages() Dictionary[string, HashSet[string]] {
             let result = Dictionary[string, HashSet[string]](StringComparer.Ordinal)
@@ -1670,7 +1719,9 @@ class ReferenceResolver : IDisposable {
                             }
                         }
                     }
-                } catch (error JsonException) { } catch (error IOException) { }
+                } catch (error JsonException) { } catch (error IOException) { } catch (
+                    error UnauthorizedAccessException
+                ) { }
             }
             let dotnetRoot = Directory.GetParent(runtimeDirectory)?.Parent?.Parent?.FullName
             if dotnetRoot != nil {
@@ -1680,28 +1731,23 @@ class ReferenceResolver : IDisposable {
                         (p string) -> p,
                         StringComparer.Ordinal
                     ) {
-                        let manifest = Path.Combine(version, "data", "FrameworkList.xml")
-                        if File.Exists(manifest) {
-                            for file in XDocument.Load(manifest).Descendants("File") {
-                                if file.Attribute("AssemblyName")?.Value is {} name {
-                                    supported.Add(name)
-                                }
-                            }
-                        }
-                        let refs = Path.Combine(version, "ref")
-                        if Directory.Exists(refs) {
-                            directories.AddRange(
-                                Directory.EnumerateDirectories(refs).OrderBy((p string) -> p, StringComparer.Ordinal)
-                            )
-                        }
+                        AddTrustedEffectReferencePack(version, supported, directories)
                     }
                 }
             }
             for directory in directories {
-                for path in Directory.EnumerateFiles(directory, "*.dll").OrderBy(
-                    (p string) -> p,
-                    StringComparer.Ordinal
-                ) {
+                var paths[]string
+                try {
+                    paths = Directory
+                        .EnumerateFiles(directory, "*.dll")
+                        .OrderBy((path string) -> path, StringComparer.Ordinal)
+                        .ToArray()
+                } catch (error IOException) {
+                    continue
+                } catch (error UnauthorizedAccessException) {
+                    continue
+                }
+                for path in paths {
                     if !supported.Contains(Path.GetFileNameWithoutExtension(path)) {
                         continue
                     }
@@ -1714,7 +1760,9 @@ class ReferenceResolver : IDisposable {
                             result[identity] = hashes
                         }
                         hashes.Add(hash)
-                    } catch (error IOException) { } catch (error BadImageFormatException) { }
+                    } catch (error IOException) { } catch (error BadImageFormatException) { } catch (
+                        error UnauthorizedAccessException
+                    ) { }
                 }
             }
             return result

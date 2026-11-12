@@ -401,6 +401,15 @@ Compilation-wide indexes use weak compilation ownership; document visitors retai
 Completed summaries do not consume the active recursion budget.
 Cheap deferred-factory shape checks precede framework image verification.
 
+Source callback inventories do not prove that imported or open implementations are pure.
+Callback proofs include private imported comparer contracts and actual enumeration implementations.
+Unproven implementations have unknown writes. Closed trusted primitives, strings, arrays, and supported containers retain their applicable models.
+Direct formatting expressions use the same operation query as callee bodies and loop regions.
+Only a function's own yields make it deferred; invoked nested functions retain their own effects.
+Deferred-factory models require verified framework images after the cheap shape check.
+Unreadable reference-pack manifests contribute no trust or reference directories, and do not poison other packs.
+Runtime image verification caches immutable assembly fingerprints across compilation queries.
+
 **The conservative default.** The lists above and the proof rules of
 section 8 are closed. A fact survives a program point only when one of the
 listed proof rules shows that it does; a construct, statement kind, call,

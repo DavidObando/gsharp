@@ -1892,6 +1892,92 @@ public sealed class Formatted { public override string ToString() { Store.Value 
         Assert.Contains("return value!!.Length + 41", printed)
     }
 
+    @Theory
+    @InlineData("_ = $\"{formatted}\";")
+    @InlineData("for (var i = 0; i < 1; i++) { _ = $\"{formatted}\"; }")
+    @InlineData("_ = values.Count();")
+    @InlineData("_ = dictionary.ContainsKey(1);")
+    @InlineData("_ = keys.Contains(key);")
+    func RefParameter_CallbackImplementationsAreNotLimitedToSourceMethods(statement string) {
+        let printed = AssertRunsLikeCSharp(`
+using System;
+using System.Linq;
+using System.Collections.Generic;
+using ExternalEffects;
+public static class Demo {
+    private sealed class Formatter { public override string ToString() { Store.Value = null; return "formatted"; } }
+    private static int Guard(ref string? value, Formatter formatted, IEnumerable<int> values,
+        Dictionary<int,int> dictionary, List<Key> keys, Key key) {
+        if (value == null) return 0;
+        ` + statement + `
+        return value.Length + 43;
+    }
+    public static string Run() {
+        var formatted = new Formatter(); var values = Factory.Sequence();
+        var dictionary = Factory.Dictionary(); var key = new Key(); var keys = new List<Key> { key };
+        Store.Value = "safe";
+        try { return Guard(ref Store.Value, formatted, values, dictionary, keys, key).ToString(); }
+        catch (NullReferenceException) { return "cleared"; }
+    }
+}`, library: `
+using System;
+using System.Collections;
+using System.Collections.Generic;
+namespace ExternalEffects;
+public static class Store { public static string? Value; }
+public sealed class Key {
+    public override bool Equals(object? other) { Store.Value = null; return true; }
+    public override int GetHashCode() => 1;
+}
+public static class Factory {
+    private sealed class Comparer : IEqualityComparer<int> {
+        public bool Equals(int x, int y) => x == y;
+        public int GetHashCode(int x) { Store.Value = null; return x; }
+    }
+    private sealed class SequenceValue : IEnumerable<int> {
+        public IEnumerator<int> GetEnumerator() { Store.Value = null; return ((IEnumerable<int>)new[] { 1 }).GetEnumerator(); }
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+    public static IEnumerable<int> Sequence() => new SequenceValue();
+    public static Dictionary<int,int> Dictionary() => new Dictionary<int,int>(new Comparer()) { [1] = 1 };
+}
+`)
+        Assert.Contains("return value!!.Length + 43", printed)
+    }
+
+    @Theory
+    @InlineData(
+        "private static void Clear() { System.Collections.Generic.IEnumerable<int> Local() { yield return 1; } global = null; }",
+        "Clear();"
+    )
+    @InlineData("private static void Clear() { global = null; }", "_ = System.Linq.Enumerable.Pretend();")
+    func RefParameter_DeferredProofRequiresOwnYieldAndVerifiedFramework(members string, statement string) {
+        let printed = AssertRunsLikeCSharp(`
+using System;
+using System.Collections.Generic;
+namespace System.Linq {
+    public static class Enumerable {
+        public static IEnumerable<int> Pretend() { Demo.ClearForFactory(); return Array.Empty<int>(); }
+    }
+}
+public static class Demo {
+    private static string? global;
+    public static void ClearForFactory() { global = null; }
+    ` + members + `
+    private static int Guard(ref string? value) {
+        if (value == null) return 0;
+        ` + statement + `
+        return value.Length + 47;
+    }
+    public static string Run() {
+        global = "safe";
+        try { return Guard(ref global).ToString(); }
+        catch (NullReferenceException) { return "cleared"; }
+    }
+}`)
+        Assert.Contains("return value!!.Length + 47", printed)
+    }
+
     @Fact
     func RefParameter_CanceledStorageTraversalDoesNotPublishASummary() {
         using let cancellation = CancellationTokenSource()
@@ -2221,15 +2307,29 @@ public static class Demo {
         let document = LoadedDocument("Snippet.cs", tree, model)
         using let cancellation = CancellationTokenSource()
         let context = TranslationContext(compilation, model, document.FilePath, cancellationToken: cancellation.Token)
+        using let entered = ManualResetEventSlim()
+        using let release = ManualResetEventSlim()
+        var visits = 0
+        context.BeforeStorageEffectBody = () -> {
+            if Interlocked.Increment(ref visits) == 1 {
+                entered.Set()
+                if !release.Wait(TimeSpan.FromSeconds(15)) {
+                    throw TimeoutException("Callee barrier was not released.")
+                }
+            }
+        }
         let translation = Task.Run(() -> CSharpToGSharpTranslator().TranslateDocument(document, context))
-        Assert.True(
-            SpinWait.SpinUntil(
-                () -> Volatile.Read(ref context.StorageEffectBodyVisits) > 0 || translation.IsCompleted,
-                TimeSpan.FromSeconds(15)
+        try {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(15)), "The product callee walk must reach its barrier.")
+            cancellation.Cancel()
+        } finally {
+            release.Set()
+            Assert.Same(
+                translation,
+                Task.WhenAny(translation, Task.Delay(TimeSpan.FromSeconds(15))).GetAwaiter().GetResult()
             )
-        )
-        Assert.False(translation.IsCompleted, "The callee walk must still be active when cancellation is requested.")
-        cancellation.Cancel()
+            context.BeforeStorageEffectBody = nil
+        }
         Assert.ThrowsAny[OperationCanceledException](() -> translation.GetAwaiter().GetResult())
     }
 

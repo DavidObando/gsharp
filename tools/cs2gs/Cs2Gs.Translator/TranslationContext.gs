@@ -114,6 +114,7 @@ class TranslationContext {
         get;
     }
     internal var StorageEffectBodyVisits int32
+    internal var BeforeStorageEffectBody Action?
 
     internal class StorageIndexes {
         var AliasedFields HashSet[IFieldSymbol]?
@@ -123,6 +124,11 @@ class TranslationContext {
         let ComparerFactories List[Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax] =
         List[Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax]()
         var TreeVisits int32
+        var ImportedComparers List[INamedTypeSymbol]?
+        var IncompleteImportedComparers bool
+        let TrustedAssemblies Dictionary[IAssemblySymbol, bool] = Dictionary[IAssemblySymbol, bool](
+            SymbolEqualityComparer.Default
+        )
     }
 
     internal prop EffectIndexes StorageIndexes -> StorageIndexesByCompilation.GetOrCreateValue(this.rootCompilation)

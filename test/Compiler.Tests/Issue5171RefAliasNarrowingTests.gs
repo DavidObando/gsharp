@@ -27,6 +27,47 @@ import Xunit
 /// code, the diagnostic and its location. Every accepted case compiles,
 /// IL-verifies, runs and asserts the output.
 open class Issue5171RefAliasNarrowingTests {
+    @Theory
+    @InlineData("object")
+    @InlineData("(object, int32)")
+    func OpenFormattingDispatchInvalidatesAliasedStorage(type string) {
+        using let library = CSharpFixture(`
+namespace ExternalFormatting;
+public static class Store { public static string? Value; }
+public sealed class Formatted { public override string ToString() { Store.Value = null; return "formatted"; } }
+`)
+        let directory = Path.Combine(AppContext.BaseDirectory, "format-effects", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let source = `import ExternalFormatting
+func Guard(ref text string?, item ` + type + `) int32 {
+    if text == nil { return 0 }
+    let _ = "$item"
+    return text.Length
+}
+func Main() { let _ = Guard(ref Store.Value, ` + (
+                if type == "object" {
+                    "Formatted()"
+                } else {
+                    "(Formatted(), 1)"
+                }
+            ) + `) }`
+            let output = Path.Combine(directory, "Formatting.dll")
+            let (exit, log) = Compile(directory, source, output, []string{library.AssemblyPath})
+            Assert.NotEqual(0, exit)
+            Assert.False(File.Exists(output))
+            Assert.True(
+                log.Contains(
+                    Path.Combine(directory, "Formatting.gs") + "(5,17,5,23): error GS0158",
+                    StringComparison.Ordinal
+                ),
+                log
+            )
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
     @Fact
     func SameIdentityFrameworkReplacement_RemainsAnUnknownWriterInTheDriver() {
         let host = typeof(Console).Assembly.GetName()
