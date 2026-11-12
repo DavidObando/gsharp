@@ -149,6 +149,31 @@ open class Issue5633ConditionalLocalQueryTests {
     }
 
     @Theory
+    @InlineData(6)
+    @InlineData(8)
+    @InlineData(10)
+    @InlineData(12)
+    func LoopCarriedSplitAliases_CompletesWithinBound(links int32) {
+        let body = StringBuilder("var seed = p;\ndo {\nvar x0 = seed;\n")
+        let arms = StringBuilder()
+        for var i = 1; i <= links; i++ {
+            body.AppendLine("var a$i = x${i - 1}; var b$i = x${i - 1}; var x$i = flag ? a$i : b$i;")
+            arms.Append("${i * 2} => a$i, ${i * 2 + 1} => b$i, ")
+        }
+        body.AppendLine("seed = choice switch { $arms _ => x$links };")
+        body.AppendLine("} while (again); return seed;")
+        let printed = this.TranslateWithinBound(
+            "#nullable enable\nnamespace Demo {\n" +
+                "public class Node { }\npublic static class P {\n" +
+                "static Node Chain(Node p, bool flag, bool again, int choice) {\n" +
+                body.ToString() + "\n} } }",
+            enabled: true
+        )
+        Assert.Contains("return seed", printed)
+        TranslationTestValidation.AssertBinds(printed)
+    }
+
+    @Theory
     @InlineData(true, true, false)
     @InlineData(false, true, false)
     @InlineData(true, false, false)
@@ -187,6 +212,74 @@ open class Issue5633ConditionalLocalQueryTests {
         let printed = this.TranslateWithinBound(source, enabled)
         Assert.Contains("var x24 = if flag { x23 } else { x23 }\n", printed)
         TranslationTestValidation.AssertBinds(printed)
+    }
+
+    @Fact
+    func CyclicOrigins_PropagateDefaultsWithoutChangingRuntimeValues() {
+        let printed = this.TranslateWithinBound(`
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        static string IsNull<T>(T value) => (value is null).ToString();
+        public static string Run<T>(T replacement, bool flag, bool clear)
+        {
+            T? seed = replacement;
+            string result = "";
+            int count = 0;
+            do
+            {
+                var a = seed;
+                var b = seed;
+                var joined = flag ? a : b;
+                result += IsNull(joined) + ":";
+                seed = clear ? default(T) : flag ? a : b;
+            } while (++count < 2);
+            return result;
+        }
+    }
+}`, enabled: true)
+        Assert.Contains("let a T? = seed", printed)
+        Assert.Contains("let joined T? = if flag", printed)
+        TranslationTestValidation.AssertBinds(printed)
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "System.Console.WriteLine(P.Run(\"value\", true, true))\n" +
+                "System.Console.WriteLine(P.Run(\"value\", false, true))\n" +
+                "System.Console.WriteLine(P.Run(\"value\", true, false))\n" +
+                "System.Console.WriteLine(P.Run(\"value\", false, false))",
+            string.Join(Environment.NewLine, "False:True:", "False:True:", "False:False:", "False:False:")
+        )
+    }
+
+    @Fact
+    func DeconstructedCallback_RetainsCapturedDefaultProvenance() {
+        let printed = this.TranslateWithinBound(`
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        static string IsNull<T>(T value) => (value is null).ToString();
+        public static string Run<T>(T replacement)
+        {
+            var pair = (replacement, 0);
+            string result = "";
+            var (callback, _) = ((System.Action)(() =>
+            {
+                var (captured, _) = pair;
+                result = IsNull(captured);
+            }), 0);
+            pair = (default(T), 0);
+            callback();
+            return result;
+        }
+    }
+}`, enabled: true)
+        Assert.Contains("captured T?", printed)
+        TranslationTestValidation.AssertBinds(printed)
+        LocalFunctionHoistTranslationTests.CompileAndRun(printed, "System.Console.WriteLine(P.Run(\"value\"))", "True")
     }
 
     @Fact
