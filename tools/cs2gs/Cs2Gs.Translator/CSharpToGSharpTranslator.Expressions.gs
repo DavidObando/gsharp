@@ -1675,6 +1675,7 @@ partial class CSharpToGSharpTranslator {
         private func GetProjectedInitializerAlias(
             source Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
         ) ProjectedInitializerAlias? {
+            CompilationMeasurements.Count("translation.projection_alias_visits")
             if source is not IdentifierNameSyntax identifier {
                 return nil
             }
@@ -1716,7 +1717,6 @@ partial class CSharpToGSharpTranslator {
                 .state
                 .ManagedReferenceArrayProjectedLocalTypeInProgress
                 .Contains(alias.Local) {
-                CompilationMeasurements.Count("translation.projection_alias_visits")
                 source = Unparenthesize(alias.Initializer)
             }
             let projected = this.GetManagedReferenceArrayProjectedExpressionType(source)
@@ -1726,7 +1726,6 @@ partial class CSharpToGSharpTranslator {
             let aliases = List[ProjectedInitializerAlias]()
             var current = Unparenthesize(initializer)
             while current != source && this.GetProjectedInitializerAlias(current) is {} alias {
-                CompilationMeasurements.Count("translation.projection_alias_visits")
                 aliases.Add(alias)
                 current = Unparenthesize(alias.Initializer)
             }
