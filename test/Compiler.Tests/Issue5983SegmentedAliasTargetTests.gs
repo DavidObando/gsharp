@@ -83,9 +83,9 @@ class Issue5983SegmentedAliasTargetTests {
         VerifyStrict(control)
         let expected = Encoding.UTF8.GetBytes(
             if genericInner {
-                "42\ninner\n"
+                "42${Environment.NewLine}inner${Environment.NewLine}"
             } else {
-                "42\n"
+                "42${Environment.NewLine}"
             }
         )
         Assert.Equal(expected, direct.RunBytes(control))
