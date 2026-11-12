@@ -52,6 +52,24 @@ partial class CSharpToGSharpTranslator {
             var ReconciledRepository object? = nil
         }
 
+        private class RefStorageCatalogCache {
+            let Published ConditionalWeakTable[CSharpCompilation, RefStorageCompilationCache] =
+            ConditionalWeakTable[CSharpCompilation, RefStorageCompilationCache]()
+            var Building Dictionary[CSharpCompilation, RefStorageCompilationCache]?
+        }
+
+        private func RefStorageCacheFor(compilation CSharpCompilation) RefStorageCompilationCache {
+            let catalog = RefStorageCaches.GetOrCreateValue(this.context.CatalogIdentity)
+            if catalog.Building is {} building {
+                if !building.TryGetValue(compilation, out var entry) {
+                    entry = RefStorageCompilationCache()
+                    building.Add(compilation, entry)
+                }
+                return entry
+            }
+            return catalog.Published.GetOrCreateValue(compilation)
+        }
+
         private class RefStorageSlot {
             let Symbol ISymbol
             let Depth int32
@@ -2692,8 +2710,45 @@ partial class CSharpToGSharpTranslator {
             if this.refStorageSlots != nil {
                 return
             }
+            let catalog = RefStorageCaches.GetOrCreateValue(this.context.CatalogIdentity)
+            lock catalog {
+                if catalog.Building != nil {
+                    this.BuildRefStorageSlots()
+                    return
+                }
+                if catalog.Published.TryGetValue(this.context.Compilation, out var complete) && complete.Slots != nil {
+                    this.refStorageSlots = complete.Slots
+                    this.frozenRefStorageContracts = complete.FrozenContracts
+                    this.linkedRefStoragePromotions = complete.LinkedPromotions
+                    return
+                }
+                let building = Dictionary[CSharpCompilation, RefStorageCompilationCache](
+                    ReferenceEqualityComparer.Instance
+                )
+                catalog.Building = building
+                try {
+                    this.BuildRefStorageSlots()
+                    this.context.BeforeRefStoragePublication?.Invoke()
+                    this.context.CancellationToken.ThrowIfCancellationRequested()
+                    for entry in building {
+                        catalog.Published.GetValue(entry.Key, (key CSharpCompilation) -> entry.Value)
+                    }
+                } catch (error Exception) {
+                    this.refStorageSlots = nil
+                    this.frozenRefStorageContracts = nil
+                    this.linkedRefStoragePromotions = Dictionary[ISymbol, HashSet[int32]](
+                        SymbolEqualityComparer.Default
+                    )
+                    throw error
+                } finally {
+                    catalog.Building = nil
+                }
+            }
+        }
+
+        private func BuildRefStorageSlots() {
             let compilation = this.context.Compilation
-            let cache = RefStorageCaches.GetOrCreateValue(compilation)
+            let cache = this.RefStorageCacheFor(compilation)
             if cache.Slots != nil {
                 this.refStorageSlots = cache.Slots
                 this.frozenRefStorageContracts = cache.FrozenContracts
@@ -2708,6 +2763,7 @@ partial class CSharpToGSharpTranslator {
             this.frozenRefStorageContracts = Dictionary[ISymbol, HashSet[int32]](SymbolEqualityComparer.Default)
             this.linkedRefStoragePromotions = cache.LinkedPromotions
             for tree in compilation.SyntaxTrees {
+                this.context.CancellationToken.ThrowIfCancellationRequested()
                 let model = TranslationContext.GetSemanticModel(compilation, tree)
                 using let modelScope = this.context.UseSemanticModelFor(tree, compilation)
                 for reference in tree.GetRoot().DescendantNodes().OfType[RefExpressionSyntax]() {
@@ -2753,7 +2809,7 @@ partial class CSharpToGSharpTranslator {
         private func ReconcileLinkedRefStorageContracts(cache RefStorageCompilationCache) {
             if this.context.RepositoryCompilations is not{Count: > 1} repository || object.ReferenceEquals(
                 cache.ReconciledRepository,
-                repository
+                this.context.CatalogIdentity
             ) {
                 return
             }
@@ -2764,10 +2820,10 @@ partial class CSharpToGSharpTranslator {
                 .Compilation
                 .SyntaxTrees
                 .Any((candidate SyntaxTree) -> this.repositorySharedDocumentPaths!!.Contains(candidate.FilePath)) {
-                cache.ReconciledRepository = repository
+                cache.ReconciledRepository = this.context.CatalogIdentity
                 return
             }
-            cache.ReconciledRepository = repository
+            cache.ReconciledRepository = this.context.CatalogIdentity
             let visitors = List[DeclarationVisitor](){this}
             for owner in repository {
                 if owner == this.context.Compilation {
@@ -2779,10 +2835,10 @@ partial class CSharpToGSharpTranslator {
                 if tree == nil {
                     continue
                 }
-                let ownerCache = RefStorageCaches.GetOrCreateValue(owner)
-                ownerCache.ReconciledRepository = repository
+                let ownerCache = this.RefStorageCacheFor(owner)
+                ownerCache.ReconciledRepository = this.context.CatalogIdentity
                 // Foreign visitors compute local constraints without repository recursion.
-                let ownerContext = TranslationContext(
+                let ownerContext = this.context.CreateRelatedContext(
                     owner,
                     TranslationContext.GetSemanticModel(owner, tree),
                     tree.FilePath
@@ -2804,6 +2860,7 @@ partial class CSharpToGSharpTranslator {
             }
             var changed bool
             do {
+                this.context.CancellationToken.ThrowIfCancellationRequested()
                 changed = false
                 for source in visitors {
                     let promotions = Dictionary[ISymbol, HashSet[int32]](SymbolEqualityComparer.Default)
@@ -3634,10 +3691,10 @@ partial class CSharpToGSharpTranslator {
                 ConcurrentDictionary[ISymbol, bool]
             ] = ConditionalWeakTable[CSharpCompilation, ConcurrentDictionary[ISymbol, bool]]()
 
-            private let RefStorageCaches ConditionalWeakTable[
-                CSharpCompilation,
-                RefStorageCompilationCache
-            ] = ConditionalWeakTable[CSharpCompilation, RefStorageCompilationCache]()
+            private let RefStorageCaches ConditionalWeakTable[object, RefStorageCatalogCache] = ConditionalWeakTable[
+                object,
+                RefStorageCatalogCache
+            ]()
 
             private let RepositorySharedDocumentPathsCache ConditionalWeakTable[
                 object,

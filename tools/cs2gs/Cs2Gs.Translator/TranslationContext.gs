@@ -25,6 +25,8 @@ import System.Threading
 /// data-flow) without threading the model through every call (ADR-0115 §A).
 /// Each context captures immutable compilation catalogs. Caller list changes require a new context.
 class TranslationContext {
+    private let suppliedModels Dictionary[(Owner Compilation, Tree SyntaxTree), SemanticModel] =
+    Dictionary[(Owner Compilation, Tree SyntaxTree), SemanticModel]()
     private let diagnostics List[TranslationDiagnostic] = List[TranslationDiagnostic]()
 
     // Keyed by the syntax tree instance, so two in-memory trees without a file
@@ -49,6 +51,30 @@ class TranslationContext {
     private let catalogSnapshot SourceCatalogSnapshot?
 
     private let rootCompilation CSharpCompilation
+    private var sharedCatalogIdentity object?
+
+    internal prop CatalogIdentity object -> this.sharedCatalogIdentity ?? if this.catalogSnapshot == nil {
+        cast[object](this.rootCompilation)
+    } else {
+        cast[object](this.catalogSnapshot)
+    }
+
+    internal func CreateRelatedContext(
+        compilation CSharpCompilation,
+        model SemanticModel,
+        path string
+    ) TranslationContext {
+        let related = TranslationContext(
+            compilation,
+            model,
+            path,
+            this.siblingCompilations,
+            this.repositoryCompilations,
+            this.CancellationToken
+        )
+        related.sharedCatalogIdentity = this.CatalogIdentity
+        return related
+    }
 
     convenience init(
         compilation CSharpCompilation,
@@ -105,6 +131,7 @@ class TranslationContext {
         this.Compilation = compilation ?? throw ArgumentNullException("compilation")
         this.rootCompilation = this.Compilation
         this.SemanticModel = semanticModel ?? throw ArgumentNullException("semanticModel")
+        this.suppliedModels[(semanticModel.Compilation, semanticModel.SyntaxTree)] = semanticModel
         CacheSemanticModel(this.Compilation, this.SemanticModel)
         this.FilePath = filePath
         this.CancellationToken = cancellationToken
@@ -116,10 +143,6 @@ class TranslationContext {
         )
         this.siblingCompilations = this.catalogSnapshot?.Siblings
         this.repositoryCompilations = this.catalogSnapshot?.Repository
-        ObliviousNullabilityAnalyzer.RegisterSourceAssemblies(
-            this.Compilation,
-            this.repositoryCompilations ?? this.siblingCompilations
-        )
     }
 
     /// Gets the root C# compilation this context was created for.
@@ -132,6 +155,7 @@ class TranslationContext {
     internal var BeforeStorageEffectBody Action?
     internal var AfterStorageComparerFactory Action?
     internal var BeforeOwnershipTree Action?
+    internal var BeforeRefStoragePublication Action?
 
     internal class DeferredCallbackIndex {
         init(
@@ -232,13 +256,22 @@ class TranslationContext {
             (owner == nil || object.ReferenceEquals(this.SemanticModel.Compilation, owner)) {
             return NoOpScope.Instance
         }
-        let ownerCompilation = owner ?? if this.Compilation.ContainsSyntaxTree(tree) {
+        let currentKey(Owner Compilation, Tree SyntaxTree) = (this.Compilation, tree)
+        let ownerCompilation = owner ?? if this.suppliedModels.ContainsKey(currentKey) ||
+            this
+            .Compilation
+            .ContainsSyntaxTree(tree) {
             this.Compilation
         } else {
             this.SourceOwners(false).UniqueTreeOwner(tree) ?? this.SourceOwners(true).UniqueTreeOwner(tree) ??
                 throw InvalidOperationException("A source tree requires an explicit compilation owner.")
         }
-        let model = GetSemanticModel(ownerCompilation, tree)
+        let key(Owner Compilation, Tree SyntaxTree) = (ownerCompilation, tree)
+        let model = if this.suppliedModels.TryGetValue(key, out var supplied) {
+            supplied
+        } else {
+            GetSemanticModel(ownerCompilation, tree)
+        }
         let previousCompilation = this.Compilation
         let previousModel = this.SemanticModel
         this.Compilation = ownerCompilation
@@ -702,7 +735,10 @@ class TranslationContext {
         }
 
         internal func CacheSemanticModel(compilation Compilation, model SemanticModel) {
-            if model.IgnoresAccessibility || !object.ReferenceEquals(model.Compilation, compilation) {
+            if model.IgnoresAccessibility || model.IsSpeculativeSemanticModel || !object.ReferenceEquals(
+                model.Compilation,
+                compilation
+            ) {
                 return
             }
             let models = SemanticModelsByCompilation.GetOrCreateValue(compilation)

@@ -14,6 +14,7 @@ import System.Collections.Immutable
 import System.Globalization
 import System.Linq
 import System.Runtime.CompilerServices
+import System.Threading
 
 /// Issue #2113: a whole-program, symbol-keyed null-TAINT analysis for a
 /// nullable-<em>oblivious</em> compilation (one whose
@@ -48,6 +49,170 @@ import System.Runtime.CompilerServices
 /// annotation and writable contract, including oblivious islands in enabled
 /// projects; explicitly non-null leaves and frozen metadata stay unchanged.
 internal shared class ObliviousNullabilityAnalyzer {
+    // Flow the captured domain through existing recursive readers without duplicating nullability rules.
+    private let CurrentAnalysis AsyncLocal[AnalysisScope?] = AsyncLocal[AnalysisScope?]()
+    private let AnalysisScopes ConditionalWeakTable[object, AnalysisScope] = ConditionalWeakTable[
+        object,
+        AnalysisScope
+    ]()
+    private let DirectAnalysisScopes ConditionalWeakTable[
+        Compilation,
+        ConditionalWeakTable[object, AnalysisPublication]
+    ] =
+    ConditionalWeakTable[Compilation, ConditionalWeakTable[object, AnalysisPublication]]()
+    private let UnboundAnalysisScopes ConditionalWeakTable[object, AnalysisPublication] =
+    ConditionalWeakTable[object, AnalysisPublication]()
+    private let DefaultAnalysisIdentity object = System.Object()
+
+    private class AnalysisScope {
+        init(identity object, sources IEnumerable[CSharpCompilation], first object?, second object?) {
+            this.Identity = identity
+            this.SourceNames = sources
+                .Select((source CSharpCompilation) -> source.Assembly.Identity.GetDisplayName())
+                .Distinct(StringComparer.Ordinal)
+                .ToImmutableArray()
+            this.FirstCatalog = first
+            this.SecondCatalog = second
+        }
+        let Identity object
+        let SourceNames IReadOnlyList[string]
+        let FirstCatalog object?
+        let SecondCatalog object?
+    }
+
+    private class RestoreAnalysis : IDisposable {
+        private let previous AnalysisScope?
+        init(previous AnalysisScope?) {
+            this.previous = previous
+        }
+
+        func Dispose() {
+            CurrentAnalysis.Value = this.previous
+        }
+    }
+
+    private class NoOpAnalysis : IDisposable {
+        func Dispose() { }
+        shared {
+            let Instance NoOpAnalysis = NoOpAnalysis()
+        }
+    }
+
+    private class AnalysisPublication {
+        var Catalog IReadOnlyList[CSharpCompilation]?
+        var Analysis AnalysisScope?
+    }
+
+    internal class ScopedCompilationCache[T class] {
+        private let scopes ConditionalWeakTable[object, ConditionalWeakTable[Compilation, T]] =
+        ConditionalWeakTable[object, ConditionalWeakTable[Compilation, T]]()
+        private func Table() ConditionalWeakTable[Compilation, T] ->
+        this.scopes.GetOrCreateValue(CurrentAnalysis.Value?.Identity ?? DefaultAnalysisIdentity)
+
+        func GetValue(compilation Compilation, factory Func[Compilation, T]) T ->
+        this.Table().GetValue(compilation, (current Compilation) -> factory(current))
+
+        func TryGetValue(compilation Compilation, out result T?) bool -> this.Table().TryGetValue(
+            compilation,
+            out result
+        )
+
+        func Remove(compilation Compilation) bool -> this.Table().Remove(compilation)
+    }
+
+    internal func UseCatalogScope(context TranslationContext) IDisposable {
+        let prior = CurrentAnalysis.Value
+        let identity = context.CatalogIdentity
+        if prior != nil && object.ReferenceEquals(prior.Identity, identity) {
+            return NoOpAnalysis.Instance
+        }
+        let selected = AnalysisScopes.GetValue(
+            identity,
+            (key object) -> AnalysisScope(
+                key,
+                []CSharpCompilation{context.RootCompilation}.Concat(
+                    context.RepositoryCompilations ?? Array.Empty[CSharpCompilation]()
+                )
+                    .Concat(context.SiblingCompilations ?? Array.Empty[CSharpCompilation]()),
+                context.RepositoryCompilations,
+                context.SiblingCompilations
+            )
+        )
+        CurrentAnalysis.Value = selected
+        return RestoreAnalysis(prior)
+    }
+
+    private func UseCatalogScope(compilation Compilation?, catalog IReadOnlyList[CSharpCompilation]?) IDisposable {
+        let prior = CurrentAnalysis.Value
+        if prior != nil &&
+            (
+            catalog == nil || object.ReferenceEquals(prior.FirstCatalog, catalog) || object.ReferenceEquals(
+                prior.SecondCatalog,
+                catalog
+            )
+        ) {
+            return NoOpAnalysis.Instance
+        }
+        if catalog == nil && compilation is CSharpCompilation own {
+            CurrentAnalysis.Value = AnalysisScopes.GetValue(
+                own,
+                (key object) ->
+                AnalysisScope(key, []CSharpCompilation{own}, nil, nil)
+            )
+            return RestoreAnalysis(prior)
+        }
+        let scopes = if compilation == nil {
+            UnboundAnalysisScopes
+        } else {
+            DirectAnalysisScopes.GetOrCreateValue(compilation)
+        }
+        let identity = if catalog == nil {
+            DefaultAnalysisIdentity
+        } else {
+            cast[object](catalog)
+        }
+        let publication = scopes.GetOrCreateValue(identity)
+        var selected AnalysisScope
+        lock publication {
+            if publication.Analysis == nil || !SameCatalog(publication.Catalog, catalog) {
+                let snapshot IReadOnlyList[CSharpCompilation]? = if catalog == nil {
+                    nil
+                } else {
+                    catalog.ToImmutableArray()
+                }
+                let analysis = AnalysisScope(
+                    System.Object(),
+                    (
+                        if compilation is CSharpCompilation source {
+                            []CSharpCompilation{source}
+                        } else {
+                            Array.Empty[CSharpCompilation]()
+                        }
+                    ).Concat(snapshot ?? Array.Empty[CSharpCompilation]()),
+                    catalog,
+                    nil
+                )
+                publication.Catalog = snapshot
+                publication.Analysis = analysis
+            }
+            selected = publication.Analysis ?? throw InvalidOperationException("analysis catalog was not captured")
+        }
+        CurrentAnalysis.Value = selected
+        return RestoreAnalysis(prior)
+    }
+
+    private func SameCatalog(left IReadOnlyList[CSharpCompilation]?, right IReadOnlyList[CSharpCompilation]?) bool {
+        if (left?.Count ?? 0) != (right?.Count ?? 0) {
+            return false
+        }
+        for var index = 0; index < (left?.Count ?? 0); index++ {
+            if !object.ReferenceEquals(left!![index], right!![index]) {
+                return false
+            }
+        }
+        return true
+    }
+
     // Which source expressions a transitive return/forwarding edge follows.
     private enum SourceScope {
         AllSources,
@@ -456,6 +621,11 @@ internal shared class ObliviousNullabilityAnalyzer {
                 referenced.Add(assembly.Identity.GetDisplayName())
             }
             this.ReferencedNames = referenced
+            for name in CurrentAnalysis.Value?.SourceNames ?? Array.Empty[string]() {
+                if referenced.Contains(name) {
+                    this.Names.Add(name)
+                }
+            }
         }
 
         prop Names HashSet[string] {
@@ -484,9 +654,8 @@ internal shared class ObliviousNullabilityAnalyzer {
     // Keyed by Compilation identity so an edited/new compilation naturally gets
     // a fresh entry and stale ones are collectible — same pattern as the
     // subclassed-base-types / partial-type-parts caches in the translator.
-    private let Cache ConditionalWeakTable[Compilation, TaintResult] = ConditionalWeakTable[Compilation, TaintResult]()
-    private let RefArraySources ConditionalWeakTable[Compilation, RefArraySourceIndex] = ConditionalWeakTable[
-        Compilation,
+    private let Cache ScopedCompilationCache[TaintResult] = ScopedCompilationCache[TaintResult]()
+    private let RefArraySources ScopedCompilationCache[RefArraySourceIndex] = ScopedCompilationCache[
         RefArraySourceIndex
     ]()
 
@@ -526,10 +695,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         StrongBox[int32]
     ]()
 
-    private let SourceAssemblies ConditionalWeakTable[Compilation, SourceAssemblySet] = ConditionalWeakTable[
-        Compilation,
-        SourceAssemblySet
-    ]()
+    private let SourceAssemblies ScopedCompilationCache[SourceAssemblySet] = ScopedCompilationCache[SourceAssemblySet]()
     private let SourceTrees ConditionalWeakTable[Compilation, Dictionary[string, []SyntaxTree]] = ConditionalWeakTable[
         Compilation,
         Dictionary[string, []SyntaxTree]
@@ -546,17 +712,11 @@ internal shared class ObliviousNullabilityAnalyzer {
 
     // Issue #3676: per-compilation set of members some source directly writes
     // `null` into, keyed like `Cache` above so it is computed at most once.
-    private let NullTargets ConditionalWeakTable[Compilation, HashSet[string]] = ConditionalWeakTable[
-        Compilation,
-        HashSet[string]
-    ]()
+    private let NullTargets ScopedCompilationCache[HashSet[string]] = ScopedCompilationCache[HashSet[string]]()
 
     // Issue #3848: per-compilation set of declarations a PURE FORWARDING chain
     // from a promoted generated declaration reaches. Cached like `NullTargets`.
-    private let ForwardedTargets ConditionalWeakTable[Compilation, HashSet[string]] = ConditionalWeakTable[
-        Compilation,
-        HashSet[string]
-    ]()
+    private let ForwardedTargets ScopedCompilationCache[HashSet[string]] = ScopedCompilationCache[HashSet[string]]()
 
     // Issue #5508: the file paths each compilation compiles, for linked-source aliases.
     private let SourcePaths ConditionalWeakTable[Compilation, HashSet[string]] = ConditionalWeakTable[
@@ -568,21 +728,14 @@ internal shared class ObliviousNullabilityAnalyzer {
     // `NullTargets`. The seeds are cheap (a syntactic scan for `null` / `null!`
     // arguments); the forwarding edges are built lazily, only once some
     // compilation of the run actually has a seed.
-    private let NullArguments ConditionalWeakTable[Compilation, NullArgumentGraph] = ConditionalWeakTable[
-        Compilation,
-        NullArgumentGraph
-    ]()
+    private let NullArguments ScopedCompilationCache[NullArgumentGraph] = ScopedCompilationCache[NullArgumentGraph]()
 
     // Issue #3848 (family B): per-compilation set of generated ARRAY-typed
     // declarations some source writes a maybe-null ELEMENT into. Cached like
     // `NullTargets`.
-    private let NullElementTargets ConditionalWeakTable[Compilation, HashSet[string]] = ConditionalWeakTable[
-        Compilation,
-        HashSet[string]
-    ]()
+    private let NullElementTargets ScopedCompilationCache[HashSet[string]] = ScopedCompilationCache[HashSet[string]]()
 
-    private let EfEntities ConditionalWeakTable[Compilation, HashSet[INamedTypeSymbol]] = ConditionalWeakTable[
-        Compilation,
+    private let EfEntities ScopedCompilationCache[HashSet[INamedTypeSymbol]] = ScopedCompilationCache[
         HashSet[INamedTypeSymbol]
     ]()
 
@@ -602,7 +755,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             .NullableContextOptions != NullableContextOptions.Disable {
             return false
         }
-        RegisterSourceAssemblies(compilation, nil)
+        using let catalogScope = UseCatalogScope(compilation, nil)
         return Cache.GetValue(compilation, Compute).Tainted.Contains(Canonical(symbol)!!)
     }
 
@@ -1191,7 +1344,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         if symbol == nil || compilation == nil || !anyObliviousCompilation {
             return false
         }
-        RegisterSourceAssemblies(compilation, siblingCompilations)
+        using let catalogScope = UseCatalogScope(compilation, siblingCompilations)
         return IsTaintedCore(
             compilation,
             Canonical(symbol),
@@ -1278,7 +1431,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         if parameterId == nil {
             return false
         }
-        RegisterSourceAssemblies(compilation, siblingCompilations)
+        using let catalogScope = UseCatalogScope(compilation, siblingCompilations)
         let candidates = []CSharpCompilation{compilation}.Concat(
             siblingCompilations ?? Enumerable.Empty[CSharpCompilation]()
         )
@@ -1318,7 +1471,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         if symbol == nil || elementPath == nil || elementPath.Count == 0 || compilation == nil {
             return false
         }
-        RegisterSourceAssemblies(compilation, siblingCompilations)
+        using let catalogScope = UseCatalogScope(compilation, siblingCompilations)
         return IsTupleElementTaintedCore(
             compilation,
             symbol,
@@ -1377,7 +1530,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         } else if !TryResolveTupleElementSource(expression, model, out source) {
             return false
         }
-        RegisterSourceAssemblies(compilation, siblingCompilations)
+        using let catalogScope = UseCatalogScope(compilation, siblingCompilations)
         return IsTupleElementTaintedCore(
             compilation,
             source.ContractSymbol,
@@ -1417,7 +1570,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             !TryResolveForEachDeconstructionSource(expression, model, out var source) {
             return false
         }
-        RegisterSourceAssemblies(compilation, siblingCompilations)
+        using let catalogScope = UseCatalogScope(compilation, siblingCompilations)
         return IsTupleElementTaintedCore(
             compilation,
             source.ContractSymbol,
@@ -2047,6 +2200,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         path string,
         siblingCompilations IReadOnlyList[CSharpCompilation]? = nil
     ) bool {
+        using let catalogScope = UseCatalogScope(compilation, siblingCompilations)
         if compilation == nil || symbol == nil || IsSubstitutableMethodPosition(symbol, path) {
             return false
         }
@@ -6299,7 +6453,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         if compilation == nil || createdPath.Count == 0 {
             return false
         }
-        RegisterSourceAssemblies(compilation, siblingCompilations)
+        using let catalogScope = UseCatalogScope(compilation, siblingCompilations)
         let targets = MapCreationTupleTargets(sink, createdType, EncodeTuplePath(createdPath), creation)
         for (targetSymbol, targetPath) in targets {
             if !IsTupleElementTaintedCore(
@@ -9988,37 +10142,6 @@ internal shared class ObliviousNullabilityAnalyzer {
         let assemblies = SourceAssemblies.GetValue(compilation!!, (current Compilation) -> SourceAssemblySet(current))
         lock assemblies.Names {
             return assemblies.Names.Contains(assembly.Identity.GetDisplayName())
-        }
-    }
-
-    internal func RegisterSourceAssemblies(
-        compilation CSharpCompilation?,
-        siblingCompilations IReadOnlyList[CSharpCompilation]?
-    ) {
-        if compilation == nil {
-            return
-        }
-        let compilations = List[CSharpCompilation]{compilation}
-        if siblingCompilations != nil {
-            compilations.AddRange(siblingCompilations.Where((candidate CSharpCompilation) -> candidate != nil))
-        }
-        let names = compilations
-            .Select((candidate CSharpCompilation) -> candidate.Assembly.Identity.GetDisplayName())
-            .Distinct(StringComparer.Ordinal)
-            .ToArray()
-        for candidate in compilations {
-            let assemblies = SourceAssemblies.GetValue(candidate, (current Compilation) -> SourceAssemblySet(current))
-            var changed = false
-            lock assemblies.Names {
-                for name in names {
-                    if assemblies.ReferencedNames.Contains(name) {
-                        changed |= assemblies.Names.Add(name)
-                    }
-                }
-            }
-            if changed {
-                Cache.Remove(candidate)
-            }
         }
     }
 

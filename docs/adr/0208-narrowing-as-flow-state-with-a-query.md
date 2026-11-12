@@ -464,6 +464,23 @@ preserves the pipeline's fresh-context-per-retranslation behavior and avoids
 invalidating live projection boundaries during a pass. Existing CLR constructor
 and semantic-model-scope overloads remain executable for compiled consumers.
 
+The captured catalog also owns linked ref-storage promotions, frozen contracts,
+taint results, null-argument graphs, source-assembly classification, and anonymous
+shape evidence. These answers must not use a compilation-only mutable cache.
+Translation and direct analyzer entry points enter a catalog query scope and
+restore the prior scope on exit. Weak scope/compilation caches share completed
+answers only within that version. Source membership derives from the captured
+version and never expands a process-wide compilation set. Immutable syntax/path
+facts remain compilation-shared. Related linked-storage visitors retain the same
+catalog identity; reconciliation stages a batch before publishing its entries.
+
+A supplied semantic model remains context-local under its actual compilation
+and tree. Nested tree switches consult that model before a shared normal model.
+Accessibility-ignoring and speculative models never enter the normal shared
+cache. The Windows loaded-image witness renames the mapped original aside before
+moving the genuine image to its original path; it retains the loaded assembly
+through the trust and diagnostic checks.
+
 The original open-comparer corpus row `h1_by_ref_param_survives_calls` now records its exact rejection diagnostics.
 The disjoint out-parameter execution control re-proves its fact around unknown comparer calls.
 This keeps the disjoint-write coverage without assuming that an externally supplied comparer is pure.

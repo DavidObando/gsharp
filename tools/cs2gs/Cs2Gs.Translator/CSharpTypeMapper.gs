@@ -3043,13 +3043,11 @@ class CSharpTypeMapper {
             Dictionary[string, List[(Compilation CSharpCompilation, Tree Microsoft.CodeAnalysis.SyntaxTree)]]
         ]()
 
-        private let AnonymousShapeEvidenceIndexes ConditionalWeakTable[
-            Compilation,
+        private let AnonymousShapeEvidenceIndexes ObliviousNullabilityAnalyzer
+            .ScopedCompilationCache[
             Dictionary[string, List[(PropertyTypes[]ITypeSymbol, AcceptsNil[]bool)]]
-        ] = ConditionalWeakTable[
-            Compilation,
-            Dictionary[string, List[(PropertyTypes[]ITypeSymbol, AcceptsNil[]bool)]]
-        ]()
+        ] = ObliviousNullabilityAnalyzer
+            .ScopedCompilationCache[Dictionary[string, List[(PropertyTypes[]ITypeSymbol, AcceptsNil[]bool)]]]()
 
         private let SourceTopLevelSimpleNamesByCompilation ConditionalWeakTable[
             Compilation,

@@ -152,10 +152,13 @@ partial class CSharpToGSharpTranslator {
     // documents (#2292). Synthetic names themselves are derived from the full
     // ordered shape (#2598), so distinct shapes cannot reuse a simple name
     // across imported packages or independently translated projects.
-    private let anonymousTypeRegistriesByPackage Dictionary[string, AnonymousTypeRegistry] = Dictionary[
-        string,
-        AnonymousTypeRegistry
-    ](StringComparer.Ordinal)
+    private let anonymousTypeRegistriesByPackage System
+        .Runtime
+        .CompilerServices
+        .ConditionalWeakTable[object, Dictionary[string, AnonymousTypeRegistry]] = System
+        .Runtime
+        .CompilerServices
+        .ConditionalWeakTable[object, Dictionary[string, AnonymousTypeRegistry]]()
 
     /// Initializes a new instance of the (cref:CSharpToGSharpTranslator) class.
     /// @param preservePartialParts When `true` (default), each C# `partial`
@@ -304,6 +307,7 @@ partial class CSharpToGSharpTranslator {
         context TranslationContext,
         suppressedPartialPairKeys IReadOnlyCollection[string]?
     ) CompilationUnit {
+        using let catalogAnalysis = ObliviousNullabilityAnalyzer.UseCatalogScope(context)
         let root = document.GetRoot()
         // A document split into several package units is translated once per
         // unit; only the first (or only) unit reports its directives.
@@ -400,9 +404,13 @@ partial class CSharpToGSharpTranslator {
         // global-namespace file in this translator's project, exactly
         // mirroring the non-null-package case).
         let registryKey = package_ ?? string.Empty
-        if !this.anonymousTypeRegistriesByPackage.TryGetValue(registryKey, out var anonymousTypeRegistry) {
+        let registries = this.anonymousTypeRegistriesByPackage.GetValue(
+            context.CatalogIdentity,
+            (identity object) -> Dictionary[string, AnonymousTypeRegistry](StringComparer.Ordinal)
+        )
+        if !registries.TryGetValue(registryKey, out var anonymousTypeRegistry) {
             anonymousTypeRegistry = AnonymousTypeRegistry()
-            this.anonymousTypeRegistriesByPackage[registryKey] = anonymousTypeRegistry
+            registries[registryKey] = anonymousTypeRegistry
         }
         let typeMapper = CSharpTypeMapper(anonymousTypeRegistry, nameAllocator){AnalyzerApiMode = this.analyzerApiMode}
         typeMapper.SetTopLevelStatementsEntryPoint(

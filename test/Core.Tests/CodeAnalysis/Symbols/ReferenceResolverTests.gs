@@ -70,13 +70,15 @@ public static class Probe {
     public static void Main(string[] args) {
         var path = args[0];
         var owner = new Owner();
+        try {
         var loaded = owner.LoadFromAssemblyPath(path);
         var store = loaded.GetType("System.Custom.Store", true)!;
         store.GetField("Value")!.SetValue(null, "safe");
         loaded.GetType("System.Linq.Enumerable", true)!.GetMethod("Empty")!.MakeGenericMethod(typeof(int)).Invoke(null, null);
         var replacement = path + ".replacement";
         File.Copy(typeof(Enumerable).Assembly.Location, replacement);
-        File.Move(replacement, path, true);
+        File.Move(path, path + ".loaded");
+        File.Move(replacement, path);
         Console.WriteLine("identity:" + (loaded.FullName == AssemblyName.GetAssemblyName(path).FullName));
         Console.WriteLine("effect:" + (store.GetField("Value")!.GetValue(null) == null ? "cleared" : "retained"));
         Console.WriteLine("unverified:" + ReferenceResolver.IsTrustedEffectAssembly(loaded));
@@ -95,6 +97,7 @@ public static class Probe {
         using var authentic = ReferenceResolver.WithRuntimeReferences(Array.Empty<string>(), ImmutableArray.Create(typeof(object).Assembly, typeof(Enumerable).Assembly));
         var control = new GSharp.Core.CodeAnalysis.Compilation.Compilation(authentic, GSharp.Core.CodeAnalysis.Syntax.SyntaxTree.Parse(source.Replace("import System.Custom\n", "")));
         Console.WriteLine("authentic-errors:" + control.GetDiagnostics().Count(diagnostic => diagnostic.IsError));
+        } finally { owner.Unload(); }
     }
     private sealed class Owner : AssemblyLoadContext { public Owner() : base(true) {} }
 }`

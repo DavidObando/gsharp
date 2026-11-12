@@ -25,6 +25,55 @@ import Xunit
 /// hand-written source file merely because its name matches a generated-file
 /// pattern (it must check for an actual generated marker instead).
 open class CSharpProjectLoaderDiagnosticsTests {
+    @Fact
+    func SuppliedAccessibilityModel_SurvivesNestedTreeScopesWithoutLeakingToPeers() {
+        let first = CSharpSyntaxTree.ParseText(
+            "public class Hidden { private static int Value = 1; } public class Reader { public static int Read() => Hidden.Value; }",
+            path: "AccessibilityA.cs"
+        )
+        let second = CSharpSyntaxTree.ParseText("public class Other {}", path: "AccessibilityB.cs")
+        let compilation = CSharpCompilation.Create(
+            "AccessibilityScope5326",
+            []SyntaxTree{first, second},
+            CSharpProjectLoader.RuntimeReferences()
+        )
+        let member = first
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax]()
+            .Single()
+        let supplied = compilation.GetSemanticModel(first, ignoreAccessibility: true)
+        Assert.NotNull(supplied.GetSymbolInfo(member).Symbol)
+        Assert.Null(compilation.GetSemanticModel(first).GetSymbolInfo(member).Symbol)
+        let context = TranslationContext(compilation, supplied, first.FilePath)
+        {
+            using let outer = context.UseSemanticModelFor(second)
+            Assert.Same(second, context.SemanticModel.SyntaxTree)
+            {
+                using let inner = context.UseSemanticModelFor(first, compilation)
+                Assert.NotNull(context.GetSymbolInfo(member).Symbol)
+                Assert.True(context.SemanticModel.IgnoresAccessibility)
+            }
+            Assert.Same(second, context.SemanticModel.SyntaxTree)
+        }
+        Assert.Same(supplied, context.SemanticModel)
+        let producer = CSharpCompilation.Create(
+            "DifferentAccessibilityOwner5326",
+            []SyntaxTree{first},
+            CSharpProjectLoader.RuntimeReferences()
+        )
+        {
+            using let producerScope = context.UseSemanticModelFor(first, producer)
+            Assert.Null(context.GetSymbolInfo(member).Symbol)
+            Assert.Same(producer, context.SemanticModel.Compilation)
+        }
+        Assert.NotNull(context.GetSymbolInfo(member).Symbol)
+        let peer = TranslationContext(compilation, compilation.GetSemanticModel(second), second.FilePath)
+        using let normal = peer.UseSemanticModelFor(first)
+        Assert.Null(peer.GetSymbolInfo(member).Symbol)
+        Assert.False(peer.SemanticModel.IgnoresAccessibility)
+    }
+
     @Theory
     @InlineData(false)
     @InlineData(true)

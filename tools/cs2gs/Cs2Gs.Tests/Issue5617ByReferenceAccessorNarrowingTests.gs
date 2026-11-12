@@ -2616,6 +2616,235 @@ public static class Demo {
         )
     }
 
+    @Fact
+    func RefParameter_CancelledSemanticBatchDoesNotPublishLinkedStorage() {
+        let project = CSharpProjectLoader.LoadInMemory(
+            [](string, string){
+                (
+                    "CancelledSemanticBatch.cs",
+                    "public static class Demo { private static void Clear(ref string value) { value = null; } public static string Run() { var items = new[] {\"safe\"}; Clear(ref items[0]); return items[0] ?? \"-\"; } }"
+                )
+            }
+        )
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        let document = Assert.Single(project.Documents)
+        let catalog = List[CSharpCompilation]{project.Compilation}
+        using let cancellation = CancellationTokenSource()
+        let cancelled = TranslationContext(
+            project.Compilation,
+            document.SemanticModel,
+            document.FilePath,
+            catalog,
+            catalog,
+            cancellation.Token
+        )
+        var reached = false
+        cancelled.BeforeRefStoragePublication = func () {
+            reached = true
+            cancellation.Cancel()
+        }
+        Assert.ThrowsAny[OperationCanceledException](
+            func () {
+                let _ = CSharpToGSharpTranslator().TranslateDocument(document, cancelled)
+            }
+        )
+        Assert.True(reached)
+        var rebuilt = false
+        let retry = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath, catalog, catalog)
+        retry.BeforeRefStoragePublication = func () {
+            rebuilt = true
+        }
+        let output = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, retry))
+        Assert.True(rebuilt)
+        Assert.Contains("[]string?", output)
+        let peer = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath, catalog, catalog)
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(output),
+            Encoding.UTF8.GetBytes(GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, peer)))
+        )
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("-"),
+            Encoding.UTF8.GetBytes(CompileAndRun(output, Array.Empty[byte](), strictIl: true).Trim())
+        )
+    }
+
+    @Fact
+    func RefParameter_CatalogEpochIsolatesLinkedRefArrayPromotionsAcrossExistingContexts() {
+        let shared = CSharpSyntaxTree.ParseText(
+            "public static class Demo { public static string[] Values = new[] {\"safe\"}; internal static void Keep(ref string value) {} public static string Run() { Keep(ref Values[0]); return Values[0] ?? \"-\"; } }",
+            path: "SharedArrayEpoch.cs"
+        )
+        let first = CSharpCompilation.Create(
+            "LinkedEpochFirst5326",
+            []SyntaxTree{shared},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        let caller = CSharpSyntaxTree.ParseText(
+            "internal static class Caller { private static void Clear(ref string value) { value = null; } internal static void Touch() { Clear(ref Demo.Values[0]); } }",
+            path: "NullableEpochCaller.cs"
+        )
+        let second = CSharpCompilation.Create(
+            "LinkedEpochSecond5326",
+            []SyntaxTree{shared, caller},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        let catalog = List[CSharpCompilation]{first}
+        let model = first.GetSemanticModel(shared)
+        let old = TranslationContext(first, model, shared.FilePath, catalog, catalog)
+        let document = LoadedDocument(shared.FilePath, shared, model)
+        let translator = CSharpToGSharpTranslator()
+        let before = GSharpPrinter.Print(translator.TranslateDocument(document, old))
+        Assert.Contains("Values []string", before)
+        Assert.DoesNotContain("Values []string?", before)
+        catalog.Add(second)
+        let added = TranslationContext(first, model, shared.FilePath, catalog, catalog)
+        let widened = GSharpPrinter.Print(translator.TranslateDocument(document, added))
+        Assert.Contains("Values []string?", widened)
+        let oldAfterAdd = GSharpPrinter.Print(translator.TranslateDocument(document, old))
+        Assert.Equal(Encoding.UTF8.GetBytes(before), Encoding.UTF8.GetBytes(oldAfterAdd))
+        catalog.Remove(second)
+        let removed = TranslationContext(first, model, shared.FilePath, catalog, catalog)
+        let afterRemove = GSharpPrinter.Print(translator.TranslateDocument(document, removed))
+        Assert.Equal(Encoding.UTF8.GetBytes(before), Encoding.UTF8.GetBytes(afterRemove))
+        let computations = ObliviousNullabilityAnalyzer.ComputeCount(first)
+        for var index = 0; index < 16; index++ {
+            let peer = TranslationContext(first, model, shared.FilePath, catalog, catalog)
+            Assert.Same(removed.CatalogIdentity, peer.CatalogIdentity)
+            Assert.Equal(
+                Encoding.UTF8.GetBytes(afterRemove),
+                Encoding.UTF8.GetBytes(GSharpPrinter.Print(translator.TranslateDocument(document, peer)))
+            )
+        }
+        Assert.Equal(computations, ObliviousNullabilityAnalyzer.ComputeCount(first))
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(widened),
+            Encoding.UTF8.GetBytes(GSharpPrinter.Print(translator.TranslateDocument(document, added)))
+        )
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("safe"),
+            Encoding.UTF8.GetBytes(CompileAndRun(before, Array.Empty[byte](), strictIl: true).Trim())
+        )
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("safe"),
+            Encoding.UTF8.GetBytes(CompileAndRun(widened, Array.Empty[byte](), strictIl: true).Trim())
+        )
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("safe"),
+            Encoding.UTF8.GetBytes(CompileAndRun(afterRemove, Array.Empty[byte](), strictIl: true).Trim())
+        )
+    }
+
+    @Fact
+    func RefParameter_CatalogEpochIsolatesReferencedObliviousTupleContracts() {
+        let options = CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        let producer = CSharpCompilation.Create(
+            "Lib5617",
+            []SyntaxTree{
+                CSharpSyntaxTree.ParseText(
+                    "namespace Lib5617 { public static class Contract { public static void Keep(ref (string First, string Second) pair) { pair = (null, \"safe\"); } } }",
+                    path: "TupleEpochProducer.cs"
+                )
+            },
+            CSharpProjectLoader.RuntimeReferences(),
+            options
+        )
+        using let image = MemoryStream()
+        let emitted = producer.Emit(image)
+        Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics))
+        let tree = CSharpSyntaxTree.ParseText(
+            "using Lib5617; public static class Demo { private static void Forward(ref (string First, string Second) pair) { Contract.Keep(ref pair); } public static string Run() { var pair = (First: \"safe\", Second: \"safe\"); Forward(ref pair); return pair.First ?? \"-\"; } }",
+            path: "TupleEpochConsumer.cs"
+        )
+        let root = CSharpCompilation.Create(
+            "TupleEpochConsumer5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences().Append(
+                cast[MetadataReference](MetadataReference.CreateFromImage(image.ToArray()))
+            ),
+            options
+        )
+        let method = root.GetTypeByMetadataName("Demo")!!
+            .GetMembers("Forward")
+            .OfType[IMethodSymbol]()
+            .Single()
+            .Parameters[0]
+        let catalog = List[CSharpCompilation]{root}
+        let model = root.GetSemanticModel(tree)
+        let old = TranslationContext(root, model, tree.FilePath, catalog, catalog)
+        let beforeTainted = ObliviousNullabilityAnalyzer.IsTupleElementTainted(
+            root,
+            method,
+            []int32{0},
+            old.RepositoryCompilations
+        )
+        let document = LoadedDocument(tree.FilePath, tree, model)
+        let translator = CSharpToGSharpTranslator()
+        let before = GSharpPrinter.Print(translator.TranslateDocument(document, old))
+        catalog.Add(producer)
+        let added = TranslationContext(root, model, tree.FilePath, catalog, catalog)
+        let addedTainted = ObliviousNullabilityAnalyzer.IsTupleElementTainted(
+            root,
+            method,
+            []int32{0},
+            added.RepositoryCompilations
+        )
+        let addedOutput = GSharpPrinter.Print(translator.TranslateDocument(document, added))
+        Assert.False(beforeTainted)
+        Assert.True(addedTainted)
+        Assert.False(
+            ObliviousNullabilityAnalyzer.IsTupleElementTainted(root, method, []int32{0}, old.RepositoryCompilations)
+        )
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(before),
+            Encoding.UTF8.GetBytes(GSharpPrinter.Print(translator.TranslateDocument(document, old)))
+        )
+        catalog.Remove(producer)
+        let removed = TranslationContext(root, model, tree.FilePath, catalog, catalog)
+        Assert.False(
+            ObliviousNullabilityAnalyzer.IsTupleElementTainted(root, method, []int32{0}, removed.RepositoryCompilations)
+        )
+        let removedOutput = GSharpPrinter.Print(translator.TranslateDocument(document, removed))
+        Assert.Equal(Encoding.UTF8.GetBytes(before), Encoding.UTF8.GetBytes(removedOutput))
+        let independent = root.WithAssemblyName("IndependentTupleEpoch5326")
+        let otherModel = independent.GetSemanticModel(tree)
+        let other = TranslationContext(independent, otherModel, tree.FilePath)
+        let otherMethod = independent.GetTypeByMetadataName("Demo")!!
+            .GetMembers("Forward")
+            .OfType[IMethodSymbol]()
+            .Single()
+            .Parameters[0]
+        Assert.False(
+            ObliviousNullabilityAnalyzer.IsTupleElementTainted(
+                independent,
+                otherMethod,
+                []int32{0},
+                other.RepositoryCompilations
+            )
+        )
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(before),
+            Encoding.UTF8.GetBytes(
+                GSharpPrinter.Print(
+                    translator.TranslateDocument(LoadedDocument(tree.FilePath, tree, otherModel), other)
+                )
+            )
+        )
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("-"),
+            Encoding.UTF8.GetBytes(CompileAndRun(before, image.ToArray(), strictIl: true).Trim())
+        )
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("-"),
+            Encoding.UTF8.GetBytes(CompileAndRun(addedOutput, image.ToArray(), strictIl: true).Trim())
+        )
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("-"),
+            Encoding.UTF8.GetBytes(CompileAndRun(removedOutput, image.ToArray(), strictIl: true).Trim())
+        )
+    }
+
     @Theory
     @InlineData("add")
     @InlineData("remove")
@@ -4345,7 +4574,12 @@ public class Demo
             return stream.ToArray()
         }
 
-        private func CompileAndRun(printed string, libraryImage[]byte, runtimeOnlyLibrary bool = false) string {
+        private func CompileAndRun(
+            printed string,
+            libraryImage[]byte,
+            runtimeOnlyLibrary bool = false,
+            strictIl bool = false
+        ) string {
             let compiler string? = FindCompiler()
             Assert.True(
                 compiler != nil,
@@ -4367,6 +4601,7 @@ public class Demo
                     "import System${Environment.NewLine}Console.WriteLine(Demo.Run())${Environment.NewLine}"
                 )
                 let arguments = List[string]{compiler!!, "/target:exe", "/out:$dllPath", gsPath, mainPath}
+                let verifyReferences = List[string]()
                 if libraryImage.Length > 0 {
                     let libraryPath = Path.Combine(
                         workDir,
@@ -4377,6 +4612,7 @@ public class Demo
                         }
                     )
                     File.WriteAllBytes(libraryPath, libraryImage)
+                    verifyReferences.Add(libraryPath)
                     if !runtimeOnlyLibrary {
                         arguments.Add("/r:" + libraryPath)
                     }
@@ -4389,6 +4625,19 @@ public class Demo
                         "\n\nTranslated G#:\n" +
                         printed
                 )
+                if strictIl {
+                    let verify = List[string]{"tool", "run", "ilverify", dllPath, "-s", "System.Private.CoreLib"}
+                    for reference in Directory.EnumerateFiles(
+                        Path.GetDirectoryName(typeof(object).Assembly.Location)!!,
+                        "*.dll"
+                    )
+                        .Concat(verifyReferences) {
+                        verify.Add("-r")
+                        verify.Add(reference)
+                    }
+                    let (verifyExit, verifyOutput) = RunDotnet(verify.ToArray())
+                    Assert.True(verifyExit == 0, verifyOutput)
+                }
                 // A `!!` on the by-reference read where gsc keeps the fact is GS0536.
                 let lines = printed.Replace("\r\n", "\n").Split('\n')
                 for diagnostic in Regex.Matches(compileOutput, `Snippet\.gs\((\d+),\d+,\d+,\d+\): warning GS0536`) {
