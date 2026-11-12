@@ -14649,11 +14649,11 @@ partial class CSharpToGSharpTranslator {
                 ) &&
                     !this
                     .NullComparisonUsesUserOperator(binary) {
-                    if IsNullLiteral(binary.Right) {
+                    if IsNullOrSuppressedNull(binary.Right) {
                         operand = binary.Left
                         return true
                     }
-                    if IsNullLiteral(binary.Left) {
+                    if IsNullOrSuppressedNull(binary.Left) {
                         operand = binary.Right
                         return true
                     }
@@ -14909,9 +14909,9 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             let comparesSymbolToNull = (
-                IsNullLiteral(comparison.Left) && this.BindsToGuardSymbol(comparison.Right, symbol)
+                IsNullOrSuppressedNull(comparison.Left) && this.BindsToGuardSymbol(comparison.Right, symbol)
             ) ||
-                (IsNullLiteral(comparison.Right) && this.BindsToGuardSymbol(comparison.Left, symbol))
+                (IsNullOrSuppressedNull(comparison.Right) && this.BindsToGuardSymbol(comparison.Left, symbol))
             whenTrue = comparison.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.NotEqualsExpression)
             return comparesSymbolToNull
         }
@@ -18938,8 +18938,8 @@ partial class CSharpToGSharpTranslator {
                 ) ||
                     binary
                     .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.NotEqualsExpression) {
-                    let leftIsNull = IsNullLiteral(binary.Left)
-                    let rightIsNull = IsNullLiteral(binary.Right)
+                    let leftIsNull = IsNullOrSuppressedNull(binary.Left)
+                    let rightIsNull = IsNullOrSuppressedNull(binary.Right)
                     if !leftIsNull && !rightIsNull {
                         return false
                     }
@@ -20032,8 +20032,8 @@ partial class CSharpToGSharpTranslator {
             // any value with `null`) is a plain operation; anything else may be an operator call.
             if node is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax binary {
                 return (
-                    IsNullLiteral(binary.Left) ||
-                        IsNullLiteral(binary.Right) ||
+                    IsNullOrSuppressedNull(binary.Left) ||
+                        IsNullOrSuppressedNull(binary.Right) ||
                         (this.IsBuiltInPrimitive(binary.Left) && this.IsBuiltInPrimitive(binary.Right))
                 ) &&
                     !this.IsLoweredToCall(binary)
@@ -20064,7 +20064,7 @@ partial class CSharpToGSharpTranslator {
                     Microsoft.CodeAnalysis.CSharp.SyntaxKind.NotEqualsExpression
                 )
             ) &&
-                (IsNullLiteral(Unparenthesize(binary.Left)) || IsNullLiteral(Unparenthesize(binary.Right))) {
+                (IsNullOrSuppressedNull(binary.Left) || IsNullOrSuppressedNull(binary.Right)) {
                 return this.NullComparisonUsesUserOperator(binary)
             }
             return this

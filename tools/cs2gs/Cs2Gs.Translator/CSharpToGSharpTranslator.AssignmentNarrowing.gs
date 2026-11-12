@@ -500,43 +500,51 @@ partial class CSharpToGSharpTranslator {
                 binary.IsKind(SyntaxKind.LogicalAndExpression) || binary.IsKind(SyntaxKind.LogicalOrExpression) ||
                     binary.IsKind(SyntaxKind.CoalesceExpression)
             ) {
-                let proof = this.GetGSharpInitializerMutationProof(
+                return this.GetGSharpOptionalOperandMutationProof(
                     binary.Left,
+                    binary.Right,
                     symbol,
                     use,
                     $scope,
                     inherited,
                     requireRuntimeNonNullProof
                 )
-                return if proof != nil && !this.AssignmentRegionInvalidatesNarrowing(
-                    symbol,
-                    binary.Right,
-                    binary.Right.SpanStart,
-                    binary.Right.Span.End
-                ) {
-                    proof
-                } else {
-                    default(SyntaxNode?)
-                }
             }
             if node is ConditionalAccessExpressionSyntax conditionalAccess {
-                let proof = this.GetGSharpInitializerMutationProof(
+                return this.GetGSharpOptionalOperandMutationProof(
                     conditionalAccess.Expression,
+                    conditionalAccess.WhenNotNull,
                     symbol,
                     use,
                     $scope,
                     inherited,
                     requireRuntimeNonNullProof
                 )
-                return if proof != nil && !this.AssignmentRegionInvalidatesNarrowing(
+            }
+            if node is AssignmentExpressionSyntax coalescing && coalescing.IsKind(
+                SyntaxKind.CoalesceAssignmentExpression
+            ) {
+                let proof = this.GetGSharpOptionalOperandMutationProof(
+                    coalescing.Left,
+                    coalescing.Right,
                     symbol,
-                    conditionalAccess.WhenNotNull,
-                    conditionalAccess.WhenNotNull.SpanStart,
-                    conditionalAccess.WhenNotNull.Span.End
-                ) {
-                    proof
+                    use,
+                    $scope,
+                    inherited,
+                    requireRuntimeNonNullProof
+                )
+                // The target has its own postcondition. Other symbols cannot gain facts from the optional RHS.
+                return if this.BindsTo(coalescing.Left, symbol) {
+                    this.GetGSharpAssignmentNarrowingProof(
+                        coalescing,
+                        symbol,
+                        use,
+                        $scope,
+                        proof,
+                        requireRuntimeNonNullProof
+                    )
                 } else {
-                    default(SyntaxNode?)
+                    proof
                 }
             }
             var proof = inherited
@@ -577,6 +585,36 @@ partial class CSharpToGSharpTranslator {
                     this.IsClosureAssignedVariable(symbol),
                     this.IsByReferenceVariable(symbol)
                 )
+            ) {
+                proof
+            } else {
+                default(SyntaxNode?)
+            }
+        }
+
+        private func GetGSharpOptionalOperandMutationProof(
+            first ExpressionSyntax,
+            conditionalOperand SyntaxNode,
+            symbol ISymbol,
+            use ExpressionSyntax,
+            $scope SyntaxNode,
+            inherited SyntaxNode?,
+            requireRuntimeNonNullProof bool
+        ) SyntaxNode? {
+            let proof = this.GetGSharpInitializerMutationProof(
+                first,
+                symbol,
+                use,
+                $scope,
+                inherited,
+                requireRuntimeNonNullProof
+            )
+            // A skipped operand establishes no facts. A possible write or call can still invalidate an incoming fact.
+            return if proof != nil && !this.AssignmentRegionInvalidatesNarrowing(
+                symbol,
+                conditionalOperand,
+                conditionalOperand.SpanStart,
+                conditionalOperand.Span.End
             ) {
                 proof
             } else {

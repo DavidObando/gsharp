@@ -22,9 +22,135 @@ import Xunit
 /// The same head fails the by-reference join control. Shared-query mutants reject the bridge regression cases.
 /// On 9897d36fc, adjacent effects, initializer mutations and overloaded-null tests fail; the loop-entry mutant fails too.
 /// On a6f5ff7fb, contextual conversions and enclosing compound calls leave stale initializer facts.
+/// On 74c10fcee, suppressed null comparisons and optional coalescing-assignment operands fail these runtime/binding oracles.
 /// The C# output oracle also rejects erased null guards and throwing bridges on nullable stores.
 /// Each test also compares the translated program's output with C#.
 open class Issue5706NarrowedConditionalIndexTests {
+    @Fact
+    func SuppressedNullEquality_PreservesNativeArrayAndStringGuards() {
+        let printed = AssertRunsWithoutConditionalIndexWarning(`
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        static char? Array(char[]? value) { if (value != null!) return value?[0]; return null; }
+        static char? Text(string? value) { if (value != (null!)) return value?[0]; return null; }
+        static char? Join(string? value) { if (value == null!) value = "j"; return value?[0]; }
+        static string Params(params char[] values) => values != null! ? "p" : "nil";
+        public static string Run() =>
+            Array(null) + "|" + Array(new[] { 'a' }) + "|" + Text(null) + "|" + Text("s") + "|" +
+            Join(null) + "|" + Join("k") + "|" + Params('p');
+    }
+}`, "|a||s|j|k|p")
+        Assert.DoesNotContain("nil!!", printed)
+        Assert.DoesNotContain("value?[0]", printed)
+    }
+
+    @Fact
+    func SuppressedNullEquality_PreservesImportedOperatorDispatch() {
+        let printed = Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using ObLib5936;
+public static class Demo
+{
+    static char? Equal() { Box? value = null; if (value == null!) value = new Box(); return value?[0]; }
+    static char? Unequal() { Box? value = null; if (value != (null!)) {} else value = new Box(); return value?[0]; }
+    static char? Left() { Box? value = null; if ((null!) == value) value = new Box(); return value?[0]; }
+    static char? Pattern() { Box? value = null; if (value is null) value = new Box(); return value?[0]; }
+    public static string Run() => Equal() + "|" + Unequal() + "|" + Left() + "|" + Pattern() + "|" + Box.Calls;
+}`, `
+#nullable enable
+namespace ObLib5936;
+public sealed class Box
+{
+    public static int Calls;
+    public static bool operator ==(Box? left, Box? right) { Calls++; return false; }
+    public static bool operator !=(Box? left, Box? right) { Calls++; return true; }
+    public override bool Equals(object? other) => false;
+    public override int GetHashCode() => 0;
+    public char this[int index] => 'x';
+}`, rejectConditionalIndexWarnings: true)
+        Assert.DoesNotContain("nil!!", printed)
+        Assert.Contains("cast[Box?](nil)", printed)
+        Assert.Contains("value?[0]", printed)
+    }
+
+    @Fact
+    func ConditionalEvaluation_ExportsOnlyGuaranteedAssignmentFacts() {
+        let printed = AssertRunsWithoutConditionalIndexWarning(`
+#nullable enable
+using System;
+namespace Demo
+{
+    public static class P
+    {
+        static int calls;
+        static string Touch(string value) { calls++; return value; }
+        static string Reset(Action clear) { calls++; clear(); return "r"; }
+        static char? And(bool gate)
+        {
+            string? value = null;
+            var result = gate && (value ??= Touch("a")) != null;
+            return value?[0];
+        }
+        static char? Or(bool gate)
+        {
+            string? value = null;
+            var result = gate || (value ??= Touch("o")) != null;
+            return value?[0];
+        }
+        static char? Coalesce(string? seed)
+        {
+            string? value = null;
+            var result = seed ?? (value ??= Touch("c"));
+            return value?[0];
+        }
+        static char? Choice(bool gate)
+        {
+            string? value = null;
+            var result = gate ? (value ??= Touch("t")) : "skip";
+            return value?[0];
+        }
+        static string CoalesceAssign(string? seed)
+        {
+            string? target = seed, value = null;
+            var result = (target ??= (value ??= Touch("q")));
+            return target?[0] + ":" + value?[0];
+        }
+        static char? Invalidate(bool gate)
+        {
+            string? other = null, value = null;
+            value = "p";
+            var result = gate ? (value = null) : (other ??= Touch("o"));
+            return value?[0];
+        }
+        static char? InvalidateCoalescing(string? seed)
+        {
+            string? target = seed, value = null;
+            value = "p";
+            var result = (target ??= Reset(() => value = null));
+            return value?[0];
+        }
+        static char? Both(bool gate)
+        {
+            string? value = null;
+            var result = gate ? (value ??= Touch("t")) : (value ??= Touch("f"));
+            return value?[0];
+        }
+        public static string Run() =>
+            And(false) + ":" + And(true) + "|" + Or(true) + ":" + Or(false) + "|" +
+            Coalesce("keep") + ":" + Coalesce(null) + "|" + Choice(false) + ":" + Choice(true) + "|" +
+            CoalesceAssign("keep") + ":" + CoalesceAssign(null) + "|" +
+            Invalidate(false) + ":" + Invalidate(true) + "|" +
+            InvalidateCoalescing("keep") + ":" + InvalidateCoalescing(null) + "|" +
+            Both(false) + ":" + Both(true) + "|" + calls;
+    }
+}`, ":a|:o|:c|:t|k::q:q|p:|p:|f:t|9")
+        Assert.Contains("value?[0]", printed)
+        Assert.DoesNotContain("target?[0]", printed)
+    }
+
     @Fact
     func InitializerConversions_ApplyAfterAssignmentValues() {
         let printed = AssertRunsWithoutConditionalIndexWarning(`
@@ -1512,8 +1638,8 @@ namespace Demo
     }
 
     shared {
-        private func AssertRunsWithoutConditionalIndexWarning(source string) string {
-            let printed = Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(source)
+        private func AssertRunsWithoutConditionalIndexWarning(source string, expectedOutput string? = nil) string {
+            let printed = Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(source, expectedOutput)
             let directory = Path.Combine(AppContext.BaseDirectory, "issue-5706", Guid.NewGuid().ToString("N"))
             Directory.CreateDirectory(directory)
             try {

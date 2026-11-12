@@ -5925,9 +5925,19 @@ partial class CSharpToGSharpTranslator {
             if this.TryFoldParamsArrayNullCheck(binary, out var foldedParamsCheck) {
                 return foldedParamsCheck
             }
-            var left GExpression? = this.TranslateExpression(binary.Left)
+            // C# suppression is erased. Normalize null before preserving the selected comparison operator.
+            let equality = binary.IsKind(SyntaxKind.EqualsExpression) || binary.IsKind(SyntaxKind.NotEqualsExpression)
+            var left GExpression? = if equality && IsNullOrSuppressedNull(binary.Left) {
+                LiteralExpression.Null()
+            } else {
+                this.TranslateExpression(binary.Left)
+            }
             let op = binary.OperatorToken.Text
-            var right GExpression? = this.TranslateBinaryRightOperand(binary)
+            var right GExpression? = if equality && IsNullOrSuppressedNull(binary.Right) {
+                LiteralExpression.Null()
+            } else {
+                this.TranslateBinaryRightOperand(binary)
+            }
             if this.NullComparisonUsesUserOperator(binary) {
                 // Preserve C#'s selected operator. An untyped G# nil comparison uses the built-in null test.
                 left = this.PreserveUserOperatorNullOperand(binary.Left, left)
@@ -6087,7 +6097,7 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func PreserveUserOperatorNullOperand(value ExpressionSyntax, translated GExpression?) GExpression? ->
-        if IsNullLiteral(Unparenthesize(value)) {
+        if IsNullOrSuppressedNull(value) {
             cast[GExpression](
                 ConversionExpression(
                     MakeNullable(
@@ -7353,11 +7363,11 @@ partial class CSharpToGSharpTranslator {
             if !isEquals && !binary.IsKind(SyntaxKind.NotEqualsExpression) {
                 return false
             }
-            let operand ExpressionSyntax? = if binary.Right.IsKind(SyntaxKind.NullLiteralExpression) {
+            let operand ExpressionSyntax? = if IsNullOrSuppressedNull(binary.Right) {
                 binary.Left
             } else {
                 (
-                    if binary.Left.IsKind(SyntaxKind.NullLiteralExpression) {
+                    if IsNullOrSuppressedNull(binary.Left) {
                         binary.Right
                     } else {
                         default(ExpressionSyntax?)
