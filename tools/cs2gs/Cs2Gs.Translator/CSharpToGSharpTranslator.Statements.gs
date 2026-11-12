@@ -4,6 +4,7 @@
 
 package Cs2Gs.Translator
 
+import CompilationMeasurements = GSharp.Core.CodeAnalysis.Compilation.CompilationMeasurements
 import Cs2Gs.CodeModel.Ast
 import Cs2Gs.CodeModel.Printing
 import Cs2Gs.Translator.Loading
@@ -59,6 +60,19 @@ partial class CSharpToGSharpTranslator {
         private let defaultOriginGuards List[(DefaultOriginQuery, DefaultOriginQuery)] = List[
             (DefaultOriginQuery, DefaultOriginQuery)
         ]()
+        private let tupleReachingStateKeys Dictionary[ExpressionSyntax, string] = Dictionary[ExpressionSyntax, string](
+            ReferenceEqualityComparer.Instance
+        )
+
+        private func TupleReachingStateKey(expression ExpressionSyntax) string {
+            if !this.tupleReachingStateKeys.TryGetValue(expression, out var key) {
+                key = ComputeTupleReachingStateKey(expression)
+                this.tupleReachingStateKeys.Add(expression, key)
+                CompilationMeasurements.Count("translation.tuple_state_keys")
+                CompilationMeasurements.Count("translation.tuple_state_key_characters", key.Length)
+            }
+            return key
+        }
 
         private class DefaultOriginQuery {
             public let Source ExpressionSyntax?
@@ -532,7 +546,7 @@ partial class CSharpToGSharpTranslator {
                 // Issue #5561: record whether the emitted storage accepts nil.
                 if this.context.GetDeclaredSymbol(declarator) is ILocalSymbol storageLocal &&
                     (type != nil || initializer != nil) {
-                    this.state.LocalHoldsPromotedValueAnswers.Clear()
+                    this.InvalidateLocalPromotedValue(storageLocal)
                     if type != nil {
                         this.state.EmittedLocalTypeClauses.Add(storageLocal)
                     }
@@ -1011,7 +1025,7 @@ partial class CSharpToGSharpTranslator {
                 this.defaultOriginReachingValues.Add(key, reaching)
             }
             for value in reaching.OrderBy((value ExpressionSyntax) -> value.SpanStart).ThenBy(
-                TupleReachingStateKey,
+                this.TupleReachingStateKey,
                 StringComparer.Ordinal
             ) {
                 this.AddDefaultOriginEdge(query, this.GetDefaultOriginQuery(value), -1, nil)
@@ -5547,7 +5561,7 @@ partial class CSharpToGSharpTranslator {
                     values.UnionWith(previousValues)
                 }
                 for previous in previousValues {
-                    let key = (write, TupleReachingStateKey(previous))
+                    let key = (write, this.TupleReachingStateKey(previous))
                     var updated ExpressionSyntax?
                     if !elementAssignedValues.TryGetValue(key, out updated) {
                         updated = this.ReplaceTupleElement(previous, local.Type, elementPath, 0, source!!)
@@ -6706,7 +6720,7 @@ partial class CSharpToGSharpTranslator {
                         this.typeMapper.MapExplicitType(local.Type, this.context, single.GetLocation()),
                         local
                     )
-                    this.state.LocalHoldsPromotedValueAnswers.Clear()
+                    this.InvalidateLocalPromotedValue(local)
                     if type != nil {
                         this.state.EmittedLocalTypeClauses.Add(local)
                     }
@@ -8559,18 +8573,24 @@ partial class CSharpToGSharpTranslator {
                 return -1
             }
 
-            private func TupleReachingStateKey(expression ExpressionSyntax) string {
+            private func ComputeTupleReachingStateKey(expression ExpressionSyntax) string {
                 let projections = expression
                     .DescendantNodesAndSelf()
                     .SelectMany(
                     func (node SyntaxNode) IEnumerable[SyntaxAnnotation] {
+                        CompilationMeasurements.Count("translation.tuple_state_key_node_visits")
                         return node.GetAnnotations(ReachingTupleProjectionAnnotation)
                     }
                 )
                     .Select((annotation SyntaxAnnotation) -> annotation.Data!!)
                 let sourceNodes = expression
                     .DescendantNodesAndSelf()
-                    .Where((node SyntaxNode) -> node.SyntaxTree != nil)
+                    .Where(
+                    func (node SyntaxNode) bool {
+                        CompilationMeasurements.Count("translation.tuple_state_key_node_visits")
+                        return node.SyntaxTree != nil
+                    }
+                )
                     .Select(
                     (node SyntaxNode) -> (
                         node.RawKind.ToString(CultureInfo.InvariantCulture) + ":" + node.SpanStart.ToString(
