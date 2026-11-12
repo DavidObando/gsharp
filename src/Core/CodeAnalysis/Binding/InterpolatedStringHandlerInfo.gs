@@ -528,9 +528,9 @@ class InterpolatedStringHandlerInfo {
                     let parameter = ps[2 + i]
                     let paramType = parameter.ParameterType
                     let argType Type? = forwardedArgs[i].Type?.ClrType
-                    // A forwarded value cannot fill a writable reference slot, including another overload's out-bool gate.
+                    // Writable reference slots require addresses to writable storage, including another overload's out-bool gate.
                     if (RefCapabilities.GetParameterRefKind(parameter) is RefKind.Ref or RefKind.Out) &&
-                        argType?.IsByRef != true {
+                        (argType?.IsByRef != true || RefCapabilities.IsReadOnlyStorage(forwardedArgs[i])) {
                         ok = false
                         break
                     }

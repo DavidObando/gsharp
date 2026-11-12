@@ -42,10 +42,41 @@ class Issue5966HandlerConstructorOverloadTests {
         )
     }
 
+    @Theory
+    @InlineData("ReadForRef", "in value")
+    @InlineData("ReadForRef", "in (choose ? value : other)")
+    @InlineData("ReadForRef", "in alias")
+    @InlineData("ReadForOut", "in value")
+    func ReadOnlyForwardedStorage_CannotFillWritableConstructorSlots(method string, argument string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let library = fixture.CompileCSharp(Library + ReferenceLibrary, "HandlerLibrary5966")
+        let call = "RefApi." + method + "(" + argument + `, "p${"x"}")`
+        let (code, output) = fixture.TryCompile(`import HandlerLibrary
+func Reject(in value bool, in other bool, choose bool) {
+    let ref readonly alias bool = value
+    ` + call + `
+}`, "HandlerReadOnly5966", executable: false, "/r:" + library)
+        Assert.Equal(1, code)
+        Assert.Contains(
+            "(4,12,4," + (5 + call.Length).ToString() + "): error GS0221:",
+            output,
+            StringComparison.Ordinal
+        )
+    }
+
+    @Fact
+    func WritableRefAndReadOnlyIn_ForwardOriginalStorage_AndPreserveOutGate() {
+        AssertParity(`var value = true
+RefApi.WriteRef(ref value, "p${Effects.Hole("x")}")
+RefApi.WriteIn(in value, "p${Effects.Hole("y")}")`, `bool value = true;
+RefApi.WriteRef(ref value, $"p{Effects.Hole("x")}");
+RefApi.WriteIn(in value, $"p{Effects.Hole("y")}")`, "CRef;Lp;Hx;Fx;WRefFalse;CInFalse;WInFalse;|0/1/2/0/0", ReferenceLibrary)
+    }
+
     shared {
-        private func AssertParity(gsharp string, csharp string, expected string) {
+        private func AssertParity(gsharp string, csharp string, expected string, additionalLibrary string = "") {
             using let fixture = NativeSliceLanguageTests.Fixture()
-            let library = fixture.CompileCSharp(Library, "HandlerLibrary5966")
+            let library = fixture.CompileCSharp(Library + additionalLibrary, "HandlerLibrary5966")
             let oracle = fixture.CompileCSharp(`using HandlerLibrary;
 public static class Consumer {
     public static string Run() {
@@ -109,6 +140,42 @@ public static class Effects {
     public static string Hole(string value) { Holes++; Trace += "H" + value + ";"; return value; }
     public static Log Receiver() { Receivers++; Trace += "R;"; return new Log(); }
     public static string Snapshot() => Trace + $"|{Flags}/{Holes}/{Appends}/{Receivers}/{Constructors}";
+}`
+
+        private const ReferenceLibrary string = `
+[InterpolatedStringHandler]
+public struct RefHandler {
+    public RefHandler(int literalLength, int formattedCount, ref bool value, out bool shouldAppend) {
+        value = false; shouldAppend = true; Effects.Trace += "CRef;";
+    }
+    public void AppendLiteral(string value) { Effects.Appends++; Effects.Trace += "L" + value + ";"; }
+    public void AppendFormatted(string value) { Effects.Appends++; Effects.Trace += "F" + value + ";"; }
+}
+[InterpolatedStringHandler]
+public struct OutHandler {
+    public OutHandler(int literalLength, int formattedCount, out bool value, out bool shouldAppend) {
+        value = false; shouldAppend = true;
+    }
+    public void AppendLiteral(string value) { }
+    public void AppendFormatted(string value) { }
+}
+[InterpolatedStringHandler]
+public struct InHandler {
+    public InHandler(int literalLength, int formattedCount, in bool value, out bool shouldAppend) {
+        shouldAppend = value; Effects.Trace += $"CIn{value};";
+    }
+    public void AppendLiteral(string value) { Effects.Appends++; Effects.Trace += "L" + value + ";"; }
+    public void AppendFormatted(string value) { Effects.Appends++; Effects.Trace += "F" + value + ";"; }
+}
+public static class RefApi {
+    public static void ReadForRef(in bool value,
+        [InterpolatedStringHandlerArgument("value")] RefHandler handler) { }
+    public static void ReadForOut(in bool value,
+        [InterpolatedStringHandlerArgument("value")] OutHandler handler) { }
+    public static void WriteRef(ref bool value,
+        [InterpolatedStringHandlerArgument("value")] RefHandler handler) { Effects.Trace += $"WRef{value};"; }
+    public static void WriteIn(in bool value,
+        [InterpolatedStringHandlerArgument("value")] InHandler handler) { Effects.Trace += $"WIn{value};"; }
 }`
     }
 }
