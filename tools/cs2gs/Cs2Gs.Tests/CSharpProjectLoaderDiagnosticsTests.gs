@@ -26,6 +26,70 @@ import Xunit
 /// pattern (it must check for an actual generated marker instead).
 open class CSharpProjectLoaderDiagnosticsTests {
     @Fact
+    func CompiledFiveArgumentContextConsumer_RetainsItsConstructorAbi() {
+        let nativeAssembly = typeof(TranslationContext).Assembly
+        let name = nativeAssembly.GetName()
+        let references = CSharpProjectLoader
+            .RuntimeReferences()
+            .Where(
+            (reference MetadataReference) ->
+            (reference as PortableExecutableReference)?.FilePath != nativeAssembly.Location
+        )
+            .ToList()
+        for assembly in[]System.Reflection.Assembly{typeof(CSharpCompilation).Assembly, typeof(Compilation).Assembly} {
+            if !references.OfType[PortableExecutableReference]().Any(
+                (reference PortableExecutableReference) ->
+                reference.FilePath == assembly.Location
+            ) {
+                references.Add(MetadataReference.CreateFromFile(assembly.Location))
+            }
+        }
+        let Emit = func (assemblyName string, source string, metadata IEnumerable[MetadataReference])[]byte {
+            let compilation = CSharpCompilation.Create(
+                assemblyName,
+                []SyntaxTree{CSharpSyntaxTree.ParseText(source)},
+                metadata,
+                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+            )
+            using let image = MemoryStream()
+            let result = compilation.Emit(image)
+            Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics))
+            return image.ToArray()
+        }
+        let contract = Emit(
+            name.Name!!,
+            "[assembly:System.Reflection.AssemblyVersion(\"${name.Version}\")] namespace Cs2Gs.Translator { public class TranslationContext { public TranslationContext(Microsoft.CodeAnalysis.CSharp.CSharpCompilation c, Microsoft.CodeAnalysis.SemanticModel m, string p, System.Collections.Generic.IReadOnlyList<Microsoft.CodeAnalysis.CSharp.CSharpCompilation> siblings, System.Collections.Generic.IReadOnlyList<Microsoft.CodeAnalysis.CSharp.CSharpCompilation> repository) {} } }",
+            references
+        )
+        let consumer = Emit(
+            "FiveArgumentContextConsumer5326",
+            "public static class Consumer { public static object Create(Microsoft.CodeAnalysis.CSharp.CSharpCompilation c, Microsoft.CodeAnalysis.SemanticModel m) => new Cs2Gs.Translator.TranslationContext(c, m, \"Consumer.cs\", null, null); }",
+            references.Append(cast[MetadataReference](MetadataReference.CreateFromImage(contract)))
+        )
+        let tree = CSharpSyntaxTree.ParseText("public class C {}", path: "Consumer.cs")
+        let compilation = CSharpCompilation.Create(
+            "OriginalContext5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences()
+        )
+        let model = compilation.GetSemanticModel(tree)
+        let load = AssemblyLoadContext("FiveArgumentContextConsumer5326", isCollectible: true)
+        try {
+            let assembly = load.LoadFromStream(MemoryStream(consumer))
+            let context = Assert.IsType[TranslationContext](
+                assembly.GetType("Consumer", throwOnError: true)!!.GetMethod("Create")!!.Invoke(
+                    nil,
+                    []object{compilation, model}
+                )
+            )
+            Assert.Same(compilation, context.RootCompilation)
+            Assert.Same(model, context.GetOwnedSemanticModel(tree))
+        } finally {
+            load.Unload()
+        }
+    }
+
+    @Fact
     async func SnapshotGraph_DoesNotRebindMemoryImageToItsSuppliedDiskPath() {
         let source = CSharpCompilation.Create(
             "MemoryOnly5326",

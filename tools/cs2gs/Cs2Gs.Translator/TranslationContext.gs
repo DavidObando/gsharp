@@ -48,6 +48,23 @@ class TranslationContext {
 
     private let rootCompilation CSharpCompilation
 
+    convenience init(
+        compilation CSharpCompilation,
+        semanticModel SemanticModel,
+        filePath string,
+        siblingCompilations IReadOnlyList[CSharpCompilation]?,
+        repositoryCompilations IReadOnlyList[CSharpCompilation]?
+    ) {
+        init(
+            compilation,
+            semanticModel,
+            filePath,
+            siblingCompilations,
+            repositoryCompilations,
+            default(CancellationToken)
+        )
+    }
+
     /// Initializes a new instance of the (cref:TranslationContext) class.
     /// @param compilation The owning C# compilation.
     /// @param semanticModel The active semantic model for the file being translated.
