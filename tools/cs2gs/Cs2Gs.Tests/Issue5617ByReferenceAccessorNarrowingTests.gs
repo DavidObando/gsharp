@@ -2604,7 +2604,11 @@ public static class Demo {
             Assert.True(entered.Wait(TimeSpan.FromSeconds(10)), "ownership walk did not enter barrier")
             cancellation.Cancel()
         } finally {
+            cancellation.Cancel()
             release.Set()
+            try {
+                await worker.WaitAsync(TimeSpan.FromSeconds(10))
+            } catch (error OperationCanceledException) { }
         }
         await Assert.ThrowsAnyAsync[OperationCanceledException](
             async func () {
