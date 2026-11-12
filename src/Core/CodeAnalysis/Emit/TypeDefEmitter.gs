@@ -1114,7 +1114,7 @@ internal class TypeDefEmitter {
         // returning `Task[Token?]` exported `Task[Token]`.
         let invokeReturnType = delegateSym.ReturnType ?? TypeSymbol.Void
         let invokeNullability = MethodNullabilityPlan.ForParameters(invokeReturnType, delegateSym.Parameters)
-        let invokeReturnRow = this.AddReturnRow(invokeNullability, invokeReturnType, RefKind.None, nil)
+        let invokeReturnRow = this.AddReturnRow(invokeNullability, invokeReturnType, RefKind.None, delegateSym)
         let invokeParamHandles = ImmutableArray.CreateBuilder[ParameterHandle](delegateSym.Parameters.Length)
         for var i = 0; i < delegateSym.Parameters.Length; i++ {
             let p = delegateSym.Parameters[i]
@@ -1166,7 +1166,7 @@ internal class TypeDefEmitter {
         // @Note-style attributes silently vanish for delegate params.
         let invokeRows = invokeParamHandles.MoveToImmutable()
         this.EmitUserAttributesOnParameters(invokeRows, delegateSym.Parameters)
-        this.StampSignature(invokeHandle, invokeNullability, invokeReturnRow, invokeReturnType, nil, invokeRows)
+        this.StampSignature(invokeHandle, invokeNullability, invokeReturnRow, invokeReturnType, delegateSym, invokeRows)
         // ADR-0047 §3: user annotations targeting the delegate type land on
         // the TypeDef row (same as struct/interface/enum).
         this.emitUserAttributes(delegateTypeDef, delegateSym, AttributeTargetKind.Type)

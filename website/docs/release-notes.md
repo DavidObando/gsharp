@@ -16,6 +16,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Accept return-target attributes on delegates and emit them on `Invoke` return parameters. Preserve type and parameter attributes. Reject unsupported delegate return `MarshalAs` with `GS0360` instead of omitting required marshalling metadata. (Fixes #5967)
+
 - **Keep call-effect ownership and cache lifetimes sound** (#5326). Treat unmodeled external dispatch and formatting as unknown writes. Follow source-project operations, event accessors, deconstruction stores, property initializers, actual buffers, and enumerated callbacks. Share immutable reference snapshots per project load and immutable indexes per compilation. Completed pure callback summaries do not consume the recursion budget. Check deferred-factory shapes before framework image verification.
 - **Operation-based `cs2gs` storage effects** (#5326). Follow implicit accessors, constructor chains, interface slots, formatting, buffers, deferred callbacks, and comparer contracts. Cache completed context-sensitive summaries and observe cancellation. Bind immutable reference images for effect trust without restricting host reference visibility.
 - **Verify call-effect trust and share storage effects with `cs2gs`** (#5326). Framework models require installed framework image fingerprints, not matching metadata identities or arbitrary host dependencies. Resolver-local membership and cached discovery cover unregistered host comparers without process-history leaks. Typed call effects now cover translated ordinary statements, condition operands, and loops while retaining disjoint-write and pure-callback precision.
