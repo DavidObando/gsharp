@@ -317,14 +317,36 @@ internal partial class DeclarationBinder {
                 let previousTree = $scope.SetCurrentReferencingSyntaxTree(clause.SyntaxTree)
                 try {
                     let segments = clause.DottedName.Split('.')
+                    var current TypeSymbol? = nil
                     for var index = 0; index < segments.Length; index++ {
                         let name = string.Join(".", segments, 0, index + 1)
                         let arity = clause.GetSegmentTypeArguments(index)?.Count ?? -1
-                        var resolved = lookupTypeWithArity(name, arity)
-                        if resolved == nil && arity >= 0 {
-                            resolved ??= ResolveNestedAttributeName(name, arity)
+                        var resolved TypeSymbol? = nil
+                        if current is {} previous {
+                            let definition = switch previous {
+                                case aggregate is StructSymbol: aggregate.Definition ?? aggregate
+                                case contract is InterfaceSymbol: contract.Definition ?? contract
+                                default: previous
+                            }
+                            if $scope.TryLookupNestedTypeAlias(definition, segments[index], arity, out var nested) {
+                                resolved = nested
+                            } else if previous is StructSymbol container &&
+                                $scope.TryLookupNestedTypeAliasIncludingInherited(
+                                container,
+                                segments[index],
+                                arity,
+                                out nested,
+                                out _
+                            ) {
+                                resolved = nested
+                            } else {
+                                break
+                            }
+                        } else {
+                            resolved = lookupTypeWithArity(name, arity)
+                            resolved ??= ResolveAttributeName(name)
                         }
-                        resolved ??= ResolveAttributeName(name)
+                        current = resolved
                         if resolved is StructSymbol container {
                             let definition = container.Definition ?? container
                             if nestedStructPackages.ContainsKey(definition) && !readyStructHeaders.Contains(

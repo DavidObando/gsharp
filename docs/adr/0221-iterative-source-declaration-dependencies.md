@@ -31,6 +31,8 @@ Separate source declaration scheduling into header, member, and usage-validation
    Bind each complete constraint contract once, before the declaration's own base clauses.
    Apply qualifier prerequisites throughout base/interface clauses, including nested type arguments.
    Use the binder's lexical, arity-aware lookup for prerequisite discovery and actual type binding.
+   Resolve each nested segment through its selected container, preserving all preceding segment arities.
+   Read declared shared-member names for hiding before complete member contracts exist.
    Complete referenced source type headers before their identities prove imported generic constraints.
    Drain source headers in declaration order after aliases exist and before shell attributes or delegate signatures bind.
 2. Check the completed source base relation for inheritance cycles.

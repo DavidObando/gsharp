@@ -249,6 +249,50 @@ class TagAttribute : Attribute {}`
     }
 
     @Theory
+    @InlineData("var Token int32")
+    @InlineData("prop Token int32 -> 1")
+    @InlineData("func Token() int32 -> 1")
+    @InlineData("event Token System.Action")
+    func HeaderLookup_RespectsDeclaredStaticMemberHiding(member string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let driver = CompileBoundedStackDriver(fixture)
+        let declarations = []string{
+            "class Derived : Outer.Token {}",
+            "open class Outer : Mid {}",
+            "open class Mid : Root { shared { " + member + " } }",
+            "open class Root { public open class Token {} }"
+        }
+        for reverse in[]bool{false, true} {
+            let sourcePath = Path.Combine(fixture.Directory, "hiding.gs")
+            let dll = Path.Combine(fixture.Directory, "hiding-" + reverse.ToString() + ".dll")
+            File.WriteAllText(
+                sourcePath,
+                string.Join(
+                    "\n",
+                    if reverse {
+                        declarations.Reverse()
+                    } else {
+                        declarations
+                    }
+                )
+            )
+            let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+                sourcePath,
+                dll,
+                driver
+            )
+            Assert.True(code == 1, output)
+            let line = if reverse {
+                "4"
+            } else {
+                "1"
+            }
+            Assert.Equal([]string{"GS0113@" + line + ",17," + line + ",22"}, DiagnosticLocations(output))
+            Assert.False(File.Exists(dll))
+        }
+    }
+
+    @Theory
     @InlineData(false)
     @InlineData(true)
     func SourceAttributeDependencies_CanReferToEachOtherWithoutReadingProvisionalUsage(sugar bool) {
@@ -786,6 +830,7 @@ class BAttribute : Attribute {}`
     @InlineData("base")
     @InlineData("argument")
     @InlineData("interface")
+    @InlineData("segmented")
     func QualifiedDeclarationSignatures_UseReadyLexicalHeaders(kind string) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let driver = CompileBoundedStackDriver(fixture)
@@ -799,6 +844,7 @@ class BAttribute : Attribute {}`
             case "constraint": "public class Consumer[U Container[int32].Nested] {}"
             case "base": "public class Consumer : Container.Nested {}"
             case "argument": "public open class GenericBase[T] {}\npublic class Consumer : GenericBase[Container.Nested] {}"
+            case "segmented": "public class Consumer : Outer[int32].Container.Nested {}"
             default: "public interface Contract { func Read(value Container.Nested); }\n" +
                 "public class Implementation : Contract { public func Read(value Root.Nested) {} }"
         }
@@ -808,14 +854,23 @@ class BAttribute : Attribute {}`
             } else {
                 container + "\n" + consumer
             }
-            let declarations = []string{
-                root,
-                if kind == "constraint" {
-                    "open class Container[T] {}"
-                } else {
-                    ""
-                },
-                "class Envelope {\n" + siblings + "\n}"
+            let declarations = if kind == "segmented" {
+                []string{
+                    root,
+                    "open class Outer {}",
+                    "open class Outer[T] { public open class Container : Root {} }",
+                    consumer
+                }
+            } else {
+                []string{
+                    root,
+                    if kind == "constraint" {
+                        "open class Container[T] {}"
+                    } else {
+                        ""
+                    },
+                    "class Envelope {\n" + siblings + "\n}"
+                }
             }
             let sourcePath = Path.Combine(fixture.Directory, "qualifiers.gs")
             let dll = Path.Combine(fixture.Directory, "qualifiers-" + reverse.ToString() + ".dll")
