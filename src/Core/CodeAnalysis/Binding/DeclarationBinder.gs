@@ -446,7 +446,7 @@ internal partial class DeclarationBinder {
         let delegateAttributes = BindAttributes(
             syntax.Annotations,
             AttributeTargetKind.Type,
-            Binder.TypeDeclarationAllowedTargets,
+            Binder.DelegateDeclarationAllowedTargets,
             "a delegate declaration",
             AttributeTargets.Delegate
         )

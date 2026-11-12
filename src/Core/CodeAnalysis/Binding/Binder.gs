@@ -6757,6 +6757,12 @@ partial class Binder {
             AttributeTargetKind.Type
         )
 
+        /// Targets permitted on a delegate: `type` by default, or `return` for `Invoke`.
+        internal let DelegateDeclarationAllowedTargets ImmutableHashSet[AttributeTargetKind] = ImmutableHashSet.Create(
+            AttributeTargetKind.Type,
+            AttributeTargetKind.Return
+        )
+
         /// Targets permitted on a field declaration: only `field`.
         internal let FieldDeclarationAllowedTargets ImmutableHashSet[AttributeTargetKind] = ImmutableHashSet.Create(
             AttributeTargetKind.Field

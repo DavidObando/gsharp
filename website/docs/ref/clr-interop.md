@@ -284,6 +284,8 @@ class Trace {
 
 Annotation names resolve either to the exact type name or to the conventional `Attribute` suffix form. Use-site targets include `field`, `param`, `return`, `type`, `method`, `property`, `event`, `module`, `assembly`, and `genericparam`. Arguments must be compile-time constants supported by CLR attribute metadata. `@Attribute` is declaration sugar for attribute classes and implies a `System.Attribute` base class.
 
+On a named delegate, annotations target the delegate type by default. Use `@return:` to annotate the return parameter of its CLR `Invoke` method. Parameter annotations remain on `Invoke` parameters. Attribute usage and constructor validation apply to each target. Delegate return `@MarshalAs` is rejected with `GS0360`: return marshalling metadata is not implemented.
+
 Compiler-synthesized attributes such as `CompilerGenerated`, `Extension`, `AsyncStateMachine`, `Nullable`, and `NullableContext` are reserved. `@DllImport` opts a function into P/Invoke (see [Unmanaged interop (P/Invoke)](#unmanaged-interop-pinvoke) below); the historical blanket-rejection at `GS0211` no longer fires.
 
 ## By-ref pointers (`&` / `*` / `*T`)
