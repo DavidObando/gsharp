@@ -22,8 +22,7 @@ import System.Runtime.CompilerServices
 
 partial class CSharpToGSharpTranslator {
     private partial class DeclarationVisitor : CSharpSyntaxVisitor[GMember] {
-        // Issue #4356 follow-up: TryGetDeclaringRepositoryMember's owner index
-        // and DeclaringRepositoryMemberPromotes' answers (see there).
+        // Cache the shared declaring-compilation promotion decision for member reads.
         private let declaringRepositoryMemberPromotions Dictionary[ISymbol, bool] = Dictionary[ISymbol, bool](
             SymbolEqualityComparer.Default
         )
@@ -33,7 +32,6 @@ partial class CSharpToGSharpTranslator {
             bool
         ] = Dictionary[(Call SyntaxNode, ParameterName string, TypeParameterOrdinal int32), bool]()
 
-        private var repositoryCompilationsByIdentity Dictionary[AssemblyIdentity, CSharpCompilation]?
         private var repositorySharedDocumentPaths HashSet[string]?
         private var refStorageSlots Dictionary[ISymbol, Dictionary[int32, RefStorageSlot]]?
         private var frozenRefStorageContracts Dictionary[ISymbol, HashSet[int32]]?
@@ -135,40 +133,17 @@ partial class CSharpToGSharpTranslator {
             owner = nil
             source = nil
             if !((symbol is IPropertySymbol || symbol is IFieldSymbol || symbol is IMethodSymbol)) ||
-                symbol!!.ContainingAssembly is not{} assembly ||
                 SymbolEqualityComparer
                 .Default
-                .Equals(assembly, this.context.Compilation.Assembly) ||
-                (this.context.RepositoryCompilations ?? this.context.SiblingCompilations) is not{} compilations ||
-                symbol!!
-                .OriginalDefinition
-                .GetDocumentationCommentId() is not{} id {
+                .Equals(symbol?.ContainingAssembly, this.context.Compilation.Assembly) {
                 return false
             }
-            if this.repositoryCompilationsByIdentity == nil {
-                this.repositoryCompilationsByIdentity = Dictionary[AssemblyIdentity, CSharpCompilation]()
-                for compilation in compilations {
-                    if compilation != nil && !object.ReferenceEquals(compilation, this.context.Compilation) {
-                        this.repositoryCompilationsByIdentity!!.TryAdd(compilation.Assembly.Identity, compilation)
-                    }
-                }
-            }
-            if !this.repositoryCompilationsByIdentity!!.TryGetValue(assembly.Identity, out var candidate) {
-                return false
-            }
-            let declared ISymbol? = DocumentationCommentId.GetFirstSymbolForDeclarationId(id, candidate)
-            if declared == nil || !SymbolEqualityComparer.Default.Equals(
-                declared.ContainingAssembly,
-                candidate.Assembly
-            ) ||
-                declared
-                .DeclaringSyntaxReferences
-                .IsDefaultOrEmpty {
-                return false
-            }
-            owner = candidate
-            source = declared
-            return true
+            return ObliviousNullabilityAnalyzer.TryGetSourceMember(
+                this.context.Compilation,
+                symbol,
+                out owner,
+                out source
+            )
         }
 
         /// Issue #4356 follow-up: whether a field, property, or method that another
@@ -218,14 +193,8 @@ partial class CSharpToGSharpTranslator {
                 .Annotated {
                 return false
             }
-            if source is IMethodSymbol {
-                return ObliviousNullabilityAnalyzer.HasMaybeNullReturnContract(source) &&
-                    ObliviousNullabilityAnalyzer.CanPromoteTuplePosition(
-                    owner,
-                    source,
-                    string.Empty,
-                    declaredReturn: true
-                )
+            if source is IMethodSymbol method {
+                return ObliviousNullabilityAnalyzer.ReturnContractIsPromoted(owner!!, method)
             }
             if ObliviousNullabilityAnalyzer.HasAllowNullWriteContract(source) {
                 return true
@@ -570,9 +539,9 @@ partial class CSharpToGSharpTranslator {
                 )
             }
             // MaybeNull describes the declared envelope, independently of its result.
-            return if (
-                ObliviousNullabilityAnalyzer.HasMaybeNullReturnContract(symbol) ||
-                    this.DeclaringRepositoryMemberPromotes(symbol)
+            return if symbol != nil && ObliviousNullabilityAnalyzer.ReturnContractIsPromoted(
+                this.context.Compilation,
+                symbol
             ) &&
                 this.ShouldPromoteToNullableReference(symbol) {
                 MakeNullable(promoted)
@@ -2328,6 +2297,11 @@ partial class CSharpToGSharpTranslator {
             if this.DeclaringRepositoryMemberPromotes(symbol) {
                 return true
             }
+            if symbol is IMethodSymbol envelopeMethod && ObliviousNullabilityAnalyzer.IsReferenceReturnEnvelope(
+                envelopeMethod
+            ) {
+                return ObliviousNullabilityAnalyzer.ReturnContractIsPromoted(this.context.Compilation, envelopeMethod)
+            }
             // Issue #3694: C# gives a declaration two nullability contracts, an
             // INPUT and an OUTPUT one, and `[AllowNull]` keeps the output
             // non-nullable while widening the input — `[AllowNull] T P { get;
@@ -2348,13 +2322,11 @@ partial class CSharpToGSharpTranslator {
             if ObliviousNullabilityAnalyzer.HasAllowNullWriteContract(symbol) {
                 return true
             }
-            if ObliviousNullabilityAnalyzer.HasMaybeNullReturnContract(symbol) {
-                return ObliviousNullabilityAnalyzer.CanPromoteTuplePosition(
-                    this.context.Compilation,
-                    symbol,
-                    string.Empty,
-                    declaredReturn: true
-                )
+            if symbol is IMethodSymbol method && ObliviousNullabilityAnalyzer.ReturnContractIsPromoted(
+                this.context.Compilation,
+                method
+            ) {
+                return true
             }
             // Issue #3726: a data-driving attribute is a null-WRITING site. An
             // xunit theory declared `[InlineData(null, …)] void T(string a, …)`
@@ -3145,6 +3117,16 @@ partial class CSharpToGSharpTranslator {
                 .CodeAnalysis
                 .NullableAnnotation
                 .Annotated {
+                return false
+            }
+            if targetSymbol is IMethodSymbol returning && !SymbolEqualityComparer.Default.Equals(
+                targetType,
+                returning.ReturnType
+            ) &&
+                SymbolEqualityComparer
+                .Default
+                .Equals(targetType, ObliviousNullabilityAnalyzer.SymbolValueType(returning)) &&
+                this.AwaitedReturnIsTainted(targetType, returning) {
                 return false
             }
             // Issue #5537: a parameter or element typed by a type argument of oblivious

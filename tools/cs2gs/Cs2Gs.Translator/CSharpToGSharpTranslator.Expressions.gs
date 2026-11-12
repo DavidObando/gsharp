@@ -21848,16 +21848,11 @@ partial class CSharpToGSharpTranslator {
                     )
                 }
                 case invocation is InvocationExpressionSyntax {
-                    // A `Task<T>`/`ValueTask<T>` envelope is itself non-null; its
-                    // annotation belongs to the awaited T (see
-                    // AwaitedReceiverValueIsPromotedNullable), never to the
-                    // receiver being dereferenced here.
                     return this
                         .context
                         .GetSymbolInfo(invocation)
                         .Symbol is IMethodSymbol method &&
-                        !IsTaskLikeEnvelope(method.ReturnType) &&
-                        IsAnnotatedNullableReference(method.ReturnType)
+                        ObliviousNullabilityAnalyzer.ReturnContractIsNullable(this.context.Compilation, method)
                 }
                 case elementAccess is ElementAccessExpressionSyntax {
                     return this
@@ -21923,9 +21918,8 @@ partial class CSharpToGSharpTranslator {
                     .context
                     .GetSymbolInfo(invocation)
                     .Symbol is IMethodSymbol method {
-                    // Method-return taint on Task<T>/ValueTask<T> widens the
-                    // awaited T, not the non-null task envelope itself.
-                    return !IsTaskLikeEnvelope(method.ReturnType) && this.ShouldPromoteToNullableReference(method)
+                    return ObliviousNullabilityAnalyzer.ReturnContractIsNullable(this.context.Compilation, method) ||
+                        (!IsTaskLikeEnvelope(method.ReturnType) && this.ShouldPromoteToNullableReference(method))
                 }
                 case elementAccess is ElementAccessExpressionSyntax {
                     return this
@@ -21978,7 +21972,12 @@ partial class CSharpToGSharpTranslator {
                     .context
                     .GetSymbolInfo(invocation)
                     .Symbol is IMethodSymbol method {
-                    return IsTaskLikeEnvelope(method.ReturnType) && this.ShouldPromoteToNullableReference(method)
+                    let resultType = ObliviousNullabilityAnalyzer.SymbolValueType(method)
+                    return IsTaskLikeEnvelope(method.ReturnType) &&
+                        (
+                        this.AwaitedReturnIsTainted(resultType, method) ||
+                            (resultType != nil && IsAnnotatedNullableReference(resultType))
+                    )
                 }
                 default {
                     return false

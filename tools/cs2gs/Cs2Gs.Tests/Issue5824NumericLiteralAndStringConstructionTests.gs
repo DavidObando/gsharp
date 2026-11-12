@@ -295,7 +295,6 @@ internal shared class LiteralConstructionRuntimeParity {
             Assert.NotEqual(printed, transformed)
             printed = transformed
         }
-        verifyTranslation?.Invoke(printed)
         let directory = Path.Combine(
             AppContext.BaseDirectory,
             "literal-construction-parity",
@@ -365,6 +364,7 @@ internal shared class LiteralConstructionRuntimeParity {
                 Assert.Empty(verified.Errors)
             }
             Assert.Equal(expected, RunDotnet([]string{translatedPath}))
+            verifyTranslation?.Invoke(printed)
         } finally {
             Directory.Delete(directory, recursive: true)
         }

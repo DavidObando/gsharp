@@ -16,7 +16,7 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
-- Preserve source `[return: MaybeNull]` reference-return contracts in `cs2gs`, including task envelopes and migrated project references, without asserting nullable values. Keep envelope and awaited-result nullability independent. (Fixes #5951)
+- Preserve source `[return: MaybeNull]` reference-return contracts in `cs2gs`, including forwarded task envelopes and inherited migrated signatures, without asserting nullable values. Share return-contract queries across declarations, receivers, and source-reference boundaries. Keep envelope and awaited-result nullability independent. (Fixes #5951)
 - Preserve nullable tuple leaves in generic indexer writes in `cs2gs`, instead of inserting runtime null assertions. (Part of #5948)
 - **Preserve promoted-local null-guard narrowing in `cs2gs`** (Fixes #5645). Nullable-oblivious translations omit redundant `!!` assertions on guarded immutable-local receiver and argument reads. Mutable receivers, intervening escaped-closure calls, and mutable capture boundaries retain required assertions. Promoted nullable tuple destinations accept values changed through ref aliases without asserting the yielded value. Destination projection preserves intermediate assignment contracts before following assignment results into nullable arrays.
 - Reuse inferred generic call arguments during implicit static dispatch, so deeply nested calls bind in linear work. (Fixes #5652)

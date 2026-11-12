@@ -13,8 +13,18 @@ import Xunit
 
 class Issue5951SourceMaybeNullReturnTests {
     shared {
-        private func AssertMetadataBoundary(knownSource bool) {
-            let libraryTree = CSharpSyntaxTree.ParseText(`
+        private func AssertMetadataBoundary(knownSource bool, inheritedContract bool = false) {
+            let librarySource = if inheritedContract {
+                `
+#nullable enable
+using System.Diagnostics.CodeAnalysis;
+namespace Library
+{
+    public interface IValue { [return: MaybeNull] string Read(); }
+    public abstract class Base { [return: MaybeNull] public abstract string Read(); }
+}`
+            } else {
+                `
 #nullable enable
 using System.Diagnostics.CodeAnalysis;
 namespace Library
@@ -25,7 +35,9 @@ namespace Library
         [return: MaybeNull]
         public static string Value(bool missing) { Calls++; return missing ? null : "abc"; }
     }
-}`, path: "Library.cs")
+}`
+            }
+            let libraryTree = CSharpSyntaxTree.ParseText(librarySource, path: "Library.cs")
             let library = CSharpCompilation.Create(
                 "Library",
                 []SyntaxTree{libraryTree},
@@ -37,7 +49,32 @@ namespace Library
             using let image = MemoryStream()
             let libraryEmit = library.Emit(image)
             Assert.True(libraryEmit.Success, string.Join(Environment.NewLine, libraryEmit.Diagnostics))
-            let consumer = CSharpProjectLoader.LoadInMemory([](string, Source string){("Consumer.cs", `
+            let consumerSource = if inheritedContract {
+                `
+#nullable enable
+using System;
+using System.Diagnostics.CodeAnalysis;
+using Library;
+public class Value : Base, IValue
+{
+    public static int Calls;
+    [return: MaybeNull]
+    public override string Read() { Calls++; return null; }
+}
+public static class P
+{
+    public static void Main()
+    {
+        IValue value = new Value();
+        Base parent = new Value();
+        Console.WriteLine(value.Read() == null);
+        Console.WriteLine(parent.Read() == null);
+        Console.WriteLine(new Value().Read() == null);
+        Console.WriteLine(Value.Calls);
+    }
+}`
+            } else {
+                `
 #nullable disable
 using System;
 using Library;
@@ -52,10 +89,17 @@ public static class P
         catch (NullReferenceException) { Console.WriteLine("null"); }
         Console.WriteLine(Lib.Calls);
     }
-}`)}, CSharpProjectLoader
+}`
+            }
+            let consumer = CSharpProjectLoader.LoadInMemory(
+                [](string, Source string){("Consumer.cs", consumerSource)},
+                CSharpProjectLoader
                     .RuntimeReferences()
                     .Append(MetadataReference.CreateFromImage(image.ToArray()))
-                    .ToArray(), assemblyName: "Native", outputKind: OutputKind.ConsoleApplication)
+                    .ToArray(),
+                assemblyName: "Native",
+                outputKind: OutputKind.ConsoleApplication
+            )
             Assert.True(consumer.BoundWithoutErrors, string.Join(Environment.NewLine, consumer.ErrorDiagnostics))
             let document = Assert.Single(consumer.Documents)
             let compilations = if knownSource {
@@ -93,7 +137,15 @@ public static class P
                 let expected = LiteralConstructionRuntimeParity.RunDotnet([]string{nativePath})
                 Assert.Equal(
                     Encoding.UTF8.GetBytes(
-                        string.Join(Environment.NewLine, []string{"True", "3", "null", "3"}) + Environment.NewLine
+                        string.Join(
+                            Environment.NewLine,
+                            if inheritedContract {
+                                []string{"True", "True", "True", "3"}
+                            } else {
+                                []string{"True", "3", "null", "3"}
+                            }
+                        ) +
+                            Environment.NewLine
                     ),
                     expected
                 )
@@ -134,7 +186,10 @@ public static class P
                     printed
                 )
                 Assert.Equal(expected, LiteralConstructionRuntimeParity.RunDotnet([]string{translatedPath}, printed))
-                if knownSource {
+                if inheritedContract {
+                    Assert.Contains("func Read() string?", printed)
+                    Assert.DoesNotContain("Read()!!", printed)
+                } else if knownSource {
                     Assert.Contains("Lib.Value(false)!!.Length", printed)
                 } else {
                     Assert.DoesNotContain("Lib.Value(false)!!", printed)
@@ -144,6 +199,119 @@ public static class P
                 Directory.Delete(directory, recursive: true)
             }
         }
+    }
+
+    @Fact
+    func NullableEnvelopes_AreAssertedOnlyAtActualDereferences() {
+        let source = `
+#nullable disable
+using System;
+using System.Diagnostics.CodeAnalysis;
+using System.Threading.Tasks;
+public static class P
+{
+    static int calls;
+    [return: MaybeNull]
+    static Task<int> Value(bool missing) { calls++; return missing ? null : Task.FromResult(7); }
+    [return: MaybeNull]
+    static ValueTask<int> StructValue() => new ValueTask<int>(9);
+    public static void Main()
+    {
+        Console.WriteLine(Value(false).Result);
+        Console.WriteLine(Value(false).GetAwaiter().GetResult());
+        try { Console.WriteLine(Value(true).Result); }
+        catch (NullReferenceException) { Console.WriteLine("null"); }
+        try { Console.WriteLine(Value(true).GetAwaiter().GetResult()); }
+        catch (NullReferenceException) { Console.WriteLine("null"); }
+        Console.WriteLine(StructValue().Result);
+        var saved = Value(false);
+        Console.WriteLine(saved.Result);
+        Console.WriteLine(calls);
+    }
+}`
+        for mode in[]NullableContextOptions{NullableContextOptions.Disable, NullableContextOptions.Enable} {
+            LiteralConstructionRuntimeParity.AssertMatches(
+                if mode == NullableContextOptions.Enable {
+                    source.Replace("#nullable disable", "#nullable enable")
+                } else {
+                    source
+                },
+                nullableContext: mode,
+                expectedOutput: string.Join(Environment.NewLine, []string{"7", "7", "null", "null", "9", "7", "5"}) +
+                    Environment.NewLine
+            )
+        }
+    }
+
+    @Fact
+    func NullableEnvelopes_ForwardWithoutBorrowingAwaitedResultNullability() {
+        LiteralConstructionRuntimeParity.AssertMatches(`
+#nullable disable
+using System;
+using System.Diagnostics.CodeAnalysis;
+using System.Threading.Tasks;
+public static class P
+{
+    static int calls;
+    [return: MaybeNull]
+    static Task<int> Empty() { calls++; return null; }
+    static Task<int> Forward() => Empty();
+    static Task<int> Again() => Forward();
+    static Task<int> Alias() { var task = Empty(); return task; }
+    [return: MaybeNull]
+    static Task<string> TextEmpty() => null;
+    static Task<string> TextForward() => TextEmpty();
+    [return: MaybeNull]
+    static Task<T> GenericEmpty<T>() { calls++; return null; }
+    static Task<T> GenericForward<T>() => GenericEmpty<T>();
+    static Task<int> Fallback() => Empty() ?? Task.FromResult(9);
+    public static void Main()
+    {
+        Console.WriteLine(Again() == null);
+        Console.WriteLine(TextForward() == null);
+        Console.WriteLine(GenericForward<int>() == null);
+        Console.WriteLine(GenericForward<string>() == null);
+        Console.WriteLine(Alias() == null);
+        Console.WriteLine(Fallback().Result);
+        Console.WriteLine(calls);
+    }
+}`, verifyTranslation: (
+                printed string
+            ) -> {
+                Assert.Contains(
+                    "func Forward() Task[int32]?",
+                    printed
+                )
+                Assert.Contains(
+                    "func Again() Task[int32]?",
+                    printed
+                )
+                Assert.Contains(
+                    "func TextForward() Task[string]?",
+                    printed
+                )
+                Assert.DoesNotContain(
+                    "Task[string?]",
+                    printed
+                )
+                Assert.DoesNotContain(
+                    "Empty()!!",
+                    printed
+                )
+                Assert.DoesNotContain(
+                    "func Fallback() Task[int32]?",
+                    printed
+                )
+            }, nullableContext: NullableContextOptions.Disable, expectedOutput: string.Join(
+                Environment.NewLine,
+                []string{"True", "True", "True", "True", "True", "9", "5"}
+            ) +
+                Environment.NewLine)
+    }
+
+    @Fact
+    func KnownSiblingInheritedContracts_AreReadFromTheirSourceDeclarations() {
+        AssertMetadataBoundary(knownSource: true, inheritedContract: true)
     }
 
     @Fact
@@ -208,11 +376,13 @@ public static class P
     [return: MaybeNull]
     static Task<string> Empty() => null;
     static Task<string> ResultOnly() => Inner();
+    static async Task<string> AsyncForward() => await Inner();
     public static void Main()
     {
         Console.WriteLine(Empty() == null);
         Console.WriteLine(Outer()!.GetAwaiter().GetResult() == null);
         Console.WriteLine(ResultOnly().GetAwaiter().GetResult() == null);
+        Console.WriteLine(AsyncForward().GetAwaiter().GetResult() == null);
         Console.WriteLine(calls);
     }
 }`, verifyTranslation: (
@@ -240,7 +410,7 @@ public static class P
                 )
             }, nullableContext: NullableContextOptions.Disable, expectedOutput: string.Join(
                 Environment.NewLine,
-                []string{"True", "True", "True", "3"}
+                []string{"True", "True", "True", "True", "4"}
             ) +
                 Environment.NewLine)
     }
