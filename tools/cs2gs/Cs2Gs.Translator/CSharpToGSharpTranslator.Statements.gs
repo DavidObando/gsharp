@@ -546,6 +546,9 @@ partial class CSharpToGSharpTranslator {
                 }
                 // Issue #4356: record the emitted G# nullability of this local
                 // (analyzer mode), for every later read of it.
+                if this.context.GetDeclaredSymbol(declarator) is ILocalSymbol storedLocal {
+                    type = this.PromoteStoredValueContract(type, storedLocal)
+                }
                 this.RecordEmittedLocalNullability(
                     this.context.GetDeclaredSymbol(declarator) as ILocalSymbol,
                     type,
@@ -609,7 +612,8 @@ partial class CSharpToGSharpTranslator {
         /// unlike C#'s erased `!`, G#'s `!!` is a checked assertion that
         /// THROWS on nil.
         private func InferredLocalDeclarationIsNullable(local ILocalSymbol) bool {
-            if this.ShouldPromoteToNullableReference(local) ||
+            if ObliviousNullabilityAnalyzer.ValueContractIsPromoted(this.context.Compilation, local) ||
+                this.ShouldPromoteToNullableReference(local) ||
                 (
                 IsAnnotatedNullableReference(local.Type) && this.IsUsedAsNullable(
                     local,

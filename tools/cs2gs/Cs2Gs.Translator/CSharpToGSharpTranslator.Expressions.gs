@@ -21595,6 +21595,14 @@ partial class CSharpToGSharpTranslator {
             if this.IsCallableValueExpression(recv) {
                 return false
             }
+            if !isDereferenceReceiver && !widenedSinkNeedsNonNull && this.DeclaringRepositoryMemberPromotes(
+                this.context.GetSymbolInfo(recv).Symbol
+            ) {
+                let (targetType, targetSymbol) = this.FindContextualValueTarget(recv)
+                if this.NullForgivingTargetAcceptsNil(targetType, targetSymbol, recv) {
+                    return false
+                }
+            }
             // Issue #5537: an element of storage that keeps an imported oblivious
             // container is `T?` in G#. A C# dereference of it throws on nil. A value
             // position keeps the target-aware bridge, so a nullable target gets no `!!`.
@@ -21807,6 +21815,12 @@ partial class CSharpToGSharpTranslator {
             // throws on a null here too.
             let flowState = this.context.GetTypeInfo(recv).Nullability.FlowState
             let symbol ISymbol? = this.context.GetSymbolInfo(recv).Symbol
+            if !isDereferenceReceiver &&
+                !widenedSinkNeedsNonNull &&
+                symbol != nil &&
+                ObliviousNullabilityAnalyzer.ValueFlowIsPromoted(this.context.Compilation, symbol) {
+                return false
+            }
             // Issue #5254: in this context C# runs no flow analysis, so the
             // declaration is the only contract C# states. A declaration that C#
             // declares non-null and cs2gs widened only to bind a null write
@@ -21940,16 +21954,11 @@ partial class CSharpToGSharpTranslator {
                     )
                 }
                 case invocation is InvocationExpressionSyntax {
-                    // A `Task<T>`/`ValueTask<T>` envelope is itself non-null; its
-                    // annotation belongs to the awaited T (see
-                    // AwaitedReceiverValueIsPromotedNullable), never to the
-                    // receiver being dereferenced here.
                     return this
                         .context
                         .GetSymbolInfo(invocation)
                         .Symbol is IMethodSymbol method &&
-                        !IsTaskLikeEnvelope(method.ReturnType) &&
-                        IsAnnotatedNullableReference(method.ReturnType)
+                        ObliviousNullabilityAnalyzer.ReturnContractIsNullable(this.context.Compilation, method)
                 }
                 case elementAccess is ElementAccessExpressionSyntax {
                     return this
@@ -22015,9 +22024,8 @@ partial class CSharpToGSharpTranslator {
                     .context
                     .GetSymbolInfo(invocation)
                     .Symbol is IMethodSymbol method {
-                    // Method-return taint on Task<T>/ValueTask<T> widens the
-                    // awaited T, not the non-null task envelope itself.
-                    return !IsTaskLikeEnvelope(method.ReturnType) && this.ShouldPromoteToNullableReference(method)
+                    return ObliviousNullabilityAnalyzer.ReturnContractIsNullable(this.context.Compilation, method) ||
+                        (!IsTaskLikeEnvelope(method.ReturnType) && this.ShouldPromoteToNullableReference(method))
                 }
                 case elementAccess is ElementAccessExpressionSyntax {
                     return this
@@ -22054,29 +22062,13 @@ partial class CSharpToGSharpTranslator {
 
         private func AwaitedReceiverValueIsPromotedNullable(
             expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
-        ) bool {
-            switch expression {
-                case parenthesized is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax {
-                    return this.AwaitedReceiverValueIsPromotedNullable(parenthesized.Expression)
-                }
-                case cast is CastExpressionSyntax {
-                    return this.AwaitedReceiverValueIsPromotedNullable(cast.Expression)
-                }
-                case conditional is Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalExpressionSyntax {
-                    return this.AwaitedReceiverValueIsPromotedNullable(conditional.WhenTrue) ||
-                        this.AwaitedReceiverValueIsPromotedNullable(conditional.WhenFalse)
-                }
-                case invocation is InvocationExpressionSyntax when this
-                    .context
-                    .GetSymbolInfo(invocation)
-                    .Symbol is IMethodSymbol method {
-                    return IsTaskLikeEnvelope(method.ReturnType) && this.ShouldPromoteToNullableReference(method)
-                }
-                default {
-                    return false
-                }
-            }
-        }
+        ) bool -> ObliviousNullabilityAnalyzer
+            .AwaitedExpressionResultIsNullable(
+            this.context.Compilation,
+            expression,
+            this.context.SemanticModel,
+            this.context.SiblingCompilations
+        )
 
         // Issue #2164: true when <paramref name="recv"/> reads a nullable
         // (`T?`) field/property that is lazily initialized under a dominating

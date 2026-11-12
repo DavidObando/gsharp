@@ -55,6 +55,11 @@ internal shared class ObliviousNullabilityAnalyzer {
         CallsAndNonPropertyDeclarations
     }
 
+    private enum ScalarFlowPosition {
+        Value,
+        AwaitedResult
+    }
+
     private struct TupleElementKey {
         init(symbol ISymbol?, path string) {
             this.ContractSymbol = symbol
@@ -456,7 +461,15 @@ internal shared class ObliviousNullabilityAnalyzer {
                 referenced.Add(assembly.Identity.GetDisplayName())
             }
             this.ReferencedNames = referenced
+            if current is CSharpCompilation csharp {
+                this.Compilations.Add(csharp.Assembly.Identity, csharp)
+            }
         }
+
+        let Compilations Dictionary[AssemblyIdentity, CSharpCompilation] = Dictionary[
+            AssemblyIdentity,
+            CSharpCompilation
+        ]()
 
         prop Names HashSet[string] {
             get;
@@ -485,6 +498,35 @@ internal shared class ObliviousNullabilityAnalyzer {
     // a fresh entry and stale ones are collectible — same pattern as the
     // subclassed-base-types / partial-type-parts caches in the translator.
     private let Cache ConditionalWeakTable[Compilation, TaintResult] = ConditionalWeakTable[Compilation, TaintResult]()
+    private let ReturnContracts ConditionalWeakTable[Compilation, ReturnContractGraph] = ConditionalWeakTable[
+        Compilation,
+        ReturnContractGraph
+    ]()
+
+    private class ReturnContractGraph {
+        let Nullable HashSet[ISymbol] = HashSet[ISymbol](SymbolEqualityComparer.Default)
+        let PromotedFlow HashSet[ISymbol] = HashSet[ISymbol](SymbolEqualityComparer.Default)
+        let Nodes Dictionary[ISymbol, ReturnContractNode] = Dictionary[ISymbol, ReturnContractNode](
+            SymbolEqualityComparer.Default
+        )
+    }
+
+    private class ReturnContractNode {
+        init(owner CSharpCompilation, symbol ISymbol, seed bool, canBeNullable bool) {
+            this.Owner = owner
+            this.Symbol = symbol
+            this.Seed = seed
+            this.CanBeNullable = canBeNullable
+        }
+
+        let Owner CSharpCompilation
+        let Symbol ISymbol
+        var Seed bool
+        let CanBeNullable bool
+        let Sources List[(Owner Compilation, Symbol ISymbol, Narrowed bool)] = List[
+            (Owner Compilation, Symbol ISymbol, Narrowed bool)
+        ]()
+    }
     private let RefArraySources ConditionalWeakTable[Compilation, RefArraySourceIndex] = ConditionalWeakTable[
         Compilation,
         RefArraySourceIndex
@@ -996,6 +1038,505 @@ internal shared class ObliviousNullabilityAnalyzer {
         return false
     }
 
+    /// Reads the nullable output contract of a source method and its inherited source signatures.
+    internal func HasMaybeNullReturnContract(compilation Compilation?, symbol ISymbol?) bool {
+        var compilation = compilation
+        if symbol is not IMethodSymbol method {
+            return false
+        }
+        var definition = Canonical(method) as IMethodSymbol
+        if TryGetSourceMember(compilation, definition, out var owner, out var source) {
+            compilation = owner
+            definition = source as IMethodSymbol
+        }
+        if definition == nil {
+            return false
+        }
+        if definition.DeclaringSyntaxReferences.Length == 0 {
+            return false
+        }
+        if CarriesMaybeNullReturn(definition) {
+            return true
+        }
+        for inherited in InheritedDeclarations(definition).OfType[IMethodSymbol]() {
+            let contract = if TryGetSourceMember(compilation, inherited, out _, out var inheritedSource) {
+                inheritedSource as IMethodSymbol
+            } else {
+                inherited
+            }
+            if contract != nil && CarriesMaybeNullReturn(contract) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Resolves a member only when its full assembly identity belongs to this migration.
+    internal func TryGetSourceMember(
+        compilation Compilation?,
+        symbol ISymbol?,
+        out owner CSharpCompilation?,
+        out source ISymbol?
+    ) bool {
+        owner = nil
+        source = nil
+        if compilation == nil || symbol?.ContainingAssembly is not{} assembly {
+            return false
+        }
+        let known = SourceAssemblies.GetValue(compilation, (current Compilation) -> SourceAssemblySet(current))
+        lock known.Names {
+            if !known.Compilations.TryGetValue(assembly.Identity, out var candidate) {
+                return false
+            }
+            owner = candidate
+        }
+        source = RunSourceDeclarations(Canonical(symbol)!!, []Compilation{owner!!}).FirstOrDefault()
+        let sourceOwner = owner!!
+        if source == nil &&
+            (
+            symbol!!.DeclaringSyntaxReferences.Any(
+                (reference SyntaxReference) -> sourceOwner.ContainsSyntaxTree(reference.SyntaxTree)
+            ) ||
+                (
+                symbol is IMethodSymbol{MethodKind: MethodKind.DelegateInvoke} &&
+                    symbol
+                    .ContainingType
+                    .DeclaringSyntaxReferences
+                    .Any((reference SyntaxReference) -> sourceOwner.ContainsSyntaxTree(reference.SyntaxTree))
+            )
+        ) {
+            source = Canonical(symbol)
+        }
+        return source != nil
+    }
+
+    /// Reads the emitted reference-return contract, independently from its awaited result.
+    internal func ReturnContractIsNullable(compilation Compilation, method IMethodSymbol) bool {
+        if HasDeclaredNullableReferenceReturn(method) {
+            return true
+        }
+        if TryGetSourceMember(compilation, method, out var owner, out var source) {
+            return ReturnContracts.GetValue(owner!!, ComputeReturnContracts).Nullable.Contains(source!!)
+        }
+        return method.ReturnType.IsReferenceType && IsImportedStatedNullablePosition(method, compilation)
+    }
+
+    private func HasDeclaredNullableReferenceReturn(method IMethodSymbol) bool ->
+    !method.IsAsync && method.ReturnType.IsReferenceType && IsDeclaredNullablePosition(method.ReturnType)
+
+    internal func ReturnContractIsPromoted(compilation Compilation, method IMethodSymbol) bool ->
+    ValueContractIsPromoted(compilation, method)
+
+    internal func ValueContractIsPromoted(compilation Compilation, symbol ISymbol) bool {
+        if !TryGetSourceMember(compilation, symbol, out var owner, out var source) {
+            return false
+        }
+        let graph = ReturnContracts.GetValue(owner!!, ComputeReturnContracts)
+        return if source is IMethodSymbol {
+            !IsDeclaredNullablePosition(SymbolDeclaredType(source)) && graph.Nullable.Contains(source)
+        } else {
+            graph.PromotedFlow.Contains(source!!)
+        }
+    }
+
+    internal func ValueFlowIsPromoted(compilation Compilation, symbol ISymbol) bool ->
+    TryGetSourceMember(compilation, symbol, out var owner, out var source) &&
+        ReturnContracts
+        .GetValue(owner!!, ComputeReturnContracts)
+        .PromotedFlow
+        .Contains(source!!)
+
+    internal func StoredAwaitedResultIsTainted(
+        compilation CSharpCompilation,
+        symbol ISymbol,
+        siblings IReadOnlyList[CSharpCompilation]?
+    ) bool {
+        let target = Canonical(symbol)!!
+        let pending = Queue[(Owner Compilation, Symbol ISymbol)]()
+        pending.Enqueue((compilation, target))
+        let tainted = HashSet[ISymbol](SymbolEqualityComparer.Default)
+        let edges = List[(Target ISymbol, Source ISymbol)]()
+        CollectSourceEdges(target, pending, tainted, edges, ScalarFlowPosition.AwaitedResult)
+        return AwaitedSourcesAreTainted(compilation, target, tainted, edges, siblings)
+    }
+
+    internal func AwaitedExpressionResultIsNullable(
+        compilation CSharpCompilation,
+        value ExpressionSyntax,
+        model SemanticModel,
+        siblings IReadOnlyList[CSharpCompilation]?
+    ) bool {
+        let type = model.GetTypeInfo(value).Type
+        if type == nil || !IsTaskLike(type) {
+            return false
+        }
+        let result = UnwrapAwaitedType(type)
+        if !result.IsReferenceType {
+            return false
+        }
+        if IsDeclaredNullablePosition(result) {
+            return true
+        }
+        if !IsEligibleTupleLeaf(result) {
+            return false
+        }
+        let target = model.GetEnclosingSymbol(value.SpanStart) ?? compilation.Assembly
+        let tainted = HashSet[ISymbol](SymbolEqualityComparer.Default)
+        let edges = List[(Target ISymbol, Source ISymbol)]()
+        AddEdges(target, value, model, tainted, edges, position: ScalarFlowPosition.AwaitedResult)
+        return AwaitedSourcesAreTainted(compilation, target, tainted, edges, siblings)
+    }
+
+    private func AwaitedSourcesAreTainted(
+        compilation CSharpCompilation,
+        target ISymbol,
+        tainted HashSet[ISymbol],
+        edges List[(Target ISymbol, Source ISymbol)],
+        siblings IReadOnlyList[CSharpCompilation]?
+    ) bool {
+        return tainted.Contains(target) || edges.Any(
+            (edge(Target ISymbol, Source ISymbol)) ->
+            if TryGetSourceMember(compilation, edge.Source, out var owner, out var source) {
+                IsTainted(owner, source, siblings)
+            } else {
+                IsTainted(compilation, edge.Source, siblings)
+            }
+        )
+    }
+
+    internal func IsReferenceReturnEnvelope(method IMethodSymbol) bool -> method
+        .ReturnType
+        .IsReferenceType &&
+        HasProjectedReturnResult(method)
+
+    private func HasProjectedReturnResult(method IMethodSymbol) bool ->
+    !SymbolEqualityComparer.Default.Equals(method.ReturnType, SymbolValueType(method))
+
+    private func ComputeReturnContracts(compilation Compilation) ReturnContractGraph {
+        let owners = List[CSharpCompilation]()
+        let pending = Queue[Compilation]()
+        let visited = HashSet[Compilation]()
+        pending.Enqueue(compilation)
+        while pending.Count != 0 {
+            let current = pending.Dequeue()
+            if !visited.Add(current) {
+                continue
+            }
+            if current is CSharpCompilation csharp {
+                owners.Add(csharp)
+            }
+            let known = SourceAssemblies.GetValue(current, (item Compilation) -> SourceAssemblySet(item))
+            lock known.Names {
+                for owner in known.Compilations.Values {
+                    if !visited.Contains(owner) {
+                        pending.Enqueue(owner)
+                    }
+                }
+            }
+        }
+        let graph = ReturnContractGraph()
+        let nodes = graph.Nodes
+        for owner in owners {
+            for tree in owner.SyntaxTrees {
+                let model = TranslationContext.GetSemanticModel(owner, tree)
+                for syntax in tree.GetRoot().DescendantNodes() {
+                    for (parameter, value) in EnumerateArgumentValueFlows(syntax, model) {
+                        if GetValueContractNode(owner, parameter, graph) is {} parameterNode {
+                            AddValueContractFlow(parameterNode, value, model)
+                        }
+                    }
+                    let methodDeclaration = syntax is MethodDeclarationSyntax or
+                        LocalFunctionStatementSyntax or
+                        AnonymousFunctionExpressionSyntax or
+                        DelegateDeclarationSyntax
+                    let propertyDeclaration = syntax is PropertyDeclarationSyntax or IndexerDeclarationSyntax
+                    let assignment = syntax as AssignmentExpressionSyntax
+                    if !methodDeclaration &&
+                        !propertyDeclaration &&
+                        syntax is not VariableDeclaratorSyntax and
+                        not ParameterSyntax &&
+                        (assignment == nil || !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)) {
+                        continue
+                    }
+                    let declared = switch syntax {
+                        case lambda is AnonymousFunctionExpressionSyntax: model.GetSymbolInfo(lambda).Symbol
+                        case declaration is DelegateDeclarationSyntax: (
+                            model.GetDeclaredSymbol(declaration) as INamedTypeSymbol
+                        )?.DelegateInvokeMethod
+                        case write is AssignmentExpressionSyntax: model.GetSymbolInfo(write.Left).Symbol
+                        default: model.GetDeclaredSymbol(syntax)
+                    }
+                    if GetValueContractNode(owner, declared, graph) is not{} node {
+                        continue
+                    }
+                    let expressions = List[ExpressionSyntax]()
+                    switch syntax {
+                        case declaration is MethodDeclarationSyntax {
+                            expressions.AddRange(
+                                EnumerateReturnValues(declaration.ExpressionBody?.Expression, declaration.Body)
+                            )
+                        }
+                        case local is LocalFunctionStatementSyntax {
+                            expressions.AddRange(EnumerateReturnValues(local.ExpressionBody?.Expression, local.Body))
+                        }
+                        case lambda is AnonymousFunctionExpressionSyntax {
+                            expressions.AddRange(
+                                EnumerateReturnValues(lambda.Body as ExpressionSyntax, lambda.Body as BlockSyntax)
+                            )
+                        }
+                        case property is PropertyDeclarationSyntax {
+                            expressions.AddRange(
+                                EnumeratePropertyReturnValues(
+                                    property.ExpressionBody?.Expression,
+                                    property.AccessorList
+                                )
+                            )
+                            if property.Initializer is {} initializer {
+                                expressions.Add(initializer.Value)
+                            }
+                        }
+                        case indexer is IndexerDeclarationSyntax {
+                            expressions.AddRange(
+                                EnumeratePropertyReturnValues(indexer.ExpressionBody?.Expression, indexer.AccessorList)
+                            )
+                        }
+                        case variable is VariableDeclaratorSyntax {
+                            if variable.Initializer is {} initializer {
+                                expressions.Add(initializer.Value)
+                            }
+                        }
+                        case write is AssignmentExpressionSyntax {
+                            expressions.Add(write.Right)
+                        }
+                    }
+                    for expression in expressions {
+                        AddValueContractFlow(node, expression, model)
+                    }
+                }
+            }
+        }
+        let contractEdges = List[(Target ISymbol, Source ISymbol)]()
+        for owner in owners {
+            CollectInterfaceImplementationEdges(owner, contractEdges, ScalarFlowPosition.Value)
+            CollectOverrideContractEdges(owner, contractEdges, ScalarFlowPosition.Value)
+            for tree in owner.SyntaxTrees {
+                let model = TranslationContext.GetSemanticModel(owner, tree)
+                for (delegateType, invoke, source) in EnumerateDelegateReturnFlows(tree.GetRoot(), model) {
+                    if IsSourceDelegateType(owner, delegateType) &&
+                        GetValueContractNode(owner, invoke, graph) != nil &&
+                        GetValueContractNode(owner, source, graph) != nil {
+                        AddReturnContractEdges(invoke, source, contractEdges, ScalarFlowPosition.Value)
+                    }
+                }
+            }
+        }
+        let sourceContractEdges = List[(Target ISymbol, Source ISymbol)]()
+        for (target, source) in contractEdges {
+            if target is not IMethodSymbol and not IPropertySymbol and not IParameterSymbol {
+                continue
+            }
+            if TryGetSourceMember(compilation, target, out _, out var targetDeclaration) &&
+                TryGetSourceMember(compilation, source, out _, out var sourceDeclaration) &&
+                nodes.TryGetValue(targetDeclaration!!, out var targetNode) && nodes.TryGetValue(
+                sourceDeclaration!!,
+                out var sourceNode
+            ) &&
+                object
+                .ReferenceEquals(targetNode.Owner, sourceNode.Owner) {
+                targetNode.Sources.Add((sourceNode.Owner, sourceNode.Symbol, false))
+                sourceContractEdges.Add((targetDeclaration, sourceDeclaration))
+            }
+        }
+        let fixedReturns = HashSet[ISymbol](SymbolEqualityComparer.Default)
+        for node in nodes.Values {
+            if TupleContractDeclarations(node.Owner, node.Symbol).Any(
+                (contract ISymbol?) -> contract != nil &&
+                    !TupleContractPositionAcceptsNil(node.Owner, contract, "", declaredReturn: true) &&
+                    !(SourceContractCanPromote(node.Owner, contract, graph))
+            ) {
+                fixedReturns.Add(node.Symbol)
+            }
+        }
+        var fixedChanged bool
+        do {
+            fixedChanged = false
+            for (target, source) in sourceContractEdges {
+                if fixedReturns.Contains(source) {
+                    fixedChanged |= fixedReturns.Add(target)
+                }
+            }
+        } while fixedChanged
+        let nullableReturns = graph.Nullable
+        var changed bool
+        do {
+            changed = false
+            for node in nodes.Values {
+                if !node.CanBeNullable || fixedReturns.Contains(node.Symbol) {
+                    continue
+                }
+                let nullableSource = node.Sources.Any(
+                    (item(Owner Compilation, Symbol ISymbol, Narrowed bool)) ->
+                    ReturnSourceIsNullable(item.Owner, item.Symbol, graph, item.Narrowed)
+                )
+                if !node.Seed && !nullableSource {
+                    continue
+                }
+                changed |= nullableReturns.Add(node.Symbol)
+                if (node.Symbol is IMethodSymbol && !IsDeclaredNullablePosition(SymbolDeclaredType(node.Symbol))) ||
+                    node
+                    .Sources
+                    .Any(
+                    (item(Owner Compilation, Symbol ISymbol, Narrowed bool)) ->
+                    ReturnSourceIsNullable(item.Owner, item.Symbol, graph, requirePromotion: true)
+                ) {
+                    changed |= graph.PromotedFlow.Add(node.Symbol)
+                }
+            }
+        } while changed
+        return graph
+    }
+
+    private func SourceContractCanPromote(
+        askingOwner CSharpCompilation,
+        contract ISymbol,
+        graph ReturnContractGraph
+    ) bool {
+        if !TryGetSourceMember(askingOwner, contract, out var owner, out var source) {
+            return false
+        }
+        if object.ReferenceEquals(askingOwner, owner) {
+            return graph.Nodes.TryGetValue(source!!, out var node) && node.CanBeNullable
+        }
+        if source is IMethodSymbol method {
+            return ReturnContractIsNullable(owner!!, method)
+        }
+        return IsDeclaredNullablePosition(SymbolDeclaredType(source)) ||
+            ReturnContracts
+            .GetValue(owner!!, ComputeReturnContracts)
+            .Nullable
+            .Contains(source!!)
+    }
+
+    private func GetValueContractNode(
+        owner CSharpCompilation,
+        declared ISymbol?,
+        graph ReturnContractGraph
+    ) ReturnContractNode? {
+        if declared == nil || !TryGetSourceMember(owner, declared, out var sourceOwner, out var source) {
+            return nil
+        }
+        if graph.Nodes.TryGetValue(source!!, out var existing) {
+            return existing
+        }
+        let type = SymbolDeclaredType(source)
+        if type == nil {
+            return nil
+        }
+        let method = source as IMethodSymbol
+        let annotated = method != nil && HasMaybeNullReturnContract(sourceOwner, method)
+        let nullable = IsDeclaredNullablePosition(type)
+        let canBeNullable = type.IsReferenceType &&
+            (method == nil || !method.IsAsync) &&
+            (nullable || annotated || IsEligibleTupleLeaf(type))
+        if !canBeNullable && !IsTaskLike(type) {
+            return nil
+        }
+        let node = ReturnContractNode(
+            sourceOwner!!,
+            source!!,
+            (nullable && !IsInferredStorage(source)) || annotated,
+            canBeNullable
+        )
+        graph.Nodes.Add(source, node)
+        return node
+    }
+
+    private func AddValueContractFlow(node ReturnContractNode, expression ExpressionSyntax, model SemanticModel) {
+        if IsCallableValueExpression(expression, model) {
+            return
+        }
+        let flowNotNull = model
+            .GetTypeInfo(expression)
+            .Nullability
+            .FlowState == Microsoft
+            .CodeAnalysis
+            .NullableFlowState
+            .NotNull
+        if node.Symbol is not IMethodSymbol &&
+            node.CanBeNullable &&
+            !flowNotNull &&
+            IsDirectlyNullable(expression, model) {
+            node.Seed = true
+        }
+        if node.Symbol is IPropertySymbol property && ImplementsBaseOrInterfaceMember(property) {
+            return
+        }
+        let sourceScope = if node.Symbol is IPropertySymbol {
+            SourceScope.CallsAndNonPropertyDeclarations
+        } else {
+            SourceScope.AllSources
+        }
+        for item in ResolveSources(expression, model, sourceScope, respectNullGuards: true) {
+            if item != nil {
+                // Narrowed declared slots contribute only nullability from changed return contracts.
+                node.Sources.Add(
+                    (
+                        model.Compilation,
+                        item,
+                        flowNotNull && !IsInferredStorage(item) && IsDeclaredNullablePosition(SymbolDeclaredType(item))
+                    )
+                )
+            }
+        }
+    }
+
+    private func ReturnSourceIsNullable(
+        compilation Compilation,
+        symbol ISymbol,
+        graph ReturnContractGraph,
+        requirePromotion bool = false
+    ) bool {
+        if !requirePromotion && symbol is IMethodSymbol method && HasDeclaredNullableReferenceReturn(method) {
+            return true
+        }
+        if TryGetSourceMember(compilation, symbol, out var owner, out var source) {
+            let emittedGraph = if object.ReferenceEquals(compilation, owner) {
+                graph
+            } else {
+                ReturnContracts.GetValue(owner!!, ComputeReturnContracts)
+            }
+            if requirePromotion {
+                return emittedGraph.PromotedFlow.Contains(source!!)
+            }
+            return emittedGraph.Nullable.Contains(source!!) ||
+                (
+                !emittedGraph.Nodes.ContainsKey(source!!) &&
+                    source is not IMethodSymbol &&
+                    !IsInferredStorage(source) &&
+                    IsDeclaredNullablePosition(SymbolDeclaredType(source))
+            )
+        }
+        return !requirePromotion && IsImportedStatedNullablePosition(symbol, compilation)
+    }
+
+    private func IsInferredStorage(symbol ISymbol?) bool -> symbol is ILocalSymbol &&
+        symbol
+        .DeclaringSyntaxReferences
+        .Any(
+        (reference SyntaxReference) -> reference.GetSyntax() is VariableDeclaratorSyntax{
+            Parent: VariableDeclarationSyntax{Type: {IsVar: true}}
+        }
+    )
+
+    private func CarriesMaybeNullReturn(method IMethodSymbol) bool -> method
+        .DeclaringSyntaxReferences
+        .Length > 0 &&
+        method
+        .GetReturnTypeAttributes().Any(
+        (attribute AttributeData) ->
+        attribute.AttributeClass?.ToDisplayString() == "System.Diagnostics.CodeAnalysis.MaybeNullAttribute"
+    )
+
     /// Issue #3726: whether [`symbol`](paramref) is a parameter some
     /// DATA-DRIVING attribute on its own method supplies `null` for. An
     /// xunit theory's `[InlineData(null, "x")]` states outright that the
@@ -1498,8 +2039,15 @@ internal shared class ObliviousNullabilityAnalyzer {
     /// `null` for symbols that are not value declarations.
     /// @param symbol The candidate declaration symbol.
     /// @returns The denoted value type, or `null`.
-    internal func SymbolValueType(symbol ISymbol?) ITypeSymbol? -> switch symbol {
-        case method is IMethodSymbol: UnwrapAwaitedType(method.ReturnType)
+    internal func SymbolValueType(symbol ISymbol?) ITypeSymbol? -> if symbol is IMethodSymbol method {
+        UnwrapAwaitedType(method.ReturnType)
+    } else {
+        SymbolDeclaredType(symbol)
+    }
+
+    /// Reads a declaration's type without projecting a method's awaited result.
+    internal func SymbolDeclaredType(symbol ISymbol?) ITypeSymbol? -> switch symbol {
+        case method is IMethodSymbol: method.ReturnType
         case property is IPropertySymbol: property.Type
         case field is IFieldSymbol: field.Type
         case local is ILocalSymbol: local.Type
@@ -5533,6 +6081,9 @@ internal shared class ObliviousNullabilityAnalyzer {
         edges List[(Target ISymbol?, Source ISymbol?)],
         scalarTupleEdges List[(Target ISymbol, Source TupleElementKey)]
     ) {
+        for (parameter, value) in EnumerateArgumentValueFlows(call, model) {
+            CollectScalarValueFlow(Canonical(parameter), value, model, tainted, edges, scalarTupleEdges)
+        }
         let arguments = GetCallArguments(call, model)
         if arguments.IsDefaultOrEmpty {
             return
@@ -5545,31 +6096,6 @@ internal shared class ObliviousNullabilityAnalyzer {
                 continue
             }
             let parameterSymbol ISymbol? = Canonical(parameter)
-            // Issue #3501/#4816: a value that flow analysis proves non-null at
-            // a CONSTRUCTOR argument does not carry its declaration's taint
-            // into the parameter. This covers both a syntactic null guard and
-            // a nullable local reassigned before storage. Tainting the record's
-            // positional parameter would widen the DATA SHAPE (`Product` →
-            // `Product?` on the positional property) for every consumer,
-            // including deconstruction locals whose dereferences are not
-            // receiver-bridged. gsc's own smart-cast narrows the same value at
-            // the G# creation, so the suppressed edge never reintroduces a
-            // `T? -> T` mismatch. A syntactically guarded concrete-reference
-            // method argument is equally non-null at that call. Open type
-            // parameters retain promotion consolidation because G# cannot
-            // smart-cast them reliably (see PromotionConsolidationTests).
-            let guardedArgument = (
-                call is BaseObjectCreationExpressionSyntax &&
-                    (IsNullGuardDominatedRead(value, model) || IsUnreassignedNonNullLocal(value, model))
-            ) ||
-                (
-                (parameter.Type is {IsReferenceType: true} and not ITypeParameterSymbol) &&
-                    (IsNullGuardDominatedRead(value, model) || IsNullGuardDominatedExpression(value, model))
-            )
-            if !guardedArgument &&
-                !(parameter.RefKind != RefKind.None && IsSubstitutableMethodPosition(parameter, string.Empty)) {
-                CollectScalarValueFlow(parameterSymbol, value, model, tainted, edges, scalarTupleEdges)
-            }
             // A parameter forwarded unchanged into another parameter inherits
             // that downstream nullable contract. This lets a null-check at the
             // end of a pass-through chain widen every upstream declaration even
@@ -5624,6 +6150,44 @@ internal shared class ObliviousNullabilityAnalyzer {
                 if receiver != nil && IsValueDeclarationSymbol(receiver) {
                     edges.Add((Canonical(receiver), parameterSymbol))
                 }
+            }
+        }
+    }
+
+    private func EnumerateArgumentValueFlows(call SyntaxNode, model SemanticModel) sequence[
+        (Parameter IParameterSymbol, Value ExpressionSyntax)
+    ] {
+        if call is not InvocationExpressionSyntax and
+            not BaseObjectCreationExpressionSyntax and
+            not ConstructorInitializerSyntax and
+            not ElementAccessExpressionSyntax and
+            not ElementBindingExpressionSyntax {
+            yield break
+        }
+        let arguments = GetCallArguments(call, model)
+        if arguments.IsDefaultOrEmpty {
+            yield break
+        }
+        for argument in arguments {
+            if argument.Parameter is not IParameterSymbol parameter ||
+                argument
+                .Value
+                ?.Syntax is not ExpressionSyntax value {
+                continue
+            }
+            // Guarded concrete values do not widen storage. Open parameters retain promotion consolidation (#3501/#4816).
+            let guarded = (
+                call is BaseObjectCreationExpressionSyntax &&
+                    (IsNullGuardDominatedRead(value, model) || IsUnreassignedNonNullLocal(value, model))
+            ) ||
+                (
+                parameter.Type is {IsReferenceType: true} and
+                    not ITypeParameterSymbol &&
+                    (IsNullGuardDominatedRead(value, model) || IsNullGuardDominatedExpression(value, model))
+            )
+            if !guarded &&
+                !(parameter.RefKind != RefKind.None && IsSubstitutableMethodPosition(parameter, string.Empty)) {
+                yield (parameter, value)
             }
         }
     }
@@ -7202,6 +7766,10 @@ internal shared class ObliviousNullabilityAnalyzer {
         edges List[(Target ISymbol, Source ISymbol)],
         scalarTupleEdges List[(Target ISymbol?, Source TupleElementKey)]
     ) {
+        if TryResolveDeconstructionTarget(targetPattern, model, out var scalarTarget) {
+            CollectScalarValueFlow(scalarTarget, value, model, tainted, edges, scalarTupleEdges)
+            return
+        }
         var value = value
         value = UnwrapTupleValue(value)
         if value is ConditionalExpressionSyntax conditional {
@@ -7250,16 +7818,6 @@ internal shared class ObliviousNullabilityAnalyzer {
                     edges,
                     scalarTupleEdges
                 )
-            }
-            return
-        }
-        if TryResolveDeconstructionTarget(targetPattern, model, out var scalarTarget) {
-            if IsDirectlyNullable(value, model) {
-                tainted.Add(scalarTarget!!)
-            } else if TryResolveTupleElementSource(value, model, out var elementSource) {
-                scalarTupleEdges.Add((scalarTarget, elementSource))
-            } else {
-                AddEdges(scalarTarget, value, model, edges)
             }
             return
         }
@@ -7322,13 +7880,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             return
         }
         let scalarTarget ISymbol? = Canonical(declared)
-        if IsDirectlyNullable(value, model) {
-            tainted.Add(scalarTarget!!)
-        } else if TryResolveTupleElementSource(value, model, out var elementSource) {
-            scalarTupleEdges.Add((scalarTarget, elementSource))
-        } else {
-            AddEdges(scalarTarget, value, model, edges)
-        }
+        CollectScalarValueFlow(scalarTarget, value, model, tainted, edges, scalarTupleEdges)
     }
 
     private func CollectPatternFromTupleSource(
@@ -8471,42 +9023,51 @@ internal shared class ObliviousNullabilityAnalyzer {
             symbol = property
         }
         symbol = OwningMember(symbol)
+        let contractSymbol ISymbol? = symbol
+        let contractPath = path
         if path.Length == 0 {
             // Scalar endpoints share the tuple ref-storage contract graph.
             let type = SymbolValueType(symbol)
-            return IsSourceAssembly(compilation, symbol?.ContainingAssembly) &&
-                type?.IsReferenceType == true &&
-                (
-                IsEligibleTupleLeaf(type) ||
-                    HasAllowNullWriteContract(symbol) ||
-                    HasNullDataRowArgument(symbol) ||
-                    IsNullArgumentTarget(compilation as CSharpCompilation, symbol, nil)
+            if !(
+                IsSourceAssembly(compilation, symbol?.ContainingAssembly) &&
+                    type?.IsReferenceType == true &&
+                    (
+                    IsEligibleTupleLeaf(type) ||
+                        HasAllowNullWriteContract(symbol) ||
+                        HasMaybeNullReturnContract(compilation, symbol) ||
+                        HasNullDataRowArgument(symbol) ||
+                        IsNullArgumentTarget(compilation as CSharpCompilation, symbol, nil)
+                )
+            ) {
+                return false
+            }
+            if !HasMaybeNullReturnContract(compilation, symbol) {
+                return true
+            }
+        } else {
+            let declaredPosition ITypeSymbol? = TuplePositionType(Canonical(symbol), path)
+            symbol, path = ProjectTupleContractPosition(symbol, path)
+            let sourceOwnedContract = contractSymbol != nil &&
+                IsSourceAssembly(compilation, contractSymbol.ContainingAssembly)
+            // A caller owns nested tuple leaves, not a native reference slot itself.
+            let position ITypeSymbol? = TuplePositionType(
+                symbol,
+                path,
+                requireTuple: symbol is INamedTypeSymbol && !sourceOwnedContract
             )
-        }
-        let contractSymbol ISymbol? = symbol
-        let contractPath = path
-        let declaredPosition ITypeSymbol? = TuplePositionType(Canonical(symbol), path)
-        symbol, path = ProjectTupleContractPosition(symbol, path)
-        let sourceOwnedContract = contractSymbol != nil &&
-            IsSourceAssembly(compilation, contractSymbol.ContainingAssembly)
-        // A caller owns nested tuple leaves, not a native reference slot itself.
-        let position ITypeSymbol? = TuplePositionType(
-            symbol,
-            path,
-            requireTuple: symbol is INamedTypeSymbol && !sourceOwnedContract
-        )
-        if !IsEligibleTupleLeaf(position) ||
-            (declaredPosition != nil && !IsEligibleTupleLeaf(declaredPosition)) ||
-            (symbol is not INamedTypeSymbol && declaredPosition == nil) {
-            return false
-        }
-        // Constructed type arguments belong to their source use, not to the
-        // imported generic definition. Member signatures retain their owner.
-        if contractSymbol is INamedTypeSymbol || (symbol is INamedTypeSymbol && !sourceOwnedContract) {
-            return true
-        }
-        if !sourceOwnedContract {
-            return false
+            if !IsEligibleTupleLeaf(position) ||
+                (declaredPosition != nil && !IsEligibleTupleLeaf(declaredPosition)) ||
+                (symbol is not INamedTypeSymbol && declaredPosition == nil) {
+                return false
+            }
+            // Constructed type arguments belong to their source use, not to the
+            // imported generic definition. Member signatures retain their owner.
+            if contractSymbol is INamedTypeSymbol || (symbol is INamedTypeSymbol && !sourceOwnedContract) {
+                return true
+            }
+            if !sourceOwnedContract {
+                return false
+            }
         }
         if !visited.Add(contractSymbol!!) {
             return true
@@ -8532,13 +9093,30 @@ internal shared class ObliviousNullabilityAnalyzer {
     private func TupleContractPositionAcceptsNil(
         compilation Compilation?,
         symbol ISymbol?,
-        path string
-    ) bool -> IsDeclaredNullablePosition(TuplePositionType(symbol, path)) ||
-        (
-        symbol != nil &&
-            !IsSourceAssembly(compilation, symbol.ContainingAssembly) &&
-            IsObliviousConcreteReferencePosition(TuplePositionType(symbol.OriginalDefinition, path))
-    )
+        path string,
+        declaredReturn bool = false
+    ) bool {
+        var symbol = symbol
+        if declaredReturn && TryGetSourceMember(compilation, symbol, out _, out var source) {
+            symbol = source
+        }
+        let type = if declaredReturn {
+            SymbolDeclaredType(symbol)
+        } else {
+            TuplePositionType(symbol, path)
+        }
+        let definitionType = if declaredReturn {
+            SymbolDeclaredType(symbol?.OriginalDefinition)
+        } else {
+            TuplePositionType(symbol?.OriginalDefinition, path)
+        }
+        return IsDeclaredNullablePosition(type) ||
+            (
+            symbol != nil &&
+                !IsSourceAssembly(compilation, symbol.ContainingAssembly) &&
+                IsObliviousConcreteReferencePosition(definitionType)
+        )
+    }
 
     internal func TuplePositionType(symbol ISymbol?, path string, requireTuple bool = false) ITypeSymbol? {
         let strippedPath = StripCreationTupleScope(path)
@@ -8795,21 +9373,8 @@ internal shared class ObliviousNullabilityAnalyzer {
             return
         }
         let canonicalReturn ISymbol? = Canonical(returnSymbol)
-        if arrowBody != nil {
-            ApplyReturnValue(canonicalReturn, arrowBody, model, tainted, edges, scalarTupleEdges, transitive: true)
-        }
-        for statement in EnumerateOwnReturns(body) {
-            if statement.Expression != nil {
-                ApplyReturnValue(
-                    canonicalReturn,
-                    statement.Expression,
-                    model,
-                    tainted,
-                    edges,
-                    scalarTupleEdges,
-                    transitive: true
-                )
-            }
+        for value in EnumerateReturnValues(arrowBody, body) {
+            ApplyReturnValue(canonicalReturn, value, model, tainted, edges, scalarTupleEdges, transitive: true)
         }
         // Issue #3501: an ITERATOR'S yields are its returns for element-taint
         // purposes — `yield return null` (or yielding a promoted-nullable
@@ -8892,11 +9457,10 @@ internal shared class ObliviousNullabilityAnalyzer {
         // member stays direct-taint-only (transitive is false below, so the
         // forwarding edges are not recorded for it regardless).
         let transitive = !ImplementsBaseOrInterfaceMember(propertySymbol)
-        // `Prop => expr;`
-        if propertyArrowBody != nil {
+        for value in EnumeratePropertyReturnValues(propertyArrowBody, accessorList) {
             ApplyReturnValue(
                 canonicalReturn,
-                propertyArrowBody,
+                value,
                 model,
                 tainted,
                 edges,
@@ -8904,42 +9468,6 @@ internal shared class ObliviousNullabilityAnalyzer {
                 transitive,
                 SourceScope.CallsAndNonPropertyDeclarations
             )
-        }
-        // Only the `get` accessor produces the property value; `set`/`init`
-        // return void and are ignored.
-        let getter AccessorDeclarationSyntax? = accessorList?.Accessors.FirstOrDefault(
-            (a AccessorDeclarationSyntax) -> a.IsKind(SyntaxKind.GetAccessorDeclaration)
-        )
-        if getter == nil {
-            return
-        }
-        // `get => expr;`
-        if getter.ExpressionBody?.Expression is ExpressionSyntax getterArrow {
-            ApplyReturnValue(
-                canonicalReturn,
-                getterArrow,
-                model,
-                tainted,
-                edges,
-                scalarTupleEdges,
-                transitive,
-                SourceScope.CallsAndNonPropertyDeclarations
-            )
-        }
-        // `get { ... return x; }`
-        for statement in EnumerateOwnReturns(getter.Body) {
-            if statement.Expression != nil {
-                ApplyReturnValue(
-                    canonicalReturn,
-                    statement.Expression,
-                    model,
-                    tainted,
-                    edges,
-                    scalarTupleEdges,
-                    transitive,
-                    SourceScope.CallsAndNonPropertyDeclarations
-                )
-            }
         }
     }
 
@@ -8998,7 +9526,8 @@ internal shared class ObliviousNullabilityAnalyzer {
     /// @param edges The taint-edge list to append to.
     private func CollectInterfaceImplementationEdges(
         compilation Compilation,
-        edges List[(Target ISymbol, Source ISymbol)]
+        edges List[(Target ISymbol, Source ISymbol)],
+        position ScalarFlowPosition = ScalarFlowPosition.AwaitedResult
     ) {
         for type in EnumerateSourceNamedTypes(compilation) {
             if (type.TypeKind != TypeKind.Class && type.TypeKind != TypeKind.Struct) ||
@@ -9014,7 +9543,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                             CollectInterfacePropertyEdges(compilation, type, interfaceProperty, edges)
                         }
                         case interfaceMethod is IMethodSymbol {
-                            CollectInterfaceMethodEdges(type, interfaceMethod, edges)
+                            CollectInterfaceMethodEdges(type, interfaceMethod, edges, position)
                         }
                     }
                 }
@@ -9075,22 +9604,27 @@ internal shared class ObliviousNullabilityAnalyzer {
     private func CollectInterfaceMethodEdges(
         type INamedTypeSymbol,
         interfaceMethod IMethodSymbol,
-        edges List[(Target ISymbol, Source ISymbol)]
+        edges List[(Target ISymbol, Source ISymbol)],
+        position ScalarFlowPosition
     ) {
         if interfaceMethod.MethodKind != MethodKind.Ordinary || type.FindImplementationForInterfaceMember(
             interfaceMethod
         ) is not IMethodSymbol implementingMethod {
             return
         }
-        AddReturnContractEdges(interfaceMethod, implementingMethod, edges)
+        AddReturnContractEdges(interfaceMethod, implementingMethod, edges, position)
         AddParameterContractEdges(interfaceMethod.Parameters, implementingMethod.Parameters, edges)
     }
 
-    private func CollectOverrideContractEdges(compilation Compilation, edges List[(Target ISymbol, Source ISymbol)]) {
+    private func CollectOverrideContractEdges(
+        compilation Compilation,
+        edges List[(Target ISymbol, Source ISymbol)],
+        position ScalarFlowPosition = ScalarFlowPosition.AwaitedResult
+    ) {
         for type in EnumerateSourceNamedTypes(compilation) {
             for method in type.GetMembers().OfType[IMethodSymbol]() {
                 if method.MethodKind == MethodKind.Ordinary && method.OverriddenMethod is IMethodSymbol overridden {
-                    AddReturnContractEdges(method, overridden, edges)
+                    AddReturnContractEdges(method, overridden, edges, position)
                     AddParameterContractEdges(method.Parameters, overridden.Parameters, edges)
                 }
             }
@@ -9114,9 +9648,14 @@ internal shared class ObliviousNullabilityAnalyzer {
     private func AddReturnContractEdges(
         first IMethodSymbol,
         second IMethodSymbol,
-        edges List[(Target ISymbol?, Source ISymbol?)]
+        edges List[(Target ISymbol?, Source ISymbol?)],
+        position ScalarFlowPosition
     ) {
-        let effectiveReturnType = UnwrapAwaitedType(first.ReturnType)
+        let effectiveReturnType = if position == ScalarFlowPosition.Value {
+            first.ReturnType
+        } else {
+            SymbolValueType(first)
+        }
         if first.ReturnsVoid ||
             second.ReturnsVoid ||
             !(effectiveReturnType != nil && effectiveReturnType.IsReferenceType == true) ||
@@ -9493,7 +10032,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         let type = SymbolValueType(symbol)
         let target = SymbolValueType(contract)
         let comparison = TupleContractComparisonType(symbol, type, contract)
-        if SymbolEqualityComparer.Default.Equals(comparison, target) ||
+        if path.Length == 0 || SymbolEqualityComparer.Default.Equals(comparison, target) ||
             (type is INamedTypeSymbol{IsTupleType: true} && target is INamedTypeSymbol{IsTupleType: true}) {
             return TupleContractPositionAcceptsNil(compilation, contract, path) ||
                 CanPromoteTuplePosition(compilation, contract, path, visited)
@@ -9922,21 +10461,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         tupleTainted HashSet[TupleElementKey],
         tupleEdges List[(Target TupleElementKey, Source TupleElementKey)]
     ) {
-        for expression in root.DescendantNodes().OfType[ExpressionSyntax]() {
-            let isLambda = expression is AnonymousFunctionExpressionSyntax
-            if !isLambda && model.GetMemberGroup(expression).IsDefaultOrEmpty {
-                continue
-            }
-            if model.GetTypeInfo(expression)
-                .ConvertedType is not INamedTypeSymbol delegateType ||
-                delegateType.TypeKind != TypeKind.Delegate ||
-                delegateType.DelegateInvokeMethod is not IMethodSymbol invoke {
-                continue
-            }
-            let source IMethodSymbol? = model.GetSymbolInfo(expression).Symbol as IMethodSymbol
-            if source == nil {
-                continue
-            }
+        for (delegateType, invoke, source) in EnumerateDelegateReturnFlows(root, model) {
             AddParameterTupleContractPairs(invoke.Parameters, source.Parameters, tupleTainted, tupleEdges)
             if invoke.ReturnsVoid || source.ReturnsVoid {
                 continue
@@ -9964,6 +10489,26 @@ internal shared class ObliviousNullabilityAnalyzer {
                 .Annotated {
                 tainted.Add(invokeCanonical!!)
             }
+        }
+    }
+
+    private func EnumerateDelegateReturnFlows(root SyntaxNode, model SemanticModel) sequence[
+        (Delegate INamedTypeSymbol, Invoke IMethodSymbol, Source IMethodSymbol)
+    ] {
+        for expression in root.DescendantNodes().OfType[ExpressionSyntax]() {
+            if expression is not AnonymousFunctionExpressionSyntax && model.GetMemberGroup(expression)
+                .IsDefaultOrEmpty {
+                continue
+            }
+            if model.GetTypeInfo(expression)
+                .ConvertedType is not INamedTypeSymbol delegateType ||
+                delegateType.TypeKind != TypeKind.Delegate ||
+                delegateType.DelegateInvokeMethod is not IMethodSymbol invoke ||
+                model
+                .GetSymbolInfo(expression).Symbol is not IMethodSymbol source {
+                continue
+            }
+            yield (delegateType, invoke, source)
         }
     }
 
@@ -10006,6 +10551,11 @@ internal shared class ObliviousNullabilityAnalyzer {
             .Select((candidate CSharpCompilation) -> candidate.Assembly.Identity.GetDisplayName())
             .Distinct(StringComparer.Ordinal)
             .ToArray()
+        let sourceOwners = Dictionary[AssemblyIdentity, CSharpCompilation]()
+        for source in compilations {
+            sourceOwners.TryAdd(source.Assembly.Identity, source)
+        }
+        var returnContractsChanged = false
         for candidate in compilations {
             let assemblies = SourceAssemblies.GetValue(candidate, (current Compilation) -> SourceAssemblySet(current))
             var changed = false
@@ -10015,9 +10565,29 @@ internal shared class ObliviousNullabilityAnalyzer {
                         changed |= assemblies.Names.Add(name)
                     }
                 }
+                for source in sourceOwners.Values {
+                    if assemblies.ReferencedNames.Contains(source.Assembly.Identity.GetDisplayName()) {
+                        let resolved = if source.Assembly.Identity.Equals(candidate.Assembly.Identity) {
+                            candidate
+                        } else {
+                            source
+                        }
+                        if !assemblies.Compilations.TryGetValue(source.Assembly.Identity, out var previous) ||
+                            !object.ReferenceEquals(previous, resolved) {
+                            assemblies.Compilations[source.Assembly.Identity] = resolved
+                            changed = true
+                        }
+                    }
+                }
             }
             if changed {
                 Cache.Remove(candidate)
+                returnContractsChanged = true
+            }
+        }
+        if returnContractsChanged {
+            for candidate in compilations {
+                ReturnContracts.Remove(candidate)
             }
         }
     }
@@ -10104,6 +10674,13 @@ internal shared class ObliviousNullabilityAnalyzer {
         transitive bool,
         $scope SourceScope = SourceScope.AllSources
     ) {
+        // A nullable envelope is not evidence that its awaited result can be nil.
+        if returnSymbol is IMethodSymbol{IsAsync: false} method && HasProjectedReturnResult(method) {
+            if transitive {
+                AddEdges(returnSymbol, value, model, tainted, edges, $scope, ScalarFlowPosition.AwaitedResult)
+            }
+            return
+        }
         if value is RefExpressionSyntax reference {
             CollectRefStorageFlow(returnSymbol, reference.Expression, model, tainted, edges, scalarTupleEdges)
         } else if IsDirectlyNullable(value, model) {
@@ -10160,6 +10737,33 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
     }
 
+    private func EnumerateReturnValues(arrow ExpressionSyntax?, body BlockSyntax?) sequence[ExpressionSyntax] {
+        if arrow != nil {
+            yield arrow
+        }
+        for statement in EnumerateOwnReturns(body) {
+            if statement.Expression is {} value {
+                yield value
+            }
+        }
+    }
+
+    private func EnumeratePropertyReturnValues(arrow ExpressionSyntax?, accessors AccessorListSyntax?) sequence[
+        ExpressionSyntax
+    ] {
+        if arrow != nil {
+            yield arrow
+        }
+        let getter = accessors?.Accessors.FirstOrDefault(
+            (accessor AccessorDeclarationSyntax) -> accessor.IsKind(SyntaxKind.GetAccessorDeclaration)
+        )
+        if getter != nil {
+            for value in EnumerateReturnValues(getter.ExpressionBody?.Expression, getter.Body) {
+                yield value
+            }
+        }
+    }
+
     // The `return` statements that belong to <paramref name="body"/> itself,
     // excluding those inside a nested lambda / local function (which have their
     // own return contract).
@@ -10206,11 +10810,75 @@ internal shared class ObliviousNullabilityAnalyzer {
         target ISymbol?,
         value ExpressionSyntax?,
         model SemanticModel,
+        tainted HashSet[ISymbol],
         edges List[(Target ISymbol?, Source ISymbol?)],
-        $scope SourceScope = SourceScope.AllSources
+        $scope SourceScope = SourceScope.AllSources,
+        position ScalarFlowPosition = ScalarFlowPosition.Value
     ) {
+        let pending = Queue[(Owner Compilation, Symbol ISymbol)]()
         for source in ResolveSources(value, model, $scope) {
-            edges.Add((target, source!!))
+            if source != nil {
+                pending.Enqueue((model.Compilation, source))
+            }
+        }
+        CollectSourceEdges(target, pending, tainted, edges, position)
+    }
+
+    private func CollectSourceEdges(
+        target ISymbol?,
+        pending Queue[(Owner Compilation, Symbol ISymbol)],
+        tainted HashSet[ISymbol],
+        edges List[(Target ISymbol?, Source ISymbol?)],
+        position ScalarFlowPosition
+    ) {
+        let visited = HashSet[ISymbol](SymbolEqualityComparer.Default)
+        while pending.Count != 0 {
+            let (owner, source) = pending.Dequeue()
+            if !visited.Add(source) {
+                continue
+            }
+            if position == ScalarFlowPosition.Value {
+                if source is IMethodSymbol method {
+                    if target != nil && ReturnContractIsNullable(owner, method) {
+                        tainted.Add(target)
+                    }
+                    // A method's taint denotes its logical result, not the returned envelope.
+                    if HasProjectedReturnResult(method) {
+                        continue
+                    }
+                }
+                edges.Add((target, source))
+                continue
+            }
+            let declared = SymbolDeclaredType(source)
+            if declared != nil &&
+                IsTaskLike(declared) &&
+                IsDeclaredNullablePosition(UnwrapAwaitedType(declared)) &&
+                target != nil {
+                tainted.Add(target)
+            }
+            if TryGetSourceMember(owner, source, out var sourceOwner, out var declaration) {
+                let signature = RemapMemberOwner(sourceOwner, source) ?? declaration
+                let declaredSourceType = SymbolDeclaredType(signature)
+                if declaredSourceType != nil &&
+                    IsTaskLike(declaredSourceType) &&
+                    IsDeclaredNullablePosition(UnwrapAwaitedType(declaredSourceType)) &&
+                    target != nil {
+                    tainted.Add(target)
+                }
+            }
+            if source is IMethodSymbol returning && HasProjectedReturnResult(returning) {
+                edges.Add((target, Canonical(returning)!!))
+                continue
+            }
+            if sourceOwner != nil && declaration != nil {
+                let graph = ReturnContracts.GetValue(sourceOwner, ComputeReturnContracts)
+                if graph.Nodes.TryGetValue(declaration, out var storage) {
+                    for incoming in storage.Sources {
+                        pending.Enqueue((incoming.Owner, incoming.Symbol))
+                    }
+                }
+            }
         }
     }
 
@@ -10251,6 +10919,10 @@ internal shared class ObliviousNullabilityAnalyzer {
                 $scope,
                 visitedArrayWrites
             )
+            return
+        }
+        if value is AwaitExpressionSyntax awaited {
+            AddEdges(target, awaited.Expression, model, tainted, edges, $scope, ScalarFlowPosition.AwaitedResult)
             return
         }
         if IsDirectlyNullable(value, model, readConversion: false) {
@@ -10413,7 +11085,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             scalarTupleEdges.Add((target, tupleSource))
             return
         }
-        AddEdges(target, value, model, edges, $scope)
+        AddEdges(target, value, model, tainted, edges, $scope)
     }
 
     private func CollectScalarValueFlow(
@@ -10542,6 +11214,13 @@ internal shared class ObliviousNullabilityAnalyzer {
                     for source in ResolveSources(arm.Expression, model, $scope, respectNullGuards) {
                         yield source
                     }
+                }
+            }
+            case assignment is AssignmentExpressionSyntax when assignment.IsKind(
+                SyntaxKind.SimpleAssignmentExpression
+            ) {
+                for source in ResolveSources(assignment.Left, model, $scope) {
+                    yield source
                 }
             }
             case invocation is InvocationExpressionSyntax {
@@ -11023,7 +11702,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                 return IsDirectlyNullable(checkedExpression.Expression, model, respectNullGuards)
             }
             case awaitExpression is AwaitExpressionSyntax {
-                return IsDirectlyNullable(awaitExpression.Expression, model, respectNullGuards)
+                let awaited = model.GetTypeInfo(awaitExpression.Expression).Type
+                return awaited != nil && IsDeclaredNullablePosition(UnwrapAwaitedType(awaited))
             }
             case suppress is PostfixUnaryExpressionSyntax when suppress.IsKind(
                 SyntaxKind.SuppressNullableWarningExpression
