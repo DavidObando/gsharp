@@ -183,6 +183,79 @@ func Main() {
         )
         Assert.NotEqual(0, constructorCode)
         Assert.Equal([]string{"GS0583@2,1,2,23"}, DiagnosticLocations(constructorOutput))
+        for annotation in[]string{
+            `DllImport("unused")`,
+            `LibraryImport("unused")`,
+            "StructLayout(LayoutKind.Sequential)",
+            "FieldOffset(0)",
+            "MethodImpl(MethodImplOptions.NoInlining)"
+        } {
+            let (code, output) = fixture.TryCompile(
+                "import System.Runtime.InteropServices\nimport System.Runtime.CompilerServices\n@return:" +
+                    annotation +
+                    "\ndelegate Reader() string;",
+                "pseudo-" + annotation.Substring(0, annotation.IndexOf('(')),
+                false
+            )
+            Assert.NotEqual(0, code)
+            Assert.Equal(
+                []string{"GS0209@3,9,3," + (9 + annotation.IndexOf('(')).ToString()},
+                DiagnosticLocations(output)
+            )
+        }
+    }
+
+    @Theory
+    @InlineData("MarshalAs")
+    @InlineData("MarshalAsAttribute")
+    @InlineData("System.Runtime.InteropServices.MarshalAsAttribute")
+    func UnsupportedDelegateReturnMarshalling_ReportsLocatedDiagnostic(attribute string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        fixture.Compile(`import System.Runtime.InteropServices
+@return:MarshalAs(UnmanagedType.LPWStr)
+func Value() string -> "ok"`, "method-marshal5967", false)
+        let ordinary = fixture.Compile(`import System
+class MarshalAsAttribute(Code int32) : Attribute {}
+@return:MarshalAs(7)
+delegate Ordinary() int32;`, "ordinary-marshal-name5967", false)
+        let customInvoke = EmittedFixture
+            .Load(ordinary)
+            .GetTypes()
+            .Single((t Type) -> t.Name == "Ordinary")
+            .GetMethod("Invoke")!!
+        let custom = Assert.Single(
+            customInvoke.ReturnParameter.GetCustomAttributesData(),
+            (a CustomAttributeData) -> a.AttributeType.Name == "MarshalAsAttribute"
+        )
+        Assert.Equal(7, custom.ConstructorArguments[0].Value)
+        let annotation = "@return:" + attribute + "(UnmanagedType.LPWStr)"
+        let (code, output) = fixture.TryCompile(
+            "import System.Runtime.InteropServices\n" + annotation + "\ndelegate Reader() string;",
+            "delegate-marshal5967",
+            false
+        )
+        let dll = Path.Combine(fixture.Directory, "delegate-marshal5967.dll")
+        if code == 0 {
+            using let stream = File.OpenRead(dll)
+            using let pe = PEReader(stream)
+            let metadata = pe.GetMetadataReader()
+            let invoke = metadata
+                .MethodDefinitions
+                .Select((h MethodDefinitionHandle) -> metadata.GetMethodDefinition(h))
+                .Single((m MethodDefinition) -> metadata.GetString(m.Name) == "Invoke")
+            let row = invoke
+                .GetParameters()
+                .Select((h ParameterHandle) -> metadata.GetParameter(h))
+                .Single((p Parameter) -> p.SequenceNumber == 0)
+            Assert.Fail(
+                "Accepted unsupported delegate return MarshalAs; marshalling blob: " + Convert.ToHexString(
+                    metadata.GetBlobBytes(row.GetMarshallingDescriptor())
+                )
+            )
+        }
+        Assert.NotEqual(0, code)
+        Assert.Equal([]string{"GS0360@2,1,2," + (annotation.Length + 1).ToString()}, DiagnosticLocations(output))
+        Assert.False(File.Exists(dll))
     }
 
     shared {
