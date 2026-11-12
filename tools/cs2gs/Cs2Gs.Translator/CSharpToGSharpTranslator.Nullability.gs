@@ -939,9 +939,11 @@ partial class CSharpToGSharpTranslator {
         /// without a bridge. G# types a local by the storage that its declaration emitted, so a local
         /// that holds a `T?` value (`LocalHoldsPromotedValue`) has `T?` storage. A user-defined
         /// conversion still bridges the input of its operator.
-        private func LocalStoreAcceptsNil(target ISymbol?) bool -> this.IsObliviousCompilation() &&
-            target is ILocalSymbol local &&
-            this.LocalHoldsPromotedValue(local)
+        private func LocalStoreAcceptsNil(target ISymbol?) bool -> target is ILocalSymbol local &&
+            (
+            this.ShouldPromoteToNullableReference(local) ||
+                (this.IsObliviousCompilation() && this.LocalHoldsPromotedValue(local))
+        )
 
         // Issue #3676: whether <paramref name="expression"/> reads a
         // generated-code declaration that direct null evidence promoted to
@@ -2265,8 +2267,9 @@ partial class CSharpToGSharpTranslator {
 
         private func ShouldPromoteToNullableReference(symbol ISymbol?, checkRefStorage bool = true) bool {
             let declared ITypeSymbol? = PromotableDeclaredType(symbol)
-            if !(declared != nil && declared.IsReferenceType == true) ||
-                declared.NullableAnnotation == Microsoft
+            let genericLocal = symbol is ILocalSymbol local && this.ExplicitGenericLocalNeedsNullableStorage(local)
+            if (!genericLocal && !(declared != nil && declared.IsReferenceType == true)) ||
+                declared?.NullableAnnotation == Microsoft
                 .CodeAnalysis
                 .NullableAnnotation
                 .Annotated {
@@ -2279,16 +2282,14 @@ partial class CSharpToGSharpTranslator {
             // that is not constrained to a class (`T Value`) stays `T`, whatever
             // reference type the type argument substitutes, so a maybe-null
             // value stored into it keeps its bridge.
-            if PromotableDeclaredType(symbol?.OriginalDefinition)?.IsReferenceType != true {
+            if !genericLocal && PromotableDeclaredType(symbol?.OriginalDefinition)?.IsReferenceType != true {
                 return false
             }
             if checkRefStorage && this.TryGetRefStorageSlot(symbol, 0) is {} slot {
                 return this.RefStorageIsNullable(slot, includeArrays: true)
             }
-            if this.RefStorageContractIsFrozen(symbol, 0) || !this.ShouldPromoteToNullableReferenceCandidate(
-                symbol,
-                declared
-            ) {
+            if this.RefStorageContractIsFrozen(symbol, 0) ||
+                (!genericLocal && !this.ShouldPromoteToNullableReferenceCandidate(symbol, declared!!)) {
                 return false
             }
             return !ObliviousNullabilityAnalyzer.IsTupleContractFixed(
@@ -2925,6 +2926,11 @@ partial class CSharpToGSharpTranslator {
                 (
                 this.RefStoragePositionType(slot.Symbol.OriginalDefinition, slot.Depth)
                     ?.IsReferenceType != true &&
+                    !(
+                    slot.Depth == 0 &&
+                        slot.Symbol is ILocalSymbol local &&
+                        this.ExplicitGenericLocalNeedsNullableStorage(local)
+                ) &&
                     !(
                     slot.Depth == 0 && ObliviousNullabilityAnalyzer.IsSubstitutableMethodPosition(
                         slot.Symbol,

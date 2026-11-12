@@ -621,6 +621,56 @@ partial class CSharpToGSharpTranslator {
             return this.InferredLocalDefaultRequiresTypedDeclaration(local)
         }
 
+        // Explicit generic locals share the nullable storage required by their default-carrying reads.
+        // Ref-storage reconciliation still freezes contracts that cannot widen.
+        private func ExplicitGenericLocalNeedsNullableStorage(local ILocalSymbol) bool {
+            if local.Type is not ITypeParameterSymbol ||
+                local
+                .Type
+                .IsValueType ||
+                local
+                .Type
+                .NullableAnnotation == Microsoft
+                .CodeAnalysis
+                .NullableAnnotation
+                .Annotated ||
+                local.RefKind != RefKind.None ||
+                IsImplicitlyTypedLocal(local) {
+                return false
+            }
+            if this.state.ExplicitGenericLocalNullableStorage.TryGetValue(local, out var cached) {
+                return cached
+            }
+            let scope_ = this.GetNullabilityScope(local)
+            if scope_ != nil && scope_.SyntaxTree != this.context.SemanticModel.SyntaxTree {
+                if !this.context.Compilation.ContainsSyntaxTree(scope_.SyntaxTree) {
+                    return false
+                }
+                using let modelScope = this.context.UseSemanticModelFor(scope_.SyntaxTree)
+                return this.ExplicitGenericLocalNeedsNullableStorage(local)
+            }
+            var result = false
+            if scope_ != nil {
+                for read in scope_.DescendantNodes().OfType[IdentifierNameSyntax]() {
+                    if SymbolEqualityComparer.Default.Equals(this.context.GetSymbolInfo(read).Symbol, local) &&
+                        this
+                        .context
+                        .GetTypeInfo(read)
+                        .Nullability
+                        .FlowState == Microsoft
+                        .CodeAnalysis
+                        .NullableFlowState
+                        .MaybeNull &&
+                        this.FindDefaultOrigin(read, Array.Empty[int32]()) != nil {
+                        result = true
+                        break
+                    }
+                }
+            }
+            this.state.ExplicitGenericLocalNullableStorage.Add(local, result)
+            return result
+        }
+
         private func InferredLocalDefaultRequiresTypedDeclaration(local ILocalSymbol?) bool {
             if this.state.InferredLocalDefaultTypedDeclarations.TryGetValue(local!!, out var cached) {
                 return cached
