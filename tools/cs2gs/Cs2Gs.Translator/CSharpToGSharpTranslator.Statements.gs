@@ -53,6 +53,8 @@ partial class CSharpToGSharpTranslator {
         private var defaultOriginOperations int64 = 0
         // Include full index construction, semantic lookups, and candidate reads in the resource oracle.
         private var localStorageScanWork int64 = 0
+        private var genericLocalStorageEvaluation Dictionary[ILocalSymbol, GenericLocalStorageContract]?
+        private var genericLocalStorageConsumer GenericLocalStorageConsumer?
         private let defaultOriginEdgeKeys HashSet[(DefaultOriginQuery, DefaultOriginQuery, int32)] = HashSet[
             (DefaultOriginQuery, DefaultOriginQuery, int32)
         ]()
@@ -105,6 +107,59 @@ partial class CSharpToGSharpTranslator {
         )
 
         func GetLocalStorageScanWork() int64 -> this.localStorageScanWork
+
+        private class GenericLocalStorageContract {
+            private var parent GenericLocalStorageContract?
+            private var rank int32 = 0
+            public var HasDefault bool = false
+            public var HasExplicit bool = false
+            public var IsFixed bool = false
+            public let Dependents HashSet[GenericLocalStorageConsumer] = HashSet[GenericLocalStorageConsumer]()
+
+            func Root() GenericLocalStorageContract {
+                var root = this
+                while root.parent is {} nextRoot {
+                    root = nextRoot
+                }
+                var node = this
+                while node.parent is {} next {
+                    node.parent = root
+                    node = next
+                }
+                return root
+            }
+
+            func Join(other GenericLocalStorageContract) {
+                var first = this.Root()
+                var second = other.Root()
+                if object.ReferenceEquals(first, second) {
+                    return
+                }
+                if first.rank < second.rank {
+                    let swap = first
+                    first = second
+                    second = swap
+                }
+                second.parent = first
+                if first.rank == second.rank {
+                    first.rank++
+                }
+                first.HasDefault |= second.HasDefault
+                first.HasExplicit |= second.HasExplicit
+            }
+        }
+
+        private class GenericLocalStorageConsumer {
+            public let Contract GenericLocalStorageContract
+            public let Value IdentifierNameSyntax
+            public let Target ISymbol
+
+            init(contract GenericLocalStorageContract, value IdentifierNameSyntax, target ISymbol) {
+                this.Contract = contract
+                this.Value = value
+                this.Target = target
+            }
+        }
 
         private enum DelegateArgumentBehavior {
             NotObserved,
@@ -319,6 +374,18 @@ partial class CSharpToGSharpTranslator {
                             }
                         }
                     }
+                } else if initializer != nil && this.context.GetDeclaredSymbol(
+                    declarator
+                ) is ILocalSymbol fixedGenericLocal &&
+                    this
+                    .GenericLocalStorageIsFixed(fixedGenericLocal) {
+                    type = this.typeMapper.MapEventType(
+                        fixedGenericLocal.Type.WithNullableAnnotation(
+                            Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated
+                        ),
+                        this.context,
+                        declaration!!.Type.GetLocation()
+                    )
                 } else if initializer != nil && this.context.GetDeclaredSymbol(
                     declarator
                 ) is ILocalSymbol containerLocal &&
@@ -613,6 +680,9 @@ partial class CSharpToGSharpTranslator {
         /// unlike C#'s erased `!`, G#'s `!!` is a checked assertion that
         /// THROWS on nil.
         private func InferredLocalDeclarationIsNullable(local ILocalSymbol) bool {
+            if this.GenericLocalStorageIsFixed(local) {
+                return false
+            }
             if this.ShouldPromoteToNullableReference(local) ||
                 (
                 IsAnnotatedNullableReference(local.Type) && this.IsUsedAsNullable(
@@ -625,59 +695,147 @@ partial class CSharpToGSharpTranslator {
             return this.InferredLocalDefaultRequiresTypedDeclaration(local)
         }
 
-        // Explicit generic locals share the nullable storage required by their default-carrying reads.
-        // Ref-storage reconciliation still freezes contracts that cannot widen.
         private func ExplicitGenericLocalNeedsNullableStorage(local ILocalSymbol) bool {
-            if local.Type is not ITypeParameterSymbol ||
-                local
+            if !GenericLocalStorageCanVary(local) || IsImplicitlyTypedLocal(local) {
+                return false
+            }
+            let evaluation = this.genericLocalStorageEvaluation
+            if evaluation != nil && evaluation.TryGetValue(local, out var evaluating) {
+                let root = evaluating.Root()
+                return root.HasDefault && !root.IsFixed
+            }
+            this.EnsureGenericLocalStorageContracts(local)
+            return this.state.GenericLocalStorageNullable.TryGetValue(local, out var nullable) && nullable
+        }
+
+        private func GenericLocalStorageIsFixed(local ILocalSymbol) bool {
+            if !GenericLocalStorageCanVary(local) {
+                return false
+            }
+            let evaluation = this.genericLocalStorageEvaluation
+            if evaluation != nil && evaluation.TryGetValue(local, out var evaluating) {
+                this.TryGetEvaluatingGenericLocalStorage(local, out _)
+                return evaluating.Root().HasExplicit && evaluating.Root().IsFixed
+            }
+            this.EnsureGenericLocalStorageContracts(local)
+            return this.state.FixedGenericLocalStorage.Contains(local)
+        }
+
+        private func GenericLocalStorageCanVary(local ILocalSymbol) bool -> local.Type is ITypeParameterSymbol &&
+            !local
+            .Type
+            .IsValueType &&
+            local.RefKind == RefKind.None &&
+            (
+            local
                 .Type
-                .IsValueType ||
-                local
-                .Type
-                .NullableAnnotation == Microsoft
+                .NullableAnnotation != Microsoft
                 .CodeAnalysis
                 .NullableAnnotation
                 .Annotated ||
-                local.RefKind != RefKind.None ||
-                IsImplicitlyTypedLocal(local) {
+                IsImplicitlyTypedLocal(local)
+        )
+
+        private func TryGetEvaluatingGenericLocalStorage(local ILocalSymbol, out nullable bool) bool {
+            nullable = false
+            let evaluation = this.genericLocalStorageEvaluation
+            if evaluation == nil || !evaluation.TryGetValue(local, out var contract) {
                 return false
             }
-            if this.state.ExplicitGenericLocalNullableStorage.TryGetValue(local, out var cached) {
-                return cached
+            let root = contract.Root()
+            if !root.HasExplicit || (!root.HasDefault && !root.IsFixed) {
+                return false
+            }
+            let consumer = this.genericLocalStorageConsumer
+            // A newly fixed component schedules only inference queries that read its contract.
+            if consumer != nil && !object.ReferenceEquals(root, consumer.Contract.Root()) {
+                root.Dependents.Add(consumer)
+            }
+            nullable = root.HasDefault && !root.IsFixed
+            return true
+        }
+
+        // Publish only completed component facts. Inference queries use a separate dependency-tracked evaluation view.
+        private func EnsureGenericLocalStorageContracts(local ILocalSymbol) {
+            if !GenericLocalStorageCanVary(local) || this.state.GenericLocalStorageNullable.ContainsKey(local) {
+                return
             }
             let scope_ = this.GetNullabilityScope(local)
+            if scope_ == nil {
+                return
+            }
             if scope_ != nil && scope_.SyntaxTree != this.context.SemanticModel.SyntaxTree {
                 if !this.context.Compilation.ContainsSyntaxTree(scope_.SyntaxTree) {
-                    return false
+                    return
                 }
                 using let modelScope = this.context.UseSemanticModelFor(scope_.SyntaxTree)
-                return this.ExplicitGenericLocalNeedsNullableStorage(local)
+                this.EnsureGenericLocalStorageContracts(local)
+                return
             }
-            var result = false
-            if scope_ != nil {
-                let executable = scope_.AncestorsAndSelf().LastOrDefault(
-                    (node SyntaxNode) -> node is BaseMethodDeclarationSyntax ||
-                        node is AccessorDeclarationSyntax ||
-                        node is LocalFunctionStatementSyntax ||
-                        node is AnonymousFunctionExpressionSyntax
-                ) ??
-                    scope_
-                for read in this.GetProjectionConsumers(executable, local).OfType[IdentifierNameSyntax]() {
-                    this.localStorageScanWork++
-                    let sink = this.ResolveValueSink(read)
-                    // Fixed generic consumers retain T storage, including its default reference value.
-                    if sink != nil &&
-                        sink is not ILocalSymbol &&
-                        IsBareTypeParameter(
-                        this.GetFixedElementDestinationType(read, sink) ?? ObliviousNullabilityAnalyzer.SymbolValueType(
-                            sink
-                        )
-                    ) &&
-                        !this.SinkInfersTypeFromValue(sink, read) {
-                        this.state.ExplicitGenericLocalNullableStorage.Add(local, false)
-                        return false
+            let executable = scope_.AncestorsAndSelf().LastOrDefault(
+                (node SyntaxNode) -> node is BaseMethodDeclarationSyntax ||
+                    node is AccessorDeclarationSyntax ||
+                    node is LocalFunctionStatementSyntax ||
+                    node is AnonymousFunctionExpressionSyntax
+            ) ??
+                scope_
+            if this.state.GenericLocalStorageBodies.Contains(executable) {
+                this.state.GenericLocalStorageNullable[local] = false
+                return
+            }
+            let index = this.GetProjectionConsumerIndex(executable)
+            if IsImplicitlyTypedLocal(local) &&
+                !index
+                .Keys
+                .OfType[ILocalSymbol]()
+                .Any(
+                (candidate ILocalSymbol) -> GenericLocalStorageCanVary(candidate) && !IsImplicitlyTypedLocal(candidate)
+            ) {
+                // Inferred-only bodies keep their existing declaration and provenance queries.
+                for candidate in index.Keys.OfType[ILocalSymbol]() {
+                    if GenericLocalStorageCanVary(candidate) {
+                        this.state.GenericLocalStorageNullable[candidate] = false
                     }
-                    if !result &&
+                }
+                this.state.GenericLocalStorageNullable[local] = false
+                this.state.GenericLocalStorageBodies.Add(executable)
+                return
+            }
+            let contracts = Dictionary[ILocalSymbol, GenericLocalStorageContract](SymbolEqualityComparer.Default)
+            let GetContract = func (symbol ILocalSymbol) GenericLocalStorageContract {
+                if !contracts.TryGetValue(symbol, out var contract) {
+                    contract = GenericLocalStorageContract(){HasExplicit = !IsImplicitlyTypedLocal(symbol)}
+                    contracts.Add(symbol, contract)
+                }
+                return contract
+            }
+            GetContract(local)
+            let consumers = List[GenericLocalStorageConsumer]()
+            for entry in index {
+                if entry.Key is not ILocalSymbol source || !GenericLocalStorageCanVary(source) {
+                    continue
+                }
+                let contract = GetContract(source)
+                for read in entry.Value.OfType[IdentifierNameSyntax]() {
+                    this.localStorageScanWork++
+                    let (sink, slotType) = this.ResolveValueStoreContract(read)
+                    if sink is ILocalSymbol target &&
+                        GenericLocalStorageCanVary(target) &&
+                        SymbolEqualityComparer
+                        .Default
+                        .Equals(source.Type, target.Type) {
+                        contract.Join(GetContract(target))
+                    } else if sink != nil && (sink is not ILocalSymbol || this.SlotTypeIsDeclared(sink, read)) {
+                        if IsBareTypeParameter(slotType) ||
+                            (
+                            sink is IParameterSymbol parameter &&
+                                IsBareTypeParameter(this.InferredGenericParameterTypeParameter(parameter, read))
+                        ) {
+                            consumers.Add(GenericLocalStorageConsumer(contract, read, sink))
+                        }
+                    }
+                    if !contract.Root()
+                        .HasDefault &&
                         this
                         .context
                         .GetTypeInfo(read)
@@ -687,20 +845,70 @@ partial class CSharpToGSharpTranslator {
                         .NullableFlowState
                         .MaybeNull &&
                         this.FindDefaultOrigin(read, Array.Empty[int32]()) != nil {
-                        result = true
+                        contract.Root().HasDefault = true
                     }
                 }
             }
-            this.state.ExplicitGenericLocalNullableStorage.Add(local, result)
-            return result
+            let pending = Queue[GenericLocalStorageConsumer]()
+            let queued = HashSet[GenericLocalStorageConsumer]()
+            for consumer in consumers {
+                let root = consumer.Contract.Root()
+                if root.HasExplicit && root.HasDefault && queued.Add(consumer) {
+                    pending.Enqueue(consumer)
+                }
+            }
+            let previousEvaluation = this.genericLocalStorageEvaluation
+            let previousConsumer = this.genericLocalStorageConsumer
+            this.genericLocalStorageEvaluation = contracts
+            this.genericLocalStorageConsumer = nil
+            try {
+                while pending.TryDequeue(out var consumer) {
+                    queued.Remove(consumer)
+                    let root = consumer.Contract.Root()
+                    if root.IsFixed {
+                        continue
+                    }
+                    this.localStorageScanWork++
+                    this.genericLocalStorageConsumer = consumer
+                    if this.SinkInfersTypeFromValue(consumer.Target, consumer.Value) {
+                        continue
+                    }
+                    root.IsFixed = true
+                    for dependent in root.Dependents {
+                        if queued.Add(dependent) {
+                            pending.Enqueue(dependent)
+                        }
+                    }
+                }
+            } finally {
+                this.genericLocalStorageConsumer = previousConsumer
+                this.genericLocalStorageEvaluation = previousEvaluation
+            }
+            for entry in contracts {
+                let root = entry.Value.Root()
+                this.state.GenericLocalStorageNullable[entry.Key] = root.HasExplicit && root.HasDefault && !root.IsFixed
+                if root.HasExplicit && root.IsFixed {
+                    this.state.FixedGenericLocalStorage.Add(entry.Key)
+                }
+            }
+            this.state.GenericLocalStorageBodies.Add(executable)
         }
 
         private func InferredLocalDefaultRequiresTypedDeclaration(local ILocalSymbol?) bool {
-            if this.state.InferredLocalDefaultTypedDeclarations.TryGetValue(local!!, out var cached) {
+            if local != nil && this.GenericLocalStorageIsFixed(local) {
+                return false
+            }
+            if this.genericLocalStorageEvaluation == nil &&
+                this
+                .state
+                .InferredLocalDefaultTypedDeclarations
+                .TryGetValue(local!!, out var cached) {
                 return cached
             }
             let result = this.InferredLocalDefaultRequiresTypedDeclarationCore(local)
-            this.state.InferredLocalDefaultTypedDeclarations.Add(local!!, result)
+            if this.genericLocalStorageEvaluation == nil {
+                this.state.InferredLocalDefaultTypedDeclarations.Add(local!!, result)
+            }
             return result
         }
 

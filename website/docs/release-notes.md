@@ -16,7 +16,7 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
-- Preserve nullable generic local storage in `cs2gs` for default-carrying aliases, while retaining fixed generic consumer contracts without null assertions. Reuse an executable-wide consumer index for local reads, including nested captures. (Fixes #5960)
+- Reconcile generic local storage across aliases and fixed consumers in `cs2gs`, including delegate results and iterator elements. Complete dependency-tracked storage and inference decisions before emission, preserving generic defaults without added runtime assertions. Reuse an executable-wide read index, including nested captures. (Fixes #5960)
 
 - Share local default-value and deconstruction reachability through sparse alias dependencies and finite tuple-index summaries, including reassigned locals, split aliases, loop-carried cycles and tuple-unboxing cycles. (Fixes #5633)
 

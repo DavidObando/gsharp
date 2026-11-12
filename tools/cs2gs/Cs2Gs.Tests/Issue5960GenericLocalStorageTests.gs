@@ -4,7 +4,6 @@
 
 package Cs2Gs.Tests
 
-import Cs2Gs.Cli
 import Cs2Gs.CodeModel.Printing
 import Cs2Gs.Pipeline
 import Cs2Gs.Translator
@@ -31,9 +30,15 @@ open class Issue5960GenericLocalStorageTests {
     @InlineData("effectful")
     @InlineData("fixed-consumers")
     @InlineData("captured")
+    @InlineData("lambda-result")
+    @InlineData("alias-result")
+    @InlineData("fixed-loop")
+    @InlineData("iterator-result")
+    @InlineData("repeated-arguments")
     async func ExplicitGenericStorage_PreservesNativeRuntimeBytes(shape string) {
         let effectful = shape == "effectful"
         let fixedConsumers = shape == "fixed-consumers"
+        let loopCase = shape == "exact" || effectful || shape == "captured" || shape == "fixed-loop"
         let compiler = LocalFunctionHoistTranslationTests.FindCompiler()
         Assert.NotNull(compiler)
         let repository = GsharpTestProjectRunner.FindRepoRoot()
@@ -52,6 +57,16 @@ open class Issue5960GenericLocalStorageTests {
             )
             let source = if fixedConsumers {
                 FixedConsumerSource
+            } else if shape == "lambda-result" {
+                LambdaResultSource
+            } else if shape == "alias-result" {
+                AliasResultSource
+            } else if shape == "iterator-result" {
+                IteratorResultSource
+            } else if shape == "repeated-arguments" {
+                RepeatedArgumentsSource
+            } else if shape == "fixed-loop" {
+                Source.Replace("T seed = replacement;", "T seed = replacement; _ = IsNull<T>(seed);")
             } else if shape == "captured" {
                 Source.Replace("string result = \"\";", "System.Func<string> loop = () => { string result = \"\";")
                     .Replace("return result;", "return result; }; return loop();")
@@ -83,6 +98,17 @@ open class Issue5960GenericLocalStorageTests {
             Assert.NotEmpty(expected)
             if fixedConsumers {
                 Assert.Equal(string.Concat(Enumerable.Repeat("True:0" + Environment.NewLine, 5)), expected)
+            } else if shape == "lambda-result" || shape == "alias-result" {
+                Assert.Equal("True:0" + Environment.NewLine, expected)
+            } else if shape == "iterator-result" {
+                Assert.Equal("True" + Environment.NewLine + "0" + Environment.NewLine, expected)
+            } else if shape == "repeated-arguments" {
+                Assert.Equal(
+                    "False:False" + Environment.NewLine + string.Concat(
+                        Enumerable.Repeat("True:True" + Environment.NewLine, 3)
+                    ),
+                    expected
+                )
             } else {
                 Assert.Contains("False:True:", expected)
                 Assert.Contains("False:False:", expected)
@@ -99,43 +125,37 @@ open class Issue5960GenericLocalStorageTests {
             }
 
             let destination = Path.Combine(directory, "translated")
-            let originalOut = Console.Out
-            let originalError = Console.Error
-            let output = StringWriter()
-            let errors = StringWriter()
-            var exit int32
-            try {
-                Console.SetOut(output)
-                Console.SetError(errors)
-                exit = await Program.Main(
-                    []string{
-                        "migrate",
-                        "--corpus",
-                        sourceRoot,
-                        "--out",
-                        destination,
-                        "--artifacts",
-                        Path.Combine(directory, "runs"),
-                        "--gsc",
-                        compiler!!,
-                        "--diagnostic-run",
-                        "--no-via-sdk",
-                        "--app",
-                        "corpus/Probe",
-                        "--stop-after",
-                        "translate",
-                        "--no-format"
-                    }
-                )
-            } finally {
-                Console.SetOut(originalOut)
-                Console.SetError(originalError)
-            }
-            Assert.True(exit == 0, output.ToString() + errors.ToString())
-            Assert.DoesNotContain("CS2GS-GENERIC-STORE-BRIDGE", output.ToString() + errors.ToString())
+            let cli = Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(compiler))!!, "Cs2Gs.Cli", "cs2gs.dll")
+            Assert.True(File.Exists(cli), "Build the real cs2gs CLI before running this test.")
+            let translation = await ProcessRunner.RunAsync(
+                "dotnet",
+                []string{
+                    cli,
+                    "migrate",
+                    "--corpus",
+                    sourceRoot,
+                    "--out",
+                    destination,
+                    "--artifacts",
+                    Path.Combine(directory, "runs"),
+                    "--gsc",
+                    compiler!!,
+                    "--diagnostic-run",
+                    "--no-via-sdk",
+                    "--app",
+                    "corpus/Probe",
+                    "--stop-after",
+                    "translate",
+                    "--no-format"
+                },
+                timeout: TimeSpan.FromSeconds(45)
+            )
+            Assert.False(translation.TimedOut, translation.Output)
+            Assert.True(translation.ExitCode == 0, translation.Output)
             let translated = Directory.GetFiles(destination, "Probe.gs", SearchOption.AllDirectories)
             let gsPath = Assert.Single(translated)
             let printed = File.ReadAllText(gsPath)
+            Assert.True(!translation.Output.Contains("CS2GS-GENERIC-STORE-BRIDGE"), translation.Output + "\n" + printed)
             let translatedPath = Path.Combine(directory, "Translated.dll")
             let compile = ProcessRunner.Run(
                 "dotnet",
@@ -151,9 +171,11 @@ open class Issue5960GenericLocalStorageTests {
             if fixedConsumers {
                 Assert.DoesNotContain("value T?", printed)
                 Assert.DoesNotContain("!!", printed)
-            } else {
+            } else if loopCase && shape != "fixed-loop" {
                 Assert.Contains("var seed T?", printed)
                 Assert.DoesNotContain("seed!!", printed)
+            } else {
+                Assert.DoesNotContain("!!", printed)
             }
         } finally {
             Directory.Delete(directory, recursive: true)
@@ -204,6 +226,72 @@ open class Issue5960GenericLocalStorageTests {
     }
 
     shared {
+        private const LambdaResultSource string = `
+#nullable enable
+public static class P
+{
+    static System.Func<T> Make<T>() { T value = default(T); return () => value; }
+    public static void Main()
+    {
+        System.Console.WriteLine((Make<string>()() is null) + ":" + Make<int>()());
+    }
+}`
+
+        private const AliasResultSource string = `
+#nullable enable
+public static class P
+{
+    static T Make<T>() { T value = default(T); T result = value; return result; }
+    public static void Main()
+    {
+        System.Console.WriteLine((Make<string>() is null) + ":" + Make<int>());
+    }
+}`
+
+        private const IteratorResultSource string = `
+#nullable enable
+public static class P
+{
+    static System.Collections.Generic.IEnumerable<T> Make<T>() { T value = default(T); yield return value; }
+    public static void Main()
+    {
+        foreach (var value in Make<string>()) System.Console.WriteLine(value is null);
+        foreach (var value in Make<int>()) System.Console.WriteLine(value);
+    }
+}`
+
+        private const RepeatedArgumentsSource string = `
+#nullable enable
+public static class P
+{
+    static string Pair<U>(U a, U b) => (a is null) + ":" + (b is null);
+    static string FixedPair<U>(U[] carrier, U a, U b) => Pair(a, b);
+    static string RefPair<U>(ref U a, U b) => Pair(a, b);
+    static string Run<T>(T p) where T : class { T x = p; return Pair(x, x); }
+    static string Defaults<T>() where T : class { T x = default(T); return Pair(x, x); }
+    static string Fixed<T>() where T : class
+    {
+        T x = default(T);
+        return FixedPair(new T[1], x, x);
+    }
+    static string Propagate<T>() where T : class
+    {
+        T x = default(T);
+        T y = default(T);
+        _ = Pair(y, y);
+        var result = RefPair(ref x, y);
+        _ = Pair<T>(x, x);
+        return result;
+    }
+    public static void Main()
+    {
+        System.Console.WriteLine(Run("value"));
+        System.Console.WriteLine(Defaults<string>());
+        System.Console.WriteLine(Fixed<string>());
+        System.Console.WriteLine(Propagate<string>());
+    }
+}`
+
         private const FixedConsumerSource string = `
 #nullable enable
 public static class P

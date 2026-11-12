@@ -6312,6 +6312,18 @@ partial class CSharpToGSharpTranslator {
         private func GetProjectionConsumers(body Microsoft.CodeAnalysis.SyntaxNode, symbol ISymbol?) IReadOnlyList[
             Microsoft.CodeAnalysis.SyntaxNode
         ] {
+            let index = this.GetProjectionConsumerIndex(body)
+            return if index.TryGetValue(symbol!!, out var consumers) {
+                cast[IReadOnlyList[Microsoft.CodeAnalysis.SyntaxNode]](consumers)
+            } else {
+                cast[IReadOnlyList[Microsoft.CodeAnalysis.SyntaxNode]](Array.Empty[Microsoft.CodeAnalysis.SyntaxNode]())
+            }
+        }
+
+        private func GetProjectionConsumerIndex(body Microsoft.CodeAnalysis.SyntaxNode) Dictionary[
+            ISymbol,
+            List[Microsoft.CodeAnalysis.SyntaxNode]
+        ] {
             if !this.state.ProjectionConsumersByBody.TryGetValue(body, out var index) {
                 let AddConsumer = func (consumerSymbol ISymbol?, consumer Microsoft.CodeAnalysis.SyntaxNode) {
                     if consumerSymbol == nil {
@@ -6354,11 +6366,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 this.state.ProjectionConsumersByBody.Add(body, index)
             }
-            return if index.TryGetValue(symbol!!, out var consumers) {
-                cast[IReadOnlyList[Microsoft.CodeAnalysis.SyntaxNode]](consumers)
-            } else {
-                cast[IReadOnlyList[Microsoft.CodeAnalysis.SyntaxNode]](Array.Empty[Microsoft.CodeAnalysis.SyntaxNode]())
-            }
+            return index
         }
 
         private func GetFixedElementDestinationType(

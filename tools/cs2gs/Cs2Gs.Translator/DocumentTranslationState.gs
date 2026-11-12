@@ -74,7 +74,9 @@ internal class DocumentTranslationState {
         LocalHoldsPromotedValueInProgress = HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
         EmittedLocalTypeClauses = HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
         InferredLocalDefaultTypedDeclarations = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
-        ExplicitGenericLocalNullableStorage = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
+        GenericLocalStorageNullable = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
+        FixedGenericLocalStorage = HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
+        GenericLocalStorageBodies = HashSet[SyntaxNode]()
         VarCaptureInputNonNull = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         NilableOnlyInEmittedGSharpLocals = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         NilableOnlyInEmittedGSharpNodes = Dictionary[Microsoft.CodeAnalysis.SyntaxNode, bool]()
@@ -458,7 +460,15 @@ internal class DocumentTranslationState {
         get;
     }
 
-    prop ExplicitGenericLocalNullableStorage Dictionary[ILocalSymbol, bool] {
+    prop GenericLocalStorageNullable Dictionary[ILocalSymbol, bool] {
+        get;
+    }
+
+    prop FixedGenericLocalStorage HashSet[ILocalSymbol] {
+        get;
+    }
+
+    prop GenericLocalStorageBodies HashSet[SyntaxNode] {
         get;
     }
 
