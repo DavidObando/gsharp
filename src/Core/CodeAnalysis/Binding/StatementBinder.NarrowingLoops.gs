@@ -8716,6 +8716,7 @@ internal partial class StatementBinder {
         intrinsicOwner ||
             IsMutableGenericContainerTypeName(owner) ||
             IsMutableBufferTypeName(owner) ||
+            (owner == "System.Object" && name == "ReferenceEquals") ||
             (owner is "System.Math" or "System.MathF" or "System.Text.StringBuilder") ||
             (
             (owner is "System.Enum" or "System.Delegate" or "System.MulticastDelegate") &&
