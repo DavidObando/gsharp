@@ -200,6 +200,8 @@ open class Issue5633ConditionalLocalQueryTests {
         let keyVisits = System.Collections.Generic.List[int64]()
         let promotedEvaluations = System.Collections.Generic.List[int64]()
         let scopeWork = System.Collections.Generic.List[int64]()
+        let aliasVisits = System.Collections.Generic.List[int64]()
+        let terminalEntries = System.Collections.Generic.List[int64]()
         for links in[]int32{16, 128, 256, 512} {
             let body = StringBuilder()
             if fanOut {
@@ -232,6 +234,12 @@ open class Issue5633ConditionalLocalQueryTests {
             keyVisits.Add(this.translationWork["tuple_state_key_node_visits"])
             promotedEvaluations.Add(this.translationWork["promoted_value_evaluations"])
             scopeWork.Add(this.ScopeCensusWork())
+            aliasVisits.Add(
+                this.translationWork["projection_alias_visits"] +
+                    this.translationWork["projection_alias_terminal_build_visits"] +
+                    this.translationWork["projection_alias_live_boundary_visits"]
+            )
+            terminalEntries.Add(this.translationWork["projection_alias_terminal_entries"])
             this.output.WriteLine(
                 "$links links: ${this.translationAllocatedBytes} allocated bytes; " +
                     "${this.translationOriginMetrics.SourceCount} sources; " +
@@ -254,6 +262,14 @@ open class Issue5633ConditionalLocalQueryTests {
             )
             TranslationTestValidation.AssertBinds(printed)
         }
+        Assert.True(
+            aliasVisits[0] > 0 && aliasVisits[1] <= aliasVisits[0] * 3 && aliasVisits[2] <= aliasVisits[1] * 3,
+            "Raw alias construction and live projection probes must not revisit each chain prefix: ${aliasVisits[0]} -> ${aliasVisits[1]} -> ${aliasVisits[2]}."
+        )
+        Assert.True(
+            terminalEntries[1] <= terminalEntries[0] * 3 && terminalEntries[2] <= terminalEntries[1] * 3,
+            "Retained raw terminals must scale with source size: ${terminalEntries[0]} -> ${terminalEntries[1]} -> ${terminalEntries[2]}."
+        )
         Assert.True(
             allocations[1] <= allocations[0] * 3 && allocations[2] <= allocations[1] * 3,
             "Doubling aliases must not quadruple whole translator/printer allocations: ${allocations[0]} -> ${allocations[1]} -> ${allocations[2]}."
@@ -897,8 +913,10 @@ namespace Demo
     }
 
     private func TranslateWithinBound(source string, enabled bool, measureWork bool = false) string {
+        let beforeLoad = GC.GetAllocatedBytesForCurrentThread()
         let project = CSharpProjectLoader.LoadInMemory([](string, string){("Chain.cs", source)})
         Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        let afterLoad = GC.GetAllocatedBytesForCurrentThread()
         let compilation = project.Compilation.WithOptions(
             project
                 .Compilation
@@ -922,6 +940,10 @@ namespace Demo
             compilation.GetSemanticModel(original.SyntaxTree)
         )
         let context = TranslationContext(compilation, document.SemanticModel, document.FilePath)
+        this.output.WriteLine(
+            "Input loading/initial binding: ${afterLoad - beforeLoad} bytes; preparation/diagnostics: " +
+                "${GC.GetAllocatedBytesForCurrentThread() - afterLoad} bytes"
+        )
         let translation = Task.Run(
             () -> {
                 let started = Stopwatch.GetTimestamp()
@@ -941,11 +963,13 @@ namespace Demo
                 )
                 if measureWork {
                     // Measure work separately so opt-in counter overhead cannot change the allocation oracle.
+                    let beforeWork = GC.GetAllocatedBytesForCurrentThread()
                     using let measurements = CompilationMeasurements.Start("scalar-alias-work")
                     let measuredContext = TranslationContext(compilation, document.SemanticModel, document.FilePath)
                     let measured = GSharpPrinter.Print(
                         CSharpToGSharpTranslator().TranslateDocument(document, measuredContext)
                     )
+                    let workAllocatedBytes = GC.GetAllocatedBytesForCurrentThread() - beforeWork
                     Assert.Equal(Encoding.UTF8.GetBytes(printed), Encoding.UTF8.GetBytes(measured))
                     Assert.Equal(
                         this.translationDiagnosticText,
@@ -962,6 +986,10 @@ namespace Demo
                         "tuple_state_key_node_visits",
                         "projection_alias_facts",
                         "projection_alias_visits",
+                        "projection_initializer_queries",
+                        "projection_alias_terminal_build_visits",
+                        "projection_alias_terminal_entries",
+                        "projection_alias_live_boundary_visits",
                         "promoted_value_evaluations",
                         "promoted_value_dependency_reads",
                         "promoted_value_invalidation_visits",
@@ -987,6 +1015,7 @@ namespace Demo
                     } {
                         this.translationWork[counter] = measurements.GetCounter("translation." + counter)
                     }
+                    this.output.WriteLine("Separate instrumented translator/printer: $workAllocatedBytes bytes")
                 }
                 return printed
             }

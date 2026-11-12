@@ -1,0 +1,47 @@
+#nullable enable
+using System;
+using System.Linq;
+
+namespace Demo {
+public sealed class Node {
+    public string Name;
+    public Node(string name) { Name = name; }
+}
+public static class P {
+    static string Read(Node? value) => value == null ? "null" : value.Name;
+    static string Force(Node?[] rows) {
+        try { return rows[0].Name; }
+        catch (NullReferenceException) { return "nre"; }
+    }
+    static bool Scalar<T>(T seed) {
+        var a = seed;
+        var b = a;
+        a = default(T);
+        b = a;
+        a = b;
+        Func<T> read = () => b;
+        return read() is null;
+    }
+    public static void Main() {
+        var stable = new[] { new Node("stable") };
+        var safeAlias = stable;
+        var rows = new Node?[1];
+        var alias = rows;
+        var saved = alias;
+        Func<string> read = () => Read(saved[0]);
+        alias = new[] { new Node("present") };
+        saved = alias;
+        rows = saved;
+        Node?[][] nested = new Node?[][] { new Node?[] { new Node("present") } };
+        var nestedAlias = nested;
+        alias = nestedAlias[0];
+        saved = alias;
+        var query = from row in nestedAlias let selected = row select selected[0];
+        string before = Force(alias);
+        saved[0] = null;
+        Console.Write(Force(safeAlias) + "|" + before + ":" + read() + ":" +
+            string.Join(",", query.Select(Read)) + ":" + Force(alias) + ":" +
+            Scalar("seed") + ":" + Scalar(1));
+    }
+}
+}

@@ -254,7 +254,8 @@ internal shared class LiteralConstructionRuntimeParity {
         verifyTranslation Action[string]? = nil,
         librarySource string? = nil,
         transform((string) -> string)? = nil,
-        verifyIL bool = false
+        verifyIL bool = false,
+        verifyAssembly Action[string]? = nil
     ) {
         let tree = CSharpSyntaxTree.ParseText(source, CSharpParseOptions(LanguageVersion.Latest), path: "Probe.cs")
         let library = if librarySource != nil {
@@ -356,6 +357,7 @@ internal shared class LiteralConstructionRuntimeParity {
                 compilerArguments.Add("/reference:" + libraryPath)
             }
             RunDotnet(compilerArguments.ToArray(), printed)
+            verifyAssembly?.Invoke(translatedPath)
             if verifyIL {
                 let verified = IlVerifyRunner().Verify(translatedPath)
                 Assert.True(verified.Status == IlVerifyStatus.Passed, verified.Output)
