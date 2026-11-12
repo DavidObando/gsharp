@@ -150,6 +150,107 @@ class TagAttribute : Attribute {}`
     @Theory
     @InlineData(false)
     @InlineData(true)
+    func ImportedConstructorConstraints_DoNotReadEmptySourceShells(privateConstructor bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let driver = CompileBoundedStackDriver(fixture)
+        let library = fixture.CompileCSharp(
+            "namespace Contracts { public class NeedsCtor<T> where T : new() {} }",
+            "constructor-contracts"
+        )
+        let item = if privateConstructor {
+            "class Item { private init() {} }"
+        } else {
+            "class Item(Value int32) {}"
+        }
+        const wrapper = "class Wrapper : NeedsCtor[Item] {}"
+        for reverse in[]bool{false, true} {
+            let source = "import Contracts\n" + if reverse {
+                wrapper + "\n" + item
+            } else {
+                item + "\n" + wrapper
+            }
+            let sourcePath = Path.Combine(fixture.Directory, "constructor.gs")
+            let response = Path.Combine(fixture.Directory, "constructor.rsp")
+            let dll = Path.Combine(fixture.Directory, "constructor-" + reverse.ToString() + ".dll")
+            File.WriteAllText(sourcePath, source)
+            File.WriteAllText(response, "/reference:\"" + library + "\"\n\"" + sourcePath + "\"")
+            let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+                "@" + response,
+                dll,
+                driver
+            )
+            Assert.True(code == 1, output)
+            Assert.Equal(
+                []string{
+                    "GS0152@" +
+                        (
+                        if reverse {
+                            "2"
+                        } else {
+                            "3"
+                        }
+                    ) +
+                        ",17," +
+                        (
+                        if reverse {
+                            "2"
+                        } else {
+                            "3"
+                        }
+                    ) +
+                        ",26"
+                },
+                DiagnosticLocations(output)
+            )
+            Assert.False(File.Exists(dll))
+        }
+    }
+
+    @Fact
+    func NestedBaseLookup_UsesTheCompletedEnclosingHierarchy() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let driver = CompileBoundedStackDriver(fixture)
+        let declarations = []string{
+            "class Derived : Parent {}",
+            "open class Outer : Root { public open class Inner : Token {} }",
+            "open class Root { public open class Token {} }",
+            "open class Token {}"
+        }
+        for reverse in[]bool{false, true} {
+            let sourcePath = Path.Combine(fixture.Directory, "enclosing-base.gs")
+            let dll = Path.Combine(fixture.Directory, "enclosing-base-" + reverse.ToString() + ".dll")
+            File.WriteAllText(
+                sourcePath,
+                "import Parent = Outer.Inner\n" + string.Join(
+                    "\n",
+                    if reverse {
+                        declarations.Reverse()
+                    } else {
+                        declarations
+                    }
+                )
+            )
+            let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+                sourcePath,
+                dll,
+                driver
+            )
+            Assert.True(code == 0, output)
+            IlVerifier.Verify(dll)
+            let types = EmittedFixture.Load(dll).GetTypes()
+            let inherited = types.Single((type Type) -> type.Name == "Token" && type.DeclaringType?.Name == "Root")
+            let topLevel = types.Single((type Type) -> type.Name == "Token" && type.DeclaringType == nil)
+            let derived = types.Single((type Type) -> type.Name == "Derived")
+            Assert.Equal("Inner", derived.BaseType!!.Name)
+            Assert.Equal(inherited, derived.BaseType!!.BaseType)
+            Assert.NotEqual(topLevel, derived.BaseType!!.BaseType)
+            Assert.NotNull(Activator.CreateInstance(derived))
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
     func SourceAttributeDependencies_CanReferToEachOtherWithoutReadingProvisionalUsage(sugar bool) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         var source = `import System
@@ -613,6 +714,70 @@ class BAttribute : Attribute {}`
                         .Value
                 )
             }
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func HeaderInterfaceIdentities_AreReadyForImportedConstraints(data bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let driver = CompileBoundedStackDriver(fixture)
+        let library = fixture.CompileCSharp(
+            "namespace Contracts { public interface IMarker {} " +
+                "public class NeedsMarker<T> where T : IMarker {} " +
+                "public class NeedsEquality<T> where T : System.IEquatable<T> {} }",
+            "header-contracts"
+        )
+        let marker = if data {
+            "data class Marker(Code int32) {}"
+        } else {
+            "class Marker : IMarker {}"
+        }
+        let wrapper = if data {
+            "class Wrapper : NeedsEquality[Marker] {}"
+        } else {
+            "class Wrapper[T Marker] : NeedsMarker[T] {}"
+        }
+        for reverse in[]bool{false, true} {
+            let source = "import Contracts\n" + if reverse {
+                wrapper + "\n" + marker
+            } else {
+                marker + "\n" + wrapper
+            }
+            let sourcePath = Path.Combine(fixture.Directory, "interfaces.gs")
+            let response = Path.Combine(fixture.Directory, "interfaces.rsp")
+            let dll = Path.Combine(fixture.Directory, "interfaces-" + reverse.ToString() + ".dll")
+            File.WriteAllText(sourcePath, source)
+            File.WriteAllText(response, "/reference:\"" + library + "\"\n\"" + sourcePath + "\"")
+            let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+                "@" + response,
+                dll,
+                driver
+            )
+            Assert.True(code == 0, output)
+            IlVerifier.Verify(dll, []string{library})
+            let types = EmittedFixture.Load(dll).GetTypes()
+            let markerType = types.Single((type Type) -> type.Name == "Marker")
+            var wrapperType = types.Single(
+                (type Type) -> type.Name == if data {
+                    "Wrapper"
+                } else {
+                    "Wrapper`1"
+                }
+            )
+            if data {
+                let equality = Assert.Single(
+                    markerType.GetInterfaces(),
+                    (type Type) -> type.IsGenericType && type.GetGenericTypeDefinition() == typeof(IEquatable[_])
+                )
+                Assert.Equal(markerType, Assert.Single(equality.GetGenericArguments()))
+            } else {
+                Assert.Contains(markerType.GetInterfaces(), (type Type) -> type.Name == "IMarker")
+                wrapperType = wrapperType.MakeGenericType(markerType)
+            }
+            Assert.Equal(markerType, Assert.Single(wrapperType.BaseType!!.GetGenericArguments()))
+            Assert.NotNull(Activator.CreateInstance(wrapperType))
         }
     }
 

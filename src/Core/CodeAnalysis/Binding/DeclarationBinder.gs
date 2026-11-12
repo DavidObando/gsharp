@@ -179,6 +179,7 @@ internal partial class DeclarationBinder {
     ]()
     private let readyStructHeaders HashSet[StructSymbol] = HashSet[StructSymbol]()
     private let boundStructTypeParameterConstraints HashSet[StructSymbol] = HashSet[StructSymbol]()
+    private let checkedStructInheritance HashSet[StructSymbol] = HashSet[StructSymbol]()
     private let boundStructBodies HashSet[StructSymbol] = HashSet[StructSymbol]()
     private let requestedNestedTypeBindings HashSet[StructSymbol] = HashSet[StructSymbol]()
     private let structDeclarationWork Stack[(Symbol StructSymbol, BindMembers bool)] = Stack[
@@ -631,7 +632,7 @@ internal partial class DeclarationBinder {
     /// reaches here because it is rejected — and its base left unset — in the
     /// base-clause loop.
     internal func DetectClassInheritanceCycles(classSymbols IEnumerable[StructSymbol], includeNestedTypes bool = true) {
-        let acyclic = HashSet[StructSymbol]()
+        let acyclic = checkedStructInheritance
         let candidates = if includeNestedTypes {
             classSymbols.Concat(nestedStructShells.Values.Where((s StructSymbol) -> s.IsClass))
         } else {

@@ -4734,7 +4734,8 @@ partial class Binder {
                 clrOpenType,
                 clrArgs,
                 symbolicArgs.ToImmutable(),
-                identifierToken.Location
+                identifierToken.Location,
+                bindingScope: $scope
             ) {
                 return nil
             }
@@ -5772,7 +5773,8 @@ partial class Binder {
             clrType,
             clrArgs,
             symbolicArgs.ToImmutable(),
-            identifierToken.Location
+            identifierToken.Location,
+            bindingScope: $scope
         ) {
             return nil
         }
@@ -6010,7 +6012,8 @@ partial class Binder {
             nestedDef,
             clrArgs,
             symbolicArgs.ToImmutable(),
-            identifierToken.Location
+            identifierToken.Location,
+            bindingScope: $scope
         ) {
             return nil
         }
@@ -6710,12 +6713,14 @@ partial class Binder {
             diagnostics DiagnosticBag,
             declaredParameters ImmutableArray[TypeParameterSymbol],
             typeArgs ImmutableArray[TypeSymbol],
-            location TextLocation
+            location TextLocation,
+            deferredCheck(() -> bool)? = nil
         ) {
             Diagnostics = diagnostics
             DeclaredParameters = declaredParameters
             TypeArgs = typeArgs
             Location = location
+            DeferredCheck = deferredCheck
         }
 
         /// Gets the bag the diagnostic is reported into.
@@ -6735,6 +6740,10 @@ partial class Binder {
 
         /// Gets the location the diagnostic is anchored to.
         prop Location TextLocation {
+            get;
+        }
+
+        prop DeferredCheck(() -> bool)? {
             get;
         }
     }
@@ -12186,12 +12195,33 @@ partial class Binder {
             openDefinition Type?,
             clrArgs[]?Type,
             symbolicArgs ImmutableArray[TypeSymbol],
-            location TextLocation
+            location TextLocation,
+            bindingScope BoundScope? = nil
         ) bool {
             if openDefinition == nil ||
                 clrArgs == nil ||
                 symbolicArgs.IsDefaultOrEmpty ||
                 symbolicArgs.Length != clrArgs.Length {
+                return false
+            }
+            if bindingScope is {} declaringScope && declaringScope.IsDeferringUserGenericConstraintChecks() {
+                // Headers cannot validate incomplete source constructor or interface contracts.
+                let capturedArgs = clrArgs.ToArray()
+                declaringScope.GetPendingUserGenericConstraintChecks().Add(
+                    PendingUserGenericConstraintCheck(
+                        diagnostics,
+                        ImmutableArray[TypeParameterSymbol].Empty,
+                        symbolicArgs,
+                        location,
+                        () -> ReportUnsatisfiedGenericTypeConstraint(
+                            diagnostics,
+                            openDefinition,
+                            capturedArgs,
+                            symbolicArgs,
+                            location
+                        )
+                    )
+                )
                 return false
             }
             var anyOpen = false
@@ -12466,6 +12496,9 @@ partial class Binder {
         /// one-diagnostic-per-construction budget.
         /// @param check The recorded construction.
         private func RunUserGenericTypeClauseConstraintCheck(check PendingUserGenericConstraintCheck) bool {
+            if check.DeferredCheck is {} deferred {
+                return deferred()
+            }
             if ReportUnforwardedUserGenericConstraint(
                 check.Diagnostics,
                 check.DeclaredParameters,

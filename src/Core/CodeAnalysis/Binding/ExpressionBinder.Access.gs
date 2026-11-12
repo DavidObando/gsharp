@@ -782,7 +782,8 @@ internal partial class ExpressionBinder {
                         openType,
                         clrArgs,
                         symbolic,
-                        typeArgumentList.Location
+                        typeArgumentList.Location,
+                        bindingScope: $scope
                     ) {
                         return false
                     }
@@ -914,7 +915,8 @@ internal partial class ExpressionBinder {
                     nestedType,
                     clrArgs,
                     symbolic,
-                    typeArguments.Location
+                    typeArguments.Location,
+                    bindingScope: $scope
                 ) {
                     return false
                 }

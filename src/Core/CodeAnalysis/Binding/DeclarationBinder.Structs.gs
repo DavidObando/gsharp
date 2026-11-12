@@ -167,6 +167,12 @@ internal partial class DeclarationBinder {
                 pending.Add(symbol)
                 work.Push((symbol, bindHeader))
                 work.Push((symbol, requestConstraints))
+                if symbol.ContainingType is StructSymbol containing {
+                    let containingDefinition = containing.Definition ?? containing
+                    if nestedStructPackages.ContainsKey(containingDefinition) {
+                        work.Push((containingDefinition, requestHeader))
+                    }
+                }
                 continue
             }
             if phase == requestConstraints {
@@ -311,7 +317,7 @@ internal partial class DeclarationBinder {
                 let previousTree = $scope.SetCurrentReferencingSyntaxTree(clause.SyntaxTree)
                 try {
                     let segments = clause.DottedName.Split('.')
-                    for var index = 0; index + 1 < segments.Length; index++ {
+                    for var index = 0; index < segments.Length; index++ {
                         let name = string.Join(".", segments, 0, index + 1)
                         let arity = clause.GetSegmentTypeArguments(index)?.Count ?? -1
                         var resolved = lookupTypeWithArity(name, arity)
@@ -1018,6 +1024,12 @@ internal partial class DeclarationBinder {
         if importedBaseType != nil {
             structSymbol.SetImportedBaseType(importedBaseType)
         }
+        // Header identities include declared interfaces and the compiler-owned data equality contract.
+        if structSymbol.IsData && !DataEqualityMemberModel.ListsSelfEquatable(structSymbol, implementedClrInterfaces) {
+            implementedClrInterfaces.Add(DataEqualityMemberModel.CreateSelfEquatable(structSymbol))
+        }
+        structSymbol.SetInterfaces(implementedInterfaces.ToImmutable())
+        structSymbol.SetImplementedClrInterfaces(implementedClrInterfaces.ToImmutable())
         return StructBaseBindingResult(
             baseClassSymbol,
             importedBaseType,
@@ -4101,12 +4113,6 @@ internal partial class DeclarationBinder {
     ) {
         let implementedInterfaces = baseBinding.ImplementedInterfaces
         let implementedClrInterfaces = baseBinding.ImplementedClrInterfaces
-        // ADR-0199: every data type implements IEquatable<Self> through its
-        // compiler-owned typed Equals slot, as a C# record does. A declared
-        // `IEquatable[Self]` is the same interface and is not repeated.
-        if structSymbol.IsData && !DataEqualityMemberModel.ListsSelfEquatable(structSymbol, implementedClrInterfaces) {
-            implementedClrInterfaces.Add(DataEqualityMemberModel.CreateSelfEquatable(structSymbol))
-        }
         // Phase 3.B.4: validate interface implementation. Walks each
         // implemented interface and confirms the class (including inherited
         // methods) provides a same-name, same-signature method. The check
@@ -4114,7 +4120,6 @@ internal partial class DeclarationBinder {
         // after interface method signatures have been bound, since
         // interface methods may forward-reference user struct/class types.
         if implementedInterfaces.Count > 0 {
-            structSymbol.SetInterfaces(implementedInterfaces.ToImmutable())
             for iface in implementedInterfaces {
                 // Phase 3.B.5: a `sealed` interface restricts implementors
                 // to the same package as the interface itself.
@@ -4138,7 +4143,6 @@ internal partial class DeclarationBinder {
         // interfaces. The check is deferred because class methods may not
         // have been bound yet when this declaration is processed.
         if implementedClrInterfaces.Count > 0 {
-            structSymbol.SetImplementedClrInterfaces(implementedClrInterfaces.ToImmutable())
             if implementedInterfaces.Count == 0 {
                 pendingInterfaceImplementationChecks.Add((syntax, structSymbol))
             }

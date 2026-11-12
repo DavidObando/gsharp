@@ -1133,7 +1133,8 @@ internal partial class ExpressionBinder {
                 openType,
                 clrArgs,
                 symbolicTypeArgs,
-                syntax.Identifier.Location
+                syntax.Identifier.Location,
+                bindingScope: $scope
             ) {
                 // Issue #4051: `false` here means "not a CLR constructor call",
                 // and overload resolution answered the question it was then
@@ -3005,7 +3006,8 @@ internal partial class ExpressionBinder {
             nestedType,
             combinedClrArgs,
             combinedSymbolic,
-            typeArgumentList?.Location ?? diagnosticLocation
+            typeArgumentList?.Location ?? diagnosticLocation,
+            bindingScope: $scope
         ) {
             constraintFailed = true
             return false
