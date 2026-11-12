@@ -886,10 +886,8 @@ namespace Demo
             printed
         )
         Assert.Contains("[][]string{[]string{\"ok\"}, []string{Volatile.Read(&fullString)!!}}", printed)
-        Assert.Contains(
-            "let consumedRows = [][]string?{consumedRow!!, []string?{Volatile.Read(&stringCache)}}",
-            printed
-        )
+        // Nullable elements do not require assertions on non-null outer storage (#5978).
+        Assert.Contains("let consumedRows = [][]string?{consumedRow, []string?{Volatile.Read(&stringCache)}}", printed)
         Assert.Contains("Names: cast[[]string](guardedRow)", printed)
         Assert.Contains("List[[]string]{ cast[[]string](guardedRow) }", printed)
         Assert.Contains("bRef!!.Value = Volatile.Read(&cache)\n", printed)
@@ -932,7 +930,7 @@ namespace Demo
         )
         Assert.Contains("[][]string?{[]string?{Volatile.Read(&stringCache)} ?? []string?{\"ok\"}}", printed)
         Assert.Contains(
-            "let row = []string?{Volatile.Read(&stringCache)}\n        let rows = [][]string?{row!!}",
+            "let row = []string?{Volatile.Read(&stringCache)}\n        let rows = [][]string?{row}",
             printed
         )
         Assert.Contains("[]() -> (string?, int32){() -> (Volatile.Read(&stringCache), 0)}", printed)
@@ -940,19 +938,19 @@ namespace Demo
         Assert.Contains("[][]() -> Dictionary[string, int32]?{", printed)
         Assert.Contains("[][]string?{[]string?{\"ok\"}, []string?{Volatile.Read(&stringCache)}}", printed)
         Assert.Contains(
-            "let row = []string?{\"ok\"}\n        let rows = [][]string?{row!!, []string?{Volatile.Read(&stringCache)}}",
+            "let row = []string?{\"ok\"}\n        let rows = [][]string?{row, []string?{Volatile.Read(&stringCache)}}",
             printed
         )
         Assert.Contains(
-            "var row = []string?{\"ok\"}\n        row = []string?{\"next\"}\n        row = cast[[]string?](MakeArray(\"final\"))\n        let rows = [][]string?{row!!, []string?{Volatile.Read(&stringCache)}}",
+            "var row = []string?{\"ok\"}\n        row = []string?{\"next\"}\n        row = cast[[]string?](MakeArray(\"final\"))\n        let rows = [][]string?{row, []string?{Volatile.Read(&stringCache)}}",
             printed
         )
         Assert.Contains(
-            "let row = []string?{Volatile.Read(&stringCache)}\n        var rows = [][]string?{row!!}\n        rows = [][]string?{[]string?{\"next\"}}",
+            "let row = []string?{Volatile.Read(&stringCache)}\n        var rows = [][]string?{row}\n        rows = [][]string?{[]string?{\"next\"}}",
             printed
         )
         Assert.Contains(
-            "let row = []string?{\"ok\"}\n        let first = [][]string?{row!!}\n        let second = [][]string?{[]string?{Volatile.Read(&stringCache)}, row!!}",
+            "let row = []string?{\"ok\"}\n        let first = [][]string?{row}\n        let second = [][]string?{[]string?{Volatile.Read(&stringCache)}, row}",
             printed
         )
         Assert.Contains("rows[0] = Volatile.Read(&arrayCache)\n", printed)

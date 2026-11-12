@@ -1,0 +1,9 @@
+import System
+
+open class Node {
+}
+
+var rows = [1]Node?
+rows = []Node?{Node()}
+let nested [][]Node? = [][]Node?{rows}
+Console.Write(nested.Length)
