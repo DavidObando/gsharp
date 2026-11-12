@@ -20,6 +20,32 @@ import System.Globalization
 
 internal partial class DeclarationBinder {
     private let reportedUnscopedRefDiagnostics HashSet[AnnotationSyntax] = HashSet[AnnotationSyntax]()
+    private let pendingAttributeUsageChecks List[() -> void] = List[() -> void]()
+
+    // Attribute classes can annotate each other. Validate a cycle only after their bound contracts exist.
+    private func ValidateAttributeUsageWhenReady(attributeType TypeSymbol, validate() -> bool) bool {
+        if attributeType is StructSymbol source &&
+            (
+            bindingStructBodies.Contains(source.Definition ?? source) || pendingStructMemberBindings.ContainsKey(
+                source.Definition ?? source
+            )
+        ) {
+            pendingAttributeUsageChecks.Add(
+                () -> {
+                    validate()
+                }
+            )
+            return true
+        }
+        return validate()
+    }
+
+    internal func CheckPendingAttributeUsage() {
+        for check in pendingAttributeUsageChecks {
+            check()
+        }
+        pendingAttributeUsageChecks.Clear()
+    }
 
     /// ADR-0184 / issue #376: validates that `@UnscopedRef` sits on a shape
     /// where it means something — a non-`shared` instance member declared
@@ -391,13 +417,25 @@ internal partial class DeclarationBinder {
                     }
                     let key = (bound.AttributeType, bound.Target)
                     if applications.TryGetValue(key, out var count) {
-                        KnownAttributes.GetAttributeUsage(bound.AttributeType, out _, out var allowMultiple)
-                        if !allowMultiple {
-                            Diagnostics.ReportAttributeUsageDuplicate(
-                                GetAnnotationNameLocation(annotation),
-                                annotation.GetNameText()
-                            )
-                        }
+                        ValidateAttributeUsageWhenReady(
+                            bound.AttributeType,
+                            () -> {
+                                // Deferred target failures must not also report duplicate applications.
+                                KnownAttributes.GetAttributeUsage(
+                                    bound.AttributeType,
+                                    out var validOn,
+                                    out var allowMultiple
+                                )
+                                if !allowMultiple &&
+                                    (validOn & MapToSystemAttributeTargets(bound.Target, defaultSystemTarget)) != 0 {
+                                    Diagnostics.ReportAttributeUsageDuplicate(
+                                        GetAnnotationNameLocation(annotation),
+                                        annotation.GetNameText()
+                                    )
+                                }
+                                return allowMultiple
+                            }
+                        )
                         applications[key] = count + 1
                     } else {
                         applications[key] = 1
@@ -509,14 +547,22 @@ internal partial class DeclarationBinder {
         // effective CLR target is derived directly from targetKind, since
         // any use-site qualifier (`@return:` etc.) already narrows it.
         let effectiveSystemTarget = MapToSystemAttributeTargets(targetKind, defaultSystemTarget)
-        KnownAttributes.GetAttributeUsage(attrType, out var validOn, out _)
-        if (validOn & effectiveSystemTarget) == 0 {
-            Diagnostics.ReportAttributeUsageInvalidTarget(
-                GetAnnotationNameLocation(annotation),
-                nameText,
-                positionDescription,
-                validOn
-            )
+        if !ValidateAttributeUsageWhenReady(
+            attrType,
+            () -> {
+                KnownAttributes.GetAttributeUsage(attrType, out var validOn, out _)
+                if (validOn & effectiveSystemTarget) == 0 {
+                    Diagnostics.ReportAttributeUsageInvalidTarget(
+                        GetAnnotationNameLocation(annotation),
+                        nameText,
+                        positionDescription,
+                        validOn
+                    )
+                    return false
+                }
+                return true
+            }
+        ) {
             return nil
         }
         // 4) Bind arguments — positional + named — restricted to compile-time
@@ -875,6 +921,8 @@ internal partial class DeclarationBinder {
         // base-chain walk below can't see it. StructSymbol.DerivesFromSystemAttribute
         // walks the symbol-level BaseClass chain instead of relying on ClrType.
         if typeSymbol is StructSymbol structSym {
+            // Bind source contracts through the existing guarded declaration dependency path, not their syntax alone.
+            EnsureStructDeclarationBound(structSym)
             if structSym.DerivesFromSystemAttribute() {
                 return true
             }

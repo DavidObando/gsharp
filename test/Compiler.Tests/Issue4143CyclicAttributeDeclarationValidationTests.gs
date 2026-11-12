@@ -128,7 +128,10 @@ class BoxedAttribute(Value Holder) : Attribute {
             }
         }
 
-        private func RunGscOutOfProcess(srcPath string, outPath string)(ExitCode int32, Combined string) {
+        internal func RunGscOutOfProcess(srcPath string, outPath string, driverPath string? = nil)(
+            ExitCode int32,
+            Combined string
+        ) {
             let siblingGsc = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "Compiler", "gsc.dll"))
             let gscPath = if File.Exists(siblingGsc) {
                 siblingGsc
@@ -141,7 +144,8 @@ class BoxedAttribute(Value Holder) : Attribute {
                 RedirectStandardError = true,
                 UseShellExecute = false
             }
-            let gscRuntimeConfig = Path.ChangeExtension(gscPath, ".runtimeconfig.json")
+            let entryPath = driverPath ?? gscPath
+            let gscRuntimeConfig = Path.ChangeExtension(entryPath, ".runtimeconfig.json")
             let testRuntimeConfig = Path.ChangeExtension(
                 typeof(Issue4143CyclicAttributeDeclarationValidationTests).Assembly.Location,
                 ".runtimeconfig.json"
@@ -151,7 +155,10 @@ class BoxedAttribute(Value Holder) : Attribute {
                 psi.ArgumentList.Add("--runtimeconfig")
                 psi.ArgumentList.Add(testRuntimeConfig)
             }
-            psi.ArgumentList.Add(gscPath)
+            psi.ArgumentList.Add(entryPath)
+            if driverPath != nil {
+                psi.ArgumentList.Add(gscPath)
+            }
             psi.ArgumentList.Add("/out:" + outPath)
             psi.ArgumentList.Add("/target:library")
             psi.ArgumentList.Add("/targetframework:net10.0")
