@@ -95,11 +95,8 @@ open class Issue3501ResidualSyntheticRetargetTests {
     }
 
     @Fact
-    func ParamsArrayNullGuard_FoldsAway() {
-        // C# guards `params object?[]` against an explicit null argument; a
-        // G# variadic always materializes an array, so gsc rejects the
-        // always-true compare (GS0523, the Diagnostic.Create self-migration
-        // blocker). The test folds and the `&&` absorbs the constant.
+    func ParamsArrayNullGuard_PreservesRuntimeIdentity() {
+        // External CLR callers can supply null. Compare as object to preserve validation without GS0523.
         let printed = Translate(`public class C
 {
     public static string Render(string format, params object?[] args)
@@ -109,19 +106,14 @@ open class Issue3501ResidualSyntheticRetargetTests {
             : format;
     }
 }`)
-        Assert.DoesNotContain("!= nil", printed, StringComparison.Ordinal)
+        Assert.Contains("object(args) != nil", printed, StringComparison.Ordinal)
         Assert.DoesNotContain("true &&", printed, StringComparison.Ordinal)
         Assert.Contains(".Length > 0", printed, StringComparison.Ordinal)
-        TranslationTestValidation.AssertBinds(printed)
+        AssertBindsWithoutNilCompareWarning(printed)
     }
 
     @Fact
-    func ParamsArrayIsNullPattern_FoldsAway() {
-        // The `is null` spelling of the same guard — the shape
-        // test/Shared/EmittedFixture.cs uses, which is LINKED into both
-        // Core.Tests and Compiler.Tests, so the surviving `== nil` reported
-        // GS0523 in both migrated apps. Only the `== null` binary spelling was
-        // folded before; the constant-null PATTERN fell through.
+    func ParamsArrayIsNullPattern_PreservesRuntimeIdentity() {
         let printed = Translate(`using System;
 
 public class C
@@ -136,13 +128,12 @@ public class C
         return paths.Length;
     }
 }`)
-        Assert.DoesNotContain("== nil", printed, StringComparison.Ordinal)
+        Assert.Contains("object(paths) == nil", printed, StringComparison.Ordinal)
         AssertBindsWithoutNilCompareWarning(printed)
     }
 
     @Fact
-    func ParamsArrayIsNotNullPattern_FoldsAway() {
-        // `args is not null` is the negated spelling of the same dead guard.
+    func ParamsArrayIsNotNullPattern_PreservesRuntimeIdentity() {
         let printed = Translate(`public class C
 {
     public static int Count(params string[] paths)
@@ -150,15 +141,13 @@ public class C
         return paths is not null ? paths.Length : 0;
     }
 }`)
-        Assert.DoesNotContain("!= nil", printed, StringComparison.Ordinal)
+        Assert.Contains("object(paths) != nil", printed, StringComparison.Ordinal)
         AssertBindsWithoutNilCompareWarning(printed)
     }
 
     @Fact
     func NonParamsArrayIsNullPattern_KeepsTheGuard() {
-        // Anti-vacuity guard for the two tests above: an ORDINARY (non-params)
-        // nullable array parameter keeps its `is null` guard — the fold is
-        // keyed on `params`, not on "array compared to null".
+        // Ordinary nullable arrays retain native guards, which also narrow their receiver.
         let printed = Translate(`using System;
 
 public class C
@@ -178,10 +167,7 @@ public class C
     }
 
     @Fact
-    func ParamsArrayPropertyPattern_SkipsTheNilGuard() {
-        // `args is { Length: > 0 }` guards a C# params array that a G#
-        // variadic can never leave nil — gsc rejects the defensive guard
-        // (GS0523), so only the member test survives.
+    func ParamsArrayPropertyPattern_PreservesRuntimeIdentity() {
         let printed = Translate(`public class C
 {
     public static string Render(string format, params object?[] args)
@@ -191,9 +177,9 @@ public class C
             : format;
     }
 }`)
-        Assert.DoesNotContain("!= nil", printed, StringComparison.Ordinal)
+        Assert.Contains("object(args) != nil", printed, StringComparison.Ordinal)
         Assert.Contains(".Length > 0", printed, StringComparison.Ordinal)
-        TranslationTestValidation.AssertBinds(printed)
+        AssertBindsWithoutNilCompareWarning(printed)
     }
 
     @Fact

@@ -23,9 +23,93 @@ import Xunit
 /// On 9897d36fc, adjacent effects, initializer mutations and overloaded-null tests fail; the loop-entry mutant fails too.
 /// On a6f5ff7fb, contextual conversions and enclosing compound calls leave stale initializer facts.
 /// On 74c10fcee, suppressed null comparisons and optional coalescing-assignment operands fail these runtime/binding oracles.
+/// On 36d50e65c, declaration-style for headers and argument mutations in expression statements leave GS0300.
 /// The C# output oracle also rejects erased null guards and throwing bridges on nullable stores.
 /// Each test also compares the translated program's output with C#.
 open class Issue5706NarrowedConditionalIndexTests {
+    @Fact
+    func ForDeclarations_ApplyMutationsOnceAndRespectBackedges() {
+        let printed = AssertRunsWithoutConditionalIndexWarning(`
+#nullable enable
+using System;
+namespace Demo
+{
+    public static class P
+    {
+        static Action? clear;
+        sealed class Token
+        {
+            public static implicit operator Token(string? value) { clear?.Invoke(); return new Token(); }
+        }
+        static void Keep(string value) {}
+        static char? Exact() { string? s = null; for (var ignored = (s ??= "a");;) { return s?[0]; } }
+        static char? ExpressionHeader() { string? s = null; for (Keep(s ??= "e");;) { return s?[0]; } }
+        static char? LaterInitializer() { string? s = null; for (string? first = s ??= "l", second = s = null;;) { return s?[0]; } }
+        static string Invalidated()
+        {
+            string? s = null;
+            string result = "";
+            int count = 0;
+            for (var ignored = (s ??= "a"); count < 2; count++) { result += s?[0] + ":"; s = null; }
+            return result;
+        }
+        static string Stable()
+        {
+            string? s = null;
+            string result = "";
+            int count = 0;
+            for (var ignored = (s ??= "b"); count < 2; count++) { result += s?[0] + ":"; }
+            return result;
+        }
+        static char? Converted()
+        {
+            string? s = null;
+            clear = () => s = null;
+            for (Token ignored = s ??= "c";;) { return s?[0]; }
+        }
+        static char? DeclarationOnly() { for (string? s = "i";;) { return s?[0]; } }
+        public static string Run() => Exact() + "|" + ExpressionHeader() + "|" + LaterInitializer() + "|" + Invalidated() + "|" + Stable() + "|" + Converted() + "|" + DeclarationOnly();
+    }
+}`, "a|e||a::|b:b:||i")
+        Assert.Contains("cast[char?](s[0])", printed)
+        Assert.Contains("s?[0]", printed)
+    }
+
+    @Fact
+    func ExpressionStatements_ApplyArgumentFactsAndTrailingEffects() {
+        let printed = AssertRunsWithoutConditionalIndexWarning(`
+#nullable enable
+using System;
+namespace Demo
+{
+    public static class P
+    {
+        static Action? clear;
+        sealed class Token
+        {
+            public static implicit operator Token(string? value) { clear?.Invoke(); return new Token(); }
+        }
+        static void Keep(string value) {}
+        static void Pair(string first, string? second) {}
+        static void Invoke(string value, Action action) { action(); }
+        static void Convert(Token value) {}
+        static char? Plain() { string? s = null; Keep(s ??= "a"); return s?[0]; }
+        static char? Written() { string? s = null; Pair(s ??= "b", s = null); return s?[0]; }
+        static char? Captured() { string? s = null; Invoke(s ??= "c", () => s = null); return s?[0]; }
+        static char? Converted()
+        {
+            string? s = null;
+            clear = () => s = null;
+            Convert(s ??= "d");
+            return s?[0];
+        }
+        public static string Run() => Plain() + "|" + Written() + "|" + Captured() + "|" + Converted();
+    }
+}`, "a|||")
+        Assert.Contains("cast[char?](s[0])", printed)
+        Assert.Contains("s?[0]", printed)
+    }
+
     @Fact
     func SuppressedNullEquality_PreservesNativeArrayAndStringGuards() {
         let printed = AssertRunsWithoutConditionalIndexWarning(`

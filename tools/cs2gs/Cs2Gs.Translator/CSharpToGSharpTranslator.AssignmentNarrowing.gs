@@ -101,6 +101,17 @@ partial class CSharpToGSharpTranslator {
                     )
                 }
                 if step.Statement is ForStatementSyntax forLoop {
+                    let declaration = forLoop.Declaration
+                    if declaration != nil && declaration.Span.End <= effectiveTarget.SpanStart {
+                        proof = this.GetGSharpAssignmentNarrowingProof(
+                            declaration,
+                            symbol,
+                            expression,
+                            $scope,
+                            proof,
+                            requireRuntimeNonNullProof
+                        )
+                    }
                     for initializer in forLoop.Initializers {
                         if initializer.Span.End <= effectiveTarget.SpanStart {
                             proof = this.GetGSharpAssignmentNarrowingProof(
@@ -135,17 +146,19 @@ partial class CSharpToGSharpTranslator {
             if statement is LocalFunctionStatementSyntax {
                 return inherited
             }
-            if statement is LocalDeclarationStatementSyntax declaration {
+            let declaration VariableDeclarationSyntax? = switch statement {
+                case local is LocalDeclarationStatementSyntax: local.Declaration
+                case variables is VariableDeclarationSyntax: variables
+                default: default(VariableDeclarationSyntax?)
+            }
+            if declaration != nil {
                 var proof = inherited
-                for variable in declaration.Declaration.Variables {
+                for variable in declaration.Variables {
                     if variable.Initializer is not{} initializer {
                         continue
                     }
                     // gsc collects initializer mutations only when the expression contains a coalescing assignment.
-                    if initializer
-                        .Value
-                        .DescendantNodesAndSelf((node SyntaxNode) -> !this.IsClosureBoundary(node))
-                        .Any((node SyntaxNode) -> node.IsKind(SyntaxKind.CoalesceAssignmentExpression)) {
+                    if this.ExpressionHasCoalescingAssignment(initializer.Value) {
                         proof = this.GetGSharpInitializerMutationProof(
                             initializer.Value,
                             symbol,
@@ -259,6 +272,44 @@ partial class CSharpToGSharpTranslator {
                     default(SyntaxNode?)
                 }
             }
+            let expression ExpressionSyntax? = switch statement {
+                case expressionStatement is ExpressionStatementSyntax: expressionStatement.Expression
+                case value is ExpressionSyntax: value
+                default: default(ExpressionSyntax?)
+            }
+            if expression != nil && this.ExpressionHasCoalescingAssignment(expression) {
+                return this.GetGSharpInitializerMutationProof(
+                    expression,
+                    symbol,
+                    use,
+                    $scope,
+                    inherited,
+                    requireRuntimeNonNullProof
+                )
+            }
+            return this.GetGSharpAssignmentStoreProof(
+                statement,
+                symbol,
+                use,
+                $scope,
+                inherited,
+                requireRuntimeNonNullProof
+            )
+        }
+
+        private func ExpressionHasCoalescingAssignment(expression ExpressionSyntax) bool ->
+        expression.DescendantNodesAndSelf((node SyntaxNode) -> !this.IsClosureBoundary(node)).Any(
+            (node SyntaxNode) -> node.IsKind(SyntaxKind.CoalesceAssignmentExpression)
+        )
+
+        private func GetGSharpAssignmentStoreProof(
+            statement SyntaxNode,
+            symbol ISymbol,
+            use ExpressionSyntax,
+            $scope SyntaxNode,
+            inherited SyntaxNode?,
+            requireRuntimeNonNullProof bool
+        ) SyntaxNode? {
             let assignment = switch statement {
                 case expressionStatement is ExpressionStatementSyntax: expressionStatement.Expression as AssignmentExpressionSyntax
                 case assigned is AssignmentExpressionSyntax: assigned
@@ -535,7 +586,7 @@ partial class CSharpToGSharpTranslator {
                 )
                 // The target has its own postcondition. Other symbols cannot gain facts from the optional RHS.
                 return if this.BindsTo(coalescing.Left, symbol) {
-                    this.GetGSharpAssignmentNarrowingProof(
+                    this.GetGSharpAssignmentStoreProof(
                         coalescing,
                         symbol,
                         use,
@@ -560,7 +611,7 @@ partial class CSharpToGSharpTranslator {
                 )
             }
             if node is AssignmentExpressionSyntax assignment && this.BindsTo(assignment.Left, symbol) {
-                return this.GetGSharpAssignmentNarrowingProof(
+                return this.GetGSharpAssignmentStoreProof(
                     assignment,
                     symbol,
                     use,
@@ -639,19 +690,25 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             for loop in proof.Ancestors().OfType[ForStatementSyntax]() {
-                if !loop.Initializers.Any((initializer ExpressionSyntax) -> initializer.Span.Contains(proof.Span)) ||
+                let declaration = loop.Declaration
+                let isDeclaration = declaration != nil && declaration.Span.Contains(proof.Span)
+                if (
+                    !isDeclaration && !loop.Initializers.Any(
+                        (initializer ExpressionSyntax) -> initializer.Span.Contains(proof.Span)
+                    )
+                ) ||
                     !loop
                     .Span
                     .Contains(effectiveTarget.Span) {
                     continue
                 }
                 // A for-initializer runs once. It cannot restore a fact removed at the loop's region entry.
-                if this.AssignmentRegionInvalidatesNarrowing(
-                    symbol,
-                    loop,
-                    loop.Initializers.Last().Span.End,
-                    loop.Span.End
-                ) {
+                let headerEnd = if declaration != nil {
+                    declaration.Span.End
+                } else {
+                    loop.Initializers.Last().Span.End
+                }
+                if this.AssignmentRegionInvalidatesNarrowing(symbol, loop, headerEnd, loop.Span.End) {
                     return false
                 }
             }
