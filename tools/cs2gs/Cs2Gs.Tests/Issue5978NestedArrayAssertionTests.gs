@@ -86,6 +86,47 @@ public static class P {
         )
     }
 
+    @Fact
+    func ByRefElementPromotionAndReassignment_DoNotAssertNonNullOuterAliases() {
+        let source = `
+#nullable enable
+using System;
+using System.Threading;
+public static class P {
+    static string? cache;
+    static string?[]? replacement = new string?[] { null };
+    static T[] MakeArray<T>(T value) => new T[] { value };
+    static void Consume(string[] values) { }
+    public static void Main() {
+        var consumedRow = new[] { "ok" };
+        Consume(consumedRow);
+        var row = new[] { "ok" };
+        var alias = row;
+        var rows = new[] { consumedRow, alias, new[] { Volatile.Read(ref cache!) } };
+        row = new string[] { "next" };
+        row = MakeArray("final");
+        var snapshots = new[] { row, alias };
+        row = Volatile.Read(ref replacement!);
+        Console.Write(rows[0][0].Length + "|" + rows[1][0] + "|" + (rows[2][0] == null) + "|" +
+            snapshots[0][0] + "|" + snapshots[1][0] + "|" + (row[0] == null));
+    }
+}
+`
+        let printed = Translate(source)
+        AssertNoRelevantDiagnostics(printed)
+        GoldenFile.AssertMatches(
+            Path.Combine(AppContext.BaseDirectory, "Fixtures", "Issue5978ByRefArrayAliases.golden"),
+            printed
+        )
+        Assert.Contains("row = Volatile.Read(&replacement)!!", printed)
+        Assert.Contains("rows[0][0]!!.Length", printed)
+        LiteralConstructionRuntimeParity.AssertMatches(
+            source,
+            verifyTranslation: (raw string) -> Assert.Equal(printed, raw),
+            verifyAssembly: VerifyStrictIL
+        )
+    }
+
     shared {
         private func Translate(source string) string {
             let project = CSharpProjectLoader.LoadInMemory(
