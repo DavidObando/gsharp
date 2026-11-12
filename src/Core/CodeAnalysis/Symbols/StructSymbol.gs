@@ -1671,9 +1671,8 @@ class StructSymbol : TypeSymbol {
     func MarkCompleteReifiedTypeParameterVector() -> HasCompleteReifiedTypeParameterVector = true
 
     /// Marks this class as an `@Attribute`-sugar attribute type per
-    /// ADR-0047 §5. Intended to be called once by the binder after
-    /// (cref:Symbol.SetAttributes) when the bound annotation list
-    /// contains the `@Attribute` marker.
+    /// ADR-0047 §5. The binder consumes the marker before binding
+    /// attribute applications within this declaration.
     func SetIsAttributeClass() {
         IsAttributeClass = true
     }
@@ -1690,11 +1689,12 @@ class StructSymbol : TypeSymbol {
     /// @returns `true` when this class is or derives from (cref:System.Attribute).
     func DerivesFromSystemAttribute() bool {
         for current in GetHierarchy() {
-            if current.IsAttributeClass {
+            let definition = current.Definition ?? current
+            if definition.IsAttributeClass {
                 return true
             }
-            if current.ImportedBaseType != nil {
-                let clr = current.ImportedBaseType!!.ClrType
+            if definition.ImportedBaseType != nil {
+                let clr = definition.ImportedBaseType!!.ClrType
                 for var t Type? = clr; t != nil; t = t!!.BaseType {
                     if t.FullName == typeof(Attribute).FullName {
                         return true

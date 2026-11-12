@@ -389,6 +389,12 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         typeName
     )
 
+    /// Reports declaration dependencies that exceed the available execution stack.
+    internal func ReportDeclarationDependencyTooDeep(location TextLocation) -> Report(
+        location,
+        DiagnosticDescriptors.DeclarationDependencyTooDeep
+    )
+
     /// Issue #976: GS0382 — a `struct` (value type) named a class or
     /// another struct in its `: …` clause. A CLR value type always derives
     /// from `System.ValueType` and cannot declare a user base type; its
