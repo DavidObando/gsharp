@@ -12,6 +12,145 @@ import System.Text
 import Xunit
 
 class Issue5951SourceMaybeNullReturnTests {
+    @Fact
+    func DeclaredDelegateReturns_StayDistinctFromAsyncEnvelopes() {
+        LiteralConstructionRuntimeParity.AssertMatches(`
+#nullable enable
+using System;
+using System.Threading.Tasks;
+public delegate string? Reader();
+public static class P
+{
+    static int calls;
+    static string? Value(bool missing) { calls++; return missing ? null : "abc"; }
+    static async Task<string?> Payload() { calls++; await Task.Yield(); return null; }
+#nullable disable
+    static int Read(Reader reader) => reader().Length;
+    public static void Main()
+    {
+        Reader missing = () => Value(true);
+        Reader present = () => Value(false);
+        try { Console.WriteLine(Read(missing)); }
+        catch (NullReferenceException) { Console.WriteLine("null"); }
+        Console.WriteLine(Read(present));
+        Console.WriteLine(Value(false).Length);
+        try { Console.WriteLine(Value(true).Length); }
+        catch (NullReferenceException) { Console.WriteLine("null"); }
+        Console.WriteLine(Payload().GetAwaiter().GetResult() == null);
+        Console.WriteLine(calls);
+    }
+}`, verifyTranslation: (
+                printed string
+            ) -> {
+                Assert.DoesNotContain(
+                    "Payload()!!",
+                    printed
+                )
+            }, nullableContext: NullableContextOptions.Disable, expectedOutput: string.Join(
+                Environment.NewLine,
+                []string{"null", "3", "3", "null", "True", "5"}
+            ) +
+                Environment.NewLine)
+    }
+
+    @Fact
+    func EnvelopeStorage_DoesNotBecomeAwaitedResultEvidence() {
+        LiteralConstructionRuntimeParity.AssertMatches(`
+#nullable disable
+using System;
+using System.Diagnostics.CodeAnalysis;
+using System.Threading.Tasks;
+public static class P
+{
+    static int calls;
+    [return: MaybeNull]
+    static Task<string> Empty() { calls++; Task<string> task = null; return task; }
+    static Task<string> Forward() => Empty();
+    static async Task<string> Inner() { calls++; await Task.Yield(); return null; }
+    [return: MaybeNull]
+    static Task<string> Both() { var task = Inner(); return task; }
+    static ValueTask<string?> StructResult() => ValueTask.FromResult<string?>(null);
+    public static void Main()
+    {
+        Console.WriteLine(Forward() == null);
+        Console.WriteLine(Both().GetAwaiter().GetResult() == null);
+        Console.WriteLine(StructResult().Result == null);
+        Console.WriteLine(calls);
+    }
+}`, verifyTranslation: (
+                printed string
+            ) -> {
+                Assert.Contains(
+                    "func Empty() Task[string]?",
+                    printed
+                )
+                Assert.DoesNotContain(
+                    "func Empty() Task[string?]?",
+                    printed
+                )
+                Assert.Contains(
+                    "func Both() Task[string?]?",
+                    printed
+                )
+                Assert.DoesNotContain(
+                    "ValueTask[string?]?",
+                    printed
+                )
+            }, nullableContext: NullableContextOptions.Disable, expectedOutput: string.Join(
+                Environment.NewLine,
+                []string{"True", "True", "True", "2"}
+            ) +
+                Environment.NewLine)
+    }
+
+    @Fact
+    func LaterEnvelopeWrites_PromoteStorageAndForwardedReturns() {
+        LiteralConstructionRuntimeParity.AssertMatches(`
+#nullable disable
+using System;
+using System.Diagnostics.CodeAnalysis;
+using System.Threading.Tasks;
+public static class P
+{
+    static int calls;
+    [return: MaybeNull]
+    static Task<int> Empty() { calls++; return null; }
+    static Task<int> Forward()
+    {
+        var task = Task.FromResult(1);
+        task = Empty();
+        return task;
+    }
+    static Task<int> NonNull()
+    {
+        var task = Task.FromResult(1);
+        task = Task.FromResult(2);
+        return task;
+    }
+    public static void Main()
+    {
+        Console.WriteLine(Forward() == null);
+        Console.WriteLine(NonNull().Result);
+        Console.WriteLine(calls);
+    }
+}`, verifyTranslation: (
+                printed string
+            ) -> {
+                Assert.DoesNotContain(
+                    "Empty()!!",
+                    printed
+                )
+                Assert.DoesNotContain(
+                    "func NonNull() Task[int32]?",
+                    printed
+                )
+            }, nullableContext: NullableContextOptions.Disable, expectedOutput: string.Join(
+                Environment.NewLine,
+                []string{"True", "2", "1"}
+            ) +
+                Environment.NewLine)
+    }
+
     shared {
         private func AssertMetadataBoundary(knownSource bool, inheritedContract bool = false) {
             let librarySource = if inheritedContract {

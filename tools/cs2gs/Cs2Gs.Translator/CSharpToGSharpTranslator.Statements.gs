@@ -541,7 +541,8 @@ partial class CSharpToGSharpTranslator {
         /// unlike C#'s erased `!`, G#'s `!!` is a checked assertion that
         /// THROWS on nil.
         private func InferredLocalDeclarationIsNullable(local ILocalSymbol) bool {
-            if this.ShouldPromoteToNullableReference(local) ||
+            if ObliviousNullabilityAnalyzer.ValueContractIsPromoted(this.context.Compilation, local) ||
+                this.ShouldPromoteToNullableReference(local) ||
                 (
                 IsAnnotatedNullableReference(local.Type) && this.IsUsedAsNullable(
                     local,

@@ -2297,6 +2297,12 @@ partial class CSharpToGSharpTranslator {
             if this.DeclaringRepositoryMemberPromotes(symbol) {
                 return true
             }
+            if symbol is ILocalSymbol local && ObliviousNullabilityAnalyzer.ValueContractIsPromoted(
+                this.context.Compilation,
+                local
+            ) {
+                return true
+            }
             if symbol is IMethodSymbol envelopeMethod && ObliviousNullabilityAnalyzer.IsReferenceReturnEnvelope(
                 envelopeMethod
             ) {
