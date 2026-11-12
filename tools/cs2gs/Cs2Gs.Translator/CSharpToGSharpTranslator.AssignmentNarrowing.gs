@@ -8,6 +8,7 @@ import Cs2Gs.CodeModel.Ast
 import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
 import Microsoft.CodeAnalysis.CSharp.Syntax
+import Microsoft.CodeAnalysis.Operations
 import System.Collections.Generic
 import System.Linq
 
@@ -385,6 +386,44 @@ partial class CSharpToGSharpTranslator {
             inherited SyntaxNode?,
             requireRuntimeNonNullProof bool
         ) SyntaxNode? {
+            let proof = this.GetGSharpInitializerMutationProofCore(
+                node,
+                symbol,
+                use,
+                $scope,
+                inherited,
+                requireRuntimeNonNullProof
+            )
+            if node is ExpressionSyntax expression &&
+                this
+                .context
+                .SemanticModel
+                .GetConversion(expression)
+                .IsUserDefined {
+                // gsc exports no inner assignment facts through conversion calls. Keep only unaffected incoming provenance.
+                return if proof != nil && !node.Span.Contains(proof.Span) &&
+                    !this
+                    .ExecutionEffectInvalidatesAssignmentNarrowing(
+                    node,
+                    this.IsClosureAssignedVariable(symbol),
+                    this.IsByReferenceVariable(symbol)
+                ) {
+                    proof
+                } else {
+                    default(SyntaxNode?)
+                }
+            }
+            return proof
+        }
+
+        private func GetGSharpInitializerMutationProofCore(
+            node SyntaxNode,
+            symbol ISymbol,
+            use ExpressionSyntax,
+            $scope SyntaxNode,
+            inherited SyntaxNode?,
+            requireRuntimeNonNullProof bool
+        ) SyntaxNode? {
             var inherited = inherited
             if this.IsClosureBoundary(node) {
                 return inherited
@@ -424,7 +463,13 @@ partial class CSharpToGSharpTranslator {
                 )
                 return if (thenProof != nil || conditional.WhenTrue is ThrowExpressionSyntax) &&
                     (elseProof != nil || conditional.WhenFalse is ThrowExpressionSyntax) {
-                    cast[SyntaxNode](conditional)
+                    if object.ReferenceEquals(thenProof, elseProof) || conditional.WhenFalse is ThrowExpressionSyntax {
+                        thenProof
+                    } else if conditional.WhenTrue is ThrowExpressionSyntax {
+                        elseProof
+                    } else {
+                        cast[SyntaxNode](conditional)
+                    }
                 } else {
                     default(SyntaxNode?)
                 }
@@ -631,8 +676,18 @@ partial class CSharpToGSharpTranslator {
             closureAssigned bool,
             byReference bool
         ) bool ->
-        this.SyntaxNodeWritesSymbol(node, symbol) ||
-            (closureAssigned && this.NodeMayRunEscapedClosure(node)) ||
+        this.SyntaxNodeWritesSymbol(node, symbol) || this.ExecutionEffectInvalidatesAssignmentNarrowing(
+            node,
+            closureAssigned,
+            byReference
+        )
+
+        private func ExecutionEffectInvalidatesAssignmentNarrowing(
+            node SyntaxNode,
+            closureAssigned bool,
+            byReference bool
+        ) bool ->
+        (closureAssigned && this.NodeMayRunEscapedClosure(node)) ||
             (byReference && (this.NodeRunsStaticTypeInitializer(node) || this.NodeMayWriteReferenceStorage(node)))
 
         // Chained stores complete conversions, setters, and reference-storage effects after their inner assignment.
@@ -656,6 +711,10 @@ partial class CSharpToGSharpTranslator {
                 .SemanticModel
                 .GetConversion(assignment.Right)
                 .IsUserDefined ||
+                this
+                .context
+                .SemanticModel
+                .GetOperation(assignment) is ICompoundAssignmentOperation{OperatorMethod: not nil} ||
                 this.NodeRunsStaticTypeInitializer(assignment.Left) ||
                 (includeReferenceStorageWrites && this.NodeMayWriteReferenceStorage(assignment))
         )

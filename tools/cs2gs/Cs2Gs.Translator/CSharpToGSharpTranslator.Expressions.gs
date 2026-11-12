@@ -14816,6 +14816,7 @@ partial class CSharpToGSharpTranslator {
             return comparesSymbolToNull
         }
 
+        // Native handles and retargeted analyzer types use emitted nil tests, not their source CLR operators.
         private func NullComparisonUsesUserOperator(
             comparison Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax
         ) bool ->
@@ -14830,7 +14831,16 @@ partial class CSharpToGSharpTranslator {
             .GetOperation(comparison) is IBinaryOperation{IsLifted: false, OperatorMethod: {} method} &&
             method
             .ContainingType
-            .SpecialType != SpecialType.System_String
+            .SpecialType != SpecialType.System_String &&
+            !CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(
+            method.ContainingType,
+            this.context.Compilation
+        ) &&
+            !(
+            this.InAnalyzerApiMode &&
+                RoslynTypeMetadataName(method.ContainingType) is {} roslynName &&
+                RoslynAnalyzerApiMap.TryMapType(roslynName, out _)
+        )
 
         /// ADR-0208 R15 (#5237): gsc kills the narrowing of a local that a CLOSURE
         /// assigns at every node that runs source code, because that code may run a
@@ -19948,6 +19958,14 @@ partial class CSharpToGSharpTranslator {
         private func IsLoweredToCall(binary Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax) bool {
             if this.NodeEmitsConstantValueEquality(binary) {
                 return true
+            }
+            if (
+                binary.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.EqualsExpression) || binary.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.NotEqualsExpression
+                )
+            ) &&
+                (IsNullLiteral(Unparenthesize(binary.Left)) || IsNullLiteral(Unparenthesize(binary.Right))) {
+                return this.NullComparisonUsesUserOperator(binary)
             }
             return this
                 .context

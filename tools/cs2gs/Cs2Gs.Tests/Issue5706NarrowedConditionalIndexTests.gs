@@ -21,9 +21,103 @@ import Xunit
 /// On 6326b12f6, compound results throw, incoming coalescing values warn, and disposal exits lose nullable storage.
 /// The same head fails the by-reference join control. Shared-query mutants reject the bridge regression cases.
 /// On 9897d36fc, adjacent effects, initializer mutations and overloaded-null tests fail; the loop-entry mutant fails too.
+/// On a6f5ff7fb, contextual conversions and enclosing compound calls leave stale initializer facts.
 /// The C# output oracle also rejects erased null guards and throwing bridges on nullable stores.
 /// Each test also compares the translated program's output with C#.
 open class Issue5706NarrowedConditionalIndexTests {
+    @Fact
+    func InitializerConversions_ApplyAfterAssignmentValues() {
+        let printed = AssertRunsWithoutConditionalIndexWarning(`
+#nullable enable
+using System;
+namespace Demo
+{
+    public static class P
+    {
+        static Action? clear;
+        sealed class Token
+        {
+            public static implicit operator Token(string? value) { clear?.Invoke(); return new Token(); }
+        }
+        static char? Direct()
+        {
+            string? s = null;
+            clear = () => s = null;
+            Token value = s ??= "a";
+            return s?[0];
+        }
+        static char? Conditional(bool flag)
+        {
+            string? s = null;
+            clear = () => s = null;
+            Token value = flag ? (s ??= "t") : (s ??= "f");
+            return s?[0];
+        }
+        static char? Uncaptured()
+        {
+            string? s = null;
+            Token value = s ??= "u";
+            return s?[0];
+        }
+        static char? Incoming()
+        {
+            string? s = null;
+            s = "i";
+            Token value = s ??= "unused";
+            return s?[0];
+        }
+        static char? Existing()
+        {
+            string? s = null;
+            s = "e";
+            Token value = s;
+            return s?[0];
+        }
+        public static string Run() =>
+            Direct() + "|" + Conditional(true) + "|" + Conditional(false) + "|" + Uncaptured() + "|" +
+            Incoming() + "|" + Existing();
+    }
+}`)
+        Assert.Contains("s?[0]", printed)
+        Assert.Contains("cast[char?](s[0])", printed)
+    }
+
+    @Fact
+    func InitializerCompoundCalls_CompleteAfterInnerAssignments() {
+        let printed = AssertRunsWithoutConditionalIndexWarning(`
+#nullable enable
+using System;
+namespace Demo
+{
+    public static class P
+    {
+        static Action? clear;
+        sealed class Box
+        {
+            public static Box operator +(Box value, string? text) { clear?.Invoke(); return value; }
+        }
+        static char? Read()
+        {
+            string? s = null;
+            clear = () => s = null;
+            var b = new Box();
+            var value = (b += (s ??= "a"));
+            return s?[0];
+        }
+        static char? Uncaptured()
+        {
+            string? s = null;
+            var b = new Box();
+            var value = (b += (s ??= "u"));
+            return s?[0];
+        }
+        public static string Run() => Read() + "|" + Uncaptured();
+    }
+}`)
+        Assert.Contains("s?[0]", printed)
+        Assert.Contains("cast[char?](s[0])", printed)
+    }
+
     @Fact
     func LoopJoins_DoNotRebaseInvalidInheritedProofs() {
         let printed = AssertRunsWithoutConditionalIndexWarning(`
