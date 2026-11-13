@@ -1594,18 +1594,26 @@ partial class BoundScope {
     /// @param currentContainingType The source type containing the reference.
     /// @param simpleName The nested type's simple name.
     /// @param preferredArity The exact requested arity, or -1 when unspecified.
-    /// @param type The resolved nested type, including enclosing generic substitutions.
+    /// @param type The resolved nested type.
     /// @returns Whether a lexically visible nested type was found.
     func TryLookupLexicalNestedTypeAlias(
         currentContainingType TypeSymbol,
         simpleName string,
         preferredArity int32,
         @NotNullWhen(true) out type TypeSymbol?
+    ) bool -> TryLookupLexicalNestedTypeAlias(currentContainingType, simpleName, preferredArity, out type, false)
+
+    internal func TryLookupLexicalNestedTypeAlias(
+        currentContainingType TypeSymbol,
+        simpleName string,
+        preferredArity int32,
+        @NotNullWhen(true) out type TypeSymbol?,
+        definitionOnly bool
     ) bool {
         for var current TypeSymbol? = currentContainingType; current != nil; current = TypeContainingType(current) {
             let currentDefinition = TypeDefinition(current)
             if TryLookupNestedTypeAlias(currentDefinition, simpleName, preferredArity, out var direct) {
-                type = if current is StructSymbol directOwner {
+                type = if !definitionOnly && current is StructSymbol directOwner {
                     ApplyEnclosingConstruction(direct!!, directOwner)
                 } else {
                     direct
@@ -1620,7 +1628,11 @@ partial class BoundScope {
                 out var inherited,
                 out var declaringContainer
             ) {
-                type = ApplyEnclosingConstruction(inherited!!, declaringContainer!!)
+                type = if definitionOnly {
+                    inherited
+                } else {
+                    ApplyEnclosingConstruction(inherited!!, declaringContainer!!)
+                }
                 return true
             }
         }

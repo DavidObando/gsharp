@@ -29,6 +29,8 @@ Separate source declaration scheduling into header, member, and usage-validation
    Constraint targets require nominal identities, not completed child headers.
    Inherited qualifier lookup through an active declaration waits for the supplying ancestors' constructed signatures.
    Apply the same supplying-ancestor readiness query to lexical inherited names before considering global homonyms.
+   Nominal discovery reads lexical nested definitions without constructing provisional enclosing arguments.
+   Bare unqualified names use arity zero; qualified prefixes retain their existing unspecified-arity behavior.
    Plain nominal type arguments use declared identities; only qualifier lookup requires their header readiness.
    Complete constructed base signatures later; nominal identity alone does not publish header or member readiness.
    Resolve each header once in its captured declaration scope, package, tree, unsafe context, and type-parameter context.

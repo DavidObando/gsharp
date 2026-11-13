@@ -476,12 +476,13 @@ internal partial class DeclarationBinder {
         }
         let previousTree = $scope.SetCurrentReferencingSyntaxTree(clause.SyntaxTree)
         try {
+            let headArity = clause.GetSegmentTypeArguments(0)?.Count ?? if clause.HasQualifier {
+                -1
+            } else {
+                0
+            }
             if !nominalOnly {
-                let lexicalPrerequisite = FindPendingLexicalTypeHeader(
-                    identifier.ValueText,
-                    clause.GetSegmentTypeArguments(0)?.Count ?? -1,
-                    activeHeaders
-                )
+                let lexicalPrerequisite = FindPendingLexicalTypeHeader(identifier.ValueText, headArity, activeHeaders)
                 if lexicalPrerequisite != nil {
                     prerequisite = lexicalPrerequisite
                     return nil
@@ -495,7 +496,11 @@ internal partial class DeclarationBinder {
             var current TypeSymbol? = nil
             for var index = 0; index < segments.Length; index++ {
                 let name = string.Join(".", segments, 0, index + 1)
-                let arity = clause.GetSegmentTypeArguments(index)?.Count ?? -1
+                let arity = if index == 0 {
+                    headArity
+                } else {
+                    clause.GetSegmentTypeArguments(index)?.Count ?? -1
+                }
                 var resolved TypeSymbol? = nil
                 if current is {} previous {
                     let definition = switch previous {
@@ -517,7 +522,21 @@ internal partial class DeclarationBinder {
                         return nil
                     }
                 } else {
-                    resolved = lookupTypeWithArity(name, arity)
+                    if nominalOnly &&
+                        index == 0 &&
+                        binderCtx.CurrentContainingType is {} containing &&
+                        binderCtx
+                        .CurrentTypeParameters
+                        ?.ContainsKey(name) != true && $scope.TryLookupLexicalNestedTypeAlias(
+                        containing,
+                        name,
+                        arity,
+                        out var nominal,
+                        definitionOnly: true
+                    ) {
+                        resolved = nominal
+                    }
+                    resolved ??= lookupTypeWithArity(name, arity)
                     resolved ??= ResolveAttributeName(name)
                 }
                 current = resolved
