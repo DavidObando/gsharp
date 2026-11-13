@@ -4,6 +4,7 @@
 
 package GSharp.Core.Tests.CodeAnalysis.Symbols
 
+import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Symbols.Display
@@ -17,6 +18,7 @@ import System.Linq
 import System.Runtime.InteropServices
 import System.Threading.Tasks
 import Xunit
+import Xunit.Abstractions
 
 /// Hover/type display for symbols typed as imported CLR types. A constructed
 /// generic such as `Task[string]` must render with its friendly G# name
@@ -41,6 +43,120 @@ public class ImportedReturns {
             "func " + methodName + "() " + expectedType,
             SymbolDisplay.ToDisplayString(symbol, SymbolDisplayFormat.Signature)
         )
+    }
+
+    class Issue5492SymbolDisplayContextTests {
+        private let output ITestOutputHelper
+
+        init(output ITestOutputHelper) {
+            this.output = output
+        }
+
+        @Theory
+        @InlineData("api.Consume[Item](item)", "func Consume(value Item)")
+        @InlineData("Enumerable.Repeat[Item](item, 2)", "func Repeat(element Item, count int32) IEnumerable[Item]")
+        @InlineData("item.Inspect[Item]()", "func Inspect(value Item)")
+        func GenericCall_PreservesParameterOnlyStaticAndExtensionArguments(expression string, expected string) {
+            using let fixture = CSharpFixture(Contract)
+            let tree = SyntaxTree.Parse(`import DisplayContext
+    import System.Linq
+    class Item { }
+    func Use(api Calls, item Item) {
+        EXPRESSION
+    }`.Replace("EXPRESSION", expression))
+            let compilation = Compilation(fixture.RuntimeReferences(), tree)
+            compilation.RecordMemberGroups = true
+            Assert.Empty(compilation.GlobalScope.Diagnostics)
+            Assert.Empty(compilation.BoundProgram.Diagnostics)
+            let model = compilation.GetSemanticModel(tree)
+            let accessor = Assert.Single(tree.Root.DescendantNodesAndSelf().OfType[AccessorExpressionSyntax]())
+            let call = Assert.IsAssignableFrom[BoundCallOperationExpression](model.GetBoundNode(accessor))
+            let symbol = Assert.IsType[ImportedFunctionSymbol](model.GetSymbolInfo(accessor).Symbol)
+            let label = SymbolDisplay.ToDisplayString(symbol, SymbolDisplayFormat.Signature)
+            let candidates = model.GetMemberGroup(accessor)
+            Assert.NotEmpty(candidates)
+            let selected = Assert.Single(candidates)
+            let candidateLabel = SymbolDisplay.ToDisplayString(selected, SymbolDisplayFormat.Signature)
+            output.WriteLine("bound expression: ${SymbolDisplay.ToTypeDisplayString(call.Type)}")
+            output.WriteLine("selected signature: $label")
+            output.WriteLine("member-group candidate: $candidateLabel")
+            Assert.Same(call.CalledFunction, symbol)
+            Assert.Equal(expected, label)
+        }
+
+        @Fact
+        func ConditionalReturn_KeepsDeclaredSignatureSeparateFromExpressionNarrowing() {
+            using let fixture = CSharpFixture(Contract)
+            let tree = SyntaxTree.Parse(`import DisplayContext
+    func Use(api Calls) {
+        let value = api.Repeat("text")
+    }`)
+            let compilation = Compilation(fixture.RuntimeReferences(), tree)
+            compilation.RecordMemberGroups = true
+            Assert.Empty(compilation.GlobalScope.Diagnostics)
+            Assert.Empty(compilation.BoundProgram.Diagnostics)
+            let model = compilation.GetSemanticModel(tree)
+            let accessor = Assert.Single(tree.Root.DescendantNodesAndSelf().OfType[AccessorExpressionSyntax]())
+            let call = Assert.IsType[BoundImportedInstanceCallExpression](model.GetBoundNode(accessor))
+            let symbol = Assert.IsType[ImportedFunctionSymbol](model.GetSymbolInfo(accessor).Symbol)
+            let label = SymbolDisplay.ToDisplayString(symbol, SymbolDisplayFormat.Signature)
+            let member = Assert.Single(model.LookupMembers(accessor.Span.Start, call.Receiver.Type, "Repeat"))
+            let memberLabel = SymbolDisplay.ToDisplayString(member, SymbolDisplayFormat.Signature)
+            output.WriteLine("bound expression: ${SymbolDisplay.ToTypeDisplayString(call.Type)}")
+            output.WriteLine("selected signature: $label")
+            output.WriteLine("completion member: $memberLabel")
+            Assert.Equal(ReferenceNullabilityKind.NotNull, call.Type.ReferenceNullability)
+            Assert.Equal(ReferenceNullabilityKind.Nullable, symbol.Type.ReferenceNullability)
+            Assert.Equal("func Repeat(input string?) string?", label)
+            Assert.Equal(label, memberLabel)
+            Assert.Equal(
+                label,
+                SymbolDisplay.ToDisplayString(
+                    Assert.Single(model.GetMemberGroup(accessor)),
+                    SymbolDisplayFormat.Signature
+                )
+            )
+        }
+
+        @Fact
+        func SeparateStaticCalls_DoNotShareErasedMethodArgumentContext() {
+            let tree = SyntaxTree.Parse(`import System.Linq
+class First { }
+class Second { }
+func Use(first First, second Second) {
+    let a = Enumerable.Repeat[First](first, 1)
+    let b = Enumerable.Repeat[Second](second, 2)
+}`)
+            let compilation = Compilation(tree)
+            Assert.Empty(compilation.GlobalScope.Diagnostics)
+            Assert.Empty(compilation.BoundProgram.Diagnostics)
+            let model = compilation.GetSemanticModel(tree)
+            let accessors = tree.Root.DescendantNodesAndSelf().OfType[AccessorExpressionSyntax]().ToArray()
+            Assert.Equal(2, accessors.Length)
+            let first = Assert.IsType[ImportedFunctionSymbol](model.GetSymbolInfo(accessors[0]).Symbol)
+            let second = Assert.IsType[ImportedFunctionSymbol](model.GetSymbolInfo(accessors[1]).Symbol)
+            Assert.NotSame(first, second)
+            let firstLabel = SymbolDisplay.ToDisplayString(first, SymbolDisplayFormat.Signature)
+            let secondLabel = SymbolDisplay.ToDisplayString(second, SymbolDisplayFormat.Signature)
+            output.WriteLine("first signature: $firstLabel")
+            output.WriteLine("second signature: $secondLabel")
+            Assert.Equal("func Repeat(element First, count int32) IEnumerable[First]", firstLabel)
+            Assert.Equal("func Repeat(element Second, count int32) IEnumerable[Second]", secondLabel)
+        }
+
+        shared {
+            private const Contract string = `#nullable enable
+    namespace DisplayContext {
+        public sealed class Calls {
+            public void Consume<T>(T value) { }
+            [return: System.Diagnostics.CodeAnalysis.NotNullIfNotNull("input")]
+            public string? Repeat(string? input) => input;
+        }
+        public static class Extensions {
+            public static void Inspect<T>(this T value) { }
+        }
+    }`
+        }
     }
 
     @Fact

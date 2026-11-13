@@ -46,6 +46,12 @@ class BoundImportedCallExpression : BoundCallOperationExpression {
             typeArgumentSymbols
         }
         StaticContainerType = staticContainerType
+        if !TypeArgumentSymbols.IsDefaultOrEmpty {
+            Function.SignatureMethodTypeArguments = TypeArgumentSymbols
+        }
+        if StaticContainerType != nil {
+            Function.SignatureReceiverType = StaticContainerType
+        }
         // Issue #3802: a `[return: NotNullIfNotNull(nameof(p))]` post-condition
         // is a fact about THIS call, so it narrows the node's type, never the
         // declared `Function.Type`.

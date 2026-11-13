@@ -293,4 +293,52 @@ func Use(comparison Comparison[Item]) {
             StringComparison.Ordinal
         )
     }
+
+    @Fact
+    func StaticMethodArguments_ReachSelectedHoverAndSignatureButLeaveCompletionOpen() {
+        const source = `import System.Linq
+class Item { }
+func Use(item Item) {
+    let repeated = Enumerable.Repeat[Item](item, 2)
+}`
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = ServerCompilation.Create(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let position = LanguageServerTestHelpers.PositionOf(source, "Repeat")
+        let token = Assert.IsAssignableFrom[SyntaxToken](
+            SemanticLookup.FindTokenAt(content.SyntaxTree, SemanticLookup.ToOffset(content, position))
+        )
+        let symbol = Assert.IsType[ImportedFunctionSymbol](
+            compilation.GetSemanticModel(content.SyntaxTree).GetSymbolInfo(token).Symbol
+        )
+        let help = Assert.IsType[SignatureHelp](
+            SignatureHelpComputer.ComputeSignatureHelp(
+                content,
+                Position(position.Line, position.Character + "Repeat[Item](".Length)
+            )
+        )
+        let completion = Assert.Single(
+            CompletionComputer.ComputeCompletions(content, position).Where(
+                (item CompletionItem) -> item.Label == "Repeat"
+            )
+        )
+        let label = HoverComputer.FormatSymbol(symbol)
+        let hover = Assert.IsType[Hover](HoverComputer.ComputeHover(content, position)).Contents.ToString()
+        output.WriteLine("bound return: ${SymbolDisplay.ToTypeDisplayString(symbol.Type)}")
+        output.WriteLine("symbol: $label")
+        output.WriteLine("hover: $hover")
+        output.WriteLine("signature: ${help.Signatures.ElementAt(help.ActiveSignature).Label}")
+        output.WriteLine("completion: ${completion.Detail}")
+        const expected = "func Repeat(element Item, count int32) IEnumerable[Item]"
+        Assert.Equal(expected, label)
+        Assert.Equal(expected, help.Signatures.ElementAt(help.ActiveSignature).Label)
+        Assert.Equal("element Item", help.Signatures.ElementAt(help.ActiveSignature).Parameters.First().Label)
+        Assert.Equal("func Repeat(element TResult, count int32) IEnumerable[TResult]", completion.Detail)
+        Assert.Contains(
+            "Repeat(element Item, count int32) System.Collections.Generic.IEnumerable[Item]",
+            hover,
+            StringComparison.Ordinal
+        )
+    }
 }

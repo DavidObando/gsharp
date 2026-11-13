@@ -1121,10 +1121,6 @@ shared class SignatureHelpComputer {
         if candidates.Count == 0 {
             return nil
         }
-        let signatures = candidates.Select(
-            (c Symbol) -> BuildSignature(c, IsExtensionReceiverCall(compilation, content.SyntaxTree, funcToken, c))
-        )
-            .ToList()
         var active = candidates.FindIndex((c Symbol) -> object.ReferenceEquals(c, resolved))
         // A constructed owner substitutes the candidates; the selected callee is the declared one.
         if active < 0 && resolved is FunctionSymbol{Declaration: {} resolvedDeclaration} {
@@ -1153,6 +1149,20 @@ shared class SignatureHelpComputer {
                     .DeclaringType
             )
         }
+        let signatures = candidates.Select(
+            (c Symbol, i int32) -> {
+                let displayCandidate = if i == active && resolved is ImportedFunctionSymbol imported {
+                    cast[Symbol](imported)
+                } else {
+                    c
+                }
+                return BuildSignature(
+                    displayCandidate,
+                    IsExtensionReceiverCall(compilation, content.SyntaxTree, funcToken, displayCandidate)
+                )
+            }
+        )
+            .ToList()
         if activeParameter > 0 &&
             (active < 0 || (boundSymbol == nil && signatures[active].Parameters.Count() <= activeParameter)) {
             let byArity = signatures.FindIndex((s SignatureInformation) -> s.Parameters.Count() > activeParameter)

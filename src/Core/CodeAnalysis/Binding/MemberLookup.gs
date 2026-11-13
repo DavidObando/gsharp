@@ -6064,7 +6064,7 @@ internal class MemberLookup {
                 out var declaringTypeArguments
             ) &&
                 openDefinition != nil {
-                let openMethod MethodBase? = if closedMethod is MethodInfo methodInfo {
+                var openMethod MethodBase? = if closedMethod is MethodInfo methodInfo {
                     TryGetOpenMethodOnDeclaringType(openDefinition, methodInfo)
                 } else {
                     ClrTypeUtilities.FindMetadataDefinition(
@@ -6072,6 +6072,13 @@ internal class MemberLookup {
                         closedMethod,
                         BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static
                     ) as MethodBase
+                }
+                if !methodTypeArguments.IsDefaultOrEmpty &&
+                    openMethod is MethodInfo{
+                    IsGenericMethod: true,
+                    IsGenericMethodDefinition: false
+                } constructedMethod {
+                    openMethod = constructedMethod.GetGenericMethodDefinition()
                 }
                 let openParameters[]?ParameterInfo = openMethod?.GetParameters()
                 if openParameters != nil && uint32(parameterIndex) < uint32(openParameters.Length) {

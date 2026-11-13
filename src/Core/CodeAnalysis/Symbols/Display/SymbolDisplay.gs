@@ -154,7 +154,15 @@ shared class SymbolDisplay {
             }
             case importedFunction is ImportedFunctionSymbol {
                 let symbolicSignature = RequiresSignatureProjection(importedFunction.SignatureReceiver) ||
-                    RequiresSignatureProjection(importedFunction.Type)
+                    RequiresSignatureProjection(importedFunction.Type) ||
+                    (
+                    !importedFunction
+                        .SignatureMethodTypeArguments
+                        .IsDefaultOrEmpty &&
+                        importedFunction
+                        .SignatureMethodTypeArguments
+                        .Any(RequiresSignatureProjection)
+                )
                 AppendClrMethod(
                     builder,
                     format,
