@@ -43,7 +43,8 @@ internal partial class ExpressionBinder {
     private func BuildInstanceMethodGroup(
         receiver BoundExpression?,
         methods ImmutableArray[FunctionSymbol],
-        forceNonVirtualDispatch bool = false
+        forceNonVirtualDispatch bool = false,
+        staticOwnerType StructSymbol? = nil
     ) BoundMethodGroupExpression {
         if methods.Length == 1 && !methods[0].IsGeneric {
             let only = methods[0]
@@ -60,11 +61,13 @@ internal partial class ExpressionBinder {
             // delegate TypeSpec with a class `Var` slot in a context that
             // only has method generics (invalid metadata;
             // BadImageFormatException at runtime).
-            let owner = if receiver?.Type is StructSymbol receiverStruct &&
+            let owner = if staticOwnerType != nil && only.StaticOwnerType is StructSymbol declaredOwner {
+                TypeMemberModel.ResolveStaticMemberOwner(staticOwnerType, declaredOwner)
+            } else if receiver?.Type is StructSymbol receiverStruct &&
                 only.ReceiverType is StructSymbol declaredReceiver {
                 TypeMemberModel.ResolveStaticMemberOwner(receiverStruct, declaredReceiver)
             } else {
-                default(StructSymbol?)
+                staticOwnerType
             }
             let paramTypes = ImmutableArray.CreateBuilder[TypeSymbol](only.Parameters.Length)
             for p in only.Parameters {
@@ -75,11 +78,21 @@ internal partial class ExpressionBinder {
                 owner?.SubstituteMemberType(only.Type) ?? only.Type
             )
             let fnType = FunctionTypeSymbol.Get(paramTypes.MoveToImmutable(), returnType)
-            return BoundMethodGroupExpression(nil, receiver, only, fnType){
-                ForceNonVirtualDispatch = forceNonVirtualDispatch
-            }
+            return BoundMethodGroupExpression(
+                nil,
+                receiver,
+                only,
+                fnType,
+                if staticOwnerType == nil {
+                    nil
+                } else {
+                    owner
+                }
+            ){ForceNonVirtualDispatch = forceNonVirtualDispatch}
         }
-        return BoundMethodGroupExpression(nil, receiver, methods){ForceNonVirtualDispatch = forceNonVirtualDispatch}
+        return BoundMethodGroupExpression(nil, receiver, methods, staticOwnerType){
+            ForceNonVirtualDispatch = forceNonVirtualDispatch
+        }
     }
 
     // Issue #1467: a method group's natural delegate return type must match the
@@ -115,11 +128,7 @@ internal partial class ExpressionBinder {
         if methods.IsDefaultOrEmpty {
             return false
         }
-        methodGroup = if staticOwnerType == nil {
-            BuildInstanceMethodGroup(receiver, methods)
-        } else {
-            BoundMethodGroupExpression(nil, receiver, methods, staticOwnerType)
-        }
+        methodGroup = BuildInstanceMethodGroup(receiver, methods, staticOwnerType: staticOwnerType)
         return true
     }
 

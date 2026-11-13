@@ -126,6 +126,74 @@ Console.Write(reads)
 `, "1|21|21|11|11|31|41|True|Count|True|21|2")
     }
 
+    @Theory
+    @InlineData(false, false, false)
+    @InlineData(false, false, true)
+    @InlineData(false, true, false)
+    @InlineData(false, true, true)
+    @InlineData(true, false, false)
+    @InlineData(true, false, true)
+    @InlineData(true, true, false)
+    @InlineData(true, true, true)
+    func InferredStaticGroups_KeepNaturalTypesAndClosedOwners(generic bool, variadic bool, qualified bool) {
+        using let driver = Driver()
+        let self = if generic {
+            "Counter[T]"
+        } else {
+            "Counter"
+        }
+        driver.Check(`import System
+import System.Collections.Generic
+class SELF {
+    shared {
+        func Count(items VARIADICList[ELEMENT]) int32 -> items.Count
+        func Run(items List[ELEMENT]) {
+            let callback = GROUP
+            Console.Write(callback(items))
+            Console.Write("|")
+            Console.Write(callback.Method.Name)
+            Console.Write("|")
+            Console.Write(callback.Target == nil)
+            Console.Write("|")
+            Console.Write(callback.Method.DeclaringType == typeof(SELF))
+        }
+    }
+}
+CLOSED.Run(List[string]{"x"})
+`.Replace(
+                "SELF",
+                self
+            ).Replace(
+                "VARIADIC",
+                if variadic {
+                    "..."
+                } else {
+                    ""
+                }
+            ).Replace(
+                "ELEMENT",
+                if generic {
+                    "T"
+                } else {
+                    "string"
+                }
+            ).Replace(
+                "GROUP",
+                if qualified {
+                    self + ".Count"
+                } else {
+                    "Count"
+                }
+            ).Replace(
+                "CLOSED",
+                if generic {
+                    "Counter[string]"
+                } else {
+                    "Counter"
+                }
+            ), "1|Count|True|True")
+    }
+
     @Fact
     func RefAndOptionalParameters_KeepTheirPhysicalDelegateContracts() {
         using let driver = Driver()
