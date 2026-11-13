@@ -1665,6 +1665,7 @@ partial class CSharpToGSharpTranslator {
             public let IsArray bool
             public var TerminalKnown bool = false
             public var Terminal Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = nil
+            public var TerminalDistance int32 = 0
 
             init(local ILocalSymbol, initializer Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax) {
                 this.Local = local
@@ -1733,8 +1734,12 @@ partial class CSharpToGSharpTranslator {
                 } else {
                     alias.Terminal
                 }
-                for entry in path {
+                var distance = alias?.TerminalDistance ?? 0
+                for var i = path.Count - 1; i >= 0; i-- {
+                    let entry = path[i]
                     entry.Terminal = terminal
+                    distance++
+                    entry.TerminalDistance = distance
                     CompilationMeasurements.Count("translation.projection_alias_terminal_entries")
                 }
                 complete = true
@@ -1746,6 +1751,60 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
             }
+        }
+
+        private func ProjectedInitializerBoundaryMayReachTerminal(
+            symbol ISymbol,
+            terminal Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+        ) bool {
+            CompilationMeasurements.Count("translation.projection_alias_boundary_component_visits")
+            // Only initialized locals can occur inside the raw alias path. Its terminal remains a live query.
+            if symbol is not ILocalSymbol local {
+                return false
+            }
+            if local
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} initializer}} {
+                if initializer.SyntaxTree != this.context.SemanticModel.SyntaxTree {
+                    return true
+                }
+                let boundaryTerminal = this.GetRawProjectedInitializerTerminal(initializer)
+                // ponytail: shared terminals do not prove ancestry. Keep the canonical walk for that component and raw cycles.
+                return boundaryTerminal == nil ||
+                    (boundaryTerminal.SyntaxTree == terminal.SyntaxTree && boundaryTerminal.Span == terminal.Span)
+            }
+            return false
+        }
+
+        private func CanUseRawProjectedInitializerTerminal(
+            alias ProjectedInitializerAlias,
+            terminal Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+        ) bool {
+            // Bound the live-key census by the raw walk it can replace (#5962).
+            let queryBindings = this.state.ProjectedQueryBindingType
+            let projectedLocals = this.state.ManagedReferenceArrayNullable.ManagedReferenceArrayProjectedLocalType
+            let inProgress = this.state.ManagedReferenceArrayProjectedLocalTypeInProgress
+            let boundaryCount = int64(queryBindings.Count) + projectedLocals.Count + inProgress.Count
+            if int64(alias.TerminalDistance) <= boundaryCount {
+                return false
+            }
+            for symbol in queryBindings.Keys {
+                if this.ProjectedInitializerBoundaryMayReachTerminal(symbol, terminal) {
+                    return false
+                }
+            }
+            for local in projectedLocals.Keys {
+                if this.ProjectedInitializerBoundaryMayReachTerminal(local, terminal) {
+                    return false
+                }
+            }
+            for local in inProgress {
+                if this.ProjectedInitializerBoundaryMayReachTerminal(local, terminal) {
+                    return false
+                }
+            }
+            return true
         }
 
         private func GetManagedReferenceArrayProjectedInitializerType(
@@ -1768,6 +1827,11 @@ partial class CSharpToGSharpTranslator {
                 .ManagedReferenceArrayProjectedLocalTypeInProgress
                 .Count == 0 {
                 source = this.GetRawProjectedInitializerTerminal(initializer)
+            } else if this.GetProjectedInitializerAlias(source) is {} first && this.GetRawProjectedInitializerTerminal(
+                initializer
+            ) is {} terminal &&
+                this.CanUseRawProjectedInitializerTerminal(first, terminal) {
+                source = terminal
             } else {
                 while this.GetProjectedInitializerAlias(source) is {} alias {
                     CompilationMeasurements.Count("translation.projection_alias_live_boundary_visits")

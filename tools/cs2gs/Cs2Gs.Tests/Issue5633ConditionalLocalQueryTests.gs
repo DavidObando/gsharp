@@ -190,11 +190,17 @@ open class Issue5633ConditionalLocalQueryTests {
     }
 
     @Theory
-    @InlineData(false, false)
-    @InlineData(true, false)
-    @InlineData(false, true)
-    @InlineData(true, true)
-    func LargeScalarAliases_BoundWholePipelineAllocationsAndRetainSparseQueryWork(hasDefault bool, fanOut bool) {
+    @InlineData(false, false, false)
+    @InlineData(true, false, false)
+    @InlineData(false, true, false)
+    @InlineData(true, true, false)
+    @InlineData(false, false, true)
+    @InlineData(true, false, true)
+    func LargeScalarAliases_BoundWholePipelineAllocationsAndRetainSparseQueryWork(
+        hasDefault bool,
+        fanOut bool,
+        queryBinding bool
+    ) {
         let metrics = System.Collections.Generic.List[(SourceCount int32, EdgeCount int32, OperationCount int64)]()
         let allocations = System.Collections.Generic.List[int64]()
         let keyVisits = System.Collections.Generic.List[int64]()
@@ -219,10 +225,18 @@ open class Issue5633ConditionalLocalQueryTests {
                     body.AppendLine("var x$i = x${i - 1};")
                 }
             }
+            let chain = body.ToString() + "return x$links;\n"
             let printed = this.TranslateWithinBound(
-                "#nullable enable\nnamespace Demo { public static class P {\n" +
-                    "static T? Chain<T>(T p, int choice) {\n" +
-                    body.ToString() + "return x$links;\n} } }",
+                "#nullable enable\nusing System; using System.Linq; using System.Collections.Generic;\n" +
+                    "namespace Demo { public static class P {\n" +
+                    if queryBinding {
+                    "static IEnumerable<Func<T?>> Chain<T>(T p, int choice) {\n" +
+                        "return from item in new[] { 0 } select new Func<T?>(() => {\n" +
+                        chain +
+                        "});\n} } }"
+                } else {
+                    "static T? Chain<T>(T p, int choice) {\n" + chain + "} } }"
+                },
                 enabled: true,
                 measureWork: true
             )
@@ -237,7 +251,8 @@ open class Issue5633ConditionalLocalQueryTests {
             aliasVisits.Add(
                 this.translationWork["projection_alias_visits"] +
                     this.translationWork["projection_alias_terminal_build_visits"] +
-                    this.translationWork["projection_alias_live_boundary_visits"]
+                    this.translationWork["projection_alias_live_boundary_visits"] +
+                    this.translationWork["projection_alias_boundary_component_visits"]
             )
             terminalEntries.Add(this.translationWork["projection_alias_terminal_entries"])
             this.output.WriteLine(
@@ -251,6 +266,13 @@ open class Issue5633ConditionalLocalQueryTests {
             )
             for counter in this.translationWork {
                 this.output.WriteLine("${counter.Key}: ${counter.Value}")
+            }
+            if queryBinding {
+                Assert.True(
+                    this.translationWork["projection_alias_boundary_component_visits"] +
+                        this.translationWork["projection_alias_live_boundary_visits"] > 0,
+                    "The measured alias queries must encounter a nonempty live boundary set."
+                )
             }
             Assert.Contains(
                 if hasDefault {
@@ -990,6 +1012,7 @@ namespace Demo
                         "projection_alias_terminal_build_visits",
                         "projection_alias_terminal_entries",
                         "projection_alias_live_boundary_visits",
+                        "projection_alias_boundary_component_visits",
                         "promoted_value_evaluations",
                         "promoted_value_dependency_reads",
                         "promoted_value_invalidation_visits",
