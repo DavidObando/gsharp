@@ -368,11 +368,13 @@ public class Bag<T> : List<string> { }
     }
 
     shared {
-        private func WithTranslation(
+        internal func WithTranslation(
             source string,
             verify Action[string, string, ProcessRunResult],
             nativeExpected string? = nil,
-            librarySource string? = nil
+            librarySource string? = nil,
+            referenceTypeName string = "Demo.Counter",
+            referenceMemberName string = "Count"
         ) {
             let directory = Path.Combine(AppContext.BaseDirectory, "issue-5581", Guid.NewGuid().ToString("N"))
             let native = Path.Combine(directory, "native")
@@ -427,8 +429,8 @@ public class Bag<T> : List<string> { }
                         .LoadProjectAsync(Path.Combine(app, "Probe.csproj"), configuration: "Release")
                         .GetAwaiter()
                         .GetResult()
-                    let counter = loaded.Compilation.GetTypeByMetadataName("Demo.Counter")!!
-                    Assert.Empty(counter.GetMembers("Count").Single().DeclaringSyntaxReferences)
+                    let counter = loaded.Compilation.GetTypeByMetadataName(referenceTypeName)!!
+                    Assert.Empty(counter.GetMembers(referenceMemberName).Single().DeclaringSyntaxReferences)
                     let reference = loaded
                         .Compilation
                         .References
@@ -516,7 +518,7 @@ public class Bag<T> : List<string> { }
             }
         }
 
-        private func AssertSuccessfulTarget(
+        internal func AssertSuccessfulTarget(
             directory string,
             compiled ProcessRunResult,
             expected string,
@@ -529,7 +531,7 @@ public class Bag<T> : List<string> { }
             AssertStrictIl(assembly, references)
         }
 
-        private func AssertStrictIl(assembly string, additionalReferences ...string) {
+        internal func AssertStrictIl(assembly string, additionalReferences ...string) {
             let arguments = List[string]{"tool", "run", "ilverify", assembly, "-s", "System.Private.CoreLib"}
             let references = Directory.EnumerateFiles(
                 Path.GetDirectoryName(typeof(object).Assembly.Location)!!,

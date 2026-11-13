@@ -18,6 +18,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 - Construct expanded List and span variadic carriers over source-declared elements and generic type parameters. Preserve symbolic element types through ordinary constructor emission, including nullable elements and nested collections. Normal-form arguments retain their carrier identity. (Fixes #6010)
 
+- Follow widened `cs2gs` field, property, and call-result values into call arguments and reduced extension receivers. Discover forwarding through the existing candidate-filtered read analysis and retain the all-reads-safe fixed point. Keep fixed contracts, effectful dereferences, and incompatible params carriers pinned. (Fixes #5556)
+
 - Reject release packages whose embedded nuspec ID or version differs from the filename. Reuse package metadata verification before publishing. (Fixes #5550)
 
 - Preserve nullable scalar storage in oblivious `cs2gs` jagged-array allocations. Reuse depth-aware storage contracts for allocations, declarations, aliases, and element reads. Keep nullable array references separate from nullable elements. Range slices keep the array depth; scalar indices consume an element position. Preserve allocation, copy, and row-assignment order. (Fixes #6006)

@@ -14392,6 +14392,29 @@ partial class CSharpToGSharpTranslator {
                 }
                 return true
             }
+            for guardCall in index.StringGuardsFor(symbol) {
+                CompilationMeasurements.Count("translation.guard_candidate_visits")
+                if guardCall.SpanStart >= effectiveTarget.SpanStart ||
+                    !ObliviousNullabilityAnalyzer.IsBuiltInStringNullGuard(
+                    guardCall,
+                    symbol,
+                    this.context.SemanticModel
+                ) ||
+                    !this
+                    .ComputeBooleanFlowRegions(guardCall, whenTrue: false, includeWhenClauseRegion: false).Any(
+                    (region Microsoft.CodeAnalysis.SyntaxNode) -> region.Span.Contains(effectiveTarget.Span)
+                ) ||
+                    this.ClosureAssignedLocalLosesNarrowing(symbol, guardCall, expression, $scope) ||
+                    this.SymbolIsWrittenBetween(symbol, guardCall, effectiveTarget, $scope) || this.HasLoopCarriedWrite(
+                    expression,
+                    symbol,
+                    $scope,
+                    guardCall
+                ) {
+                    continue
+                }
+                return true
+            }
             return this.IsGSharpSwitchNarrowedLocal(expression, effectiveTarget, symbol, $scope)
         }
 
@@ -15661,6 +15684,7 @@ partial class CSharpToGSharpTranslator {
                 string,
                 List[Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax]
             ]
+            private let stringGuards Dictionary[string, List[InvocationExpressionSyntax]]
 
             init(
                 jumps List[
@@ -15673,6 +15697,7 @@ partial class CSharpToGSharpTranslator {
                 hasLabels bool,
                 patterns Dictionary[string, List[IsPatternExpressionSyntax]],
                 binaryTests Dictionary[string, List[Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax]],
+                stringGuards Dictionary[string, List[InvocationExpressionSyntax]],
                 loopLabelCandidates IReadOnlyList[Microsoft.CodeAnalysis.SyntaxNode]
             ) {
                 this.Jumps = jumps
@@ -15680,6 +15705,7 @@ partial class CSharpToGSharpTranslator {
                 this.HasLabels = hasLabels
                 this.patterns = patterns
                 this.binaryTests = binaryTests
+                this.stringGuards = stringGuards
                 this.LoopLabelCandidates = loopLabelCandidates
             }
 
@@ -15698,6 +15724,14 @@ partial class CSharpToGSharpTranslator {
                     cast[IReadOnlyList[Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax]](candidates)
                 } else {
                     Array.Empty[Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax]()
+                }
+            }
+
+            public func StringGuardsFor(symbol ISymbol?) IReadOnlyList[InvocationExpressionSyntax] {
+                return if symbol != nil && this.stringGuards.TryGetValue(symbol.Name, out var candidates) {
+                    cast[IReadOnlyList[InvocationExpressionSyntax]](candidates)
+                } else {
+                    Array.Empty[InvocationExpressionSyntax]()
                 }
             }
         }
@@ -15819,12 +15853,26 @@ partial class CSharpToGSharpTranslator {
             let binaryTests = Dictionary[string, List[Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax]](
                 StringComparer.Ordinal
             )
+            let stringGuards = Dictionary[string, List[InvocationExpressionSyntax]](StringComparer.Ordinal)
             let loopLabelCandidates = List[Microsoft.CodeAnalysis.SyntaxNode]()
             for node in $scope.DescendantNodesAndSelf(
                 (child Microsoft.CodeAnalysis.SyntaxNode) -> object.ReferenceEquals(child, $scope) ||
                     !this.IsClosureBoundary(child)
             ) {
                 CompilationMeasurements.Count("translation.guard_scope_node_visits")
+                if node is InvocationExpressionSyntax invocation &&
+                    ObliviousNullabilityAnalyzer.IsPossibleStringNullGuard(invocation) &&
+                    UnwrapParenthesesAndSuppressions(
+                    invocation.ArgumentList.Arguments[0].Expression
+                ) is IdentifierNameSyntax argumentName {
+                    let name = argumentName.Identifier.ValueText
+                    if !stringGuards.TryGetValue(name, out var candidates) {
+                        candidates = List[InvocationExpressionSyntax]()
+                        stringGuards.Add(name, candidates)
+                    }
+                    candidates.Add(invocation)
+                    CompilationMeasurements.Count("translation.scope_guard_candidates")
+                }
                 if node is IsPatternExpressionSyntax pattern && this.GuardCandidateName(pattern.Expression) is {} name {
                     if !patterns.TryGetValue(name, out var candidates) {
                         candidates = List[IsPatternExpressionSyntax]()
@@ -15921,6 +15969,7 @@ partial class CSharpToGSharpTranslator {
                 labels.Count > 0,
                 patterns,
                 binaryTests,
+                stringGuards,
                 loopLabelCandidates
             )
             this.scopeGotoIndex[key] = entry
