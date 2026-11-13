@@ -11719,16 +11719,9 @@ partial class CSharpToGSharpTranslator {
 
             private func GetParamsElementType(
                 parameter IParameterSymbol?
-            ) ITypeSymbol? -> if parameter?.IsParams == true {
-                (
-                    switch parameter!!.Type {
-                        case arrayType is IArrayTypeSymbol: arrayType.ElementType
-                        case INamedTypeSymbol{
-                            TypeArguments: [ITypeSymbol element]
-                        } collection when IsSupportedParamsCollectionType(collection): element
-                        default: default(ITypeSymbol?)
-                    }
-                )
+            ) ITypeSymbol? -> if parameter?.IsParams == true &&
+                (parameter!!.Type is IArrayTypeSymbol || IsSupportedParamsCollectionType(parameter!!.Type)) {
+                ObliviousNullabilityAnalyzer.ParamsElementType(parameter)
             } else {
                 default(ITypeSymbol?)
             }
