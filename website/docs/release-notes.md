@@ -16,7 +16,7 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
-- Preserve null forwarded into expanded `cs2gs` params elements when every collection read only counts elements or forwards the same nullable element contract. Reuse the null-argument fixed point for declarations, calls, and suppression bridges. Keep element reads, unknown escapes, generic slots, and incompatible normal-form collections pinned. The authored literal-null policy is unchanged. (Part of #5581)
+- Preserve null forwarded into expanded `cs2gs` params elements for count-only consumers and source forwarders that share element widening. Reuse the null-argument fixed point for declarations, calls, and suppression bridges. Check normal-form arguments through their actual constructed collection views. Keep element reads, unknown escapes, generic slots, and incompatible normal-form collections pinned. The authored literal-null policy is unchanged. (Part of #5581)
 
 - Initialize captured switch-pattern variables before evaluating `when` guards. Immediate and escaping guard closures now retain the matched values in both switch forms, including after false guards. Pattern bindings remain read-only. (Fixes #5998)
 

@@ -3935,16 +3935,9 @@ partial class CSharpToGSharpTranslator {
             }
 
             // The type, its base types and its interfaces, in a fixed order.
-            private func ContainerViews(type INamedTypeSymbol) List[INamedTypeSymbol] {
-                let views = List[INamedTypeSymbol]()
-                var current INamedTypeSymbol? = type
-                while current != nil {
-                    views.Add(current)
-                    current = current.BaseType
-                }
-                views.AddRange(type.AllInterfaces)
-                return views
-            }
+            private func ContainerViews(type INamedTypeSymbol) List[
+                INamedTypeSymbol
+            ] -> ObliviousNullabilityAnalyzer.ContainerViews(type)
 
             // Adds the positions of [`type`](paramref) after each type parameter is
             // replaced by its positions in [`bindings`](paramref).

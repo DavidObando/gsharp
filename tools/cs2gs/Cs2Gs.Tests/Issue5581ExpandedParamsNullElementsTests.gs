@@ -69,6 +69,7 @@ namespace Demo {
 using System;
 using System.Collections.Generic;
 using System.Linq;
+public class Bag<T> : List<string?> { }
 public static class P {
     static int trace;
     static int Count(params List<string> items) => items.Count;
@@ -93,7 +94,8 @@ public static class P {
             ForwardE(null!) + " " + ForwardA(null!) + " " + ForwardRelay(null!) + " " +
             ForwardRecursive(null!) + " " + Normal(new List<string> { "x" }) + " " +
             Nullable(null, "x") + " " + Nonnull("x") + " " + Count(Pick(1)!, Pick(2)!, Pick(3)!) + " " +
-            Count(new List<string?> { null, "x" }) + " " + CountA(new string?[] { null }) + " " + ForwardR(null!));
+            Count(new List<string?> { null, "x" }) + " " + CountA(new string?[] { null }) + " " + ForwardR(null!) +
+            " " + Count(new Bag<int>()));
         _ = Count(Pick(4)!);
         Console.Write("|" + trace);
     }
@@ -106,7 +108,7 @@ public static class P {
                 AssertSuccessfulTarget(
                     directory,
                     compiled,
-                    "0 2 3 1 1 1 1 1 2 1 3 2 1 1|1234"
+                    "0 2 3 1 1 1 1 1 2 1 3 2 1 1 0|1234"
                 )
                 Assert.Contains(
                     "CountA(items ...string?)",
@@ -132,7 +134,7 @@ public static class P {
                     "Pick(2)!!",
                     printed
                 )
-            }, "0 2 3 1 1 1 1 1 2 1 3 2 1 1|1234")
+            }, "0 2 3 1 1 1 1 1 2 1 3 2 1 1 0|1234")
     }
 
     @Fact
@@ -193,6 +195,9 @@ public static class P {
     static int ForwardReassigned(string value) => Reassigned(value);
     static int Explicit(params IEnumerable<string> items) => System.Linq.Enumerable.Count<string>(items);
     static int ForwardExplicit(string value) => Explicit(value);
+    static int Carrier(params List<string> items) => items.Count;
+    static int ForwardCarrier(string value) => Carrier(value);
+    static int NormalCarrier() => Carrier(new Bag<string?>());
     public static void Main() {
         ForwardOpen(null!);
         ForwardRead(null!);
@@ -203,8 +208,10 @@ public static class P {
         ForwardCollection(null!);
         ForwardReassigned(null!);
         ForwardExplicit(null!);
+        ForwardCarrier(null!);
     }
 }
+public class Bag<T> : List<string> { }
 `, (
                 directory string,
                 printed string,
@@ -238,7 +245,8 @@ public static class P {
                     "ForwardMixed",
                     "ForwardCollection",
                     "ForwardReassigned",
-                    "ForwardExplicit"
+                    "ForwardExplicit",
+                    "ForwardCarrier"
                 }
                     .Select((method string) -> NilRange(printed, method))
                     .ToArray()

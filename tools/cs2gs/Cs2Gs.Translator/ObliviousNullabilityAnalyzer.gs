@@ -2816,10 +2816,11 @@ internal shared class ObliviousNullabilityAnalyzer {
             } else {
                 // Do not rely on unchecked invariant C[T] -> C[T?] conversions.
                 let element = if value != nil {
-                    ParamsCollectionElementType(model.GetTypeInfo(value).Type)
+                    ParamsArgumentElementType(model.GetTypeInfo(value).Type, parameter!!.Type)
                 } else {
                     nil
                 }
+                let expected = ParamsElementType(parameter)
                 AddNullArgumentRead(
                     reads,
                     key,
@@ -2828,9 +2829,13 @@ internal shared class ObliviousNullabilityAnalyzer {
                             .CodeAnalysis
                             .NullableAnnotation
                             .Annotated &&
+                            expected != nil &&
                             SymbolEqualityComparer
-                            .Default
-                            .Equals(element, ParamsElementType(parameter)),
+                            .IncludeNullability
+                            .Equals(
+                            element,
+                            expected.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
+                        ),
                         default(string?)
                     )
                 )
@@ -3396,6 +3401,50 @@ internal shared class ObliviousNullabilityAnalyzer {
         default: default(ITypeSymbol?)
     }
 
+    // A normal-form value contributes its selected carrier view, not its own type arguments.
+    private func ParamsArgumentElementType(value ITypeSymbol?, carrier ITypeSymbol) ITypeSymbol? {
+        if value is IArrayTypeSymbol array {
+            if carrier is IArrayTypeSymbol targetArray &&
+                array.Rank == targetArray.Rank ||
+                carrier is INamedTypeSymbol &&
+                array
+                .AllInterfaces
+                .Any((view INamedTypeSymbol) -> SymbolEqualityComparer.Default.Equals(view, carrier)) {
+                return array.ElementType
+            }
+            return nil
+        }
+        if value is not INamedTypeSymbol named || carrier is not INamedTypeSymbol {
+            return nil
+        }
+        var element ITypeSymbol? = nil
+        for view in ContainerViews(named) {
+            if !SymbolEqualityComparer.Default.Equals(view, carrier) {
+                continue
+            }
+            let projected = ParamsCollectionElementType(view)
+            if element != nil && !SymbolEqualityComparer.IncludeNullability.Equals(element, projected) {
+                return nil
+            }
+            element = projected
+        }
+        return element
+    }
+
+    /// Gets the type, its base types, and its interfaces in their established order.
+    /// @param type The constructed collection type.
+    /// @returns The available constructed views.
+    func ContainerViews(type INamedTypeSymbol) List[INamedTypeSymbol] {
+        let views = List[INamedTypeSymbol]()
+        var current INamedTypeSymbol? = type
+        while current != nil {
+            views.Add(current)
+            current = current.BaseType
+        }
+        views.AddRange(type.AllInterfaces)
+        return views
+    }
+
     // Element contracts admit cardinality reads, not element reads or unknown escapes.
     private func ClassifyNullArgumentParamsRead(
         expression ExpressionSyntax,
@@ -3493,7 +3542,7 @@ internal shared class ObliviousNullabilityAnalyzer {
     }
 
     private func SameParamsElement(left IParameterSymbol, right IParameterSymbol) bool -> SymbolEqualityComparer
-        .Default
+        .IncludeNullability
         .Equals(ParamsElementType(left), ParamsElementType(right))
 
     // Extension collection-params calls do not expand yet (#6002).
