@@ -1336,11 +1336,8 @@ internal partial class OverloadResolver {
             ref hasErrors bool
         ) ImmutableArray[BoundExpression] {
             let trailingCount = boundArguments.Length - fixedCount
-            let passThrough = trailingCount == 1 && Conversion.Classify(
-                conversions.ResolveReboundSibling(boundArguments[fixedCount]).Type,
-                carrierType
-            )
-                .IsImplicit
+            let passThrough = trailingCount == 1 &&
+                IsVariadicCarrierPassThrough(conversions, boundArguments[fixedCount], carrierType)
             let result = ImmutableArray.CreateBuilder[BoundExpression](fixedCount + 1)
             for var i = 0; i < fixedCount; i++ {
                 result.Add(conversions.ResolveReboundSibling(boundArguments[i]))

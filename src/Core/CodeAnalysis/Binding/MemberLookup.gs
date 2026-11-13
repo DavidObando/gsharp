@@ -956,6 +956,16 @@ internal class MemberLookup {
             this.Bounds = Dictionary[TypeParameterSymbol, SourceInferenceBounds]()
         }
 
+        init(source SourceInferenceState) {
+            this.FixedParameters = HashSet[TypeParameterSymbol](source.FixedParameters)
+            this.Bounds = Dictionary[TypeParameterSymbol, SourceInferenceBounds]()
+            for pair in source.Bounds {
+                let bounds = SourceInferenceBounds(){Exact = pair.Value.Exact, Lower = pair.Value.Lower}
+                bounds.Upper.AddRange(pair.Value.Upper)
+                this.Bounds[pair.Key] = bounds
+            }
+        }
+
         prop FixedParameters HashSet[TypeParameterSymbol] {
             get;
         }
@@ -7002,6 +7012,24 @@ internal class MemberLookup {
             existing TypeSymbol?,
             incoming TypeSymbol?
         ) TypeSymbol? -> MergeRecoveredTypeArgument(existing, incoming)
+
+        internal func CopySourceTypeInference(
+            source Dictionary[TypeParameterSymbol, TypeSymbol],
+            target Dictionary[TypeParameterSymbol, TypeSymbol]
+        ) {
+            if object.ReferenceEquals(source, target) {
+                return
+            }
+            target.Clear()
+            for pair in source {
+                target[pair.Key] = pair.Value
+            }
+            sourceInferenceBounds.Remove(target)
+            // Provisional bounds must not become fixed merely because their dictionary was copied.
+            if sourceInferenceBounds.TryGetValue(source, out var state) {
+                sourceInferenceBounds.Add(target, SourceInferenceState(state))
+            }
+        }
 
         internal func InferSourceTypeArgument(
             substitution Dictionary[TypeParameterSymbol, TypeSymbol],

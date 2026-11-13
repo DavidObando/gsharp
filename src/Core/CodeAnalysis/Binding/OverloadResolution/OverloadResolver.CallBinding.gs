@@ -1937,6 +1937,7 @@ internal partial class OverloadResolver {
                         overloadSet,
                         boundArguments,
                         syntax.Arguments.Count,
+                        argumentNames,
                         explicitOverloadTypeArguments,
                         out var unconstrainedTypeParameter
                     ) {
@@ -2162,25 +2163,8 @@ internal partial class OverloadResolver {
                         function!!
                         .Parameters[i]
                         .IsVariadic &&
-                        paramType is SliceTypeSymbol variadicSlice {
-                        let trailingCount = boundArguments.Count - i
-                        if trailingCount == 1 && RefCapabilities.GetValueArgumentInferenceType(
-                            boundArguments[i].Type
-                        ) is SliceTypeSymbol {
-                            inferTypeArguments(
-                                paramType,
-                                RefCapabilities.GetValueArgumentInferenceType(boundArguments[i].Type),
-                                substitution
-                            )
-                        } else {
-                            for var j = i; j < boundArguments.Count; j++ {
-                                inferTypeArguments(
-                                    variadicSlice.ElementType,
-                                    RefCapabilities.GetValueArgumentInferenceType(boundArguments[j].Type),
-                                    substitution
-                                )
-                            }
-                        }
+                        VariadicCarriers.GetElementType(paramType) != TypeSymbol.Error {
+                        InferVariadicArguments(paramType, boundArguments.ToImmutable(), i, substitution)
                         break
                     }
                     inferTypeArguments(

@@ -32,6 +32,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 - **Preserve actual reference images and semantic owners in call effects** (#5326). Do not rebind arbitrary Roslyn images through supplied file paths. Carry selected method and caller-callback compilation ownership across shared syntax trees. Share immutable ownership indexes across document contexts with cancellation-safe publication and an active-model fast path.
 - Preserve nullable scalar storage in oblivious `cs2gs` jagged-array allocations. Reuse depth-aware storage contracts for allocations, declarations, aliases, and element reads. Keep nullable array references separate from nullable elements. Range slices keep the array depth; scalar indices consume an element position. Preserve allocation, copy, and row-assignment order. (Fixes #6006)
 
+- Pack expanded collection-params arguments in source extension calls. Preserve whole-carrier identity, generic inference, fixed arguments, and receiver evaluation order. Function values retain their physical signatures. (Fixes #6002)
+
 - Convert variadic method groups to delegates using their physical parameter signatures. Preserve carrier identity, overload selection, and receiver evaluation. Function values do not gain variadic expansion. (Fixes #6003)
 
 - Preserve nullable writable storage in flat `cs2gs` deconstruction declarations. Materialize typed locals when tuple inference loses their contract. Reuse ordinary inferred-local nullability, live default-origin analysis, and ref-storage contracts. Preserve nested nullable positions and retain native bindings when inference already matches. Keep required read assertions and evaluate the source once. (Fixes #5994)

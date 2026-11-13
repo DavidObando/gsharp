@@ -118,6 +118,7 @@ internal partial class OverloadResolver {
                 overloads,
                 arguments.ToBuilder(),
                 arguments.Length,
+                argumentNames,
                 boundTypeArguments,
                 out var unconstrainedTypeParameter
             ) {
@@ -310,6 +311,7 @@ internal partial class OverloadResolver {
                     candidate,
                     builder,
                     argumentCount,
+                    argumentNames,
                     substitutionCache,
                     out var inferred
                 ) {
@@ -420,9 +422,9 @@ internal partial class OverloadResolver {
         let bindsCarrierInNormalForm = isVariadic &&
             argumentCount - fixedParamCount == 1 &&
             fixedParamCount < boundArguments.Length &&
-            boundArguments[fixedParamCount]?.Type is {} passThroughType &&
+            boundArguments[fixedParamCount] is {} passThroughArgument &&
             variadicCarrierType != nil &&
-            IsVariadicCarrierPassThrough(passThroughType, variadicCarrierType)
+            IsVariadicCarrierPassThrough(conversions, passThroughArgument, variadicCarrierType)
         let variadicElementType TypeSymbol? = if isVariadic &&
             variadicCarrierType != nil &&
             VariadicCarriers.GetElementType(variadicCarrierType) is {} elem && elem != TypeSymbol.Error {
@@ -516,6 +518,7 @@ internal partial class OverloadResolver {
                     candidate,
                     boundArguments,
                     argumentCount,
+                    argumentNames,
                     substitutionCache,
                     out var inferred
                 ) {
@@ -573,7 +576,14 @@ internal partial class OverloadResolver {
                         filtered.Add(cand)
                     }
                 } else if cand.IsGeneric {
-                    if GetCachedCandidateSubstitution(cand, boundArguments, argumentCount, substitutionCache, out _) {
+                    if GetCachedCandidateSubstitution(
+                        cand,
+                        boundArguments,
+                        argumentCount,
+                        argumentNames,
+                        substitutionCache,
+                        out _
+                    ) {
                         filtered.Add(cand)
                     }
                 } else {
@@ -706,6 +716,15 @@ internal partial class OverloadResolver {
                 paramLen
             }
             var defaultsUsed = paramCountForScore - argumentCount
+            if HasNamedArguments(argumentNames) {
+                defaultsUsed = paramCountForScore
+                for var i = 0; i < argumentCount && i < boundArguments.Count; i++ {
+                    let slot = MapArgumentIndexToParameterSlot(cand, argumentNames, i, parameterOffset, paramLen)
+                    if slot >= 0 && slot < paramCountForScore {
+                        defaultsUsed--
+                    }
+                }
+            }
             if defaultsUsed < 0 {
                 defaultsUsed = 0
             }
@@ -779,13 +798,15 @@ internal partial class OverloadResolver {
                     .Binder
                     .SubstituteType(variadicCarrierType, candSubstitution)
             }
-            let bindsCarrierInNormalForm = isVariadic &&
-                !HasNamedArguments(argumentNames) &&
-                argumentCount - paramCountForScore == 1 &&
-                paramCountForScore < boundArguments.Count &&
-                boundArguments[paramCountForScore]?.Type is {} carrierPassThroughArgType &&
+            let singleVariadicArgument = if isVariadic {
+                GetSingleVariadicArgumentIndex(cand, argumentNames, Math.Min(argumentCount, boundArguments.Count))
+            } else {
+                -1
+            }
+            let bindsCarrierInNormalForm = singleVariadicArgument >= 0 &&
+                boundArguments[singleVariadicArgument] is {} carrierPassThroughArgument &&
                 variadicCarrierType != nil &&
-                IsVariadicCarrierPassThrough(carrierPassThroughArgType, variadicCarrierType)
+                IsVariadicCarrierPassThrough(conversions, carrierPassThroughArgument, variadicCarrierType)
             for var i = 0; i < boundArguments.Count; i++ {
                 let slot = MapArgumentIndexToParameterSlot(cand, argumentNames, i, parameterOffset, paramLen)
                 if slot < 0 {
@@ -1395,26 +1416,38 @@ internal partial class OverloadResolver {
         // variadic candidate is only applicable when each trailing argument
         // implicitly converts to the variadic element type — keeping
         // applicability/ranking in agreement with the final element coercion.
-        if isVariadic && !HasNamedArguments(argumentNames) && VariadicCarriers.GetElementType(
+        var carrierType = if isVariadic {
             candidate.Parameters[candidate.Parameters.Length - 1].Type
-        ) is {} variadicTailElement &&
+        } else {
+            TypeSymbol.Error
+        }
+        if substitution != nil {
+            carrierType = substituteType(carrierType, substitution)
+        }
+        if isVariadic && VariadicCarriers.GetElementType(carrierType) is {} variadicTailElement &&
             variadicTailElement != TypeSymbol
             .Error {
             let elementType = variadicTailElement
-            let tailStart = fixedParamCount
             // A single trailing argument already typed as the slice itself is a
             // pass-through (`f(existingSlice)`); accept it as-is.
-            let carrierType = candidate.Parameters[candidate.Parameters.Length - 1].Type
-            let isSlicePassThrough = argumentCount - tailStart == 1 &&
-                tailStart < boundArguments.Count &&
-                boundArguments[tailStart]?.Type is {} passThroughArgumentType &&
-                IsVariadicCarrierPassThrough(passThroughArgumentType, carrierType)
+            let singleVariadicArgument = GetSingleVariadicArgumentIndex(
+                candidate,
+                argumentNames,
+                Math.Min(argumentCount, boundArguments.Count)
+            )
+            let isSlicePassThrough = singleVariadicArgument >= 0 &&
+                boundArguments[singleVariadicArgument] is {} passThroughArgument &&
+                IsVariadicCarrierPassThrough(conversions, passThroughArgument, carrierType)
             // A tail element that still mentions a type parameter — `...T`, but
             // also a composite like `...in chan[T]` (ADR-0174 D9's `merge`) —
             // cannot be classified until inference has run, so applicability is
             // decided by the substituted signature instead of rejecting here.
             if !isSlicePassThrough && !TypeSymbol.ContainsTypeParameter(elementType) {
-                for var i = tailStart; i < argumentCount && i < boundArguments.Count; i++ {
+                for var i = 0; i < argumentCount && i < boundArguments.Count; i++ {
+                    if MapArgumentIndexToParameterSlot(candidate, argumentNames, i, parameterOffset, paramLen) <
+                    fixedParamCount {
+                        continue
+                    }
                     let argType TypeSymbol? = boundArguments[i]?.Type
                     if argType == nil {
                         continue
@@ -1612,12 +1645,13 @@ internal partial class OverloadResolver {
     /// keyed by candidate. Within a single (cref:SelectBestUserOverloadCore)
     /// call the #1124 applicability filter and the Phase-2 scoring pass both
     /// infer the same generic candidate's substitution from the identical
-    /// [`boundArguments`](paramref)/[`argumentCount`](paramref) inputs;
+    /// [`boundArguments`](paramref)/[`argumentCount`](paramref)/[`argumentNames`](paramref) inputs;
     /// caching here runs unification once per candidate instead of twice.
     private func GetCachedCandidateSubstitution(
         candidate FunctionSymbol,
         boundArguments ImmutableArray[BoundExpression].Builder,
         argumentCount int32,
+        argumentNames ImmutableArray[string],
         cache Dictionary[FunctionSymbol, (Ok bool, Substitution Dictionary[TypeParameterSymbol, TypeSymbol])],
         out substitution Dictionary[TypeParameterSymbol, TypeSymbol]
     ) bool {
@@ -1625,7 +1659,13 @@ internal partial class OverloadResolver {
             substitution = cached.Substitution
             return cached.Ok
         }
-        let ok = TryInferCandidateSubstitution(candidate, boundArguments, argumentCount, out substitution)
+        let ok = TryInferCandidateSubstitution(
+            candidate,
+            boundArguments,
+            argumentCount,
+            argumentNames,
+            out substitution
+        )
         cache[candidate] = (ok, substitution)
         return ok
     }
@@ -1634,6 +1674,7 @@ internal partial class OverloadResolver {
         candidates ImmutableArray[FunctionSymbol],
         boundArguments ImmutableArray[BoundExpression].Builder,
         argumentCount int32,
+        argumentNames ImmutableArray[string],
         explicitTypeArguments ImmutableArray[TypeSymbol],
         out typeParameter TypeParameterSymbol?
     ) bool {
@@ -1666,7 +1707,13 @@ internal partial class OverloadResolver {
                     return false
                 }
                 callerType = explicitTypeArguments[specializedTarget.Ordinal]
-            } else if !TryInferCandidateSubstitution(candidate, boundArguments, argumentCount, out var substitution) ||
+            } else if !TryInferCandidateSubstitution(
+                candidate,
+                boundArguments,
+                argumentCount,
+                argumentNames,
+                out var substitution
+            ) ||
                 !substitution.TryGetValue(specializedTarget, out callerType) {
                 return false
             }
@@ -1688,10 +1735,12 @@ internal partial class OverloadResolver {
     /// bindings into each open delegate parameter type so a value-returning
     /// delegate/method-group argument prefers the `(...)->TResult` overload over
     /// the `(...)->void` one (issue #1531 control).
+    /// Named arguments contribute to their mapped fixed or variadic slots, not their source positions.
     private func TryInferCandidateSubstitution(
         candidate FunctionSymbol,
         boundArguments ImmutableArray[BoundExpression].Builder,
         argumentCount int32,
+        argumentNames ImmutableArray[string],
         out substitution Dictionary[TypeParameterSymbol, TypeSymbol]
     ) bool {
         substitution = Dictionary[TypeParameterSymbol, TypeSymbol]()
@@ -1711,43 +1760,40 @@ internal partial class OverloadResolver {
         } else {
             paramLen
         }
-        let inferenceLimit = if isVariadic {
-            fixedParamCount
-        } else {
-            Math.Min(argumentCount, paramLen)
+        let fixedArguments = [fixedParamCount]BoundExpression?
+        let trailingArguments = ImmutableArray.CreateBuilder[BoundExpression]()
+        for var i = 0; i < argumentCount && i < boundArguments.Count; i++ {
+            let slot = MapArgumentIndexToParameterSlot(candidate, argumentNames, i, parameterOffset, paramLen)
+            if slot < 0 {
+                return false
+            }
+            if isVariadic && slot >= fixedParamCount {
+                trailingArguments.Add(boundArguments[i])
+            } else if slot < fixedParamCount {
+                fixedArguments[slot] = boundArguments[i]
+            } else {
+                return false
+            }
         }
-        for var i = 0; i < inferenceLimit && i < boundArguments.Count; i++ {
-            let argType TypeSymbol? = boundArguments[i]?.Type
-            if argType == nil {
+        for var i = 0; i < fixedArguments.Length; i++ {
+            let argument = fixedArguments[i]
+            let argType TypeSymbol? = argument?.Type
+            if argument == nil || argType == nil {
                 continue
             }
             let parameter = candidate.Parameters[i + parameterOffset]
-            inferTypeArguments(
-                parameter.Type,
-                RefCapabilities.GetInferenceType(parameter, boundArguments[i]),
+            inferTypeArguments(parameter.Type, RefCapabilities.GetInferenceType(parameter, argument), substitution)
+        }
+        if isVariadic && trailingArguments.Count > 0 && VariadicCarriers.GetElementType(
+            candidate.Parameters[candidate.Parameters.Length - 1].Type
+        ) != TypeSymbol
+            .Error {
+            InferVariadicArguments(
+                candidate.Parameters[candidate.Parameters.Length - 1].Type,
+                trailingArguments.ToImmutable(),
+                0,
                 substitution
             )
-        }
-        if isVariadic && VariadicCarriers.GetElementType(
-            candidate.Parameters[candidate.Parameters.Length - 1].Type
-        ) is {} inferenceElement &&
-            inferenceElement != TypeSymbol
-            .Error {
-            for var i = fixedParamCount; i < argumentCount && i < boundArguments.Count; i++ {
-                let argType TypeSymbol? = boundArguments[i]?.Type
-                if argType == nil {
-                    continue
-                }
-                // Normalize first, so a top-level `T!` over a slice is still
-                // recognised as a pass-through carrier.
-                let normalized = RefCapabilities.GetValueArgumentInferenceType(argType)
-                let source = if normalized is SliceTypeSymbol argSlice {
-                    argSlice.ElementType
-                } else {
-                    normalized
-                }
-                inferTypeArguments(inferenceElement, source, substitution)
-            }
         }
         for tp in candidate.TypeParameters {
             if !substitution.ContainsKey(tp) {
@@ -2319,15 +2365,19 @@ internal partial class OverloadResolver {
         /// Classify the conversion instead: an identity or implicit conversion to
         /// the carrier is exactly what "the argument already is the carrier" means,
         /// and it is the same test the final argument coercion applies.
-        /// @param argumentType The single trailing argument's type.
+        /// @param conversions The ordinary argument conversion classifier.
+        /// @param argument The single trailing argument.
         /// @param carrierType The candidate's variadic carrier parameter type.
         /// @returns `true` when the argument binds as the carrier itself.
-        private func IsVariadicCarrierPassThrough(argumentType TypeSymbol, carrierType TypeSymbol) bool {
-            if object.ReferenceEquals(argumentType, carrierType) {
-                return true
-            }
-            let conversion = Conversion.Classify(argumentType, carrierType)
-            return conversion.Exists && (conversion.IsIdentity || conversion.IsImplicit)
+        private func IsVariadicCarrierPassThrough(
+            conversions ConversionClassifier,
+            argument BoundExpression,
+            carrierType TypeSymbol
+        ) bool {
+            let argument = conversions.ResolveReboundSibling(argument)
+            let conversion = conversions.ClassifyArgumentConversion(argument, carrierType)
+            return (conversion.Exists && (conversion.IsIdentity || conversion.IsImplicit)) ||
+                conversions.CanApplyUserDefinedImplicitArgumentConversion(argument, carrierType)
         }
 
         private func HasSameAsyncLambdaResultShape(argumentType TypeSymbol?, parameterType TypeSymbol) bool {
@@ -2713,6 +2763,31 @@ internal partial class OverloadResolver {
             return -1
         }
 
+        private func GetSingleVariadicArgumentIndex(
+            candidate FunctionSymbol,
+            argumentNames ImmutableArray[string],
+            argumentCount int32
+        ) int32 {
+            let parameterOffset = if candidate.ExplicitReceiverParameter == nil {
+                0
+            } else {
+                1
+            }
+            let paramLen = candidate.Parameters.Length - parameterOffset
+            var result = -1
+            for var i = 0; i < argumentCount; i++ {
+                if MapArgumentIndexToParameterSlot(candidate, argumentNames, i, parameterOffset, paramLen) <
+                paramLen - 1 {
+                    continue
+                }
+                if result >= 0 {
+                    return -1
+                }
+                result = i
+            }
+            return result
+        }
+
         private func IsApplicableUserCallable(
             candidate FunctionSymbol,
             argumentCount int32,
@@ -2731,38 +2806,38 @@ internal partial class OverloadResolver {
                 paramLen
             }
             // Compute required (non-optional) leading-parameter count.
-            var requiredParamCount = paramLen
-            for var i = paramLen - 1; i >= 0; i-- {
+            var requiredParamCount = fixedParamCount
+            for var i = fixedParamCount - 1; i >= 0; i-- {
                 if candidate.Parameters[i + parameterOffset].HasExplicitDefaultValue {
                     requiredParamCount = i
                 } else {
                     break
                 }
             }
-            if isVariadic {
-                if argumentCount < fixedParamCount {
-                    return false
-                }
-            } else if argumentCount < requiredParamCount || argumentCount > paramLen {
+            if argumentNames.IsDefault {
+                return argumentCount >= requiredParamCount && (isVariadic || argumentCount <= paramLen)
+            }
+            if !isVariadic && argumentCount > paramLen {
                 return false
             }
-            // Named-argument names must each correspond to a parameter.
-            if !argumentNames.IsDefault {
-                for var i = 0; i < argumentNames.Length; i++ {
-                    let n string? = argumentNames[i]
-                    if n == nil {
-                        continue
-                    }
-                    var found = false
-                    for var p = 0; p < paramLen; p++ {
-                        if candidate.Parameters[p + parameterOffset].Name == n {
-                            found = true
-                            break
-                        }
-                    }
-                    if !found {
+            let supplied = [fixedParamCount]bool
+            for var i = 0; i < argumentCount; i++ {
+                let slot = MapArgumentIndexToParameterSlot(candidate, argumentNames, i, parameterOffset, paramLen)
+                if slot < 0 {
+                    return false
+                }
+                if slot < fixedParamCount {
+                    if supplied[slot] {
                         return false
                     }
+                    supplied[slot] = true
+                } else if !isVariadic {
+                    return false
+                }
+            }
+            for var i = 0; i < fixedParamCount; i++ {
+                if !supplied[i] && !candidate.Parameters[i + parameterOffset].HasExplicitDefaultValue {
+                    return false
                 }
             }
             return true
