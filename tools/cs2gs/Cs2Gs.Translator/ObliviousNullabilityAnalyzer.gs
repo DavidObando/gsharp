@@ -1669,7 +1669,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         for root in TranslationContext.GetEffectiveSyntaxRoots(compilation) {
             let tree = root.SyntaxTree
             let model = TranslationContext.GetEffectiveSemanticModel(compilation, tree)
-            for property in TranslationContext.GetEffectiveNodes(root).OfType[PropertyDeclarationSyntax]() {
+            for property in TranslationContext.GetEffectiveNodes(root, compilation)
+                .OfType[PropertyDeclarationSyntax]() {
                 let dbSet INamedTypeSymbol? = model.GetDeclaredSymbol(property)?.Type as INamedTypeSymbol
                 if dbSet?.Name != "DbSet" ||
                     dbSet!!.Arity != 1 ||
@@ -2596,7 +2597,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         for root in TranslationContext.GetEffectiveSyntaxRoots(compilation) {
             let tree = root.SyntaxTree
             var model SemanticModel? = nil
-            for node in TranslationContext.GetEffectiveNodes(root) {
+            for node in TranslationContext.GetEffectiveNodes(root, compilation) {
                 let Model = func () SemanticModel {
                     return (
                         if model == nil {
@@ -2852,7 +2853,16 @@ internal shared class ObliviousNullabilityAnalyzer {
                 }
                 for partOwner in owners {
                     for reference in partOwner.DeclaringSyntaxReferences {
-                        let body = TranslationContext.GetEffectiveDeclaration(reference.GetSyntax())
+                        let declaringOwner = run
+                            .Members
+                            .FirstOrDefault(
+                            (graph NullArgumentGraph) -> SymbolEqualityComparer.Default.Equals(
+                                graph.Owner.Assembly,
+                                partOwner.ContainingAssembly
+                            )
+                        )
+                            ?.Owner
+                        let body = TranslationContext.GetEffectiveDeclaration(reference.GetSyntax(), declaringOwner)
                         if scopes.Add(body) {
                             scopeList.Add(body)
                         }
@@ -2921,7 +2931,12 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
             if memberNames.Count != 0 || readsIndexers || readsPositional {
                 for root in TranslationContext.GetEffectiveSyntaxRoots(graph.Owner) {
-                    Visit(graph.Owner, TranslationContext.GetEffectiveNodes(root), memberNames, readsIndexers)
+                    Visit(
+                        graph.Owner,
+                        TranslationContext.GetEffectiveNodes(root, graph.Owner),
+                        memberNames,
+                        readsIndexers
+                    )
                 }
             }
         }
@@ -4192,7 +4207,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         for root in TranslationContext.GetEffectiveSyntaxRoots(compilation) {
             let tree = root.SyntaxTree
             let model = TranslationContext.GetEffectiveSemanticModel(compilation, tree)
-            for node in TranslationContext.GetEffectiveNodes(root) {
+            for node in TranslationContext.GetEffectiveNodes(root, compilation) {
                 let list = CallArgumentList(node)
                 if list == nil || !list.Arguments.Any(
                     (a ArgumentSyntax) -> a.RefKindKeyword.IsKind(SyntaxKind.None) && ArgumentWritesNull(a.Expression)
@@ -4260,7 +4275,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         for root in TranslationContext.GetEffectiveSyntaxRoots(owner) {
             let tree = root.SyntaxTree
             let model = TranslationContext.GetEffectiveSemanticModel(owner, tree)
-            for node in TranslationContext.GetEffectiveNodes(root) {
+            for node in TranslationContext.GetEffectiveNodes(root, owner) {
                 if node is AssignmentExpressionSyntax assignment && assignment.IsKind(
                     SyntaxKind.SimpleAssignmentExpression
                 ) &&
@@ -4411,7 +4426,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         for root in TranslationContext.GetEffectiveSyntaxRoots(compilation) {
             let tree = root.SyntaxTree
             var model SemanticModel? = nil
-            for node in TranslationContext.GetEffectiveNodes(root) {
+            for node in TranslationContext.GetEffectiveNodes(root, compilation) {
                 let Model = func () SemanticModel {
                     return (
                         if model == nil {
@@ -4542,7 +4557,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         for root in TranslationContext.GetEffectiveSyntaxRoots(csharp) {
             let tree = root.SyntaxTree
             var model SemanticModel? = nil
-            for node in TranslationContext.GetEffectiveNodes(root) {
+            for node in TranslationContext.GetEffectiveNodes(root, csharp) {
                 let Model = func () SemanticModel {
                     return (
                         if model == nil {
@@ -5003,7 +5018,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         for root in TranslationContext.GetEffectiveSyntaxRoots(compilation) {
             let tree = root.SyntaxTree
             let model = TranslationContext.GetEffectiveSemanticModel(compilation, tree)
-            for node in TranslationContext.GetEffectiveNodes(root) {
+            for node in TranslationContext.GetEffectiveNodes(root, compilation) {
                 if node is GenericNameSyntax generic && model.GetTypeInfo(generic)
                     .Type is INamedTypeSymbol constructed {
                     constructedTypes.Add(constructed)
@@ -5164,7 +5179,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         for root in TranslationContext.GetEffectiveSyntaxRoots(compilation) {
             let tree = root.SyntaxTree
             let model = TranslationContext.GetEffectiveSemanticModel(compilation, tree)
-            for assignment in TranslationContext.GetEffectiveNodes(root).OfType[AssignmentExpressionSyntax]() {
+            for assignment in TranslationContext.GetEffectiveNodes(root, compilation)
+                .OfType[AssignmentExpressionSyntax]() {
                 if !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) {
                     continue
                 }
@@ -5183,7 +5199,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         for root in TranslationContext.GetEffectiveSyntaxRoots(compilation) {
             let tree = root.SyntaxTree
             let model = TranslationContext.GetEffectiveSemanticModel(compilation, tree)
-            for reference in TranslationContext.GetEffectiveNodes(root).OfType[RefExpressionSyntax]() {
+            for reference in TranslationContext.GetEffectiveNodes(root, compilation).OfType[RefExpressionSyntax]() {
                 let target = RefStorageDestination(reference, model)
                 if target == nil {
                     continue
@@ -5194,7 +5210,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 }
                 ConnectRefArraySources(slots, target, reference.Expression, model)
             }
-            for argument in TranslationContext.GetEffectiveNodes(root).OfType[ArgumentSyntax]() {
+            for argument in TranslationContext.GetEffectiveNodes(root, compilation).OfType[ArgumentSyntax]() {
                 if argument.RefKindKeyword.IsKind(SyntaxKind.OutKeyword) && model.GetOperation(
                     argument
                 ) is IArgumentOperation{Parameter: {} output} {
@@ -5217,7 +5233,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         for root in TranslationContext.GetEffectiveSyntaxRoots(compilation) {
             let tree = root.SyntaxTree
             let model = TranslationContext.GetEffectiveSemanticModel(compilation, tree)
-            for assignment in TranslationContext.GetEffectiveNodes(root).OfType[AssignmentExpressionSyntax]() {
+            for assignment in TranslationContext.GetEffectiveNodes(root, compilation)
+                .OfType[AssignmentExpressionSyntax]() {
                 let (owner, depth) = RefArrayStorage(assignment.Left, model)
                 if assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) && owner != nil && slots.TryGetValue(
                     owner,
@@ -5897,7 +5914,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         scalarTupleEdges List[(Target ISymbol, Source TupleElementKey)],
         tupleContractEdges List[(Target TupleElementKey, Source TupleElementKey)]
     ) {
-        for node in TranslationContext.GetEffectiveNodes(root) {
+        for node in TranslationContext.GetEffectiveNodes(root, model.Compilation) {
             switch node {
                 case reference is RefExpressionSyntax when RefStorageDestination(reference, model) is {} target {
                     CollectRefTupleStorage(
@@ -5912,7 +5929,10 @@ internal shared class ObliviousNullabilityAnalyzer {
                     )
                 }
                 case method is MethodDeclarationSyntax {
-                    let effective = TranslationContext.GetEffectiveDeclaration(method) as MethodDeclarationSyntax ??
+                    let effective = TranslationContext.GetEffectiveDeclaration(
+                        method,
+                        model.Compilation
+                    ) as MethodDeclarationSyntax ??
                         method
                     let effectiveModel = TranslationContext.GetEffectiveSemanticModel(
                         model.Compilation,
@@ -8221,7 +8241,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             if !compilation.ContainsSyntaxTree(original.SyntaxTree) {
                 continue
             }
-            let syntax = TranslationContext.GetEffectiveDeclaration(original)
+            let syntax = TranslationContext.GetEffectiveDeclaration(original, compilation)
             if syntax is MethodDeclarationSyntax methodDecl &&
                 (methodDecl.ExpressionBody != nil || methodDecl.Body != nil) {
                 return true
@@ -8242,7 +8262,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             if !compilation.ContainsSyntaxTree(original.SyntaxTree) {
                 continue
             }
-            let syntax = TranslationContext.GetEffectiveDeclaration(original)
+            let syntax = TranslationContext.GetEffectiveDeclaration(original, compilation)
             let declarationModel = TranslationContext.GetEffectiveSemanticModel(compilation, syntax.SyntaxTree)
             let arrow ExpressionSyntax? = switch syntax {
                 case methodDecl is MethodDeclarationSyntax: methodDecl.ExpressionBody?.Expression
@@ -8976,10 +8996,13 @@ internal shared class ObliviousNullabilityAnalyzer {
         edges List[(Target ISymbol, Source ISymbol)],
         scalarTupleEdges List[(Target ISymbol, Source TupleElementKey)]
     ) {
-        for node in TranslationContext.GetEffectiveNodes(root) {
+        for node in TranslationContext.GetEffectiveNodes(root, model.Compilation) {
             switch node {
                 case method is MethodDeclarationSyntax {
-                    let effective = TranslationContext.GetEffectiveDeclaration(method) as MethodDeclarationSyntax ??
+                    let effective = TranslationContext.GetEffectiveDeclaration(
+                        method,
+                        model.Compilation
+                    ) as MethodDeclarationSyntax ??
                         method
                     let effectiveModel = TranslationContext.GetEffectiveSemanticModel(
                         model.Compilation,
@@ -10183,7 +10206,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         tupleTainted HashSet[TupleElementKey],
         tupleEdges List[(Target TupleElementKey, Source TupleElementKey)]
     ) {
-        for expression in TranslationContext.GetEffectiveNodes(root).OfType[ExpressionSyntax]() {
+        for expression in TranslationContext.GetEffectiveNodes(root, compilation).OfType[ExpressionSyntax]() {
             let isLambda = expression is AnonymousFunctionExpressionSyntax
             if !isLambda && model.GetMemberGroup(expression).IsDefaultOrEmpty {
                 continue

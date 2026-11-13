@@ -767,7 +767,7 @@ class CSharpTypeMapper {
             } else {
                 TranslationContext.GetEffectiveSemanticModel(compilation, tree)
             }
-            for node in TranslationContext.GetEffectiveNodes(root) {
+            for node in TranslationContext.GetEffectiveNodes(root, compilation) {
                 if node is Microsoft
                     .CodeAnalysis
                     .CSharp
@@ -4058,7 +4058,7 @@ class CSharpTypeMapper {
             for root in TranslationContext.GetEffectiveSyntaxRoots(compilation) {
                 let tree = root.SyntaxTree
                 let model = TranslationContext.GetEffectiveSemanticModel(compilation, tree)
-                for creation in TranslationContext.GetEffectiveNodes(root)
+                for creation in TranslationContext.GetEffectiveNodes(root, compilation)
                     .OfType[AnonymousObjectCreationExpressionSyntax]() {
                     if model.GetTypeInfo(creation).Type is not INamedTypeSymbol candidateType {
                         continue

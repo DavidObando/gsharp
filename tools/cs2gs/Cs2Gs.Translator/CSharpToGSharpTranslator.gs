@@ -1624,7 +1624,7 @@ partial class CSharpToGSharpTranslator {
             for root in TranslationContext.GetEffectiveSyntaxRoots(compilation) {
                 let tree = root.SyntaxTree
                 let typeOfExpressions = TranslationContext
-                    .GetEffectiveNodes(root)
+                    .GetEffectiveNodes(root, compilation)
                     .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.TypeOfExpressionSyntax]()
                     .ToList()
                 if typeOfExpressions.Count == 0 {

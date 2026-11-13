@@ -86,6 +86,11 @@ open class CSharpProjectLoaderDiagnosticsTests {
         using let analysis = ObliviousNullabilityAnalyzer.UseCatalogScope(context)
         Assert.Equal(boolAddNull, ObliviousNullabilityAnalyzer.IsTainted(compilation, value))
         Assert.True(ObliviousNullabilityAnalyzer.IsTainted(compilation, other))
+        let foreign = compilation.WithAssemblyName("SharedTreeForeignInventory5326")
+        let foreignOwner = foreign.GetTypeByMetadataName("Store") ??
+            throw InvalidOperationException("Foreign Store missing.")
+        let foreignValue = Assert.IsAssignableFrom[IFieldSymbol](Assert.Single(foreignOwner.GetMembers("Value")))
+        Assert.Equal(!boolAddNull, ObliviousNullabilityAnalyzer.IsTainted(foreign, foreignValue))
     }
 
     @Theory

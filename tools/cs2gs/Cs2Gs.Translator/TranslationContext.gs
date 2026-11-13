@@ -914,11 +914,10 @@ class TranslationContext {
             }
         }
 
-        internal func GetEffectiveNodes(root SyntaxNode) IEnumerable[SyntaxNode] {
-            if ActiveSpeculativeBody() is {} overlay && object.ReferenceEquals(
-                root.SyntaxTree,
-                overlay.Original.SyntaxTree
-            ) {
+        internal func GetEffectiveNodes(root SyntaxNode, owner Compilation) IEnumerable[SyntaxNode] {
+            if ActiveSpeculativeBody() is {} overlay && object.ReferenceEquals(owner, overlay.Model.Compilation) &&
+                object
+                .ReferenceEquals(root.SyntaxTree, overlay.Original.SyntaxTree) {
                 if object.ReferenceEquals(root, overlay.Original.Body) {
                     return Enumerable.Empty[SyntaxNode]()
                 }
@@ -928,8 +927,11 @@ class TranslationContext {
             return root.DescendantNodes()
         }
 
-        internal func GetEffectiveDeclaration(node SyntaxNode) SyntaxNode -> if ActiveSpeculativeBody() is {} overlay &&
-            object.ReferenceEquals(node, overlay.Original) {
+        internal func GetEffectiveDeclaration(
+            node SyntaxNode,
+            owner Compilation?
+        ) SyntaxNode -> if ActiveSpeculativeBody() is {} overlay &&
+            object.ReferenceEquals(owner, overlay.Model.Compilation) && object.ReferenceEquals(node, overlay.Original) {
             overlay.Replacement
         } else {
             node

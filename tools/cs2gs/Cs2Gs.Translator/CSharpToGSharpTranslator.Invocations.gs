@@ -6917,7 +6917,7 @@ partial class CSharpToGSharpTranslator {
                     let tree = root.SyntaxTree
                     this.context.CancellationToken.ThrowIfCancellationRequested()
                     using let _ = this.context.UseSemanticModelFor(tree, compilation)
-                    for node in TranslationContext.GetEffectiveNodes(root) {
+                    for node in TranslationContext.GetEffectiveNodes(root, compilation) {
                         if node is TypeDeclarationSyntax declaredTypeSyntax && this.context.GetDeclaredSymbol(
                             declaredTypeSyntax
                         ) is INamedTypeSymbol declaredType {

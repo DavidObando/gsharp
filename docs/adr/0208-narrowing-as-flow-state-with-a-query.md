@@ -506,6 +506,8 @@ Speculative method bodies form an effective syntax inventory over the original
 compilation. Roslyn's parent model and original speculation position identify
 the actual owning declaration. Inventories omit that declaration's original body
 and add the supplied replacement body under its actual speculative model.
+Inventory and declaration readers require the actual compilation as input.
+A different compilation sharing the original tree keeps its original body.
 Signatures, unaffected declarations, and other trees remain original inputs.
 Return, ref-storage, null-flow, shape, effect, projection, import, and naming
 walks use the same inventory and declaration resolver. Body translation uses

@@ -19030,7 +19030,7 @@ partial class CSharpToGSharpTranslator {
                             let tree = root.SyntaxTree
                             this.context.EffectIndexes.TreeVisits++
                             let model = TranslationContext.GetEffectiveSemanticModel(compilation, tree)
-                            for syntax in TranslationContext.GetEffectiveNodes(root) {
+                            for syntax in TranslationContext.GetEffectiveNodes(root, compilation) {
                                 this.context.CancellationToken.ThrowIfCancellationRequested()
                                 let address = switch syntax {
                                     case reference is Microsoft
@@ -19204,14 +19204,14 @@ partial class CSharpToGSharpTranslator {
                             this.context.EffectIndexes.TreeVisits++
                             this.context.CancellationToken.ThrowIfCancellationRequested()
                             let model = TranslationContext.GetEffectiveSemanticModel(compilation, tree)
-                            for declaration in TranslationContext.GetEffectiveNodes(root).Where(
+                            for declaration in TranslationContext.GetEffectiveNodes(root, compilation).Where(
                                 (node Microsoft.CodeAnalysis.SyntaxNode) -> node is MethodDeclarationSyntax or
                                     LocalFunctionStatementSyntax
                             ) {
                                 this.context.CancellationToken.ThrowIfCancellationRequested()
                                 if model.GetDeclaredSymbol(declaration) is IMethodSymbol method {
                                     if TranslationContext
-                                        .GetEffectiveDeclaration(declaration)
+                                        .GetEffectiveDeclaration(declaration, compilation)
                                         .DescendantNodes()
                                         .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.YieldStatementSyntax]()
                                         .Any(
@@ -19845,7 +19845,7 @@ partial class CSharpToGSharpTranslator {
                             this.context.CancellationToken.ThrowIfCancellationRequested()
                             using let ownerScope = this.context.UseSemanticModelFor(tree, compilation)
                             let model = this.context.SemanticModel
-                            for call in TranslationContext.GetEffectiveNodes(root)
+                            for call in TranslationContext.GetEffectiveNodes(root, compilation)
                                 .OfType[InvocationExpressionSyntax]() {
                                 this.context.CancellationToken.ThrowIfCancellationRequested()
                                 if model.GetOperation(
@@ -20462,7 +20462,7 @@ partial class CSharpToGSharpTranslator {
                     this.context.StorageEffectBodyVisits++
                     this.context.BeforeStorageEffectBody?.Invoke()
                     for declaration in method.DeclaringSyntaxReferences {
-                        let syntax = TranslationContext.GetEffectiveDeclaration(declaration.GetSyntax())
+                        let syntax = TranslationContext.GetEffectiveDeclaration(declaration.GetSyntax(), owner)
                         using let bodyScope = this.context.UseSemanticModelFor(syntax.SyntaxTree, owner)
                         let body Microsoft.CodeAnalysis.SyntaxNode? = switch syntax {
                             case declaration is MethodDeclarationSyntax: declaration.Body ??

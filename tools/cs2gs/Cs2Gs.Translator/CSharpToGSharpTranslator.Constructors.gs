@@ -2112,7 +2112,7 @@ partial class CSharpToGSharpTranslator {
         /// @param description A human-readable label for the body.
         /// @returns The translated block.
         private func TranslateBody(bodyOwner Microsoft.CodeAnalysis.SyntaxNode, description string) BlockStatement {
-            let effectiveBodyOwner = TranslationContext.GetEffectiveDeclaration(bodyOwner)
+            let effectiveBodyOwner = TranslationContext.GetEffectiveDeclaration(bodyOwner, this.context.Compilation)
             using let bodyModel = this.context.UseSemanticModelFor(
                 effectiveBodyOwner.SyntaxTree,
                 this.context.Compilation

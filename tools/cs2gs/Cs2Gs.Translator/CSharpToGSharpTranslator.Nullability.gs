@@ -2768,12 +2768,12 @@ partial class CSharpToGSharpTranslator {
                 this.context.CancellationToken.ThrowIfCancellationRequested()
                 using let modelScope = this.context.UseSemanticModelFor(tree, compilation)
                 let model = this.context.SemanticModel
-                for reference in TranslationContext.GetEffectiveNodes(root).OfType[RefExpressionSyntax]() {
+                for reference in TranslationContext.GetEffectiveNodes(root, compilation).OfType[RefExpressionSyntax]() {
                     if this.RefStorageDestination(reference, model) is {} destination {
                         this.ConnectRefStorage(this.GetRefStorageSlot(destination, 0), reference.Expression, model)
                     }
                 }
-                for argument in TranslationContext.GetEffectiveNodes(root).OfType[ArgumentSyntax]() {
+                for argument in TranslationContext.GetEffectiveNodes(root, compilation).OfType[ArgumentSyntax]() {
                     if (argument.RefKindKeyword.IsKind(SyntaxKind.RefKeyword)) && model.GetOperation(
                         argument
                     ) is IArgumentOperation{Parameter: {RefKind: RefKind.Ref} parameter} {
@@ -3656,7 +3656,7 @@ partial class CSharpToGSharpTranslator {
                     return if syntax == nil {
                         nil
                     } else {
-                        TranslationContext.GetEffectiveDeclaration(syntax)
+                        TranslationContext.GetEffectiveDeclaration(syntax, this.context.SourceCompilation(owner!!))
                     }
                 }
                 case field is IFieldSymbol {
