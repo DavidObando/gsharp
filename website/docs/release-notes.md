@@ -16,6 +16,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Check imported generic `class`, `struct`, and `new()` constraints before reading type-bound constraints. Missing type-bound dependencies no longer bypass known special flags. The older unreadable type-bound fallback remains unchanged pending ADR-0209's post-stage-7 follow-up (#5176). (Fixes #6023)
+
 - Document the twelve acknowledged imported-attribute support gaps, including partial marker readers and the distinction from source attributes. This changes documentation only; compiler behavior is unchanged. (Fixes #5177)
 
 - Clarify ADR-0209's existing public-copy preference for well-known types, nonpublic fallback, and searched/dependency module partition. Consumer-specific access remains compilation-owned. This changes documentation only. (Fixes #5204)

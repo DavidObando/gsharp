@@ -8022,12 +8022,6 @@ internal shared class ClrOverloadResolution {
             let argIsUserReferenceType = unwrappedArgSymbol is StructSymbol &&
                 unwrappedArgSymbol.IsClass == true &&
                 unwrappedArgSymbol.ClrType == nil
-            var typeConstraints[]Type
-            try {
-                typeConstraints = param.GetGenericParameterConstraints()
-            } catch (ex Exception) when IsMetadataLoadFailure(ex) {
-                continue
-            }
             let parameterNullability = GetDeclaredGenericParameterNullability(param)
             if (special & GenericParameterAttributes.ReferenceTypeConstraint) != 0 {
                 // `where T : class` — arg must be a reference type (not a
@@ -8118,6 +8112,12 @@ internal shared class ClrOverloadResolution {
             // `where T : ISomething`, or a dependent bound such as
             // `where TResult : T`. Substitute the complete type-argument
             // vector before testing the constraint.
+            var typeConstraints[]Type
+            try {
+                typeConstraints = param.GetGenericParameterConstraints()
+            } catch (ex Exception) when IsMetadataLoadFailure(ex) {
+                continue
+            }
             for var c = 0; c < typeConstraints.Length; c++ {
                 var constraint Type? = typeConstraints[c]
                 if constraint == nil {
