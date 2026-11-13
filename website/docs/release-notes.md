@@ -16,6 +16,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Record pattern variables' emitted storage before translating their consumers. Deconstruction stores into non-null switch subpattern locals retain required assertions. Nullable pattern locals still store null without assertions. (Fixes #5605)
+
 - Allow up to 30 minutes for NuGet SDK indexing and 10 minutes for the VS Code Marketplace post-upload query. Polls stop when the expected version appears. (Fixes #5619)
 
 - Correct release documentation: the recorded rehearsal accepted duplicate symbol packages with 201 Created; duplicate NuGet packages returned 409 Conflict. This changes documentation only. (Fixes #5620)

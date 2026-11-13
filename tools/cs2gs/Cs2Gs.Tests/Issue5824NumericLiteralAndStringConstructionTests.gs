@@ -255,7 +255,8 @@ internal shared class LiteralConstructionRuntimeParity {
         librarySource string? = nil,
         transform((string) -> string)? = nil,
         verifyIL bool = false,
-        verifyAssembly Action[string]? = nil
+        verifyAssembly Action[string]? = nil,
+        nullableContextOptions NullableContextOptions = NullableContextOptions.Enable
     ) {
         let tree = CSharpSyntaxTree.ParseText(source, CSharpParseOptions(LanguageVersion.Latest), path: "Probe.cs")
         let library = if librarySource != nil {
@@ -276,9 +277,7 @@ internal shared class LiteralConstructionRuntimeParity {
             "Native",
             []SyntaxTree{tree},
             references,
-            CSharpCompilationOptions(OutputKind.ConsoleApplication).WithNullableContextOptions(
-                NullableContextOptions.Enable
-            )
+            CSharpCompilationOptions(OutputKind.ConsoleApplication).WithNullableContextOptions(nullableContextOptions)
         )
         Assert.Empty(
             compilation.GetDiagnostics().Where(

@@ -429,7 +429,7 @@ internal class DocumentTranslationState {
     // nil: its type clause, or else whether the initializer that was actually
     // emitted is not certainly non-null (`GSharpExpressionIsStaticallyNonNull`).
     // A deconstruction into the local stores its element as is when it does,
-    // and bridges it when it does not.
+    // and bridges it when it does not. Pattern materializations record their emitted type at the same seam (#5605).
     prop EmittedLocalStorageAcceptsNil Dictionary[ILocalSymbol, bool] {
         get;
     }
