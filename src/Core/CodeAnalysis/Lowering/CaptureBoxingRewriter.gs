@@ -505,11 +505,7 @@ internal shared class CaptureBoxingRewriter {
                 if caught != nil && this.boxInfo.TryGetValue(caught, out var bi) {
                     let seed = this.BuildBoxSeedStatements(bi)
                     if filter != nil {
-                        filter = if filter is BoundBlockExpression existingBlock {
-                            BoundBlockExpression(nil, seed.AddRange(existingBlock.Statements), existingBlock.Expression)
-                        } else {
-                            BoundBlockExpression(nil, seed, filter)
-                        }
+                        filter = PrependSeedStatements(filter, seed)
                     } else {
                         body = PrependSeedStatements(body, seed)
                     }
@@ -548,7 +544,7 @@ internal shared class CaptureBoxingRewriter {
                 } else {
                     this.RewritePattern(arm.Pattern)
                 }
-                let guard_ = if arm.Guard == nil {
+                var guard_ = if arm.Guard == nil {
                     default(BoundExpression?)
                 } else {
                     this.RewriteExpression(arm.Guard)
@@ -560,7 +556,11 @@ internal shared class CaptureBoxingRewriter {
                     this.BuildPatternBoxSeedStatements(pattern)
                 }
                 if !seed.IsEmpty {
-                    body = PrependSeedStatements(body, seed)
+                    if guard_ != nil {
+                        guard_ = PrependSeedStatements(guard_, seed)
+                    } else {
+                        body = PrependSeedStatements(body, seed)
+                    }
                 }
                 if builder == nil && (pattern != arm.Pattern || guard_ != arm.Guard || body != arm.Body) {
                     builder = ImmutableArray.CreateBuilder[BoundPatternSwitchArm](node.Arms.Length)
@@ -594,7 +594,7 @@ internal shared class CaptureBoxingRewriter {
                 } else {
                     this.RewritePattern(arm.Pattern)
                 }
-                let guard_ = if arm.Guard == nil {
+                var guard_ = if arm.Guard == nil {
                     default(BoundExpression?)
                 } else {
                     this.RewriteExpression(arm.Guard)
@@ -606,15 +606,10 @@ internal shared class CaptureBoxingRewriter {
                     this.BuildPatternBoxSeedStatements(pattern)
                 }
                 if !seed.IsEmpty {
-                    // A switch-expression arm has no statement body to prepend
-                    // into — only a `Result` expression — so the seed becomes a
-                    // BoundBlockExpression's prefix statements (folding into an
-                    // existing one from a prior rewrite, e.g. #2130's expression-
-                    // tree lowering, rather than nesting).
-                    result = if result is BoundBlockExpression existingBlock {
-                        BoundBlockExpression(nil, seed.AddRange(existingBlock.Statements), existingBlock.Expression)
+                    if guard_ != nil {
+                        guard_ = PrependSeedStatements(guard_, seed)
                     } else {
-                        BoundBlockExpression(nil, seed, result)
+                        result = PrependSeedStatements(result, seed)
                     }
                 }
                 if builder == nil && (pattern != arm.Pattern || guard_ != arm.Guard || result != arm.Result) {
@@ -812,10 +807,9 @@ internal shared class CaptureBoxingRewriter {
         //
         // The fix mirrors the captured-parameter prologue (box constructed,
         // then seeded from the plain-slot value) but scoped to the construct's
-        // own body/result instead of function entry: the plain slot still
-        // receives the runtime value via the unmodified emit dispatch path,
-        // and the first thing the (rewritten) body/result does is copy that
-        // value into the box before any box.Value read executes.
+        // own region instead of function entry. The emitter fills the plain slot first.
+        // Seed the box before the guard/filter, or before the body/result when no guard exists.
+        // The guard and body must share that cell, including when a false guard escapes a closure (#5998).
         private func BuildBoxSeedStatements(bi BoxedVariable) ImmutableArray[BoundStatement] {
             this.allocated.Add(bi.Original)
             return CaptureBoxingRewriter.BuildBoxStatements(bi, BoundVariableExpression(nil, bi.Original))
@@ -832,6 +826,15 @@ internal shared class CaptureBoxingRewriter {
         }
 
         shared {
+            private func PrependSeedStatements(
+                expression BoundExpression,
+                seed ImmutableArray[BoundStatement]
+            ) BoundExpression -> if expression is BoundBlockExpression block {
+                BoundBlockExpression(nil, seed.AddRange(block.Statements), block.Expression)
+            } else {
+                BoundBlockExpression(nil, seed, expression)
+            }
+
             // Prepends box-seed statements ahead of a construct's already-rewritten
             // body, tolerating a non-block body (defensive: every current caller's
             // grammar requires a brace-delimited body, but binding this generically
