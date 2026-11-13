@@ -147,8 +147,8 @@ Console.Write(value)
 Console.Write("|")
 Console.Write(optional(20, items))
 Console.Write("|")
-Console.Write(Optional(items: items))
-`, "11|11|21|9")
+Console.Write(Optional())
+`, "11|11|21|8")
     }
 
     @Theory
