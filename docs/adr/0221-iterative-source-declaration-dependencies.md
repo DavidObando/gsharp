@@ -44,6 +44,8 @@ Separate source declaration scheduling into header, member, and usage-validation
    Resolve each nested segment through its selected container, preserving all preceding segment arities.
    Read identifier token values, not escaped source spellings, throughout prerequisite lookup.
    Read declared shared-member names for hiding before complete member contracts exist.
+   Prune inherited source-alias lookup by the indexed candidate name before walking ancestry.
+   An unrelated nested declaration must not disable pruning for other names.
    Complete referenced source type headers before their identities prove imported generic constraints.
    Drain source headers in declaration order after aliases exist and before shell attributes or delegate signatures bind.
 2. Check the completed source base relation for inheritance cycles.

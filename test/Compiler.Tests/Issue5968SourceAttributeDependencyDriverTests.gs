@@ -880,18 +880,30 @@ class BAttribute : Attribute {}`
     }
 
     @Theory
-    @InlineData(false, false)
-    @InlineData(true, false)
-    @InlineData(false, true)
-    func DeepAttributeDependencies_CompileAndRetainContractsOnSmallStacks(inheritance bool, nested bool) {
+    @InlineData(false, false, false)
+    @InlineData(true, false, false)
+    @InlineData(false, true, false)
+    @InlineData(true, false, true)
+    func DeepAttributeDependencies_CompileAndRetainContractsOnSmallStacks(
+        inheritance bool,
+        nested bool,
+        unrelatedNested bool
+    ) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let driver = CompileBoundedStackDriver(fixture)
         let sourceFile = Path.Combine(fixture.Directory, "dependency.gs")
         let outputFile = Path.Combine(fixture.Directory, "dependency.dll")
-        let wrapSource = (source string) -> if nested {
-            source.Replace("import System\n", "import System\nclass Envelope {\n") + "\n}"
-        } else {
-            source
+        let wrapSource = func (source string) string {
+            let wrapped = if nested {
+                source.Replace("import System\n", "import System\nclass Envelope {\n") + "\n}"
+            } else {
+                source
+            }
+            return wrapped + if unrelatedNested {
+                "\nclass Unrelated { public class Distractor {} }\n"
+            } else {
+                ""
+            }
         }
         File.WriteAllText(
             sourceFile,

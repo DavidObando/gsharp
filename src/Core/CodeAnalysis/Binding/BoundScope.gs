@@ -34,6 +34,7 @@ partial class BoundScope {
         ImmutableDictionary[string, TypeSymbol]
     ] =
     ImmutableDictionary[(Owner TypeSymbol, Name string), ImmutableDictionary[string, TypeSymbol]].Empty
+    private var nestedAliasCandidateNames ImmutableHashSet[string] = ImmutableHashSet[string].Empty
     private var sourcePackagePrefixes ImmutableDictionary[string, bool].Builder?
 
     private var typeAliasKeys ImmutableArray[string].Builder?
@@ -1642,9 +1643,9 @@ partial class BoundScope {
         @NotNullWhen(true) out type TypeSymbol?,
         @NotNullWhen(true) out declaringContainer StructSymbol?
     ) bool {
-        // Without nested aliases, ancestry cannot contribute a matching source type.
+        // Without candidates for this name, ancestry cannot contribute a matching source type.
         var declaringScope BoundScope? = this
-        while declaringScope != nil && declaringScope.nestedAliasCandidates.Count == 0 {
+        while declaringScope != nil && !declaringScope.nestedAliasCandidateNames.Contains(simpleName) {
             declaringScope = declaringScope.Parent
         }
         if declaringScope == nil {
@@ -1668,6 +1669,7 @@ partial class BoundScope {
         // by #4162, and the one every other #4164 call site now goes
         // through too); skip the first entry (`container` itself) to match
         // this loop's original `container.BaseClass` starting point.
+        CompilationMeasurements.Count("alias.inherited-hierarchy-walks")
         let baseChain = container.GetHierarchy()
         for var level = 1; level < baseChain.Count; level++ {
             let c = baseChain[level]
@@ -2216,13 +2218,15 @@ partial class BoundScope {
         }
         aliasCandidatesByArity = aliasCandidatesByArity.SetItem(nameWithArity, byArity.SetItem(key, target))
         if !TryGetAliasDeclaringPackageInChain(key, out _) && TypeContainingType(target) is {} owner {
-            let nestedKey = (TypeDefinition(owner), name.Substring(name.LastIndexOf('.') + 1))
+            let nestedName = name.Substring(name.LastIndexOf('.') + 1)
+            let nestedKey = (TypeDefinition(owner), nestedName)
             let nested = if nestedAliasCandidates.TryGetValue(nestedKey, out var existing) {
                 existing
             } else {
                 ImmutableDictionary[string, TypeSymbol].Empty
             }
             nestedAliasCandidates = nestedAliasCandidates.SetItem(nestedKey, nested.SetItem(key, target))
+            nestedAliasCandidateNames = nestedAliasCandidateNames.Add(nestedName)
         }
     }
 
