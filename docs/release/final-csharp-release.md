@@ -193,8 +193,7 @@ to the release (for example, the same failure on `main` or on an unrelated PR)
 before running "Re-run failed jobs" (or `gh run rerun <run-id> --failed`).
 Don't re-run a failure you haven't explained.
 
-Every publish job is safe to re-run, and "Re-run failed jobs" also runs the
-jobs that were skipped behind the failed one. Read the failure by job:
+Every publish job is safe to re-run with the same artifacts and unchanged bytes. "Re-run failed jobs" also runs the jobs skipped behind the failed one. Keep the inventory, version, tag, provenance, and credential checks unchanged. Read the failure by job:
 
 | Failed job | Meaning | Recovery |
 |---|---|---|
@@ -220,11 +219,13 @@ by its symbols: `Gsharp.NET.Sdk`, `Gsharp.Templates` (no symbols),
 `GSharp.CodeAnalysis.Analyzers.Testing`. A push that fails three times stops
 the job, so the packages after it are not pushed. A re-run of
 `publish-nuget-sdk` pushes again symbol packages that may already be on the
-symbol server. Whether that server answers 409 (a warning with
-`--skip-duplicate`) is unverified until a tag run shows it (ADR-0218).
+symbol server.
 
-If a re-run fails on a `.snupkg` push with any other answer, don't repeat it:
-every re-run stops at the same file. Instead:
+**Observed, not a server guarantee:** the `v0.5.460-rc1` rehearsal accepted all five duplicate symbol packages with **201 Created**, not 409. See [ADR-0218's evidence](../adr/0218-release-publish-jobs-per-destination.md#step-5-duplicate-symbol-packages) for run 41368080564, attempts 2 and 3. Each existing `.nupkg` returned **409 Conflict**, a warning with `--skip-duplicate`. Both push steps exited 0. Treat the observed 201 response as success, not as a failure that needs recovery.
+
+This observation covers re-uploading the same symbol-package bytes. It does not authorize replacing published content with different bytes. NuGet package immutability remains unchanged.
+
+If a re-run fails on a `.snupkg` push, read the failure log before any further attempt. Do not retry an unexplained failure. For a persistent symbol-package failure, use this recovery:
 
 1. Check the whole inventory. `python3 build/check-rid-packages.py --packages
    <dir> --require-sdk` (with the `nuget-packages` artifact in `<dir>`) covers
