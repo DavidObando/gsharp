@@ -16,6 +16,29 @@ import System.Text
 import Xunit
 
 class Issue5609AuthorSuppressionTests {
+    @Fact
+    func UnknownTypeParameterStorage_KeepsItsAuthorAssertion() {
+        AssertRuns(`
+#nullable disable
+namespace Demo {
+    public static class P {
+        public static object Unknown<T>(T q) {
+            T x;
+            x = q;
+            return x!;
+        }
+    }
+}`, `
+public static class Host {
+    public static void Main() {
+        string reference;
+        try { reference = Demo.P.Unknown<string>(null) == null ? "nil" : "value"; }
+        catch (System.NullReferenceException) { reference = "NRE"; }
+        System.Console.Write(reference + ":" + Demo.P.Unknown<int>(7));
+    }
+}`, "NRE:7", (printed string) -> Assert.Contains("return x!!", printed), nativeExpected: "nil:7")
+    }
+
     @Theory
     @InlineData("#nullable disable")
     @InlineData("#nullable enable")
@@ -34,6 +57,10 @@ namespace Demo {
         public static object Arm(Microsoft.CodeAnalysis.INamespaceSymbol ns) => ns switch { var c => c! };
         public static object Case(Microsoft.CodeAnalysis.INamespaceSymbol ns) { switch (ns) { case var c: return c!; } }
         public static object Property(Holder h) => h is { Child: var c } ? c! : new object();
+        public static object Callable(Microsoft.CodeAnalysis.INamespaceSymbol ns) {
+            var read = () => ns;
+            return read!()!;
+        }
         public static object Guarded(Microsoft.CodeAnalysis.INamespaceSymbol ns) {
             if (ns == null) return "nil";
             return ns!;
@@ -49,9 +76,9 @@ public static class Host {
     public static void Main() {
         System.Console.Write(Read(() => P.Direct(null)) + "|" + Read(() => P.Local(null)) + "|" +
             Read(() => P.Is(null)) + "|" + Read(() => P.Arm(null)) + "|" + Read(() => P.Case(null)) + "|" +
-            Read(() => P.Property(new Holder(null))) + "|" + P.Guarded(null));
+            Read(() => P.Property(new Holder(null))) + "|" + Read(() => P.Callable(null)) + "|" + P.Guarded(null));
     }
-}`, "NRE|NRE|NRE|NRE|NRE|NRE|nil", (
+}`, "NRE|NRE|NRE|NRE|NRE|NRE|NRE|nil", (
                 printed string
             ) -> {
                 Assert.Contains(
@@ -66,11 +93,15 @@ public static class Host {
                     "c!!",
                     printed
                 )
+                Assert.Contains(
+                    "return read()!!",
+                    printed
+                )
                 Assert.DoesNotContain(
                     "return ns!!",
                     printed
                 )
-            }, nativeExpected: "nil|nil|nil|nil|nil|nil|nil", analyzerApiMode: true)
+            }, nativeExpected: "nil|nil|nil|nil|nil|nil|nil|nil", analyzerApiMode: true)
     }
 
     @Fact

@@ -11661,6 +11661,11 @@ partial class CSharpToGSharpTranslator {
                     .CodeAnalysis
                     .CSharp
                     .Syntax
+                    .AnonymousFunctionExpressionSyntax,
+                Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
                     .InterpolatedStringExpressionSyntax,
                 Microsoft
                     .CodeAnalysis
@@ -12023,7 +12028,8 @@ partial class CSharpToGSharpTranslator {
             if type != nil && type.IsValueType == true {
                 return type.OriginalDefinition?.SpecialType != SpecialType.System_Nullable_T
             }
-            if symbol is ILocalSymbol local &&
+            if type?.IsReferenceType == true &&
+                symbol is ILocalSymbol local &&
                 this
                 .state
                 .EmittedLocalTypeClauses
