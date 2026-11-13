@@ -22,6 +22,52 @@ import Xunit
 
 class Issue5585ReadonlyNullArgumentTests {
     @Theory
+    @InlineData("if (stored != null) { GC.KeepAlive(this); return stored; } return \"\";", true)
+    @InlineData("if (this.stored != null) { Ping(); return this.stored; } return \"\";", true)
+    @InlineData("if (stored != null) { Ping(); string value = stored; return value; } return \"\";", true)
+    @InlineData("if (stored != null) { Ping(); return Take(stored); } return \"\";", true)
+    @InlineData("if (stored != null) return stored; return \"\";", false)
+    @InlineData("if (stored != null) { string copy = stored; return stored; } return \"\";", false)
+    @InlineData("if (stored == null) return \"\"; Ping(); return stored;", false)
+    @InlineData("if (stored != null && Check()) return stored; return \"\";", false)
+    @InlineData("if (Check() && stored != null) return stored; return \"\";", false)
+    @InlineData(
+        "if (stored != null) { for (int i = 0; i < 2; i++) { if (i == 1) return stored; Ping(); } } return \"\";",
+        true
+    )
+    func TargetReadProof_RequiresSurvivingNarrowingOrAnEmittedCapture(body string, requiresAssertion bool) {
+        let source = `
+#nullable enable
+using System;
+public class Holder {
+    private readonly string? stored;
+    public Holder(string? value) { stored = value; }
+    private void Ping() { GC.KeepAlive(this); }
+    private bool Check() { Ping(); return true; }
+    private static string Take(string value) => value;
+    public string Read() { BODY }
+    public static void Main() {
+        Console.Write(new Holder(null).Read() + "|" + new Holder("42").Read());
+    }
+}
+`.Replace("BODY", body)
+        LiteralConstructionRuntimeParity.AssertMatches(
+            source,
+            verifyTranslation: (printed string) -> {
+                AssertClean(printed)
+                Assert.Equal(requiresAssertion, printed.Contains("stored!!", StringComparison.Ordinal))
+            },
+            verifyAssembly: (assembly string) -> {
+                VerifyStrictIL(assembly)
+                let result = ProcessRunner.Run("dotnet", []string{assembly})
+                Assert.Equal(0, result.ExitCode)
+                Assert.Equal(string.Empty, result.Stderr)
+                Assert.Equal(Encoding.UTF8.GetBytes("|42"), Encoding.UTF8.GetBytes(result.Stdout))
+            }
+        )
+    }
+
+    @Theory
     @InlineData("if (stored != null) return int.Parse(stored); return -1;")
     @InlineData("if (this.stored != null) return int.Parse(stored); return -1;")
     @InlineData("if (stored == null) return -1; else return int.Parse(this.stored);")

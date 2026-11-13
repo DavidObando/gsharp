@@ -18,7 +18,7 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 - Avoid redundant null assertions on inferred deconstruction locals from non-null positional properties. Reuse the emitted declaration's nullability decision. Keep nullable and changed locals guarded. (Fixes #5597)
 
-- Propagate nullable constructor parameters through guarded readonly field storage in `cs2gs`. Reuse stable current-instance guard proofs for read classification and emitted assertions. Keep unsafe handoffs, mutable fields, changed receivers, and deferred reads pinned. (Fixes #5585)
+- Propagate nullable constructor parameters through guarded readonly field storage in `cs2gs`. Keep semantic guard proofs separate from target narrowing across calls. Preserve required assertions or reuse existing captured locals when calls invalidate member narrowing. Keep unsafe handoffs, mutable fields, changed receivers, and deferred reads pinned. (Fixes #5585)
 
 - Omit author-written null assertions in `cs2gs` when an unwidened oblivious source declaration already emits a non-null G# value. Apply the same decision to plain reads, pattern captures, and inferred deconstruction destinations. Keep required nullable, analyzer-mapped, and unknown-value assertions, including bridges into non-null stores. (Fixes #5609)
 

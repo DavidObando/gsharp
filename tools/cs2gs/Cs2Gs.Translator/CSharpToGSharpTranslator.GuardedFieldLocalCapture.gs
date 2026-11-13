@@ -115,12 +115,16 @@ partial class CSharpToGSharpTranslator {
                 // circuit to the (not-yet-declared) capture and translate the
                 // field read as itself.
                 let fieldRead GExpression? = this.TranslateExpression(eligibleUses[0])
+                // The capture reads before calls at its representative source use.
                 statements.Add(
                     LocalDeclarationStatement(
                         BindingKind.Let,
                         capturedName,
                         type: nil,
-                        initializer: if this.GSharpExpressionIsStaticallyNonNull(eligibleUses[0], fieldRead) {
+                        initializer: if this.IsGSharpFlowNarrowedReadonlyFieldRead(
+                            eligibleUses[0],
+                            ifStatement.Span.End
+                        ) {
                             fieldRead
                         } else {
                             EnsureNonNullAssertion(fieldRead)

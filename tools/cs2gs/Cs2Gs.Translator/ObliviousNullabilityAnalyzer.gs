@@ -10643,16 +10643,18 @@ internal shared class ObliviousNullabilityAnalyzer {
     // PRECEDING early-exit guard in an enclosing block
     // (`if (x is null) { continue/return/break/throw; } …use…`). Mirrors the
     // translator-side `IsDominatedByNullCheckGuard` walk, extended with the
-    // early-exit form, so a guarded read doesn't propagate its declaration's
-    // taint through argument edges (gsc's own smart-cast narrows the same
-    // guarded read on the G# side).
-    internal func IsNullGuardDominatedRead(value ExpressionSyntax?, model SemanticModel) bool {
+    // early-exit form, so a guarded read does not forward nil through argument edges.
+    // This semantic proof does not imply surviving G# member narrowing.
+    internal func IsNullGuardDominatedRead(value ExpressionSyntax?, model SemanticModel) bool ->
+    NullGuardDominatingRead(value, model) != nil
+
+    internal func NullGuardDominatingRead(value ExpressionSyntax?, model SemanticModel) ExpressionSyntax? {
         var stripped ExpressionSyntax? = value
         while stripped is ParenthesizedExpressionSyntax paren {
             stripped = paren.Expression
         }
         if stripped == nil {
-            return false
+            return nil
         }
         let symbol ISymbol? = model.GetSymbolInfo(stripped).Symbol
         let readonlyField = symbol is IFieldSymbol{
@@ -10666,44 +10668,42 @@ internal shared class ObliviousNullabilityAnalyzer {
             CSharpToGSharpTranslator.IsUnqualifiedOrThisQualifiedFieldRead(stripped)
         if !readonlyField &&
             (!(stripped is IdentifierNameSyntax) || (!(symbol is ILocalSymbol) && !(symbol is IParameterSymbol))) {
-            return false
+            return nil
         }
         for var node SyntaxNode? = stripped; node != nil; node = node!!.Parent {
             switch node.Parent {
                 case elseClause is ElseClauseSyntax when elseClause.Parent is IfStatementSyntax elseIf &&
                     node == elseClause.Statement &&
-                    IsNullTestOf(elseIf.Condition, symbol, model, whenTrueIsNull: true) &&
+                    NullTestOf(elseIf.Condition, symbol, model, whenTrueIsNull: true) is {} guardTest &&
                     GuardValueRemainsUnchanged(elseIf.Condition, node, stripped, symbol, model) {
-                    return true
+                    return guardTest
                 }
                 case ifStatement is IfStatementSyntax when node == ifStatement.Statement &&
-                    IsNullTestOf(ifStatement.Condition, symbol, model, whenTrueIsNull: false) &&
+                    NullTestOf(ifStatement.Condition, symbol, model, whenTrueIsNull: false) is {} guardTest &&
                     GuardValueRemainsUnchanged(ifStatement.Condition, node, stripped, symbol, model) {
-                    return true
+                    return guardTest
                 }
-                case ternary is ConditionalExpressionSyntax when(
-                    (
-                        node == ternary.WhenFalse &&
-                            IsNullTestOf(ternary.Condition, symbol, model, whenTrueIsNull: true)
-                    ) ||
-                        (
-                        node == ternary.WhenTrue &&
-                            IsNullTestOf(ternary.Condition, symbol, model, whenTrueIsNull: false)
-                    )
-                ) &&
+                case ternary is ConditionalExpressionSyntax when
+                (node == ternary.WhenFalse || node == ternary.WhenTrue) &&
+                    NullTestOf(
+                    ternary.Condition,
+                    symbol,
+                    model,
+                    whenTrueIsNull: node == ternary.WhenFalse
+                ) is {} guardTest &&
                     GuardValueRemainsUnchanged(ternary.Condition, node, stripped, symbol, model) {
-                    return true
+                    return guardTest
                 }
                 case whileStatement is WhileStatementSyntax when node == whileStatement.Statement &&
-                    IsNullTestOf(whileStatement.Condition, symbol, model, whenTrueIsNull: false) &&
+                    NullTestOf(whileStatement.Condition, symbol, model, whenTrueIsNull: false) is {} guardTest &&
                     GuardValueRemainsUnchanged(whileStatement.Condition, node, stripped, symbol, model) {
-                    return true
+                    return guardTest
                 }
                 case forStatement is ForStatementSyntax when node == forStatement.Statement &&
                     forStatement.Condition is {} forCondition &&
-                    IsNullTestOf(forCondition, symbol, model, whenTrueIsNull: false) &&
+                    NullTestOf(forCondition, symbol, model, whenTrueIsNull: false) is {} guardTest &&
                     GuardValueRemainsUnchanged(forCondition, node, stripped, symbol, model) {
-                    return true
+                    return guardTest
                 }
             }
             // A preceding sibling `if (x == null) <always-exits>` in an
@@ -10713,10 +10713,10 @@ internal shared class ObliviousNullabilityAnalyzer {
                 for var i = 0; i < index; i++ {
                     if block.Statements[i] is IfStatementSyntax guard_ &&
                         guard_.Else == nil &&
-                        IsNullTestOf(guard_.Condition, symbol, model, whenTrueIsNull: true) &&
+                        NullTestOf(guard_.Condition, symbol, model, whenTrueIsNull: true) is {} guardTest &&
                         AlwaysExits(guard_.Statement) &&
                         GuardValueRemainsUnchanged(guard_, block, stripped, symbol, model) {
-                        return true
+                        return guardTest
                     }
                 }
             }
@@ -10728,7 +10728,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 break
             }
         }
-        return false
+        return nil
     }
 
     private func IsNullGuardDominatedExpression(value ExpressionSyntax, model SemanticModel) bool {
@@ -10930,12 +10930,12 @@ internal shared class ObliviousNullabilityAnalyzer {
     // Matches `x == null` / `x is null` (whenTrueIsNull: true) and
     // `x != null` / `x is not null` (whenTrueIsNull: false) against
     // <paramref name="symbol"/> by identifier name.
-    private func IsNullTestOf(
+    private func NullTestOf(
         condition ExpressionSyntax,
         symbol ISymbol?,
         model SemanticModel,
         whenTrueIsNull bool
-    ) bool {
+    ) ExpressionSyntax? {
         var condition = condition
         while condition is ParenthesizedExpressionSyntax paren {
             condition = paren.Expression
@@ -10964,8 +10964,8 @@ internal shared class ObliviousNullabilityAnalyzer {
             case conjunction is BinaryExpressionSyntax when !whenTrueIsNull && conjunction.IsKind(
                 SyntaxKind.LogicalAndExpression
             ) {
-                return IsNullTestOf(conjunction.Left, symbol, model, whenTrueIsNull) ||
-                    IsNullTestOf(conjunction.Right, symbol, model, whenTrueIsNull)
+                return NullTestOf(conjunction.Right, symbol, model, whenTrueIsNull) ??
+                    NullTestOf(conjunction.Left, symbol, model, whenTrueIsNull)
             }
             case binary is BinaryExpressionSyntax when binary.IsKind(
                 if whenTrueIsNull {
@@ -10978,25 +10978,37 @@ internal shared class ObliviousNullabilityAnalyzer {
                     OperatorMethod: nil,
                     Type: {SpecialType: SpecialType.System_Boolean}
                 } {
-                    return false
+                    return nil
                 }
-                return (IsSymbolIdentifier(binary.Left, symbol) && IsNullLiteral(binary.Right)) ||
-                    (IsSymbolIdentifier(binary.Right, symbol) && IsNullLiteral(binary.Left))
+                return if (IsSymbolIdentifier(binary.Left, symbol) && IsNullLiteral(binary.Right)) ||
+                    (IsSymbolIdentifier(binary.Right, symbol) && IsNullLiteral(binary.Left)) {
+                    condition
+                } else {
+                    nil
+                }
             }
             case isPattern is IsPatternExpressionSyntax when IsSymbolIdentifier(isPattern.Expression, symbol) {
                 if whenTrueIsNull {
-                    return isPattern.Pattern is ConstantPatternSyntax{
+                    return if isPattern.Pattern is ConstantPatternSyntax{
                         Expression: LiteralExpressionSyntax nullPattern
                     } &&
-                        nullPattern.IsKind(SyntaxKind.NullLiteralExpression)
+                        nullPattern.IsKind(SyntaxKind.NullLiteralExpression) {
+                        condition
+                    } else {
+                        nil
+                    }
                 }
-                return isPattern.Pattern is UnaryPatternSyntax{
+                return if isPattern.Pattern is UnaryPatternSyntax{
                     Pattern: ConstantPatternSyntax{Expression: LiteralExpressionSyntax notNullPattern}
                 } &&
-                    notNullPattern.IsKind(SyntaxKind.NullLiteralExpression)
+                    notNullPattern.IsKind(SyntaxKind.NullLiteralExpression) {
+                    condition
+                } else {
+                    nil
+                }
             }
             default {
-                return false
+                return nil
             }
         }
     }
