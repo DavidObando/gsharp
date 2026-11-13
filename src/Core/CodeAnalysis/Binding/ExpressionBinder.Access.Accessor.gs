@@ -3059,6 +3059,12 @@ internal partial class ExpressionBinder {
             return false
         }
         if userGenericDef {
+            for var i = 0; i < typeArgs.Length; i++ {
+                if Binder.ReportByRefLikeGenericTypeArgument(Diagnostics, typeArgs[i], index.Indices[i].Location) {
+                    failureHandled = true
+                    return false
+                }
+            }
             switch alias {
                 case structDef is StructSymbol {
                     constructedStruct = StructSymbol.Construct(
@@ -3300,6 +3306,16 @@ internal partial class ExpressionBinder {
         }
         let typeArgs = typeArgsBuilder.ToImmutable()
         if userGenericDef {
+            for var i = 0; i < typeArgs.Length; i++ {
+                if Binder.ReportByRefLikeGenericTypeArgument(
+                    Diagnostics,
+                    typeArgs[i],
+                    generic.TypeArgumentList.Arguments[i].Location
+                ) {
+                    failureHandled = true
+                    return false
+                }
+            }
             switch alias {
                 case structDef is StructSymbol {
                     constructedStruct = StructSymbol.Construct(
@@ -3699,7 +3715,12 @@ internal partial class ExpressionBinder {
             clrArgs,
             typeArgs,
             receiverSyntax.Location,
-            bindingScope: $scope
+            bindingScope: $scope,
+            typeArgumentLocation: (i int32) -> switch receiverSyntax {
+                case index is IndexExpressionSyntax: index.Indices[i].Location
+                case generic is GenericNameExpressionSyntax: generic.TypeArgumentList.Arguments[i].Location
+                default: receiverSyntax.Location
+            }
         ) {
             // Issue #4051: this failure EXPLAINED itself. Say so, so the caller
             // stops rather than re-reading `Name[Arg]` as an index expression

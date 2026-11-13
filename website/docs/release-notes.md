@@ -16,6 +16,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Reject ref-struct type arguments in ordinary generic constructor calls with GS0219, as in type declarations. Check symbolic arguments before erasure, including source constructors and open generic owners. Preserve imported parameters that allow ref structs. (Fixes #6015)
+
 - Construct expanded List and span variadic carriers over source-declared elements and generic type parameters. Preserve symbolic element types through ordinary constructor emission, including nullable elements and nested collections. Normal-form arguments retain their carrier identity. (Fixes #6010)
 
 - Preserve nullable scalar storage in oblivious `cs2gs` jagged-array allocations. Reuse depth-aware storage contracts for allocations, declarations, aliases, and element reads. Keep nullable array references separate from nullable elements. Range slices keep the array depth; scalar indices consume an element position. Preserve allocation, copy, and row-assignment order. (Fixes #6006)

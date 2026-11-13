@@ -4711,12 +4711,13 @@ partial class Binder {
                     return nil
                 }
                 symbolicArgs.Add(ta)
-                // Issue #367: a by-ref-like (`ref struct`) type cannot be used as
-                // a generic type argument (e.g. `List[Span[int32]]`); the CLR
-                // forbids constructing a generic type over a by-ref-like type.
-                if TypeSymbol.IsByRefLike(ta) && !ClrTypeUtilities.GenericParameterAllowsByRefLike(clrOpenType, i) {
-                    let taLocation = topLevelTypeArguments[i].Identifier?.Location ?? identifierToken.Location
-                    Diagnostics.ReportByRefLikeEscape(taLocation, ta, "be used as a generic type argument")
+                if ReportByRefLikeGenericTypeArgument(
+                    Diagnostics,
+                    ta,
+                    topLevelTypeArguments[i].Identifier?.Location ?? identifierToken.Location,
+                    clrOpenType,
+                    i
+                ) {
                     return nil
                 }
                 // Issue #2391: this caller alone retains the established Int32
@@ -4867,11 +4868,11 @@ partial class Binder {
                     if ta == nil {
                         return nil
                     }
-                    // Issue #367: by-ref-like (`ref struct`) types are not permitted
-                    // as generic type arguments to a user-defined generic type.
-                    if TypeSymbol.IsByRefLike(ta) {
-                        let taLocation = elementTypeArguments[i].Identifier?.Location ?? identifierToken.Location
-                        Diagnostics.ReportByRefLikeEscape(taLocation, ta, "be used as a generic type argument")
+                    if ReportByRefLikeGenericTypeArgument(
+                        Diagnostics,
+                        ta,
+                        elementTypeArguments[i].Identifier?.Location ?? identifierToken.Location
+                    ) {
                         return nil
                     }
                     typeArgsBuilder.Add(ta)
@@ -5403,12 +5404,7 @@ partial class Binder {
             if ta == nil {
                 return nil
             }
-            if TypeSymbol.IsByRefLike(ta) {
-                Diagnostics.ReportByRefLikeEscape(
-                    taSyntax.Identifier?.Location ?? location,
-                    ta,
-                    "be used as a generic type argument"
-                )
+            if ReportByRefLikeGenericTypeArgument(Diagnostics, ta, taSyntax.Identifier?.Location ?? location) {
                 return nil
             }
             typeArgsBuilder.Add(ta)
@@ -5777,10 +5773,13 @@ partial class Binder {
                 return nil
             }
             symbolicArgs.Add(ta)
-            // Issue #367: by-ref-like types cannot serve as generic arguments.
-            if TypeSymbol.IsByRefLike(ta) && !ClrTypeUtilities.GenericParameterAllowsByRefLike(clrType, i) {
-                let taLocation = typeArguments[i].Identifier?.Location ?? identifierToken.Location
-                Diagnostics.ReportByRefLikeEscape(taLocation, ta, "be used as a generic type argument")
+            if ReportByRefLikeGenericTypeArgument(
+                Diagnostics,
+                ta,
+                typeArguments[i].Identifier?.Location ?? identifierToken.Location,
+                clrType,
+                i
+            ) {
                 return nil
             }
             let erasedArgument = if ta is EnumSymbol &&
@@ -6023,9 +6022,13 @@ partial class Binder {
                 return nil
             }
             symbolicArgs.Add(ta)
-            if TypeSymbol.IsByRefLike(ta) && !ClrTypeUtilities.GenericParameterAllowsByRefLike(nestedDef, i) {
-                let taLocation = argSyntaxes[i].Identifier?.Location ?? identifierToken.Location
-                Diagnostics.ReportByRefLikeEscape(taLocation, ta, "be used as a generic type argument")
+            if ReportByRefLikeGenericTypeArgument(
+                Diagnostics,
+                ta,
+                argSyntaxes[i].Identifier?.Location ?? identifierToken.Location,
+                nestedDef,
+                i
+            ) {
                 return nil
             }
             clrArgs[i] = ProjectGenericArgument(ta, typeof(object), &hasSymbolicArg)
@@ -12178,6 +12181,32 @@ partial class Binder {
             }
         }
 
+        internal func ReportByRefLikeGenericTypeArgument(
+            diagnostics DiagnosticBag,
+            argument TypeSymbol,
+            location TextLocation,
+            openDefinition Type? = nil,
+            index int32 = 0
+        ) bool {
+            if !TypeSymbol.IsByRefLike(argument) || ClrTypeUtilities.GenericParameterAllowsByRefLike(
+                openDefinition,
+                index
+            ) {
+                return false
+            }
+            let reason = "be used as a generic type argument"
+            let message = string.Format(
+                CultureInfo.CurrentCulture,
+                DiagnosticDescriptors.ByRefLikeEscape.MessageFormat,
+                argument,
+                reason
+            )
+            if !AlreadyReportedHere(diagnostics, DiagnosticDescriptors.ByRefLikeEscape.Id, message, location) {
+                diagnostics.ReportByRefLikeEscape(location, argument, reason)
+            }
+            return true
+        }
+
         /// Issue #4032: reports `GS0152` when a closed generic TYPE clause
         /// (`class MyHandler : Handler[MyOptions]`, `var h Handler[Bad]`,
         /// …) violates a constraint the imported definition declares.
@@ -12211,6 +12240,7 @@ partial class Binder {
         /// @param clrArgs The projected (possibly erased) CLR arguments.
         /// @param symbolicArgs The symbolic arguments, in the same order.
         /// @param location Where to anchor the diagnostic.
+        /// @param typeArgumentLocation The source location of each explicit type argument, when available.
         /// @returns `true` when a diagnostic was reported.
         internal func ReportUnsatisfiedGenericTypeConstraint(
             diagnostics DiagnosticBag,
@@ -12218,13 +12248,26 @@ partial class Binder {
             clrArgs[]?Type,
             symbolicArgs ImmutableArray[TypeSymbol],
             location TextLocation,
-            bindingScope BoundScope? = nil
+            bindingScope BoundScope? = nil,
+            typeArgumentLocation Func[int32, TextLocation]? = nil
         ) bool {
             if openDefinition == nil ||
                 clrArgs == nil ||
                 symbolicArgs.IsDefaultOrEmpty ||
                 symbolicArgs.Length != clrArgs.Length {
                 return false
+            }
+            // Validate symbolic arguments before erasure or an open sibling can hide a ref struct.
+            for var i = 0; i < symbolicArgs.Length; i++ {
+                if ReportByRefLikeGenericTypeArgument(
+                    diagnostics,
+                    symbolicArgs[i],
+                    typeArgumentLocation?.Invoke(i) ?? location,
+                    openDefinition,
+                    i
+                ) {
+                    return true
+                }
             }
             if bindingScope is {} declaringScope && declaringScope.IsDeferringUserGenericConstraintChecks() {
                 // Headers cannot validate incomplete source constructor or interface contracts.
