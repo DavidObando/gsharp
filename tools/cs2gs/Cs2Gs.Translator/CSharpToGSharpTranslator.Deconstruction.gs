@@ -3687,7 +3687,7 @@ partial class CSharpToGSharpTranslator {
                                 this
                                 .context
                                 .GetDeclaredSymbol(single) is ILocalSymbol local &&
-                                this.InferredLocalDefaultRequiresTypedDeclaration(local)
+                                this.DeconstructionLocalRequiresTypedDeclaration(local, declaration.Type.IsVar)
                         )
                     )
                 ) {

@@ -11,6 +11,8 @@ class Issue5994FlatDeconstructionStorageTests {
     @InlineData("(Node? changed, int id) = Next(entry);", "changed = null;")
     @InlineData("(var changed, var id) = Next(entry);", "changed = null;")
     @InlineData("(Node? changed, int id) = (Next(entry).Item, 7);", "changed = null;")
+    @InlineData("(var changed, var id) = (Next(entry).Item, 7);", "changed = null;")
+    @InlineData("(var changed, var id) = NextTuple(entry);", "changed = null;")
     @InlineData("(int outer, (Node? changed, int id)) = (1, Next(entry));", "changed = null;")
     @InlineData("var (changed, _) = Next(entry);", "Clear(ref changed);")
     func NullableWritableLeaves_StoreNullBeforeTheDereference(declaration string, store string) {
@@ -22,6 +24,7 @@ namespace Demo {
     public record Entry(Node Item, int Id);
     public static class Use {
         static Entry Next(Entry entry) { Console.Write("R|"); return entry; }
+        static (Node, int) NextTuple(Entry entry) { Console.Write("R|"); return (entry.Item, entry.Id); }
         static void Clear(ref Node? value) { value = null; }
         public static string Read(Entry entry) {
             DECLARATION
