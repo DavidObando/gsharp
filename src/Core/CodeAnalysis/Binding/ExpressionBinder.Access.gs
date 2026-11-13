@@ -104,9 +104,7 @@ internal partial class ExpressionBinder {
     /// ADR-0112 §"method-group semantics": builds a (cref:BoundMethodGroupExpression)
     /// for a user-defined type's method(s). A [`receiver`](paramref) of
     /// `null` yields a static (null-target) group; a non-null
-    /// receiver yields an instance group captured against it. Variadic
-    /// candidates are filtered out; the group is only produced when at least one
-    /// usable candidate remains.
+    /// receiver yields an instance group captured against it. Contextual conversion selects candidates by their physical signatures.
     private func TryBuildUserMethodGroup(
         receiver BoundExpression?,
         methods ImmutableArray[FunctionSymbol],
@@ -117,28 +115,10 @@ internal partial class ExpressionBinder {
         if methods.IsDefaultOrEmpty {
             return false
         }
-        let usable = ImmutableArray.CreateBuilder[FunctionSymbol](methods.Length)
-        for m in methods {
-            var hasVariadic = false
-            for parameter in m.Parameters {
-                if parameter.IsVariadic {
-                    hasVariadic = true
-                    break
-                }
-            }
-            if hasVariadic {
-                continue
-            }
-            usable.Add(m)
-        }
-        if usable.Count == 0 {
-            return false
-        }
-        let usableMethods = usable.ToImmutable()
         methodGroup = if staticOwnerType == nil {
-            BuildInstanceMethodGroup(receiver, usableMethods)
+            BuildInstanceMethodGroup(receiver, methods)
         } else {
-            BoundMethodGroupExpression(nil, receiver, usableMethods, staticOwnerType)
+            BoundMethodGroupExpression(nil, receiver, methods, staticOwnerType)
         }
         return true
     }
