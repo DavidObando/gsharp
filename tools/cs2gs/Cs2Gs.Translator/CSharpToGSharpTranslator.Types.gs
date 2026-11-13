@@ -780,9 +780,9 @@ partial class CSharpToGSharpTranslator {
                     // `when` clause (`case Point p when p.X == 0 && p.Y == 0 &&
                     // <user guard>:`).
                     guard_ = this.TranslateSwitchPatternGuard(arm.WhenClause, guards, mutableBindings)
-                    this.UseMutableSwitchPatternLocals(mutableBindings)
+                    let declarations = this.UseMutableSwitchPatternLocals(mutableBindings, arm.Pattern)
                     body = this.TranslateSwitchArmExpression(arm.Expression, nullableResultType)
-                    body = this.MaterializeMutableSwitchPatternLocals(body, mutableBindings, arm.Pattern)
+                    body = this.MaterializeMutableSwitchPatternLocals(body, declarations)
                 } finally {
                     for (symbol, _) in bindings {
                         this.state.PatternBindings.Remove(symbol)
@@ -1044,8 +1044,9 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func UseMutableSwitchPatternLocals(
-            mutableBindings List[(Symbol ILocalSymbol, MatchedValue GExpression)]
-        ) {
+            mutableBindings List[(Symbol ILocalSymbol, MatchedValue GExpression)],
+            pattern Microsoft.CodeAnalysis.CSharp.Syntax.PatternSyntax
+        ) List[GStatement] {
             for (symbol, matchedValue) in mutableBindings {
                 let localId = IdentifierExpression(this.EmittedName(symbol, symbol.Name))
                 if this.state.StoredPatternCaptures.Contains(matchedValue) {
@@ -1054,14 +1055,13 @@ partial class CSharpToGSharpTranslator {
                 }
                 this.state.PatternBindings[symbol] = localId
             }
+            return this.BuildMutableSwitchPatternDeclarations(mutableBindings, pattern)
         }
 
         private func MaterializeMutableSwitchPatternLocals(
             body GExpression?,
-            mutableBindings List[(Symbol ILocalSymbol, MatchedValue GExpression)],
-            pattern Microsoft.CodeAnalysis.CSharp.Syntax.PatternSyntax
+            declarations List[GStatement]
         ) GExpression? {
-            let declarations = this.BuildMutableSwitchPatternDeclarations(mutableBindings, pattern)
             return if declarations.Count == 0 {
                 body
             } else {
@@ -1071,10 +1071,8 @@ partial class CSharpToGSharpTranslator {
 
         private func MaterializeMutableSwitchPatternLocals(
             body BlockStatement,
-            mutableBindings List[(Symbol ILocalSymbol, MatchedValue GExpression)],
-            pattern Microsoft.CodeAnalysis.CSharp.Syntax.PatternSyntax
+            declarations List[GStatement]
         ) BlockStatement {
-            let declarations = this.BuildMutableSwitchPatternDeclarations(mutableBindings, pattern)
             if declarations.Count == 0 {
                 return body
             }
@@ -1104,6 +1102,7 @@ partial class CSharpToGSharpTranslator {
                 if nullableCapture && symbol.Type.IsReferenceType {
                     declaredType = MakeNullable(declaredType)
                 }
+                this.RecordEmittedLocalNullability(symbol, declaredType, nil, nil)
                 declarations.Add(
                     LocalDeclarationStatement(
                         BindingKind.Var,
@@ -1161,9 +1160,10 @@ partial class CSharpToGSharpTranslator {
                 }
                 var guard_ GExpression?
                 var body BlockStatement
+                var declarations List[GStatement]
                 try {
                     guard_ = this.TranslateSwitchPatternGuard(arm.WhenClause, guards, mutableBindings)
-                    this.UseMutableSwitchPatternLocals(mutableBindings)
+                    declarations = this.UseMutableSwitchPatternLocals(mutableBindings, arm.Pattern)
                     body = this.TranslateSwitchArmExpressionAsBlock(arm.Expression)
                 } finally {
                     for (symbol, _) in bindings {
@@ -1173,7 +1173,7 @@ partial class CSharpToGSharpTranslator {
                         this.state.PatternBindings.Remove(symbol)
                     }
                 }
-                let armBody = this.MaterializeMutableSwitchPatternLocals(body, mutableBindings, arm.Pattern)
+                let armBody = this.MaterializeMutableSwitchPatternLocals(body, declarations)
                 cases.Add(SwitchStatementCase(pattern, armBody, guard_))
                 hasTotalArm |= guard_ == nil && (pattern == nil || (pattern is DiscardPattern || pattern is VarPattern))
             }
@@ -1367,13 +1367,12 @@ partial class CSharpToGSharpTranslator {
                                     guards,
                                     mutableBindings
                                 )
-                                this.UseMutableSwitchPatternLocals(mutableBindings)
-                                patternBody = this.TranslateSwitchSectionBody(section, orderedBySection[section])
-                                patternBody = this.MaterializeMutableSwitchPatternLocals(
-                                    patternBody,
+                                let declarations = this.UseMutableSwitchPatternLocals(
                                     mutableBindings,
                                     patternLabel.Pattern
                                 )
+                                patternBody = this.TranslateSwitchSectionBody(section, orderedBySection[section])
+                                patternBody = this.MaterializeMutableSwitchPatternLocals(patternBody, declarations)
                             } finally {
                                 for (symbol, _) in bindings {
                                     this.state.PatternBindings.Remove(symbol)
