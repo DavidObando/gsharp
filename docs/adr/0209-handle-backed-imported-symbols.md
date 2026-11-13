@@ -188,7 +188,9 @@ handles. There is no `System.Type` behind them.
 ```text
 ReferenceImageSet                 immutable; owns byte[] images and one PEReader + MetadataReader per image;
   │                               keyed by the ordered (path, size, mtime, MVID:SHA-256) tuple; shared by compilations
-  ├── MetadataModule[i]           one per image, in reference order; row-indexed symbol slots
+  ├── MetadataModule[i]           one per image; row-indexed symbol slots
+  │                               i < SearchedCount: searched prefix (user references + BCL subset), in reference order
+  │                               i >= SearchedCount: closure-only dependencies; reached through TypeRefs and forwards, not ordinary name search
   │     ├── MetadataTypeSymbol    one object per TypeDefinitionHandle (TypeSymbol subclass; ClrType is nil)
   │     │     ├── members         decoded on first request, table order, one object per Method/Field/Property/Event row
   │     │     └── type parameters one TypeParameterSymbol per GenericParameter row
@@ -196,7 +198,7 @@ ReferenceImageSet                 immutable; owns byte[] images and one PEReader
   │     └── TypeRef resolution    TypeReferenceHandle -> symbol in another module, through ExportedType forwards
   ├── ConstructedTypeSymbol       interned by (definition, TypeArgsKey): on the set when every argument is consumer-independent
   ├── MissingTypeSymbol           interned per set by (assembly identity, full name); the answer for an unresolvable TypeRef
-  └── name index                  the #5166 reader, first writer wins in reference order
+  └── name index                  the #5166 reader over the searched prefix only; first writer wins in reference order
 CompilationImportContext          per compilation: consumer assembly name, InternalsVisibleTo grants, semantic aggregates,
                                   constructions whose arguments reach a source type, a source type parameter or any compilation-owned symbol
 ```
@@ -262,7 +264,17 @@ CompilationImportContext          per compilation: consumer assembly name, Inter
   `System.Nullable`1`, `System.Func`N`, `System.Action`N`,
   `System.Collections.Generic.Dictionary`2`, the async builders, the
   attribute types the emitter writes, ...) by name once, into the reference
-  set, with a `SpecialType` tag on the resulting symbol. This replaces every
+  set, with a `SpecialType` tag on the resulting symbol.
+  Lookup applies the existing core-library restriction to runtime-bound names,
+  then prefers the first externally visible full-name match in searched
+  reference order, after forwards. The type and every enclosing type must be
+  public for this preference. If no externally visible copy exists, lookup
+  keeps the first eligible match, even if it is nonpublic. This prevents
+  `Microsoft.VisualStudio.Validation`'s internal `NullableAttribute` from
+  shadowing the framework's public copy (#3445, #4233). The preference is
+  consumer-independent. `CanAccessInternalMembers` depends on
+  `CurrentAssemblyName`; its `InternalsVisibleTo` decision belongs to
+  `CompilationImportContext`, not the set (section 7c). The table replaces every
   host `typeof(...)` entry point (`MapClrTypeToReferences`,
   `TryProjectOntoReferences`, `EmitContext.ResolveCoreType`,
   `TupleTypeSymbol.GetOpenClrType`, `FunctionTypeSymbol`'s `typeof(Func<...>)`
@@ -358,7 +370,7 @@ diagnostic at the use site; **M** `MissingTypeSymbol`; **E** GS9998.
 
 | # | Question | Metadata source | New failure | Today (representative site and behaviour) |
 | --- | --- | --- | --- | --- |
-| Q1 | Type by full name, by name in one assembly, nested type by dotted path | name index (#5166), `TypeDefinition` rows | M | `ReferenceResolver.TryResolveType` `:389`; `TryResolveTypeInAssembly` `:514`; `GetNestedType` `:567` |
+| Q1 | Type by full name, by name in one assembly, nested type by dotted path | name index (#5166) over the searched prefix, `TypeDefinition` rows; for well-known names, prefer externally visible copies, else keep the first eligible match (section 5); consumer access stays in `CompilationImportContext` (section 7c) | M | `ReferenceResolver.TryResolveType` `:389`; `TryResolveTypeInAssembly` `:514`; `GetNestedType` `:567` |
 | Q2 | Namespace, name, arity, nesting, containing type | `TypeDefinition` | none | `Type.Namespace`/`Name`/`DeclaringType`, ~56 sites in Emit alone |
 | Q3 | Kind flags: value type, enum, interface, abstract, sealed, delegate, by-ref-like, primitive, static class | `TypeAttributes`; base chain to `System.ValueType`/`System.Enum`/`System.MulticastDelegate` by `SpecialType`; `IsByRefLike` attribute | none | raw `IsValueType` at ~65 sites answers `false` across contexts (`ClrTypeUtilities.gs:1546-1578`); `IsDelegateType` by `FullName` `:263-275` |
 | Q4 | Base type and the base chain | `TypeDefinition.BaseType` (TypeDef, TypeRef or TypeSpec) | M for an unresolvable link; the chain stops there and the use site reports D | `GetBaseTypeSafe` `ImportedClassSymbol.gs:869-875` returns `nil` (S) |
