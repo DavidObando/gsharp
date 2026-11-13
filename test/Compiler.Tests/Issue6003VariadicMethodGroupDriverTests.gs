@@ -249,6 +249,10 @@ Console.Write(Optional())
         "func Count(items ...IEnumerable[string]) int32 -> 1\nfunc Count(items ...ICollection[string]) int32 -> 2\nlet bad (List[string]) -> int32 = @Count",
         "GS0218"
     )
+    @InlineData(
+        "open class Animal {}\nclass Dog : Animal {}\nclass Checker {\nshared {\nfunc Check(a Animal, items ...List[string]) bool -> true\n}\n}\nlet bad (Dog?, List[string]) -> bool = @Checker.Check",
+        "GS0218"
+    )
     func UnsupportedContracts_RemainLocatedErrors(declarations string, diagnostic string) {
         using let driver = Driver()
         driver.Check(ListPreamble + "Console.Write(callback(List[string]{\"x\"}))", "1")
@@ -310,7 +314,7 @@ let callback (List[string]) -> int32 = Count
             let error = Assert.Single(errors.Cast[Match]())
             Assert.Equal(line.ToString(), error.Groups[1].Value)
             Assert.Equal(column.ToString(), error.Groups[2].Value)
-            let token = Regex.Match(source.Substring(marker), `^(?:"[^"]*"|\w+)`).Value
+            let token = Regex.Match(source.Substring(marker), `^(?:"[^"]*"|\w+(?:\.\w+)*)`).Value
             Assert.NotEmpty(token)
             Assert.Equal(line.ToString(), error.Groups[3].Value)
             Assert.Equal((column + token.Length).ToString(), error.Groups[4].Value)
