@@ -12053,6 +12053,11 @@ partial class CSharpToGSharpTranslator {
                 .TryGetValue(local, out var acceptsNil) {
                 return !acceptsNil
             }
+            if symbol is ILocalSymbol deconstructed && this.InferredDeconstructedPositionalParameter(
+                deconstructed
+            ) is {} positional {
+                return this.DeclaredValueIsStaticallyNonNull(positional, positional.Type)
+            }
             // Issue #5609: an unwidened oblivious source declaration emits bare `T`, not an imported platform type.
             // Locals and lambda inputs need emitted or initializer facts before this fallback.
             return type is {IsReferenceType: true} referenceType &&

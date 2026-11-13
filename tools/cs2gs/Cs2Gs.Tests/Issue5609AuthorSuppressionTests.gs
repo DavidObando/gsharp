@@ -264,7 +264,7 @@ public static class Host {
     }
 
     shared {
-        private func AssertRuns(
+        internal func AssertRuns(
             source string,
             host string,
             expected string,
@@ -330,7 +330,7 @@ public static class Host {
                 Assert.False(compiled.TimedOut, compiled.Output)
                 Assert.True(compiled.ExitCode == 0, compiled.Output + "\n" + printed)
                 Assert.True(
-                    !compiled.Output.Contains("GS0536", StringComparison.Ordinal),
+                    !compiled.Output.Contains(": warning ", StringComparison.Ordinal),
                     compiled.Output + "\n" + printed
                 )
                 if analyzerApiMode {
