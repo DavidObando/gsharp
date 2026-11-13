@@ -359,7 +359,7 @@ class CSharpTypeMapper {
         // `!!` — an assert at a site where the C# never dereferences, i.e. a
         // runtime NRE the original could not produce (the migrated
         // EmitCacheKeyRemapScopeAnalyzer crashed exactly this way).
-        let analyzerNamespaceString = this.AnalyzerApiMode && RoslynAnalyzerApiMap.IsNamespaceSymbolType(type)
+        let analyzerNamespaceString = this.MapsToNullableAnalyzerType(type)
         var mapped GTypeReference? = this.MapCore(type, context, location)
         if type is INamedTypeSymbol{IsGenericType: true} constructed && !constructed.IsTupleType {
             mapped = this.PromoteTupleTypeArguments(mapped, type, constructed, context, List[int32]())
@@ -370,6 +370,9 @@ class CSharpTypeMapper {
             mapped
         }
     }
+
+    internal func MapsToNullableAnalyzerType(type ITypeSymbol?) bool -> this.AnalyzerApiMode &&
+        RoslynAnalyzerApiMap.IsNamespaceSymbolType(type)
 
     /// Issue #4556: maps [`type`](paramref) like (cref:Map) for a
     /// caller that only inspects the result's shape and never prints it, so it

@@ -1221,6 +1221,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 let name string? = this.EmittedName(binder, binder.Name)
                 let local = IdentifierExpression(name)
+                this.RecordEmittedLocalNullability(binder, storageType, nil, nil)
                 declarations.Add(LocalDeclarationStatement(BindingKind.Var, name, storageType))
                 assignments.Add(AssignmentStatement(local, replacement))
                 let nullableReceiverCapture = binder.Type.IsReferenceType && this.ScrutineeStorageIsNullableInGSharp(

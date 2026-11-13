@@ -124,21 +124,51 @@ public static class Repro
         Assert.DoesNotContain("ReadName!!", printed, StringComparison.Ordinal)
     }
 
-    @Fact
-    func UserAuthoredSuppression_InsideExpressionTree_IsPreservedForGscDiagnostic() {
-        let printed = TranslateOblivious(`namespace Demo;
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func UserAuthoredSuppression_InsideExpressionTree_FollowsTheEmittedMemberType(nullable bool) {
+        let printed = TranslateOblivious((`DIRECTIVE
+namespace Demo;
 
 public sealed class Item
 {
-    public string Name { get; set; }
+    public TYPE Name { get; set; }
 }
 
 public static class Repro
 {
     public static void Run(Builder<Item> builder) =>
         builder.HasIndex(item => item.Name!);
-}`)
-        Assert.Contains("HasIndex((item Item) -> item.Name!!)", printed, StringComparison.Ordinal)
+}`).Replace(
+                "DIRECTIVE",
+                if nullable {
+                    "#nullable enable"
+                } else {
+                    "#nullable disable"
+                }
+            )
+                .Replace(
+                "TYPE",
+                if nullable {
+                    "string?"
+                } else {
+                    "string"
+                }
+            ))
+        Assert.Contains(
+            "HasIndex((item Item) -> item.Name" +
+                (
+                if nullable {
+                    "!!"
+                } else {
+                    ""
+                }
+            ) +
+                ")",
+            printed,
+            StringComparison.Ordinal
+        )
     }
 
     @Fact

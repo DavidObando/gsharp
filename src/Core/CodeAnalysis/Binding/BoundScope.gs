@@ -34,6 +34,7 @@ partial class BoundScope {
         ImmutableDictionary[string, TypeSymbol]
     ] =
     ImmutableDictionary[(Owner TypeSymbol, Name string), ImmutableDictionary[string, TypeSymbol]].Empty
+    private var nestedAliasCandidateNames ImmutableHashSet[string] = ImmutableHashSet[string].Empty
     private var sourcePackagePrefixes ImmutableDictionary[string, bool].Builder?
 
     private var typeAliasKeys ImmutableArray[string].Builder?
@@ -1593,18 +1594,26 @@ partial class BoundScope {
     /// @param currentContainingType The source type containing the reference.
     /// @param simpleName The nested type's simple name.
     /// @param preferredArity The exact requested arity, or -1 when unspecified.
-    /// @param type The resolved nested type, including enclosing generic substitutions.
+    /// @param type The resolved nested type.
     /// @returns Whether a lexically visible nested type was found.
     func TryLookupLexicalNestedTypeAlias(
         currentContainingType TypeSymbol,
         simpleName string,
         preferredArity int32,
         @NotNullWhen(true) out type TypeSymbol?
+    ) bool -> TryLookupLexicalNestedTypeAlias(currentContainingType, simpleName, preferredArity, out type, false)
+
+    internal func TryLookupLexicalNestedTypeAlias(
+        currentContainingType TypeSymbol,
+        simpleName string,
+        preferredArity int32,
+        @NotNullWhen(true) out type TypeSymbol?,
+        definitionOnly bool
     ) bool {
         for var current TypeSymbol? = currentContainingType; current != nil; current = TypeContainingType(current) {
             let currentDefinition = TypeDefinition(current)
             if TryLookupNestedTypeAlias(currentDefinition, simpleName, preferredArity, out var direct) {
-                type = if current is StructSymbol directOwner {
+                type = if !definitionOnly && current is StructSymbol directOwner {
                     ApplyEnclosingConstruction(direct!!, directOwner)
                 } else {
                     direct
@@ -1619,11 +1628,29 @@ partial class BoundScope {
                 out var inherited,
                 out var declaringContainer
             ) {
-                type = ApplyEnclosingConstruction(inherited!!, declaringContainer!!)
+                type = if definitionOnly {
+                    inherited
+                } else {
+                    ApplyEnclosingConstruction(inherited!!, declaringContainer!!)
+                }
                 return true
             }
         }
         type = nil
+        return false
+    }
+
+    /// Gets whether any visible scope indexes a nested alias with this name.
+    /// @param name The nested alias name.
+    /// @returns Whether a candidate name exists.
+    internal func HasNestedTypeAliasCandidates(name string) bool {
+        var declaringScope BoundScope? = this
+        while declaringScope != nil {
+            if declaringScope.nestedAliasCandidateNames.Contains(name) {
+                return true
+            }
+            declaringScope = declaringScope.Parent
+        }
         return false
     }
 
@@ -1642,6 +1669,12 @@ partial class BoundScope {
         @NotNullWhen(true) out type TypeSymbol?,
         @NotNullWhen(true) out declaringContainer StructSymbol?
     ) bool {
+        // Without candidates for this name, ancestry cannot contribute a matching source type.
+        if !HasNestedTypeAliasCandidates(simpleName) {
+            type = nil
+            declaringContainer = nil
+            return false
+        }
         // Issue #4164: a genuine base-class cycle (e.g. `class B : C` / `class
         // C : B`) is normally caught by the post-bind cycle detector (#973),
         // but this walk runs earlier — during declaration binding, while
@@ -1658,6 +1691,7 @@ partial class BoundScope {
         // by #4162, and the one every other #4164 call site now goes
         // through too); skip the first entry (`container` itself) to match
         // this loop's original `container.BaseClass` starting point.
+        CompilationMeasurements.Count("alias.inherited-hierarchy-walks")
         let baseChain = container.GetHierarchy()
         for var level = 1; level < baseChain.Count; level++ {
             let c = baseChain[level]
@@ -1995,10 +2029,7 @@ partial class BoundScope {
         )!!
     }
 
-    /// Issues #4089/#4090: whether a G#-declared generic type-clause constraint
-    /// check must be QUEUED rather than answered where it is written, because
-    /// same-compilation declarations may not have their type-parameter
-    /// constraints resolved yet.
+    /// Gets whether declaration type contracts must wait for complete source signatures, members, and layouts.
     /// @remarks Defaults to `false` — answer in place — and is set only
     /// for the DECLARATION phase's own scope chain, by `BindGlobalScope`.
     /// The default direction is load-bearing: `BindProgram` derives a
@@ -2209,13 +2240,15 @@ partial class BoundScope {
         }
         aliasCandidatesByArity = aliasCandidatesByArity.SetItem(nameWithArity, byArity.SetItem(key, target))
         if !TryGetAliasDeclaringPackageInChain(key, out _) && TypeContainingType(target) is {} owner {
-            let nestedKey = (TypeDefinition(owner), name.Substring(name.LastIndexOf('.') + 1))
+            let nestedName = name.Substring(name.LastIndexOf('.') + 1)
+            let nestedKey = (TypeDefinition(owner), nestedName)
             let nested = if nestedAliasCandidates.TryGetValue(nestedKey, out var existing) {
                 existing
             } else {
                 ImmutableDictionary[string, TypeSymbol].Empty
             }
             nestedAliasCandidates = nestedAliasCandidates.SetItem(nestedKey, nested.SetItem(key, target))
+            nestedAliasCandidateNames = nestedAliasCandidateNames.Add(nestedName)
         }
     }
 

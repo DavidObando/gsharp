@@ -3277,7 +3277,8 @@ partial class CSharpToGSharpTranslator {
             )
         }
 
-        /// Issue #4356: records whether a local cs2gs just emitted is `T?` in
+        /// Records explicit emitted storage for #5605 and analyzer-map nullability for #4356.
+        /// Issue #4356 records whether a local cs2gs just emitted is `T?` in
         /// G# because of the analyzer map, per
         /// (cref:IsGSharpNullableAnalyzerApiMember). With an emitted type
         /// clause it is not (the clause is the Roslyn type); without one, G#
@@ -3293,6 +3294,11 @@ partial class CSharpToGSharpTranslator {
             initializerSyntax Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
             emittedInitializer GExpression?
         ) {
+            if local != nil && emittedType != nil {
+                this.InvalidateLocalPromotedValue(local)
+                // Store provenance must not change pattern read-flow classification.
+                this.state.EmittedLocalStorageAcceptsNil[local] = emittedType.IsNullable
+            }
             if !this.InAnalyzerApiMode || local == nil {
                 return
             }
@@ -11668,6 +11674,11 @@ partial class CSharpToGSharpTranslator {
                     .CodeAnalysis
                     .CSharp
                     .Syntax
+                    .AnonymousFunctionExpressionSyntax,
+                Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
                     .InterpolatedStringExpressionSyntax,
                 Microsoft
                     .CodeAnalysis
@@ -12030,14 +12041,41 @@ partial class CSharpToGSharpTranslator {
             if type != nil && type.IsValueType == true {
                 return type.OriginalDefinition?.SpecialType != SpecialType.System_Nullable_T
             }
-            return type?.IsReferenceType == true &&
-                type!!.NullableAnnotation == Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .NotAnnotated &&
-                !this.IsImportedObliviousNullableMember(symbol) && !this.LocalInitializedFromImportedObliviousNullable(
-                symbol
+            if type?.IsReferenceType == true &&
+                symbol is ILocalSymbol local &&
+                this
+                .state
+                .EmittedLocalTypeClauses
+                .Contains(local) &&
+                this
+                .state
+                .EmittedLocalStorageAcceptsNil
+                .TryGetValue(local, out var acceptsNil) {
+                return !acceptsNil
+            }
+            // Issue #5609: an unwidened oblivious source declaration emits bare `T`, not an imported platform type.
+            // Locals and lambda inputs need emitted or initializer facts before this fallback.
+            return type is {IsReferenceType: true} referenceType &&
+                (
+                referenceType.NullableAnnotation == Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .NotAnnotated ||
+                    (
+                    referenceType.NullableAnnotation == Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .None &&
+                        symbol is {} sourceSymbol &&
+                        sourceSymbol is not ILocalSymbol &&
+                        sourceSymbol.ContainingSymbol is not IMethodSymbol{MethodKind: MethodKind.AnonymousFunction} &&
+                        this.IsSourceSymbol(sourceSymbol)
+                )
             ) &&
+                !this
+                .typeMapper
+                .MapsToNullableAnalyzerType(referenceType) && !this.IsImportedObliviousNullableMember(symbol) &&
+                !this.LocalInitializedFromImportedObliviousNullable(symbol) &&
                 (symbol == nil || !this.IsTranslatorWidenedDeclaration(symbol))
         }
 
@@ -14159,7 +14197,12 @@ partial class CSharpToGSharpTranslator {
                     this.IsEmittedReadOnlyCapture(symbol!!, declaration, declaringScope) &&
                     (
                     isDeconstructedForEachLeaf || this.IsClosureBoundary(scope_) ||
-                        (this.IsObliviousCompilation() && symbol is ILocalSymbol)
+                        (this.IsObliviousCompilation() && symbol is ILocalSymbol) ||
+                        (
+                        symbol is IParameterSymbol parameter && this.typeMapper.MapsToNullableAnalyzerType(
+                            parameter.Type
+                        )
+                    )
                 )
             ) {
                 return false

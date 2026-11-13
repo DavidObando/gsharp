@@ -4134,8 +4134,8 @@ partial class CSharpToGSharpTranslator {
                 slot = conversion.Parameters[0]
                 slotType = conversion.Parameters[0].Type
             } else if slot is ILocalSymbol local {
-                // A local whose emitted storage is not recorded (a pattern
-                // variable, for example) keeps the unbridged store: a wrong
+                // A local whose emitted storage is not recorded keeps the
+                // unbridged store: a wrong
                 // `!!` would throw where C# stores the null, and a wrong
                 // omission is a compile error that gsc reports.
                 return if this
