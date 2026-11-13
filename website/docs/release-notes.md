@@ -22,6 +22,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 - Show child-process status in hot-reload E2E failures with verbose `dotnet watch` output. This diagnostic-only change does not resolve the intermittent startup failure. (Part of #5976)
 
+- **Use declared storage nullability for writable ref arguments** — Passing a nullable-declared variable after a non-null assignment no longer reports a false GS0612 warning. Writable ref matching uses the declared storage contract, while narrowed reads can still prove input safety. Passing non-null storage to a nullable writable parameter still warns, and ref writes invalidate earlier read proofs. ([#5949](https://github.com/DavidObando/gsharp/issues/5949))
+
 - Reuse raw `cs2gs` alias terminals across live projection boundaries with provably separate initializer provenance. Keep shared-terminal boundaries, projected values, and scoped assignment checks live. Bound boundary scans by alias length. Shared-component walks, positive replay, and whole-pipeline switch allocations remain residual work. (Part of #5962)
 
 - Accept declared aliases for qualified nested named types with generic arguments on each segment. Preserve constructed outer identity and existing type binding rules. (Fixes #5983)
