@@ -4436,9 +4436,11 @@ partial class CSharpToGSharpTranslator {
 
         // Native tuple bindings cannot carry a leaf's nullable storage clause.
         private func DeconstructionLocalRequiresTypedDeclaration(local ILocalSymbol, inferredType bool) bool ->
-        this.InferredLocalDefaultRequiresTypedDeclaration(local) ||
-            (!inferredType || this.IsLocalReassigned(local)) &&
-            (IsAnnotatedNullableReference(local.Type) || this.ShouldPromoteToNullableReference(local))
+        if inferredType {
+            this.InferredLocalDeclarationIsNullable(local)
+        } else {
+            IsAnnotatedNullableReference(local.Type) || this.ShouldPromoteToNullableReference(local)
+        }
 
         private func TryGetDeconstructionTargets(
             left ExpressionSyntax,

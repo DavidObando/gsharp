@@ -6,6 +6,37 @@ import System
 import Xunit
 
 class Issue5994FlatDeconstructionStorageTests {
+    @Fact
+    func OverwrittenCallback_PreservesTheInferredTypeParameterContract() {
+        Issue5609AuthorSuppressionTests.AssertRuns(`
+#nullable enable
+using System;
+namespace Demo {
+    public static class Use {
+        static void Keep<T>(ref T value) { }
+        public static void Read<T>(T replacement) {
+            var pair = (replacement, replacement);
+            Action callback = () => {
+                var (value, _) = pair;
+                Keep<T>(ref value);
+                Console.Write("unexpected");
+            };
+            callback = () => { };
+            pair = (default(T), replacement);
+            callback?.Invoke();
+            Console.Write(replacement);
+        }
+    }
+}`, `
+public static class Host {
+    public static void Main() {
+        Demo.Use.Read("node");
+        System.Console.Write("|");
+        Demo.Use.Read(7);
+    }
+}`, "node|7", (printed string) -> Assert.DoesNotContain("var value T?", printed, StringComparison.Ordinal))
+    }
+
     @Theory
     @InlineData("var (changed, _) = Next(entry);", "changed = null;")
     @InlineData("(Node? changed, int id) = Next(entry);", "changed = null;")
