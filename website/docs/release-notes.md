@@ -16,6 +16,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Preserve nullable writable storage in flat `cs2gs` deconstruction declarations. Materialize typed locals when tuple inference loses their contract. Reuse ordinary inferred-local nullability, live default-origin analysis, and ref-storage contracts. Preserve nested nullable positions and retain native bindings when inference already matches. Keep required read assertions and evaluate the source once. (Fixes #5994)
+
 - Preserve null forwarded into expanded `cs2gs` params elements for count-only consumers and source forwarders that share element widening. Reuse the null-argument fixed point for declarations, calls, and suppression bridges. Check normal-form arguments through their actual constructed collection views. Keep element reads, unknown escapes, generic slots, and incompatible normal-form collections pinned. The authored literal-null policy is unchanged. (Part of #5581)
 
 - Initialize captured switch-pattern variables before evaluating `when` guards. Immediate and escaping guard closures now retain the matched values in both switch forms, including after false guards. Pattern bindings remain read-only. (Fixes #5998)
