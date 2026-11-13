@@ -100,7 +100,7 @@ def check_nuget_packages(nupkgs: Path) -> tuple[list[str], str | None]:
                    for name, versions in sorted(found.items()) if len(versions) > 1]
     for name in sorted(want_primary & set(primary)):
         for found_version in primary[name]:
-            errors += check_package_metadata(nupkgs / f"{name}.{found_version}.nupkg")
+            errors += check_package_metadata(nupkgs / f"{name}.{found_version}.nupkg", name, found_version)
     versions = {v for found in (primary, symbols) for vs in found.values() for v in vs}
     if len(versions) != 1:
         errors.append(f"the packages carry {len(versions)} versions, expected one: {sorted(versions)}")
@@ -112,25 +112,32 @@ def check_nuget_packages(nupkgs: Path) -> tuple[list[str], str | None]:
     return errors, version
 
 
-def check_package_metadata(nupkg: Path) -> list[str]:
-    """Every published package names a license, a project URL, a readme and an icon (issue #5621).
+def check_package_metadata(nupkg: Path, package_id: str, version: str) -> list[str]:
+    """Check the filename identity and the required publication metadata (issues #5550 and #5621).
 
     nuget.org warns about a missing license or readme but accepts the package. A readme, an icon or a
     license file that the nuspec names must be a file in the package.
     """
     try:
         with zipfile.ZipFile(nupkg) as archive:
-            entries = set(archive.namelist())
+            entries = archive.namelist()
             nuspecs = [name for name in entries if "/" not in name and name.endswith(".nuspec")]
             if len(nuspecs) != 1:
                 return [f"{nupkg.name}: expected one .nuspec at the package root, found {len(nuspecs)}"]
-            metadata = ET.fromstring(archive.read(nuspecs[0])).find("{*}metadata")
-    except (OSError, zipfile.BadZipFile, ET.ParseError) as error:
+            metadata = ET.fromstring(archive.read(nuspecs[0])).findall("{*}metadata")
+    except (OSError, zipfile.BadZipFile, ET.ParseError, RuntimeError, LookupError, ValueError) as error:
         return [f"{nupkg.name}: cannot read the .nuspec: {error}"]
-    if metadata is None:
-        return [f"{nupkg.name}: the .nuspec has no metadata element"]
-    values = {local(element.tag): element for element in metadata}
+    if len(metadata) != 1:
+        return [f"{nupkg.name}: expected one metadata element in the .nuspec, found {len(metadata)}"]
     errors = []
+    for field, expected in (("id", package_id), ("version", version)):
+        elements = metadata[0].findall(f"{{*}}{field}")
+        actual = (elements[0].text or "").strip() if len(elements) == 1 else ""
+        if not actual:
+            errors.append(f"{nupkg.name}: expected one nonempty <{field}> in the .nuspec")
+        elif actual != expected:
+            errors.append(f"{nupkg.name}: <{field}> is {actual!r}, expected {expected!r}")
+    values = {local(element.tag): element for element in metadata[0]}
     for field in ("license", "projectUrl", "readme", "icon"):
         element = values.get(field)
         text = (element.text or "").strip() if element is not None else ""
