@@ -168,6 +168,35 @@ public class Holder {
         Assert.False(ObliviousNullabilityAnalyzer.IsNullGuardDominatedRead(argument.Expression, model))
     }
 
+    @Theory
+    @InlineData("stored")
+    @InlineData("this.stored")
+    @InlineData("value")
+    @InlineData("copy")
+    func OverloadedConjunction_DoesNotProveANullableReadNonNull(input string) {
+        let compilation = Compile(`
+#nullable enable
+public struct Gate {
+    public static implicit operator Gate(bool value) => new Gate();
+    public static Gate operator &(Gate left, Gate right) => new Gate();
+    public static bool operator true(Gate value) => true;
+    public static bool operator false(Gate value) => false;
+}
+public class Holder {
+    private readonly string? stored;
+    public void Read(Gate gate, string? value) {
+        string? copy = value;
+        if (gate && INPUT != null) Consume(INPUT);
+    }
+    private static void Consume(string value) { }
+}
+`.Replace("INPUT", input))
+        let tree = Assert.Single(compilation.SyntaxTrees)
+        let model = compilation.GetSemanticModel(tree)
+        let argument = Assert.Single(tree.GetRoot().DescendantNodes().OfType[ArgumentSyntax]())
+        Assert.False(ObliviousNullabilityAnalyzer.IsNullGuardDominatedRead(argument.Expression, model))
+    }
+
     @Fact
     func DynamicallyBoundComparison_DoesNotProveAReadonlyFieldNonNull() {
         let compilation = Compile(`

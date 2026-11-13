@@ -10930,6 +10930,12 @@ internal shared class ObliviousNullabilityAnalyzer {
     // Matches `x == null` / `x is null` (whenTrueIsNull: true) and
     // `x != null` / `x is not null` (whenTrueIsNull: false) against
     // <paramref name="symbol"/> by identifier name.
+    private func IsBuiltInBooleanOperation(expression BinaryExpressionSyntax, model SemanticModel) bool ->
+    model.GetOperation(expression) is IBinaryOperation{
+        OperatorMethod: nil,
+        Type: {SpecialType: SpecialType.System_Boolean}
+    }
+
     private func NullTestOf(
         condition ExpressionSyntax,
         symbol ISymbol?,
@@ -10963,7 +10969,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         switch condition {
             case conjunction is BinaryExpressionSyntax when !whenTrueIsNull && conjunction.IsKind(
                 SyntaxKind.LogicalAndExpression
-            ) {
+            ) &&
+                IsBuiltInBooleanOperation(conjunction, model) {
                 return NullTestOf(conjunction.Right, symbol, model, whenTrueIsNull) ??
                     NullTestOf(conjunction.Left, symbol, model, whenTrueIsNull)
             }
@@ -10974,10 +10981,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                     SyntaxKind.NotEqualsExpression
                 }
             ) {
-                if symbol is IFieldSymbol && model.GetOperation(binary) is not IBinaryOperation{
-                    OperatorMethod: nil,
-                    Type: {SpecialType: SpecialType.System_Boolean}
-                } {
+                if symbol is IFieldSymbol && !IsBuiltInBooleanOperation(binary, model) {
                     return nil
                 }
                 return if (IsSymbolIdentifier(binary.Left, symbol) && IsNullLiteral(binary.Right)) ||
