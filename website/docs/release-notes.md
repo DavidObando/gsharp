@@ -16,6 +16,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Correct release documentation: the recorded rehearsal accepted duplicate symbol packages with 201 Created; duplicate NuGet packages returned 409 Conflict. This changes documentation only. (Fixes #5620)
+
 - Show child-process status in hot-reload E2E failures with verbose `dotnet watch` output. This diagnostic-only change does not resolve the intermittent startup failure. (Part of #5976)
 
 - Reuse raw `cs2gs` alias terminals across live projection boundaries with provably separate initializer provenance. Keep shared-terminal boundaries, projected values, and scoped assignment checks live. Bound boundary scans by alias length. Shared-component walks, positive replay, and whole-pipeline switch allocations remain residual work. (Part of #5962)

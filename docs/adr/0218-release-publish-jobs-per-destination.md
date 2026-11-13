@@ -4,6 +4,7 @@
 - **Date**: 2026-10-29
 - **Phase**: Release engineering
 - **Related**: [#5530](https://github.com/DavidObando/gsharp/issues/5530),
+  [#5620](https://github.com/DavidObando/gsharp/issues/5620) (symbol-package response correction),
   [#4640](https://github.com/DavidObando/gsharp/issues/4640) (closed),
   [#4639](https://github.com/DavidObando/gsharp/issues/4639),
   [ADR-0207](0207-readytorun-compiler-payloads-and-rid-selection.md) ("Costs of the promise"),
@@ -60,7 +61,7 @@ holds twelve `.nupkg` and five `.snupkg`.
 | In the 0.4 line, the VS Code step failed on a transient Marketplace error in three releases. `publish-visual-studio-extension` was skipped each time, and no run was re-run. The extensions stayed at 0.4.1 until a manual publish. | #4640, runbook "Marketplace state" | Verified (history) |
 | Both marketplaces are at 0.5.212 (`gsharplang.vscode-gsharp` 0.5.212, `gsharplang.GSharp-VisualStudio` 0.5.212.9261). The Visual Studio version has four parts. | Marketplace `extensionquery` API | Verified |
 | `dotnet nuget push --skip-duplicate` treats a 409 Conflict as a warning. It does not hide a 401 or 403. A `.snupkg` beside the `.nupkg` is pushed with it. | .NET CLI documentation; runbook (v0.4.591 logged 5 + 4 pushes) | Verified (docs) |
-| Whether the symbol server also answers 409 for an existing `.snupkg`, and whether `--skip-duplicate` still pushes the `.snupkg` after the `.nupkg` got 409. | Not checked. The prerelease rehearsal (migration step 5) answers it. | **Unverified** |
+| The symbol server accepted re-uploads of the same `.snupkg` bytes with **201 Created**. Each existing `.nupkg` returned 409 Conflict; the explicit symbol push still ran. | `v0.5.460-rc1`, run [41368080564](https://github.com/DavidObando/gsharp/actions/runs/41368080564), attempts 2 and 3. Five symbol packages succeeded per attempt; see the [step-5 evidence](#step-5-duplicate-symbol-packages). | **Verified (observed)** |
 | `@vscode/vsce` 3.9.2 (the `devDependencies` version) has `publish --skip-duplicate` ("fail silently if version already exists"), `publish --pre-release`, `show <extensionid> --json`. | `npx @vscode/vsce@3.9.2 --help` | Verified (`--help`) |
 | `vsce package --pre-release` writes the marker `Microsoft.VisualStudio.Code.PreRelease` into the VSIX manifest. Whether `vsce publish --packagePath --pre-release` can add it to an existing VSIX. The `vsix` job packages without the flag today (`build.yml:751`). | vsce `--help`; `build.yml` | Package flag verified (`--help`); publish-time marker **unverified** |
 | `VsixPublisher.exe publish` of a version that already exists overwrites it. | Visual Studio documentation | Verified (docs); not exercised |
@@ -302,13 +303,15 @@ publish code has never consumed. It costs one script call and no secrets.
 
 | Destination | Mechanism | Idempotent today | Idempotent proposed |
 | --- | --- | --- | --- |
-| nuget.org | `dotnet nuget push <pkg>.nupkg --skip-duplicate`, three attempts with a pause, in the fixed order. Then, when `<pkg>.snupkg` exists, `dotnet nuget push <pkg>.snupkg --skip-duplicate` explicitly, so a symbol package whose first upload failed after the primary succeeded is retried on a re-run. No flat-container pre-query decides a skip: the feed proves the primary only, not the symbols. | Yes (409 is a warning). The remaining-packages loop has no retry. | Yes, with retry on both groups. 401 and 403 still fail. |
+| nuget.org | `dotnet nuget push <pkg>.nupkg --skip-duplicate`, three attempts with a pause, in the fixed order. Then, when `<pkg>.snupkg` exists, `dotnet nuget push <pkg>.snupkg --skip-duplicate` explicitly, so a symbol package whose first upload failed after the primary succeeded is retried on a re-run. No flat-container pre-query decides a skip: the feed proves the primary only, not the symbols. | Yes for the same artifacts: NuGet package 409 is a warning; symbol-package re-uploads returned 201 in the rehearsal. The remaining-packages loop has no retry. | Yes for the same artifacts, with retry on both groups. 401 and 403 still fail. |
 | GitHub release | `view \|\| create --draft [--prerelease]`; `upload --clobber`. One job owns `create`. | Yes. | Yes. |
 | VS Code Marketplace | Pre-query (`marketplace-version`, the `extensionquery` REST). Present: skip. Absent: `vsce publish --skip-duplicate`. Post-query decides success, not the vsce exit code, because `--skip-duplicate` after a post-upload timeout is unverified. vsce pinned to 3.9.2. | **No.** | Yes. |
 | Visual Studio Marketplace | Pre-query on the four-part version from `extension.vsixmanifest`. Present: skip. Absent: `VsixPublisher.exe publish` (documented overwrite). Post-query. | Yes by overwrite (not exercised). | Yes. |
 
 The flat container and the `extensionquery` API are public. The queries need
 no credentials.
+
+For NuGet, a safe re-run uses the same artifacts with unchanged bytes. The rehearsal accepted duplicate symbol packages with 201 Created, not a 409 warning. This is observed server behavior, not a protocol requirement or a guarantee of future responses. It does not establish that different symbol-package bytes can safely replace published content. NuGet package immutability and the inventory, version, tag, and provenance requirements remain unchanged.
 
 ### 5. Prerelease tags
 
@@ -361,7 +364,7 @@ Studio version has a per-build fourth part, so it does not collide.
 
 Positive:
 
-- A failed destination is re-run alone. NuGet pushes only what is missing;
+- A failed destination is re-run alone. NuGet skips existing NuGet packages and re-uploads symbol packages from the same artifacts;
   the marketplaces skip a present version.
 - The Visual Studio job no longer depends on the VS Code job.
 - Both extensions reach users after the SDK they pin.
@@ -423,8 +426,8 @@ Each step is a PR. The first is the least risky.
    `main` commit and approves that run. It exercises every job, the six-RID
    publish, the symbol pushes, the VS Code Marketplace with a pre-release
    version, the skipped Visual Studio job, the draft and the finalize. The
-   Visual Studio publish path is first exercised by the next release tag. The run also answers the unverified
-   symbol-server and `--skip-duplicate` rows. Nothing in this ADR triggers it.
+   Visual Studio publish path is first exercised by the next release tag. Nothing in this ADR triggers it.
+   **Recorded result:** `v0.5.460-rc1` completed this rehearsal on 2026-11-02. Attempts 2 and 3 accepted all five duplicate symbol packages with 201 Created. Existing NuGet packages returned 409 Conflict, which `--skip-duplicate` treated as a warning. See the [step-5 evidence](#step-5-duplicate-symbol-packages).
 6. **Follow-ups out of scope.** Trusted publishing (OIDC) for the three
    destinations and assembly signing are a separate issue that the maintainer
    files. This ADR only notes that all three destinations support OIDC.
@@ -508,7 +511,7 @@ No question remains open.
 - Step 4 (`nuget-push`): `dotnet nuget push X.nupkg` also pushes an `X.snupkg` beside it, so the
   `.nupkg` push passes `--no-symbols` and the explicit `.snupkg` push is the only symbol push of a
   run. A first attempt pushes each symbol package once; only a re-run of `publish-nuget-sdk` pushes
-  a `.snupkg` that may already exist (the unverified symbol-server row).
+  a `.snupkg` that may already exist (the observed symbol-server row).
 - nuget.org trusted publishing ([#5535](https://github.com/DavidObando/gsharp/issues/5535)): `publish-nuget-compiler`
   and `publish-nuget-sdk` no longer read the `NUGET_API_KEY` secret. Each job has `permissions: { contents: read,
   id-token: write }` and runs `NuGet/login@v1` (user `david-obando`) as the step right before its push. That step
@@ -531,6 +534,23 @@ A throwaway workflow ran on PR #5553 (closed without merge, so it never reached 
 | After `D` (`if: always()`, needs a job that fails on every attempt, itself succeeds), does `E` (needs `D`, no status function) run? | **No.** `E` was skipped in both attempts. The implicit `success()` also checks the failed ancestor, not only the direct prerequisite. | Step 4 must give every chain job the explicit `!cancelled() && needs.<prerequisite>.result == 'success'` form. This matters on a tag: `ci` runs after a failed advisory `r2r-compiler-smoke` leg, so a default `needs: publish-verify` job would be skipped. |
 | Does the explicit form run in that shape? | Yes, in both attempts. | Confirms the form. |
 
-Not observed by the probe: a missing hosted runner label, the symbol-server answer for a duplicate
-`.snupkg`, and the `vsce` pre-release marker. They stay unverified; the first needs a tag run, the
-others wait for the step-5 rehearsal.
+Not observed by the probe: a missing hosted runner label and the `vsce` pre-release marker. The duplicate-symbol observation comes from the step-5 rehearsal, not this probe.
+
+### Step 5: duplicate symbol packages
+
+The [rehearsal record in #5530](https://github.com/DavidObando/gsharp/issues/5530#issuecomment-6567872336) reports the section-6 duplicate-symbol check. Tag `v0.5.460-rc1` used commit `21e3f30fa3f7f1d36922907d8e8137ef856cdd46` and NuGet version `0.5.460-g21e3f30fa3`. In run 41368080564, attempt 1 uploaded five symbol packages. Attempts 2 and 3 re-uploaded those same artifacts:
+
+| Attempt | `publish-nuget-sdk` job | Observed responses | Result |
+| --- | --- | --- | --- |
+| 2 | [125061088745](https://github.com/DavidObando/gsharp/actions/runs/41368080564/job/125061088745) | Six existing `.nupkg`: 409 Conflict. Five existing `.snupkg`: 201 Created. | Push step exited 0; job succeeded. |
+| 3 | [125065436555](https://github.com/DavidObando/gsharp/actions/runs/41368080564/job/125065436555) | Six existing `.nupkg`: 409 Conflict. Five existing `.snupkg`: 201 Created. | Push step exited 0; job succeeded. |
+
+For example, attempt 3 logged this SDK symbol-package response at `2026-11-02T02:41:18Z`:
+
+```text
+Pushing Gsharp.NET.Sdk.0.5.460-g21e3f30fa3.snupkg to 'https://www.nuget.org/api/v2/symbolpackage'...
+  Created https://www.nuget.org/api/v2/symbolpackage/ 604ms
+Your package was pushed.
+```
+
+Both push steps ended with `pushed 11 files of group sdk`. This evidence needs no script change. It supports re-runs with the same artifact bytes only, not replacement with different symbol-package bytes.
