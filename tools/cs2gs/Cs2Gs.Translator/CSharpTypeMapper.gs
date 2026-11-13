@@ -1478,10 +1478,16 @@ class CSharpTypeMapper {
             .ToList()
         mappedPropertyTypes = this.MergeAnonymousShapeContracts(properties, mappedPropertyTypes, context)
         // Different emitted contracts need different declarations, without exposing model-domain identity in names.
-        let nullability = string.Join("|", mappedPropertyTypes.Select(AnonymousNullabilityKey))
+        let nullability = string.Join(
+            "|",
+            mappedPropertyTypes.Select(
+                (type GTypeReference) -> AnonymousOutputContractKey(type, this.anonymousTypeRegistry)
+            )
+        )
+        let hasContractVariant = nullability.Contains('?') || nullability.Contains('@')
         let shapeKey = AnonymousShapeKey(properties) +
             (
-            if nullability.Contains('?') {
+            if hasContractVariant {
                 "#nullable:" + nullability
             } else {
                 ""
@@ -1565,6 +1571,9 @@ class CSharpTypeMapper {
         )
         let reference = NamedTypeReference(syntheticName)
         this.anonymousTypeRegistry.Register(shapeKey, reference, context.FilePath)
+        if hasContractVariant {
+            this.anonymousTypeRegistry.RegisterContractVariant(reference)
+        }
         this.declaredAnonymousShapes.Add(shapeKey)
         this.pendingAnonymousDataClasses.Add(declaration)
         return (reference, properties, mappedPropertyTypes)
@@ -4258,7 +4267,7 @@ class CSharpTypeMapper {
             )
         )
 
-        private func AnonymousNullabilityKey(type GTypeReference) string {
+        private func AnonymousOutputContractKey(type GTypeReference, registry AnonymousTypeRegistry) string {
             let children IEnumerable[GTypeReference] = switch type {
                 case named is NamedTypeReference: (
                     if named.ContainingType is {} containing {
@@ -4280,8 +4289,19 @@ class CSharpTypeMapper {
                     ""
                 }
             ) +
+                (
+                if type is NamedTypeReference named && registry.IsContractVariant(named.Name) {
+                    "@" + named.Name
+                } else {
+                    ""
+                }
+            ) +
                 "[" +
-                string.Join(",", children.Select(AnonymousNullabilityKey)) + "]"
+                string.Join(
+                ",",
+                children.Select((child GTypeReference) -> AnonymousOutputContractKey(child, registry))
+            ) +
+                "]"
         }
 
         private func MergeAnonymousNullability(mapped GTypeReference, symbol ITypeSymbol?) GTypeReference {
@@ -4471,6 +4491,14 @@ class AnonymousTypeRegistry {
 
     // The document (file path) that first declared each shape.
     private let ownerByShape Dictionary[string, string] = Dictionary[string, string](StringComparer.Ordinal)
+    // Outer shapes must retain the actual contracts of generated types they contain.
+    private let contractVariants HashSet[string] = HashSet[string](StringComparer.Ordinal)
+
+    internal func IsContractVariant(name string) bool -> this.contractVariants.Contains(name)
+
+    internal func RegisterContractVariant(reference NamedTypeReference) {
+        this.contractVariants.Add(reference.Name)
+    }
 
     /// Looks up an already-synthesized data-class reference for
     /// [`shapeKey`](paramref) (an anonymous type's ordered

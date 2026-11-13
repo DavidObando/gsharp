@@ -75,18 +75,42 @@ open class Issue2292AnonymousTypePackageScopeTests {
     }
 
     @Theory
-    @InlineData(false)
-    @InlineData(true)
-    func OutputDeclarationOwnership_DistinguishesEffectivePropertyContracts(specialFirst bool) {
+    @InlineData(false, false)
+    @InlineData(true, false)
+    @InlineData(false, true)
+    @InlineData(true, true)
+    func OutputDeclarationOwnership_DistinguishesEffectivePropertyContracts(specialFirst bool, nested bool) {
+        let creation = if nested {
+            "new { Wrap = new { Item = VALUE } }"
+        } else {
+            "new { Item = VALUE }"
+        }
+        let read = if nested {
+            "item.Wrap.Item"
+        } else {
+            "item.Item"
+        }
         let project = CSharpProjectLoader.LoadInMemory(
             [](string, string){
                 (
                     "First.cs",
-                    "public static class First { public static string Run() { var item = new { Item = \"safe\" }; return item.Item + \":\"; } }"
+                    "public static class First { public static string Run() { var item = " + creation.Replace(
+                        "VALUE",
+                        "\"safe\""
+                    ) +
+                        "; return " +
+                        read +
+                        " + \":\"; } }"
                 ),
                 (
                     "Second.cs",
-                    "public static class Second { public static string Run() { var item = new { Item = \"safe\" }; return item.Item ?? \"nil\"; } }"
+                    "public static class Second { public static string Run() { var item = " + creation.Replace(
+                        "VALUE",
+                        "\"safe\""
+                    ) +
+                        "; return " +
+                        read +
+                        " ?? \"nil\"; } }"
                 )
             }
         )
@@ -102,7 +126,10 @@ open class Issue2292AnonymousTypePackageScopeTests {
                 .CSharp
                 .SyntaxFactory
                 .ParseMemberDeclaration(
-                "public static string Run() { var item = new { Item = (string)null }; return item.Item ?? \"nil\"; }"
+                "public static string Run() { var item = " + creation.Replace("VALUE", "(string)null") +
+                    "; if (" +
+                    read +
+                    " != null) return \"wrong\"; return \"nil\"; }"
             )
         )
         Assert.True(
@@ -137,10 +164,10 @@ open class Issue2292AnonymousTypePackageScopeTests {
             let context = TranslationContext(project.Compilation, model, document.FilePath, catalog, catalog)
             printed[index] = GSharpPrinter.Print(translator.TranslateDocument(document, context))
         }
-        Assert.Matches("data class [^\\n]+\\(Item string\\)", printed[0])
-        Assert.Matches("data class [^\\n]+\\(Item string\\?\\)", printed[1])
         CompileFilesTogether(("First.gs", printed[0]), ("Second.gs", printed[1]))
         CompileAndRunOutput(printed[0] + "\n" + printed[1], "safe:nil")
+        Assert.Matches("data class [^\\n]+\\(Item string\\)", printed[0])
+        Assert.Matches("data class [^\\n]+\\(Item string\\?\\)", printed[1])
     }
 
     @MethodImpl(MethodImplOptions.NoInlining)

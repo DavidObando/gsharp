@@ -108,9 +108,11 @@ open class Issue5617ByReferenceAccessorNarrowingTests {
     }
 
     @Theory
-    @InlineData(false)
-    @InlineData(true)
-    func RefParameter_SpeculativeIteratorFactsPrecedeSignatureMapping(replacementYields bool) {
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func RefParameter_SpeculativeIteratorFactsPrecedeSignatureMapping(replacementYields bool, specialFirst bool) {
         let iterator = "yield return null;"
         let ordinary = "return new[] { \"safe\" };"
         let tree = CSharpSyntaxTree.ParseText(
@@ -167,31 +169,45 @@ open class Issue5617ByReferenceAccessorNarrowingTests {
             )
         )
         let supplied = speculativeModel ?? throw InvalidOperationException("Speculative model missing.")
-        let context = TranslationContext(compilation, supplied, tree.FilePath)
-        let printed = GSharpPrinter.Print(
-            CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, normal), context)
-        )
-        Assert.Contains(
-            if replacementYields {
-                "func Items() sequence[string?]"
+        let normalContext = TranslationContext(compilation, normal, tree.FilePath)
+        let specialContext = TranslationContext(compilation, supplied, tree.FilePath)
+        for isSpecial in[]bool{specialFirst, !specialFirst, specialFirst} {
+            let context = if isSpecial {
+                specialContext
             } else {
-                "func Items() IEnumerable[string]"
-            },
-            printed
-        )
-        Assert.Equal(
-            Encoding.UTF8.GetBytes(
-                (
-                    if replacementYields {
-                        "nil:other"
-                    } else {
-                        "safe:other"
-                    }
-                ) +
-                    Environment.NewLine
-            ),
-            Encoding.UTF8.GetBytes(CompileAndRun(printed, Array.Empty[byte](), strictIl: true))
-        )
+                normalContext
+            }
+            using let active = ObliviousNullabilityAnalyzer.UseCatalogScope(context)
+            let printed = GSharpPrinter.Print(
+                CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, normal), context)
+            )
+            let expectedYields = if isSpecial {
+                replacementYields
+            } else {
+                !replacementYields
+            }
+            Assert.Equal(
+                Encoding.UTF8.GetBytes(
+                    (
+                        if expectedYields {
+                            "nil:other"
+                        } else {
+                            "safe:other"
+                        }
+                    ) +
+                        Environment.NewLine
+                ),
+                Encoding.UTF8.GetBytes(CompileAndRun(printed, Array.Empty[byte](), strictIl: true))
+            )
+            Assert.Contains(
+                if expectedYields {
+                    "func Items() sequence[string?]"
+                } else {
+                    "func Items() IEnumerable[string]"
+                },
+                printed
+            )
+        }
     }
 
     @Theory

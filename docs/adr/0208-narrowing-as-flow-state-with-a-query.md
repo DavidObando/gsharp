@@ -469,7 +469,8 @@ not own emitted declarations. The translator retains declaration registries for
 its output lifetime, partitioned by opaque actual-compilation tokens and package.
 The tokens retain no compilation, catalog, or semantic model. Normal and special
 models share declaration ownership, but retain separate shape evidence. Ordered
-emitted nullability contracts distinguish declarations when that evidence differs.
+emitted nullability contracts and generated-type dependencies distinguish declarations
+when that evidence differs.
 Synthetic names remain content-derived; unchanged non-nullable shapes keep their names.
 Derived signature and producer visitors use the related-context factory, retaining
 cancellation and the captured model/catalog inputs.
