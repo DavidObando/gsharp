@@ -258,6 +258,101 @@ public class Holder {
         )
     }
 
+    @Fact
+    func TupleAssignmentTarget_PreservesRightHandEffectsOrPinsTheOrigin() {
+        let source = `
+#nullable enable
+using System;
+public class Node { public int P { get; set; } }
+public class Holder {
+    private readonly Node stored;
+    private static string trace = "";
+    public Holder(Node value) { stored = value; }
+    private static int Argument() { trace += "a"; return 1; }
+    private static void Sink(Node value) { trace += "s"; int last; (value.P, last) = (Argument(), 0); GC.KeepAlive(last); }
+    private void Use() => Sink(stored);
+    public static void Main() {
+        try { new Holder(null!).Use(); }
+        catch (NullReferenceException) { Console.Write(trace); }
+    }
+}
+`
+        Issue5581ExpandedParamsNullElementsTests.WithTranslation(
+            source,
+            (directory string, printed string, compiled ProcessRunResult) -> {
+                AssertPinnedNil(directory, printed, compiled)
+            },
+            "sa"
+        )
+    }
+
+    @Fact
+    func StringConversion_DoesNotProveTheOriginalReceiverNonNull() {
+        let source = `
+#nullable enable
+using System;
+public class Node {
+    public static implicit operator string(Node? value) => "ok";
+    public void Touch(int value) { }
+}
+public class Holder {
+    private readonly Node stored;
+    private static string trace = "";
+    public Holder(Node value) { stored = value; }
+    private static int Argument() { trace += "a"; return 1; }
+    private static void Sink(Node value) {
+        trace += "s";
+        if (string.IsNullOrEmpty(value)) { return; }
+        value.Touch(Argument());
+    }
+    private void Use() => Sink(stored);
+    public static void Main() {
+        try { new Holder(null!).Use(); }
+        catch (NullReferenceException) { Console.Write(trace); }
+    }
+}
+`
+        Issue5581ExpandedParamsNullElementsTests.WithTranslation(
+            source,
+            (directory string, printed string, compiled ProcessRunResult) -> {
+                // #6024 independently rejects the nullable conversion declaration; keep every diagnostic exact.
+                AssertPinnedNil(directory, printed, compiled, []string{"4,10,4,21,GS0394", "28,23,28,43,GS0159"})
+            },
+            "sa"
+        )
+    }
+
+    @Fact
+    func OtherInstanceStringGuard_DoesNotProveTheCurrentFieldNonNull() {
+        let source = `
+#nullable enable
+using System;
+public class Holder {
+    private readonly string stored;
+    private static readonly Holder other = new Holder("safe");
+    private static string trace = "";
+    public Holder(string value) { stored = value; }
+    private static int Argument() { trace += "a"; return 1; }
+    private void Use() {
+        trace += "s";
+        if (string.IsNullOrEmpty(other.stored)) { return; }
+        GC.KeepAlive(stored.PadLeft(Argument()));
+    }
+    public static void Main() {
+        try { new Holder(null!).Use(); }
+        catch (NullReferenceException) { Console.Write(trace); }
+    }
+}
+`
+        Issue5581ExpandedParamsNullElementsTests.WithTranslation(
+            source,
+            (directory string, printed string, compiled ProcessRunResult) -> {
+                AssertPinnedNil(directory, printed, compiled)
+            },
+            "sa"
+        )
+    }
+
     @Theory
     @InlineData("Node", "value.Touch(Argument());", false)
     @InlineData("Node", "GC.KeepAlive(value[Argument()]);", false)
@@ -312,7 +407,12 @@ public class Holder {
     }
 
     shared {
-        private func AssertPinnedNil(directory string, printed string, compiled ProcessRunResult) {
+        private func AssertPinnedNil(
+            directory string,
+            printed string,
+            compiled ProcessRunResult,
+            precedingErrors[]string? = nil
+        ) {
             Assert.False(compiled.TimedOut, compiled.Output)
             Assert.NotEqual(0, compiled.ExitCode)
             Assert.False(File.Exists(Path.Combine(directory, "Target.dll")))
@@ -332,7 +432,9 @@ public class Holder {
             )
                 .ToArray()
             Assert.NotEmpty(errors)
-            Assert.Equal([]string{"$line,$column,$line,${column + 3},GS0154"}, errors)
+            let expected = (precedingErrors ?? []string{}).Concat([]string{"$line,$column,$line,${column + 3},GS0154"})
+                .ToArray()
+            Assert.True(expected.SequenceEqual(errors), compiled.Output + "\n" + printed)
         }
     }
 }

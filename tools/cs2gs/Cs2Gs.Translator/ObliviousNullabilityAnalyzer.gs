@@ -3443,6 +3443,19 @@ internal shared class ObliviousNullabilityAnalyzer {
         if !argumentsAreInert {
             return false
         }
+        var target = whole
+        while true {
+            if target.Parent is ParenthesizedExpressionSyntax parenthesized {
+                target = parenthesized
+            } else if target.Parent is ArgumentSyntax argument && argument.Parent is TupleExpressionSyntax tuple {
+                target = tuple
+            } else {
+                break
+            }
+        }
+        if target != whole && target.Parent is AssignmentExpressionSyntax tupleStore && tupleStore.Left == target {
+            return false
+        }
         if whole.Parent is AssignmentExpressionSyntax store && store.Left == whole {
             return switch model.GetOperation(store) {
                 case assignment is ISimpleAssignmentOperation: IsInertNullArgumentEvaluation(assignment.Value)
@@ -11469,6 +11482,11 @@ internal shared class ObliviousNullabilityAnalyzer {
         .Arguments[0]
         .Value
         .Syntax is ExpressionSyntax value &&
+        model
+        .GetTypeInfo(value)
+        .Type
+        ?.SpecialType == SpecialType.System_String &&
+        (symbol is not IFieldSymbol || CSharpToGSharpTranslator.IsUnqualifiedOrThisQualifiedFieldRead(value)) &&
         SymbolEqualityComparer
         .Default
         .Equals(model.GetSymbolInfo(value).Symbol, symbol)
