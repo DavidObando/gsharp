@@ -1549,7 +1549,7 @@ func Run() int32 {
     }
     return s.Length
 }
-func Main() { Console.WriteLine(Run()) }`, "GS0612@10:27 GS0158@12:14", "reject", "", "stays rejected (dispatch state threading)"}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@12:14", "reject", "", "stays rejected (dispatch state threading)"}
             yield []object{"g4_overload_ambiguity_after_join", `interface IA { }
 interface IB { }
 class Both : IA, IB { }
@@ -1959,7 +1959,7 @@ func Run() int32 {
     }
     return 0
 }
-func Main() { Console.WriteLine(Run()) }`, "GS0612@9:14 GS0158@10:18", "reject", "", "R18 (#5534, #5249): header effects before the branches; threw NullReferenceException before"}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@10:18", "reject", "", "R18 (#5534, #5249): header effects before the branches; threw NullReferenceException before"}
             yield []object{"h7_getter_in_exiting_branch_kills_member_path", `open class Animal { var Name string = "a" }
 class Dog : Animal { func Bark() string { return "woof" } }
 class Box {
