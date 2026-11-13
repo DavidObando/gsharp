@@ -485,6 +485,8 @@ and tree. Nested tree switches consult that model before a shared normal model.
 Accessibility-ignoring and speculative models never enter the normal shared
 cache. Their model-sensitive effect, projection, storage, container-flow, and
 shape caches use a context-local domain, inherited by related visitors.
+Effect and projection inventories also retain the actual ownership graph in
+that domain; related visitors cannot replace another graph's selected bindings.
 Normal document peers still share the normal graph/catalog caches.
 Implicit one-argument tree scopes prefer an active owner, then the root, before
 requiring a unique external owner. An explicit selected owner always wins.

@@ -126,6 +126,48 @@ public static class Demo {
                     )
                 )
             )
+            if isSpecial {
+                let other = compilation.WithAssemblyName("RelatedNormalModel5326")
+                let otherModel = other.GetSemanticModel(tree)
+                Assert.Null(otherModel.GetSymbolInfo(factory).Symbol)
+                let related = context.CreateRelatedContext(other, otherModel, tree.FilePath)
+                CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, otherModel), related)
+                let relatedCallbacks = Assert.IsType[TranslationContext.DeferredCallbackIndex](
+                    related.EffectIndexes.DeferredIndex
+                )
+                Assert.DoesNotContain(
+                    relatedCallbacks.Comparers,
+                    (
+                        entry(
+                            Syntax Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax,
+                            Owner CSharpCompilation
+                        )
+                    ) ->
+                    object.ReferenceEquals(entry.Syntax, factory)
+                )
+                let relatedProjection = ProjectedBaseCompilationIndex.For(related.OwnershipIndexIdentity)
+                Assert.True(relatedProjection.IsIndexed)
+                Assert.False(
+                    relatedProjection
+                        .MemberConsumersByCandidate
+                        .Values
+                        .Any(
+                        (entries List[(CSharpCompilation, SyntaxNode)]) -> entries.Any(
+                            (entry(CSharpCompilation, SyntaxNode)) -> object.ReferenceEquals(entry.Item2, projected)
+                        )
+                    )
+                )
+                Assert.Contains(
+                    callbacks.Comparers,
+                    (
+                        entry(
+                            Syntax Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax,
+                            Owner CSharpCompilation
+                        )
+                    ) ->
+                    object.ReferenceEquals(entry.Syntax, factory)
+                )
+            }
         }
     }
 

@@ -59,6 +59,13 @@ class TranslationContext {
             this.Model = model
         }
         let Model SemanticModel
+        private let graphs ConditionalWeakTable[object, SpecialModelGraph] =
+        ConditionalWeakTable[object, SpecialModelGraph]()
+
+        func ForGraph(graph object) SpecialModelGraph -> this.graphs.GetOrCreateValue(graph)
+    }
+
+    private class SpecialModelGraph {
         let Effects StorageIndexes = StorageIndexes()
     }
 
@@ -208,7 +215,11 @@ class TranslationContext {
         )
     }
 
-    internal prop EffectIndexes StorageIndexes -> this.specialModelDomain?.Effects ?? this.SourceOwners(true).Effects
+    internal prop EffectIndexes StorageIndexes -> if this.specialModelDomain is {} domain {
+        domain.ForGraph(this.SourceOwners(true)).Effects
+    } else {
+        this.SourceOwners(true).Effects
+    }
 
     /// Gets the owning C# compilation.
     prop Compilation CSharpCompilation {
@@ -387,7 +398,11 @@ class TranslationContext {
     }
 
     internal prop OwnershipTreeEntries int32 -> this.SourceOwners(true).TreeEntries
-    internal prop OwnershipIndexIdentity object -> this.specialModelDomain ?? cast[object](this.SourceOwners(true))
+    internal prop OwnershipIndexIdentity object -> if this.specialModelDomain is {} domain {
+        cast[object](domain.ForGraph(this.SourceOwners(true)))
+    } else {
+        cast[object](this.SourceOwners(true))
+    }
     internal prop HasOwnershipIndex bool -> this.actualOwners != nil
 
     private class SourceOwnershipIndex {

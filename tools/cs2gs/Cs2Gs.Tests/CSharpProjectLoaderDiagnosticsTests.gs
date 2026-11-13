@@ -28,7 +28,7 @@ open class CSharpProjectLoaderDiagnosticsTests {
     @Fact
     func ImplicitSharedTreeScope_RetainsRootFallbackFromThirdCompilation() {
         let shared = CSharpSyntaxTree.ParseText(
-            "public static class Shared { public static int Read() => Helper.Value; }",
+            "public static class Shared { public static object Read() => Helper.Value; }",
             path: "SharedFallback.cs"
         )
         let rootHelper = CSharpSyntaxTree.ParseText(
