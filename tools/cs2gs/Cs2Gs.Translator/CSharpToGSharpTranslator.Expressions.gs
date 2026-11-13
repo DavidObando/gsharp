@@ -12023,11 +12023,33 @@ partial class CSharpToGSharpTranslator {
             if type != nil && type.IsValueType == true {
                 return type.OriginalDefinition?.SpecialType != SpecialType.System_Nullable_T
             }
-            return type?.IsReferenceType == true &&
-                type!!.NullableAnnotation == Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .NotAnnotated &&
+            if symbol is ILocalSymbol local &&
+                this
+                .state
+                .EmittedLocalTypeClauses
+                .Contains(local) &&
+                this
+                .state
+                .EmittedLocalStorageAcceptsNil
+                .TryGetValue(local, out var acceptsNil) {
+                return !acceptsNil
+            }
+            // Issue #5609: an unwidened oblivious source declaration emits bare `T`, not an imported platform type.
+            return type is {IsReferenceType: true} referenceType &&
+                (
+                referenceType.NullableAnnotation == Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .NotAnnotated ||
+                    (
+                    referenceType.NullableAnnotation == Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .None &&
+                        symbol is {} sourceSymbol &&
+                        this.IsSourceSymbol(sourceSymbol)
+                )
+            ) &&
                 !this.IsImportedObliviousNullableMember(symbol) && !this.LocalInitializedFromImportedObliviousNullable(
                 symbol
             ) &&
