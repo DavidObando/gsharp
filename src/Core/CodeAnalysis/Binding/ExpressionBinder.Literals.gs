@@ -2046,7 +2046,8 @@ internal partial class ExpressionBinder {
                         importedCandidate.ClassType,
                         clrTypeArguments,
                         literalSymbolicArguments,
-                        syntax.TypeIdentifier.Location
+                        syntax.TypeIdentifier.Location,
+                        bindingScope: $scope
                     ) {
                         return BoundErrorExpression(nil)
                     }

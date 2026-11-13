@@ -991,6 +991,7 @@ partial class CSharpToGSharpTranslator {
                 this.MapTypeSyntax(typeSyntax)
             }
             if !isSharedNode && targetSymbol.IsValueType {
+                this.RecordEmittedLocalNullability(patternSymbol, targetType, nil, nil)
                 result = this.BuildPositiveValueGuardHoist(ifStatement, guards, localName, targetType, receiver)
                 return true
             }
@@ -1013,6 +1014,7 @@ partial class CSharpToGSharpTranslator {
                 cast[GExpression](BinaryExpression(receiver, "as", TypeExpression(targetType)))
             }
             let hoist = LocalDeclarationStatement(binding, localName, localType, initializer)
+            this.RecordEmittedLocalNullability(patternSymbol, localType, nil, nil)
             var guard_ GExpression = BinaryExpression(local, "!=", LiteralExpression.Null())
             if requiresNotNullConditional {
                 guard_ = BinaryExpression(
@@ -1326,6 +1328,7 @@ partial class CSharpToGSharpTranslator {
                 BindingKind.Let
             }
             let hoist = LocalDeclarationStatement(binding, localName, MakeNullable(targetType), hoistInitializer)
+            this.RecordEmittedLocalNullability(designationSymbol as ILocalSymbol, hoist.Type, nil, nil)
             // `if t == nil { <then> }` reproduces the negated guard: when the cast
             // fails the local is nil, so the original then-block runs.
             var guard_ GExpression = BinaryExpression(IdentifierExpression(localName), "==", LiteralExpression.Null())
@@ -1475,6 +1478,7 @@ partial class CSharpToGSharpTranslator {
                     this.context,
                     designation!!.GetLocation()
                 )
+                this.RecordEmittedLocalNullability(binder, mutableType, nil, nil)
                 statements.Add(
                     LocalDeclarationStatement(
                         BindingKind.Var,
@@ -1558,6 +1562,7 @@ partial class CSharpToGSharpTranslator {
                 this.state.StoredPatternCaptures.Add(localId)
             }
             statements.Add(IfStatement(Negate(positiveTest), then))
+            this.RecordEmittedLocalNullability(binder, localType, nil, nil)
             statements.Add(LocalDeclarationStatement(BindingKind.Var, localName, localType, replacement))
             this.state.PatternBindings[binder] = localId
             for var i = patternIndex + 1; i < terms.Count; i++ {
@@ -1661,7 +1666,9 @@ partial class CSharpToGSharpTranslator {
                 } else {
                     BindingKind.Let
                 }
-                statements.Add(LocalDeclarationStatement(binding, localName, MakeNullable(targetType), initializer))
+                let localType = MakeNullable(targetType)
+                this.RecordEmittedLocalNullability(designationSymbol as ILocalSymbol, localType, nil, nil)
+                statements.Add(LocalDeclarationStatement(binding, localName, localType, initializer))
                 var guard_ GExpression = BinaryExpression(
                     IdentifierExpression(localName),
                     "==",

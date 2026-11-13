@@ -18,6 +18,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 - Omit author-written null assertions in `cs2gs` when an unwidened oblivious source declaration already emits a non-null G# value. Apply the same decision to plain reads, pattern captures, and inferred deconstruction destinations. Keep required nullable, analyzer-mapped, and unknown-value assertions, including bridges into non-null stores. (Fixes #5609)
 
+- Record pattern variables' emitted storage before translating their consumers. Deconstruction stores into non-null switch subpattern locals retain required assertions. Nullable pattern locals still store null without assertions. (Fixes #5605)
+
 - Allow up to 30 minutes for NuGet SDK indexing and 10 minutes for the VS Code Marketplace post-upload query. Polls stop when the expected version appears. (Fixes #5619)
 
 - Correct release documentation: the recorded rehearsal accepted duplicate symbol packages with 201 Created; duplicate NuGet packages returned 409 Conflict. This changes documentation only. (Fixes #5620)
@@ -33,6 +35,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 - **Omit redundant outer-array assertions in cs2gs nested initializers** (Fixes #5978). Array-element bridges use emitted value nullability, so nullable inner elements do not force `!!` on non-null outer storage. Required nullable-value assertions remain.
 
 - Print bounded primary SDK failure logs in the Oahu and Code Exploder nightly console without adding them to retained reports. Keep gate results unchanged; the Oahu build failure remains unresolved. (Part of #5977)
+
+- Schedule source declaration headers and base-member continuations iteratively. Deep acyclic attribute dependencies compile on small-stack workers. Validate complete source contracts and retain late diagnostics. Preserve recursive attribute contracts, source contexts, inheritance-cycle diagnostics, and deterministic emission. (Fixes #5975)
 
 - Match forwarded handler constructor arguments without treating an `out bool` gate as a bool value. Match forwarded ref kinds and reject readonly addresses for writable constructor slots. Capture managed call addresses in source order, preserving null, bounds, and array-type checks. Fixed shared-field addresses still evaluate type initialization before subsequent synchronous arguments. Adapt forwarded values and readonly references to selected constructor parameter types without repeating evaluations. Canonical managed-reference captures preserve chosen storage across suspension. References consumed without suspension preserve address effects at their definitions inside async methods. Overloaded handlers preserve constructor gating and emit valid IL. (Fixes #5966)
 

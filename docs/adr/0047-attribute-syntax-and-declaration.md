@@ -92,6 +92,12 @@ When the binder sees `@Foo(args)`:
 
 If both `Foo` and `FooAttribute` exist and both derive from `System.Attribute`, that is an `ERR_AmbiguousAttributeName` — the user must qualify (`@FooAttribute(…)` to force the suffixed spelling, or use a fully-qualified path to force the bare one). This matches C#'s rule.
 
+Source attribute identity uses completed declaration headers.
+The iterative scheduler completes source bases without recursively binding annotation dependencies.
+Usage checks wait for complete bound definition contracts, including self and mutual applications.
+Derived member binding separately waits for complete base members.
+See [ADR-0221](0221-iterative-source-declaration-dependencies.md).
+
 Constructor and named-argument resolution follows C# attribute syntax: `name: value`
 binds a constructor parameter and is reordered into that parameter's fixed-argument
 slot, while `Name = value` names a writable public property or field. For

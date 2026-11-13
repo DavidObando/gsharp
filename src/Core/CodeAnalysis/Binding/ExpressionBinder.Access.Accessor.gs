@@ -3698,7 +3698,8 @@ internal partial class ExpressionBinder {
             openClrType,
             clrArgs,
             typeArgs,
-            receiverSyntax.Location
+            receiverSyntax.Location,
+            bindingScope: $scope
         ) {
             // Issue #4051: this failure EXPLAINED itself. Say so, so the caller
             // stops rather than re-reading `Name[Arg]` as an index expression

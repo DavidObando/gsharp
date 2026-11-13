@@ -3270,7 +3270,8 @@ partial class CSharpToGSharpTranslator {
             )
         }
 
-        /// Issue #4356: records whether a local cs2gs just emitted is `T?` in
+        /// Records explicit emitted storage for #5605 and analyzer-map nullability for #4356.
+        /// Issue #4356 records whether a local cs2gs just emitted is `T?` in
         /// G# because of the analyzer map, per
         /// (cref:IsGSharpNullableAnalyzerApiMember). With an emitted type
         /// clause it is not (the clause is the Roslyn type); without one, G#
@@ -3286,6 +3287,11 @@ partial class CSharpToGSharpTranslator {
             initializerSyntax Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
             emittedInitializer GExpression?
         ) {
+            if local != nil && emittedType != nil {
+                this.InvalidateLocalPromotedValue(local)
+                // Store provenance must not change pattern read-flow classification.
+                this.state.EmittedLocalStorageAcceptsNil[local] = emittedType.IsNullable
+            }
             if !this.InAnalyzerApiMode || local == nil {
                 return
             }

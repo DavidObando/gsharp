@@ -177,58 +177,57 @@ internal shared class NativeProtocolSafety {
         seen HashSet[TypeSymbol],
         importedDelegates HashSet[System.Type]
     ) bool {
-        let entered = walkVisited
-        if entered != nil {
-            let memo = if includeStorage {
-                memoSaved
-            } else {
-                memoAny
+        var type = type
+        while true {
+            let entered = walkVisited
+            if entered != nil {
+                let memo = if includeStorage {
+                    memoSaved
+                } else {
+                    memoAny
+                }
+                if memo != nil && memo.TryGetValue(type, out var settled) {
+                    memoPruned++
+                    return settled
+                }
+                entered.Add(type)
             }
-            if memo != nil && memo.TryGetValue(type, out var settled) {
-                memoPruned++
-                return settled
-            }
-            entered.Add(type)
-        }
-        if NativeProtocolOperations.GetProtocol(type) != nil {
-            return true
-        }
-        if type is NullableTypeSymbol nullable {
-            return ContainsDependency(nullable.UnderlyingType, includeStorage, seen, importedDelegates)
-        }
-        if type is PlatformTypeSymbol platform {
-            return ContainsDependency(platform.UnderlyingType, includeStorage, seen, importedDelegates)
-        }
-        if type is ByRefTypeSymbol byRef {
-            return ContainsDependency(byRef.PointeeType, includeStorage, seen, importedDelegates)
-        }
-        if type is StructSymbol || type is DelegateTypeSymbol {
-            // Arguments precede the finite definition cut; signatures/storage follow it.
-            if TypeArguments(type).Any(
-                (argument TypeSymbol) -> ContainsDependency(argument, includeStorage, seen, importedDelegates)
-            ) {
+            if NativeProtocolOperations.GetProtocol(type) != nil {
                 return true
             }
-        } else if !seen.Add(
-            if type is NullabilityAnnotatedTypeSymbol annotated {
-                annotated.BaseType
-            } else {
-                type
+            if type is NullableTypeSymbol nullable {
+                return ContainsDependency(nullable.UnderlyingType, includeStorage, seen, importedDelegates)
             }
-        ) {
-            return false
-        }
-        if type is StructSymbol aggregate {
-            if !seen.Add(aggregate.Definition) {
+            if type is PlatformTypeSymbol platform {
+                return ContainsDependency(platform.UnderlyingType, includeStorage, seen, importedDelegates)
+            }
+            if type is ByRefTypeSymbol byRef {
+                return ContainsDependency(byRef.PointeeType, includeStorage, seen, importedDelegates)
+            }
+            if type is StructSymbol || type is DelegateTypeSymbol {
+                // Arguments precede the finite definition cut; signatures/storage follow it.
+                if TypeArguments(type).Any(
+                    (argument TypeSymbol) -> ContainsDependency(argument, includeStorage, seen, importedDelegates)
+                ) {
+                    return true
+                }
+            } else if !seen.Add(
+                if type is NullabilityAnnotatedTypeSymbol annotated {
+                    annotated.BaseType
+                } else {
+                    type
+                }
+            ) {
                 return false
             }
-            return includeStorage &&
-                (
-                aggregate.BaseType is {} parent &&
-                    ContainsDependency(parent, true, seen, importedDelegates) ||
-                    aggregate
-                    .PrimaryConstructorParameters
-                    .Any(
+            if type is StructSymbol aggregate {
+                if !seen.Add(aggregate.Definition) {
+                    return false
+                }
+                if !includeStorage {
+                    return false
+                }
+                if aggregate.PrimaryConstructorParameters.Any(
                     (parameter ParameterSymbol) -> ContainsDependency(parameter.Type, true, seen, importedDelegates)
                 ) ||
                     aggregate
@@ -243,49 +242,57 @@ internal shared class NativeProtocolSafety {
                 )
                     .Any((field FieldSymbol) -> ContainsDependency(field.Type, true, seen, importedDelegates)) ||
                     aggregate.ClrType is {} importedAggregate &&
-                    NativeProtocolMetadata.HasFeatureMarker(importedAggregate)
-            )
-        }
-        if type is InterfaceSymbol contract && includeStorage && contract.StaticFields.Any(
-            (field FieldSymbol) -> ContainsDependency(field.Type, true, seen, importedDelegates)
-        ) {
-            return true
-        }
-        if type is DelegateTypeSymbol named {
-            if !seen.Add(named.Definition ?? named) {
+                    NativeProtocolMetadata.HasFeatureMarker(importedAggregate) {
+                    return true
+                }
+                // Declaration scheduling permits deep base chains. Follow this edge without a native-stack continuation.
+                if aggregate.BaseType is {} parent {
+                    type = parent
+                    continue
+                }
                 return false
             }
-            return ContainsDependency(named.ReturnType, includeStorage, seen, importedDelegates) ||
-                named
-                .Parameters
-                .Any(
-                (parameter ParameterSymbol) -> ContainsDependency(
-                    parameter.Type,
-                    includeStorage,
-                    seen,
-                    importedDelegates
-                )
-            )
-        }
-        if type.GetElementPositions().Any(
-            (position TypeSymbol) -> ContainsDependency(position, includeStorage, seen, importedDelegates)
-        ) {
-            return true
-        }
-        if type.ClrType is {} imported && ClrTypeUtilities.IsDelegateType(imported) && importedDelegates.Add(
-            if imported.IsGenericType {
-                imported.GetGenericTypeDefinition()
-            } else {
-                imported
-            }
-        ) &&
-            MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(type, out var signature) &&
-            signature is {} targetSignature {
-            if ContainsDependency(targetSignature, includeStorage, seen, importedDelegates) {
+            if type is InterfaceSymbol contract && includeStorage && contract.StaticFields.Any(
+                (field FieldSymbol) -> ContainsDependency(field.Type, true, seen, importedDelegates)
+            ) {
                 return true
             }
+            if type is DelegateTypeSymbol named {
+                if !seen.Add(named.Definition ?? named) {
+                    return false
+                }
+                return ContainsDependency(named.ReturnType, includeStorage, seen, importedDelegates) ||
+                    named
+                    .Parameters
+                    .Any(
+                    (parameter ParameterSymbol) -> ContainsDependency(
+                        parameter.Type,
+                        includeStorage,
+                        seen,
+                        importedDelegates
+                    )
+                )
+            }
+            if type.GetElementPositions().Any(
+                (position TypeSymbol) -> ContainsDependency(position, includeStorage, seen, importedDelegates)
+            ) {
+                return true
+            }
+            if type.ClrType is {} imported && ClrTypeUtilities.IsDelegateType(imported) && importedDelegates.Add(
+                if imported.IsGenericType {
+                    imported.GetGenericTypeDefinition()
+                } else {
+                    imported
+                }
+            ) &&
+                MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(type, out var signature) &&
+                signature is {} targetSignature {
+                if ContainsDependency(targetSignature, includeStorage, seen, importedDelegates) {
+                    return true
+                }
+            }
+            return includeStorage && type.ClrType is {} marked && NativeProtocolMetadata.HasFeatureMarker(marked)
         }
-        return includeStorage && type.ClrType is {} marked && NativeProtocolMetadata.HasFeatureMarker(marked)
     }
 
     private func TypeArguments(type TypeSymbol) ImmutableArray[TypeSymbol] -> switch type {
