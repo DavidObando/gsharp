@@ -3523,13 +3523,7 @@ partial class CSharpToGSharpTranslator {
                 occupied.Contains
             )
             usedDesignators!!.Add(designator)
-            if body != nil &&
-                this
-                .state
-                .SynthesizedLocalOccupiedNamesByBody
-                .TryGetValue(body, out var updatedOccupied) {
-                updatedOccupied.Add(designator)
-            }
+            this.RecordSynthesizedLocalOccupancy(designator, recursive)
             return designator
         }
 

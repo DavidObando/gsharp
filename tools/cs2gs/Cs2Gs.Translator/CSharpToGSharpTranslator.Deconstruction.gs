@@ -190,10 +190,7 @@ partial class CSharpToGSharpTranslator {
                 stem,
                 () -> this.AllocateSynthesizedLocalName(stem, site)
             )
-            let body = this.state.CurrentBodyScope ?? site.SyntaxTree.GetRoot()
-            if this.state.SynthesizedLocalOccupiedNamesByBody.TryGetValue(body, out var occupied) {
-                occupied.Add(name)
-            }
+            this.RecordSynthesizedLocalOccupancy(name, site)
             return name
         }
 

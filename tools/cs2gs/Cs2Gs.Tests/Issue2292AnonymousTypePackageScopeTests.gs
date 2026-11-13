@@ -29,6 +29,125 @@ import Xunit
 /// emitted once and reused by later documents.
 open class Issue2292AnonymousTypePackageScopeTests {
     @Theory
+    @InlineData(false, false, false)
+    @InlineData(true, false, false)
+    @InlineData(false, true, false)
+    @InlineData(true, true, false)
+    @InlineData(false, false, true)
+    @InlineData(true, false, true)
+    @InlineData(false, true, true)
+    @InlineData(true, true, true)
+    func SameDocumentAnonymousMergesRespectIncomingManagedContracts(nullableFirst bool, deep bool, identical bool) {
+        let safeType = if deep {
+            "ManagedRef<ManagedRef<string>>"
+        } else {
+            "ManagedRef<string>"
+        }
+        let otherType = if identical {
+            safeType
+        } else {
+            if deep {
+                "ManagedRef<ManagedRef<string?>>"
+            } else {
+                "ManagedRef<string?>"
+            }
+        }
+        let safe = "ManagedRef<string>.FromArray(new string[]{\"safe\"}, 0)"
+        let other = if identical {
+            "ManagedRef<string>.FromArray(new string[]{\"next\"}, 0)"
+        } else {
+            "ManagedRef<string?>.FromArray(new string?[]{null}, 0)"
+        }
+        let safeCreation = if deep {
+            safeType + ".FromArray(new ManagedRef<string>[] {" + safe + "}, 0)"
+        } else {
+            safe
+        }
+        let otherCreation = if deep {
+            otherType +
+                ".FromArray(new " +
+                (
+                if identical {
+                    "ManagedRef<string>"
+                } else {
+                    "ManagedRef<string?>"
+                }
+            ) +
+                "[] {" +
+                other +
+                "}, 0)"
+        } else {
+            other
+        }
+        let first = "var first = new { Reference = " + safeCreation + " };"
+        let second = "var second = new { Reference = " + otherCreation + " };"
+        let borrow = if deep {
+            ".Borrow().Borrow()"
+        } else {
+            ".Borrow()"
+        }
+        let source = "#nullable enable\nusing Gsharp.Values; public static class First { public static string Run() { " +
+            (
+            if nullableFirst {
+                second + first
+            } else {
+                first + second
+            }
+        ) +
+            "return first.Reference" +
+            borrow +
+            " + \":\" + (second.Reference" +
+            borrow +
+            " ?? \"nil\"); } } public static class Second { public static string Run() => \"\"; }"
+        let references = List[Microsoft.CodeAnalysis.MetadataReference](CSharpProjectLoader.RuntimeReferences())
+        {
+            Microsoft
+                .CodeAnalysis
+                .MetadataReference
+                .CreateFromFile(typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location)
+        }
+        let project = CSharpProjectLoader.LoadInMemory(
+            [](string, string){("SameDocumentContracts.cs", source)},
+            references
+        )
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        let document = Assert.Single(project.Documents)
+        let translator = CSharpToGSharpTranslator()
+        var previous string? = nil
+        for special in[]bool{nullableFirst, !nullableFirst, nullableFirst} {
+            let context = TranslationContext(
+                project.Compilation,
+                project.Compilation.GetSemanticModel(document.SyntaxTree, ignoreAccessibility: special),
+                document.FilePath
+            )
+            for var pass = 0; pass < 2; pass++ {
+                let printed = GSharpPrinter.Print(translator.TranslateDocument(document, context))
+                CompileAndRunOutput(
+                    printed,
+                    if identical {
+                        "safe:next"
+                    } else {
+                        "safe:nil"
+                    },
+                    []string{typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location}
+                )
+                Assert.Equal(
+                    if identical {
+                        1
+                    } else {
+                        2
+                    },
+                    AnonymousTypeNames(printed).Count()
+                )
+                if previous != nil {
+                    Assert.Equal(Encoding.UTF8.GetBytes(previous), Encoding.UTF8.GetBytes(printed))
+                }
+                previous = printed
+            }
+        }
+    }
+
+    @Theory
     @InlineData(false, false)
     @InlineData(true, false)
     @InlineData(false, true)

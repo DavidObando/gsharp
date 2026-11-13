@@ -2675,11 +2675,15 @@ partial class CSharpToGSharpTranslator {
             if !LiftedLocalFunctionNameAllocator.For(this.context.Compilation).TryClaimLocalName(owner, name) {
                 return false
             }
-            let body Microsoft.CodeAnalysis.SyntaxNode? = this.state.CurrentBodyScope ?? site?.SyntaxTree.GetRoot()
-            if body != nil && this.state.SynthesizedLocalOccupiedNamesByBody.TryGetValue(body, out var occupied) {
-                occupied.Add(name!!)
-            }
+            this.RecordSynthesizedLocalOccupancy(name!!, site)
             return true
+        }
+
+        private func RecordSynthesizedLocalOccupancy(name string, site Microsoft.CodeAnalysis.SyntaxNode?) {
+            let body = this.state.CurrentBodyScope ?? site?.SyntaxTree.GetRoot()
+            if body != nil {
+                this.CollectOccupiedSynthesizedLocalNames(body).Add(name)
+            }
         }
 
         private func SourceIdentifierClaimsSynthesizedLocalName(
@@ -2722,7 +2726,11 @@ partial class CSharpToGSharpTranslator {
                 .SemanticModel
                 .GetEnclosingSymbol(site?.SpanStart ?? this.state.CurrentBodyScope?.SpanStart ?? 0)
                 ?.ContainingType
-            return LiftedLocalFunctionNameAllocator.For(this.context.Compilation).ReserveLocalName(owner, name)
+            let reserved = LiftedLocalFunctionNameAllocator.For(this.context.Compilation).ReserveLocalName(owner, name)
+            if reserved {
+                this.RecordSynthesizedLocalOccupancy(name, site)
+            }
+            return reserved
         }
 
         private func AllocateSynthesizedLocalName(stem string, site Microsoft.CodeAnalysis.SyntaxNode) string {
@@ -2756,14 +2764,17 @@ partial class CSharpToGSharpTranslator {
             site Microsoft.CodeAnalysis.SyntaxNode,
             extraCollision((string) -> bool)? = nil,
             allocationPath string = ""
-        ) string -> LiftedLocalFunctionNameAllocator
-            .For(this.context.Compilation).GetOrAllocateScopedLocalName(
-            site,
-            0,
-            stem,
-            allocationPath,
-            () -> this.AllocateScopedSynthesizedLocalNameCore(stem, site, extraCollision)
-        )
+        ) string {
+            let name = LiftedLocalFunctionNameAllocator.For(this.context.Compilation).GetOrAllocateScopedLocalName(
+                site,
+                0,
+                stem,
+                allocationPath,
+                () -> this.AllocateScopedSynthesizedLocalNameCore(stem, site, extraCollision)
+            )
+            this.RecordSynthesizedLocalOccupancy(name, site)
+            return name
+        }
 
         private func AllocateScopedSynthesizedLocalNameCore(
             stem string,

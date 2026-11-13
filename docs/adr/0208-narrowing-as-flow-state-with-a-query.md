@@ -532,6 +532,12 @@ Effective replacement roots obey the same nested-type traversal boundary as orig
 nodes. Helper assignments are indexed by their actual emitted owner and source symbol.
 Anonymous output contract keys recursively include every physical type child,
 including managed-reference elements, and retain invariant and readonly structure.
+Anonymous merge caches key the original incoming physical contract separately from
+the evidence shape and emitted output identity. A prior merge cannot replace another
+creation's invariant storage before output identity is computed.
+Cached physical local names also replay current-body occupancy. The same occupancy
+commit handles fresh allocations, reservations, record-local replay, and designators.
+The physical naming registry remains model-scoped; each visitor owns its body state.
 Return, ref-storage, null-flow, shape, effect, projection, import, and naming
 walks use the same inventory and declaration resolver. Body translation uses
 the replacement while retaining the original declared method and parameter symbols.

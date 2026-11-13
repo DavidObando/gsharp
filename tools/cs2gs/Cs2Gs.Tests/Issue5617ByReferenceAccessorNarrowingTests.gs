@@ -31,6 +31,66 @@ import Xunit
 /// output with the output of the C#.
 open class Issue5617ByReferenceAccessorNarrowingTests {
     @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func RefParameter_CachedBridgeNamesReplayBodyOccupancyBeforeDeconstruction(
+        deconstructionFirst bool,
+        specialFirst bool
+    ) {
+        let bridge = "(string, int) typed = pair;"
+        let deconstruction = "(tuple, other) = new Numbers();"
+        let tree = CSharpSyntaxTree.ParseText(
+            "#nullable enable\npublic class Numbers { public void Deconstruct(out int first, out int second) { first = 3; second = 4; } } public static class Demo { public static string Run() { " +
+                "(string?, int) pair = (\"x\", 1); int tuple = 0; int other = 0; " +
+                (
+                if deconstructionFirst {
+                    deconstruction + bridge
+                } else {
+                    bridge + deconstruction
+                }
+            ) +
+                "return typed.Item1 + \":\" + tuple + \":\" + other; } }",
+            path: "CachedBridgeBodyOccupancy.cs"
+        )
+        let compilation = CSharpCompilation.Create(
+            "CachedBridgeBodyOccupancy5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        let normal = compilation.GetSemanticModel(tree)
+        let special = compilation.GetSemanticModel(tree, ignoreAccessibility: true)
+        var previous string? = nil
+        for isSpecial in[]bool{specialFirst, !specialFirst, specialFirst} {
+            let context = TranslationContext(
+                compilation,
+                if isSpecial {
+                    special
+                } else {
+                    normal
+                },
+                tree.FilePath
+            )
+            for var pass = 0; pass < 3; pass++ {
+                let printed = GSharpPrinter.Print(
+                    CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, normal), context)
+                )
+                Assert.Contains("let tupleValue", printed)
+                Assert.Equal(
+                    Encoding.UTF8.GetBytes("x:3:4" + Environment.NewLine),
+                    Encoding.UTF8.GetBytes(CompileAndRun(printed, Array.Empty[byte](), strictIl: true))
+                )
+                if previous != nil {
+                    Assert.Equal(Encoding.UTF8.GetBytes(previous), Encoding.UTF8.GetBytes(printed))
+                }
+                previous = printed
+            }
+        }
+    }
+
+    @Theory
     @InlineData(false)
     @InlineData(true)
     func RefParameter_DeepTupleAllocationPathsReplayAcrossModelPopulations(specialFirst bool) {

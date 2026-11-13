@@ -92,10 +92,10 @@ class CSharpTypeMapper {
     // of its shapes exactly once.
     private let declaredAnonymousShapes HashSet[string] = HashSet[string](StringComparer.Ordinal)
 
-    private let anonymousShapeContracts Dictionary[string, IReadOnlyList[GTypeReference]] = Dictionary[
-        string,
+    private let anonymousShapeContracts Dictionary[
+        (Shape string, Input string),
         IReadOnlyList[GTypeReference]
-    ](StringComparer.Ordinal)
+    ] = Dictionary[(Shape string, Input string), IReadOnlyList[GTypeReference]]()
     private let synthesizedTypeAliases Dictionary[string, string] = Dictionary[string, string](StringComparer.Ordinal)
     private let barePrintedMetadataTypes List[(SimpleName string, Symbol INamedTypeSymbol)] = List[
         (SimpleName string, Symbol INamedTypeSymbol)
@@ -2969,7 +2969,16 @@ class CSharpTypeMapper {
         context TranslationContext
     ) IReadOnlyList[GTypeReference] {
         let shapeKey = AnonymousShapeKey(properties)
-        if this.anonymousShapeContracts.TryGetValue(shapeKey, out var existing) {
+        let inputKey = (
+            shapeKey,
+            string.Join(
+                "|",
+                mappedPropertyTypes!!.Select(
+                    (type GTypeReference) -> AnonymousOutputContractKey(type, this.anonymousTypeRegistry)
+                )
+            )
+        )
+        if this.anonymousShapeContracts.TryGetValue(inputKey, out var existing) {
             return existing
         }
         let merged = properties.Select(
@@ -2993,7 +3002,7 @@ class CSharpTypeMapper {
                 }
             }
         }
-        this.anonymousShapeContracts[shapeKey] = merged
+        this.anonymousShapeContracts[inputKey] = merged
         return merged
     }
 
