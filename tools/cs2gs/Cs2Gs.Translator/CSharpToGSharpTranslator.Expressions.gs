@@ -3289,7 +3289,7 @@ partial class CSharpToGSharpTranslator {
         ) {
             if local != nil && emittedType != nil {
                 this.InvalidateLocalPromotedValue(local)
-                this.state.EmittedLocalTypeClauses.Add(local)
+                // Store provenance must not change pattern read-flow classification.
                 this.state.EmittedLocalStorageAcceptsNil[local] = emittedType.IsNullable
             }
             if !this.InAnalyzerApiMode || local == nil {
