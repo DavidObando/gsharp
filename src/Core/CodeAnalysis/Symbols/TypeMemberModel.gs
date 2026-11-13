@@ -1304,7 +1304,13 @@ shared class TypeMemberModel {
             }
         }
         // Source headers expose declaration names before member contracts are bound.
-        if (type.Definition ?? type).Declaration?.SharedBlock is {} sharedBlock {
+        let declaration = (type.Definition ?? type).Declaration
+        if declaration != nil && declaration.Fields.Any(
+            (field FieldDeclarationSyntax) -> field.IsConst && field.Identifier.ValueText == name
+        ) {
+            return true
+        }
+        if declaration?.SharedBlock is {} sharedBlock {
             return sharedBlock.Fields.Any((field FieldDeclarationSyntax) -> field.Identifier.ValueText == name) ||
                 sharedBlock
                 .Properties

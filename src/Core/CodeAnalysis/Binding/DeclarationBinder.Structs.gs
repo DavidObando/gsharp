@@ -151,6 +151,7 @@ internal partial class DeclarationBinder {
         const bindHeader = 1
         const requestConstraints = 2
         const bindConstraints = 3
+        const bindBaseIdentity = 4
         let work = Stack[(Symbol StructSymbol, Phase int32)]()
         let activeHeaders = HashSet[StructSymbol]()
         let activeConstraints = HashSet[StructSymbol]()
@@ -167,11 +168,37 @@ internal partial class DeclarationBinder {
                 pending.Add(symbol)
                 work.Push((symbol, bindHeader))
                 work.Push((symbol, requestConstraints))
+                work.Push((symbol, bindBaseIdentity))
                 if symbol.ContainingType is StructSymbol containing {
                     let containingDefinition = containing.Definition ?? containing
                     if nestedStructPackages.ContainsKey(containingDefinition) {
                         work.Push((containingDefinition, requestHeader))
                     }
+                }
+                continue
+            }
+            if phase == bindBaseIdentity {
+                var prerequisite StructSymbol? = nil
+                RunInStructDeclarationContext(
+                    symbol,
+                    () -> {
+                        let syntax = symbol.Declaration!!
+                        if syntax.IsClass && syntax.BaseTypeClauses.Count > 0 {
+                            let identity = ResolveTypeHeaderIdentity(
+                                syntax.BaseTypeClauses[0],
+                                activeHeaders,
+                                out prerequisite
+                            )
+                            if identity is StructSymbol sourceBase && sourceBase.IsClass && sourceBase.ClrType == nil {
+                                // Nominal ancestry enables lookup; constructed contracts and readiness remain pending.
+                                symbol.SetBaseClass(sourceBase)
+                            }
+                        }
+                    }
+                )
+                if prerequisite != nil {
+                    work.Push((symbol, bindBaseIdentity))
+                    work.Push((prerequisite, requestHeader))
                 }
                 continue
             }
@@ -313,56 +340,10 @@ internal partial class DeclarationBinder {
                 (!rootSet.Contains(node) && (node is StructDeclarationSyntax || node is InterfaceDeclarationSyntax)) {
                 continue
             }
-            if node is TypeClauseSyntax clause && clause.Identifier is {} identifier {
-                let previousTree = $scope.SetCurrentReferencingSyntaxTree(clause.SyntaxTree)
-                try {
-                    let segments = [clause.SegmentCount]string
-                    segments[0] = identifier.ValueText
-                    for var index = 1; index < segments.Length; index++ {
-                        segments[index] = clause.QualifierIdentifierTokens[index - 1].ValueText
-                    }
-                    var current TypeSymbol? = nil
-                    for var index = 0; index < segments.Length; index++ {
-                        let name = string.Join(".", segments, 0, index + 1)
-                        let arity = clause.GetSegmentTypeArguments(index)?.Count ?? -1
-                        var resolved TypeSymbol? = nil
-                        if current is {} previous {
-                            let definition = switch previous {
-                                case aggregate is StructSymbol: aggregate.Definition ?? aggregate
-                                case contract is InterfaceSymbol: contract.Definition ?? contract
-                                default: previous
-                            }
-                            if $scope.TryLookupNestedTypeAlias(definition, segments[index], arity, out var nested) {
-                                resolved = nested
-                            } else if previous is StructSymbol container &&
-                                $scope.TryLookupNestedTypeAliasIncludingInherited(
-                                container,
-                                segments[index],
-                                arity,
-                                out nested,
-                                out _
-                            ) {
-                                resolved = nested
-                            } else {
-                                break
-                            }
-                        } else {
-                            resolved = lookupTypeWithArity(name, arity)
-                            resolved ??= ResolveAttributeName(name)
-                        }
-                        current = resolved
-                        if resolved is StructSymbol container {
-                            let definition = container.Definition ?? container
-                            if nestedStructPackages.ContainsKey(definition) && !readyStructHeaders.Contains(
-                                definition
-                            ) &&
-                                !structBaseBindings.ContainsKey(definition) && !activeHeaders.Contains(definition) {
-                                return definition
-                            }
-                        }
-                    }
-                } finally {
-                    $scope.SetCurrentReferencingSyntaxTree(previousTree)
+            if node is TypeClauseSyntax clause {
+                ResolveTypeHeaderIdentity(clause, activeHeaders, out var prerequisite)
+                if prerequisite != nil {
+                    return prerequisite
                 }
             }
             for child in node.GetChildren().Reverse() {
@@ -370,6 +351,67 @@ internal partial class DeclarationBinder {
             }
         }
         return nil
+    }
+
+    private func ResolveTypeHeaderIdentity(
+        clause TypeClauseSyntax,
+        activeHeaders HashSet[StructSymbol],
+        out prerequisite StructSymbol?
+    ) TypeSymbol? {
+        prerequisite = nil
+        let identifier = clause.Identifier
+        if identifier == nil {
+            return nil
+        }
+        let previousTree = $scope.SetCurrentReferencingSyntaxTree(clause.SyntaxTree)
+        try {
+            let segments = [clause.SegmentCount]string
+            segments[0] = identifier.ValueText
+            for var index = 1; index < segments.Length; index++ {
+                segments[index] = clause.QualifierIdentifierTokens[index - 1].ValueText
+            }
+            var current TypeSymbol? = nil
+            for var index = 0; index < segments.Length; index++ {
+                let name = string.Join(".", segments, 0, index + 1)
+                let arity = clause.GetSegmentTypeArguments(index)?.Count ?? -1
+                var resolved TypeSymbol? = nil
+                if current is {} previous {
+                    let definition = switch previous {
+                        case aggregate is StructSymbol: aggregate.Definition ?? aggregate
+                        case contract is InterfaceSymbol: contract.Definition ?? contract
+                        default: previous
+                    }
+                    if $scope.TryLookupNestedTypeAlias(definition, segments[index], arity, out var nested) {
+                        resolved = nested
+                    } else if previous is StructSymbol container && $scope.TryLookupNestedTypeAliasIncludingInherited(
+                        container,
+                        segments[index],
+                        arity,
+                        out nested,
+                        out _
+                    ) {
+                        resolved = nested
+                    } else {
+                        return nil
+                    }
+                } else {
+                    resolved = lookupTypeWithArity(name, arity)
+                    resolved ??= ResolveAttributeName(name)
+                }
+                current = resolved
+                if resolved is StructSymbol container {
+                    let definition = container.Definition ?? container
+                    if nestedStructPackages.ContainsKey(definition) && !readyStructHeaders.Contains(definition) &&
+                        !structBaseBindings.ContainsKey(definition) && !activeHeaders.Contains(definition) {
+                        prerequisite = definition
+                        return nil
+                    }
+                }
+            }
+            return current
+        } finally {
+            $scope.SetCurrentReferencingSyntaxTree(previousTree)
+        }
     }
 
     /// Issue #950: reports GS0380 for any member declared `protected` when

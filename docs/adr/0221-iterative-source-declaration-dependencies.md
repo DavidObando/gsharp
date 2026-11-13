@@ -22,6 +22,8 @@ Whole-compilation retries and syntax-only attribute identity cannot satisfy thes
 Separate source declaration scheduling into header, member, and usage-validation phases.
 
 1. Complete headers with an explicit list of pending source base definitions.
+   Publish resolved nominal source-base identities before constraints and generic-argument prerequisites.
+   Complete constructed base signatures later; nominal identity alone does not publish header or member readiness.
    Resolve each header once in its captured declaration scope, package, tree, unsafe context, and type-parameter context.
    Publish resolved source and imported bases before attribute name resolution.
    Publish declared interface identities and the compiler-owned data equality interface before generic constraint validation.
@@ -53,7 +55,7 @@ Separate source declaration scheduling into header, member, and usage-validation
    Constructor argument encoding continues to use the completed constructor contracts before emission.
    Imported generic constraint checks share the existing deferred constraint queue.
    Drain them after source constructors, members, and interface contracts are complete.
-   Validate source pointer pointees after their complete field layouts exist through the same post-member queue.
+   Validate all declaration-phase pointer pointees through the same post-member queue, including imported wrappers over source layouts.
    Forward late child-binder diagnostics to the compilation bag after child snapshots have been published.
    Partial-declaration rollback and failure cleanup apply to both source and imported checks.
 

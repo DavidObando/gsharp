@@ -4629,10 +4629,7 @@ partial class Binder {
                     expression: "syntax.PointerPointeeType"
                 )
                     .Location
-                if pointeeType is StructSymbol sourcePointee &&
-                    sourcePointee.Declaration != nil &&
-                    $scope
-                    .IsDeferringUserGenericConstraintChecks() {
+                if $scope.IsDeferringUserGenericConstraintChecks() {
                     $scope.GetPendingUserGenericConstraintChecks().Add(
                         PendingUserGenericConstraintCheck(
                             Diagnostics,
