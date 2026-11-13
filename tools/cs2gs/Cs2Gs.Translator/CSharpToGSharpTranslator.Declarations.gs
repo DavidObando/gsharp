@@ -2526,7 +2526,8 @@ partial class CSharpToGSharpTranslator {
             // Issue #4350: whether `node` (a simple name, or the member access that
             // carries it) is written: an assignment's left side, an increment or
             // decrement operand, or an element of a deconstruction target.
-            private func IsWriteTarget(node Microsoft.CodeAnalysis.SyntaxNode?) bool {
+            // Address operands also need storage, not a narrowed read, when includeAddress is true.
+            private func IsWriteTarget(node Microsoft.CodeAnalysis.SyntaxNode?, includeAddress bool = false) bool {
                 var current Microsoft
                     .CodeAnalysis
                     .SyntaxNode? = if node!!.Parent is MemberAccessExpressionSyntax memberAccess &&
@@ -2535,11 +2536,25 @@ partial class CSharpToGSharpTranslator {
                 } else {
                     node
                 }
-                while current!!.Parent is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax {
-                    current = current!!.Parent
-                }
-                while current!!.Parent is ArgumentSyntax{Parent: TupleExpressionSyntax tuple} {
-                    current = tuple
+                while true {
+                    if current!!.Parent is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ParenthesizedExpressionSyntax ||
+                        (
+                        includeAddress &&
+                            current!!.Parent is PostfixUnaryExpressionSyntax suppression &&
+                            suppression.IsKind(
+                            Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression
+                        )
+                    ) {
+                        current = current!!.Parent
+                    } else if current!!.Parent is ArgumentSyntax{Parent: TupleExpressionSyntax tuple} {
+                        current = tuple
+                    } else {
+                        break
+                    }
                 }
                 return switch current!!.Parent {
                     case assignment is Microsoft
@@ -2550,11 +2565,20 @@ partial class CSharpToGSharpTranslator {
                     case prefix is PrefixUnaryExpressionSyntax: prefix.IsKind(
                         Microsoft.CodeAnalysis.CSharp.SyntaxKind.PreIncrementExpression
                     ) ||
-                        prefix.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.PreDecrementExpression)
+                        prefix.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.PreDecrementExpression) ||
+                        (includeAddress && prefix.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AddressOfExpression))
                     case postfix is PostfixUnaryExpressionSyntax: postfix.IsKind(
                         Microsoft.CodeAnalysis.CSharp.SyntaxKind.PostIncrementExpression
                     ) ||
                         postfix.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.PostDecrementExpression)
+                    case RefExpressionSyntax: includeAddress
+                    case argument is ArgumentSyntax: includeAddress &&
+                        (
+                        argument.RefKindKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.RefKeyword) ||
+                            argument
+                            .RefKindKeyword
+                            .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.OutKeyword)
+                    )
                     default: false
                 }
             }

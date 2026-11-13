@@ -2523,11 +2523,13 @@ partial class CSharpToGSharpTranslator {
                     return nil
                 }
                 case declaration is DeclarationPatternSyntax when declaration.Designation is SingleVariableDesignationSyntax variable {
-                    return this.BuildPatternTypeTest(
-                        this.EmittedName(variable, variable.Identifier),
-                        declaration.Type,
-                        declaration
+                    let designator = this.SwitchPatternCaptureName(
+                        declaration,
+                        variable,
+                        usedDesignators,
+                        mutableBindings
                     )
+                    return this.BuildPatternTypeTest(designator, declaration.Type, declaration)
                 }
                 case declaration is DeclarationPatternSyntax when declaration.Designation is DiscardDesignationSyntax {
                     return this.BuildPatternTypeTest("_", declaration.Type, declaration)
@@ -3146,7 +3148,7 @@ partial class CSharpToGSharpTranslator {
             // scope (threaded alongside `bindings`) rather than emitting a
             // colliding declaration.
             let designator string? = if recursive!!.Designation is SingleVariableDesignationSyntax named {
-                Uniquify(this.EmittedName(named, named.Identifier), usedDesignators)
+                this.SwitchPatternCaptureName(recursive!!, named, usedDesignators, mutableBindings, uniquify: true)
             } else {
                 this.SynthesizePatternDesignator(recursive, usedDesignators)
             }
@@ -3531,6 +3533,28 @@ partial class CSharpToGSharpTranslator {
                 updatedOccupied.Add(designator)
             }
             return designator
+        }
+
+        private func SwitchPatternCaptureName(
+            pattern Microsoft.CodeAnalysis.CSharp.Syntax.PatternSyntax,
+            variable SingleVariableDesignationSyntax,
+            usedDesignators HashSet[string]?,
+            mutableBindings List[(Symbol ILocalSymbol, MatchedValue GExpression)]?,
+            uniquify bool = false
+        ) string? {
+            if mutableBindings != nil && this.context.GetDeclaredSymbol(variable) is ILocalSymbol symbol &&
+                this
+                .IsSymbolReassigned(symbol, this.state.CurrentBodyScope ?? pattern.SyntaxTree.GetRoot()) {
+                let captureName = this.NewMutableSwitchPatternCaptureName(pattern, usedDesignators)
+                mutableBindings.Add((symbol, IdentifierExpression(captureName)))
+                return captureName
+            }
+            let name = this.EmittedName(variable, variable.Identifier)
+            return if uniquify {
+                Uniquify(name, usedDesignators)
+            } else {
+                name
+            }
         }
 
         private func NewMutableSwitchPatternCaptureName(
