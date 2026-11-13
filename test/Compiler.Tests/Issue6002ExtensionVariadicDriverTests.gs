@@ -100,6 +100,18 @@ func (receiver int32) Bump(ref count int32, items ...List[string]) int32 {
     count += items.Count
     return receiver + count
 }
+func Receiver() int32 {
+    Console.Write("R")
+    return 1
+}
+func Prefix() int32 {
+    Console.Write("P")
+    return 2
+}
+func Items() List[string] {
+    Console.Write("I")
+    return List[string]{"a", "b"}
+}
 var count = 10
 Console.Write((1).Measure())
 Console.Write("|")
@@ -110,7 +122,11 @@ Console.Write("|")
 Console.Write((1).Bump(ref count, "a", "b"))
 Console.Write("|")
 Console.Write(count)
-`, "8|5|5|13|12")
+Console.Write("|")
+Console.Write(Receiver().Measure(items: Items(), prefix: Prefix()))
+Console.Write("|")
+Console.Write((1).Measure(items: List[string]{"a"}))
+`, "8|5|5|13|12|RIP5|9")
     }
 
     @Fact

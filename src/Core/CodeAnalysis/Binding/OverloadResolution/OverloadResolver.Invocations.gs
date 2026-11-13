@@ -1417,7 +1417,9 @@ internal partial class OverloadResolver {
         let extensionParameterIsOptional(int32) -> bool = (parameterIndex int32) -> extension
             .Parameters[parameterIndex + 1]
             .HasExplicitDefaultValue
+        let reorderNamedArguments = !argumentNames.IsDefault && (!isVariadic || arguments.Length <= userParamCount)
         if isVariadic &&
+            !reorderNamedArguments &&
             !ValidateExpandedVariadicNamedArguments(
             argumentNames,
             fixedUserParamCount,
@@ -1427,13 +1429,13 @@ internal partial class OverloadResolver {
         ) {
             return BoundErrorExpression(nil)
         }
-        if !argumentNames.IsDefault && !isVariadic {
+        if reorderNamedArguments {
             if !TryReorderUserCallArguments(
                 ce.Arguments,
                 arguments,
                 userParamCount,
                 extensionParameterNameAt,
-                extensionParameterIsOptional,
+                (i int32) -> extensionParameterIsOptional(i) || (isVariadic && i == fixedUserParamCount),
                 extension.Name,
                 out permutedSyntax,
                 out permutedArguments
@@ -1441,10 +1443,13 @@ internal partial class OverloadResolver {
                 return BoundErrorExpression(nil)
             }
             let filledArguments = permutedArguments.ToBuilder()
+            if isVariadic && filledArguments[fixedUserParamCount] == nil {
+                filledArguments.RemoveAt(fixedUserParamCount)
+            }
             for var i = 0; i < filledArguments.Count; i++ {
                 filledArguments[i] ??= CreateOptionalUserDefaultArgument(extension.Parameters[i + 1])
             }
-            permutedArguments = filledArguments.MoveToImmutable()
+            permutedArguments = filledArguments.ToImmutable()
         } else {
             permutedSyntax = [ce.Arguments.Count]ExpressionSyntax
             for var i = 0; i < ce.Arguments.Count; i++ {
