@@ -1289,10 +1289,11 @@ partial class CSharpToGSharpTranslator {
         // Lifted helpers from separate partial-type documents share one CLR type;
         // LiftedLocalFunctionNameAllocator.For keeps their readable names unique
         // across the whole compilation.
-        private let IdentifierTokenIndexes ConditionalWeakTable[
-            Compilation,
+        private let IdentifierTokenIndexes ObliviousNullabilityAnalyzer.ScopedCompilationCache[
             Dictionary[string, List[Microsoft.CodeAnalysis.SyntaxToken]]
-        ] = ConditionalWeakTable[Compilation, Dictionary[string, List[Microsoft.CodeAnalysis.SyntaxToken]]]()
+        ] = ObliviousNullabilityAnalyzer.ScopedCompilationCache[
+            Dictionary[string, List[Microsoft.CodeAnalysis.SyntaxToken]]
+        ]()
 
         private let AllStaticUsingTargetsCache ObliviousNullabilityAnalyzer.ScopedCompilationCache[
             HashSet[INamedTypeSymbol]

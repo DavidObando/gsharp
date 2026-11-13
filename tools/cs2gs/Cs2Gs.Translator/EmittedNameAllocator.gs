@@ -916,11 +916,16 @@ internal class EmittedNameAllocator {
         containingType INamedTypeSymbol,
         model SemanticModel
     ) {
+        var constructor = constructor
+        var model = model
         if constructor.Body == nil || constructor.Initializer != nil || model.GetDeclaredSymbol(
             constructor
         ) is not IMethodSymbol constructorSymbol {
             return
         }
+        constructor = TranslationContext.GetEffectiveDeclaration(constructor, this.compilation, out var bodyModel) as
+        Microsoft.CodeAnalysis.CSharp.Syntax.ConstructorDeclarationSyntax ?? constructor
+        model = bodyModel
         let targets = Dictionary[IParameterSymbol, ISymbol](SymbolEqualityComparer.Default)
         for statement in constructor.Body!!.Statements {
             if !(

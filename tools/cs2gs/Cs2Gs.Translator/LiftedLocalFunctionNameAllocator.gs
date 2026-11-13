@@ -439,10 +439,9 @@ internal class LiftedLocalFunctionNameAllocator {
     }
 
     shared {
-        private let ByCompilation ConditionalWeakTable[
-            Compilation,
+        private let ByCompilation ObliviousNullabilityAnalyzer.ScopedCompilationCache[
             LiftedLocalFunctionNameAllocator
-        ] = ConditionalWeakTable[Compilation, LiftedLocalFunctionNameAllocator]()
+        ] = ObliviousNullabilityAnalyzer.ScopedCompilationCache[LiftedLocalFunctionNameAllocator]()
         func For(compilation Compilation) LiftedLocalFunctionNameAllocator -> ByCompilation.GetValue(
             compilation,
             (_ Compilation) -> LiftedLocalFunctionNameAllocator()

@@ -918,17 +918,27 @@ class TranslationContext {
             }
         }
 
-        internal func GetEffectiveNodes(root SyntaxNode, owner Compilation) IEnumerable[SyntaxNode] {
+        internal func GetEffectiveNodes(root SyntaxNode, owner Compilation) IEnumerable[SyntaxNode] ->
+        GetEffectiveNodes(root, owner, (_ SyntaxNode) -> true)
+
+        internal func GetEffectiveNodes(
+            root SyntaxNode,
+            owner Compilation,
+            descendIntoChildren Func[SyntaxNode, bool]
+        ) IEnumerable[SyntaxNode] {
             if ActiveSpeculativeBody() is {} overlay && object.ReferenceEquals(owner, overlay.Model.Compilation) &&
                 object
                 .ReferenceEquals(root.SyntaxTree, overlay.Original.SyntaxTree) {
                 if object.ReferenceEquals(root, overlay.Original.Body) {
                     return Enumerable.Empty[SyntaxNode]()
                 }
-                return root.DescendantNodes((node SyntaxNode) -> !object.ReferenceEquals(node, overlay.Original.Body))
+                return root.DescendantNodes(
+                    (node SyntaxNode) -> !object.ReferenceEquals(node, overlay.Original.Body) &&
+                        descendIntoChildren(node)
+                )
                     .Where((node SyntaxNode) -> !object.ReferenceEquals(node, overlay.Original.Body))
             }
-            return root.DescendantNodes()
+            return root.DescendantNodes(descendIntoChildren)
         }
 
         internal func GetEffectiveScopeRoots(root SyntaxNode, owner Compilation) sequence[SyntaxNode] {
@@ -953,6 +963,12 @@ class TranslationContext {
             overlay.Replacement
         } else {
             node
+        }
+
+        internal func GetEffectiveDeclaration(node SyntaxNode, owner Compilation, out model SemanticModel) SyntaxNode {
+            let effective = GetEffectiveDeclaration(node, owner)
+            model = GetEffectiveSemanticModel(owner, effective.SyntaxTree)
+            return effective
         }
 
         internal func GetEffectiveDeclaredSymbol(model SemanticModel, node SyntaxNode) ISymbol? {

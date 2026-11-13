@@ -31,6 +31,284 @@ import Xunit
 /// output with the output of the C#.
 open class Issue5617ByReferenceAccessorNarrowingTests {
     @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func RefParameter_EffectiveConstructorOverwritePreservesFreshArrayIdentity(
+        replacementReads bool,
+        specialFirst bool
+    ) {
+        let observe = "SawShared = System.Object.ReferenceEquals(items, System.Array.Empty<int>()); "
+        let tree = CSharpSyntaxTree.ParseText(
+            "public sealed class Owner { public int[] items; public bool SawShared; public Owner() { " +
+                (
+                if replacementReads {
+                    ""
+                } else {
+                    observe
+                }
+            ) +
+                "items = new int[1]; } public Owner(int control) { items = new int[2]; } } " +
+                "public static class Demo { public static string Run() { var other = new Owner(2); var value = new Owner(); return value.SawShared.ToString() + \":\" + other.items.Length; } }",
+            path: "SpeculativeArrayConstructor.cs"
+        )
+        let compilation = CSharpCompilation.Create(
+            "SpeculativeArrayConstructor5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        let normal = compilation.GetSemanticModel(tree)
+        let original = tree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.ConstructorDeclarationSyntax]()
+            .Single(
+            (ctor Microsoft.CodeAnalysis.CSharp.Syntax.ConstructorDeclarationSyntax) -> ctor
+                .ParameterList
+                .Parameters
+                .Count == 0
+        )
+        let special = CreateSpeculativeBodyModel(
+            normal,
+            original,
+            "public Owner() { " +
+                (
+                if replacementReads {
+                    observe
+                } else {
+                    ""
+                }
+            ) +
+                "items = new int[1]; }"
+        )
+        let normalContext = TranslationContext(compilation, normal, tree.FilePath)
+        let specialContext = TranslationContext(compilation, special, tree.FilePath)
+        using let enclosing = ObliviousNullabilityAnalyzer.UseCatalogScope(specialContext)
+        for isSpecial in[]bool{specialFirst, !specialFirst, specialFirst} {
+            let context = if isSpecial {
+                specialContext
+            } else {
+                normalContext
+            }
+            let printed = GSharpPrinter.Print(
+                CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, normal), context)
+            )
+            Assert.Equal(
+                Encoding.UTF8.GetBytes("False:2" + Environment.NewLine),
+                Encoding.UTF8.GetBytes(CompileAndRun(printed, Array.Empty[byte](), strictIl: true))
+            )
+            let observes = if isSpecial {
+                replacementReads
+            } else {
+                !replacementReads
+            }
+            Assert.Equal(!observes, Regex.IsMatch(printed, "items\\s+\\[\\]int32\\s*=\\s*(?:System\\.)?Array.Empty"))
+        }
+    }
+
+    @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func RefParameter_EffectiveRecordConstructorFeedsLiteralAndPrimaryPlans(replacementSwaps bool, specialFirst bool) {
+        let straight = "First = first; Second = second;"
+        let swapped = "First = second; Second = first;"
+        let tree = CSharpSyntaxTree.ParseText(
+            "public record struct Pair { public int First; public int Second; public Pair(int first, int second) { " +
+                (
+                if replacementSwaps {
+                    straight
+                } else {
+                    swapped
+                }
+            ) +
+                " } } " +
+                "public struct Other { public int Value; public Other(int value) { Value = value; } } " +
+                "public static class SourceProbe { private static int order; private static int Next(int value) { order = order * 10 + value; return value; } " +
+                "public static string Run() { order = 0; var value = new Pair(Next(1), Next(2)); return value.First + \":\" + value.Second + \":\" + order + \":\" + new Other(9).Value; } }",
+            path: "SpeculativeRecordConstructor.cs"
+        )
+        let compilation = CSharpCompilation.Create(
+            "SpeculativeRecordConstructor5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        let normal = compilation.GetSemanticModel(tree)
+        let original = tree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.ConstructorDeclarationSyntax]()
+            .Single(
+            (ctor Microsoft.CodeAnalysis.CSharp.Syntax.ConstructorDeclarationSyntax) -> ctor
+                .Identifier
+                .ValueText == "Pair"
+        )
+        let special = CreateSpeculativeBodyModel(
+            normal,
+            original,
+            "public Pair(int first, int second) { " +
+                (
+                if replacementSwaps {
+                    swapped
+                } else {
+                    straight
+                }
+            ) +
+                " }"
+        )
+        let normalContext = TranslationContext(compilation, normal, tree.FilePath)
+        let specialContext = TranslationContext(compilation, special, tree.FilePath)
+        using let enclosing = ObliviousNullabilityAnalyzer.UseCatalogScope(specialContext)
+        for isSpecial in[]bool{specialFirst, !specialFirst, specialFirst} {
+            let expectedSwaps = if isSpecial {
+                replacementSwaps
+            } else {
+                !replacementSwaps
+            }
+            let context = if isSpecial {
+                specialContext
+            } else {
+                normalContext
+            }
+            let printed = GSharpPrinter.Print(
+                CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, normal), context)
+            )
+            let runtime = printed +
+                "\npublic class Demo { shared { public func Run() string { let value = Pair(1, 2)\n" +
+                "return SourceProbe.Run() + \":\" + value.First.ToString() + \":\" + value.Second.ToString()\n} } }\n"
+            let values = if expectedSwaps {
+                "2:1"
+            } else {
+                "1:2"
+            }
+            Assert.Equal(
+                Encoding.UTF8.GetBytes(values + ":12:9:" + values + Environment.NewLine),
+                Encoding.UTF8.GetBytes(CompileAndRun(runtime, Array.Empty[byte](), strictIl: true))
+            )
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RefParameter_EffectiveHelperPreallocationIsDocumentOrderAndModelStable(specialFirst bool) {
+        let first = CSharpSyntaxTree.ParseText(
+            "public static partial class Demo { public static int Read() { return 1; } }",
+            path: "AHelper.cs"
+        )
+        let second = CSharpSyntaxTree.ParseText(
+            "public static partial class Demo { public static System.Collections.Generic.IEnumerable<int[]> Values() { yield return new int[1]; } " +
+                "public static string Run() { foreach(var value in Values()) return Read() + \":\" + value.Length; return \"empty\"; } }",
+            path: "BIterator.cs"
+        )
+        let results = Dictionary[bool, string]()
+        for var fresh = 0; fresh < 2; fresh++ {
+            let compilation = CSharpCompilation.Create(
+                "SpeculativeHelperNames5326",
+                []SyntaxTree{first, second},
+                CSharpProjectLoader.RuntimeReferences(),
+                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+            )
+            let normal = compilation.GetSemanticModel(first)
+            let original = first
+                .GetRoot()
+                .DescendantNodes()
+                .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax]()
+                .Single()
+            let special = CreateSpeculativeBodyModel(
+                normal,
+                original,
+                "public static int Read() { int item(int n) { return n == 0 ? 42 : item(n - 1); } return item(1); }"
+            )
+            let firstMode = if fresh == 0 {
+                specialFirst
+            } else {
+                !specialFirst
+            }
+            for isSpecial in[]bool{firstMode, !firstMode, firstMode} {
+                let model = if isSpecial {
+                    special
+                } else {
+                    normal
+                }
+                for reverse in(
+                    if fresh == 0 {
+                        []bool{false, true}
+                    } else {
+                        []bool{true, false}
+                    }
+                ) {
+                    let translator = CSharpToGSharpTranslator()
+                    let printed = Dictionary[string, string](StringComparer.Ordinal)
+                    for tree in(
+                        if reverse {
+                            []SyntaxTree{second, first}
+                        } else {
+                            []SyntaxTree{first, second}
+                        }
+                    ) {
+                        printed[tree.FilePath] = GSharpPrinter.Print(
+                            translator.TranslateDocument(
+                                LoadedDocument(tree.FilePath, tree, compilation.GetSemanticModel(tree)),
+                                TranslationContext(compilation, model, tree.FilePath)
+                            )
+                        )
+                    }
+                    let output = printed[first.FilePath] + "\n" + printed[second.FilePath]
+                    if results.TryGetValue(isSpecial, out var previous) {
+                        Assert.Equal(Encoding.UTF8.GetBytes(previous), Encoding.UTF8.GetBytes(output))
+                    } else {
+                        results.Add(isSpecial, output)
+                    }
+                    Assert.Equal(
+                        Encoding.UTF8.GetBytes(
+                            (
+                                if isSpecial {
+                                    "42:1"
+                                } else {
+                                    "1:1"
+                                }
+                            ) +
+                                Environment.NewLine
+                        ),
+                        Encoding.UTF8.GetBytes(CompileAndRun(output, Array.Empty[byte](), strictIl: true))
+                    )
+                    GC.Collect()
+                    GC.WaitForPendingFinalizers()
+                    GC.Collect()
+                }
+            }
+        }
+    }
+
+    private func CreateSpeculativeBodyModel(
+        normal SemanticModel,
+        original Microsoft.CodeAnalysis.CSharp.Syntax.BaseMethodDeclarationSyntax,
+        replacementText string
+    ) SemanticModel {
+        let replacement = Assert.IsAssignableFrom[Microsoft.CodeAnalysis.CSharp.Syntax.BaseMethodDeclarationSyntax](
+            SyntaxFactory.ParseMemberDeclaration(replacementText)
+        )
+        Assert.True(
+            Microsoft
+                .CodeAnalysis
+                .CSharp
+                .CSharpExtensions
+                .TryGetSpeculativeSemanticModelForMethodBody(
+                normal,
+                original.Body!!.SpanStart,
+                replacement,
+                out var speculative
+            )
+        )
+        return speculative ?? throw InvalidOperationException("Speculative model missing.")
+    }
+
+    @Theory
     @InlineData(false)
     @InlineData(true)
     func RefParameter_SpeculativeConstructorFactsPrecedeInitializerFolding(replacementFolds bool) {

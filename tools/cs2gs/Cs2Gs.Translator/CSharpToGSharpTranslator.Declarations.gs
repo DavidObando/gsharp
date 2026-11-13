@@ -2073,18 +2073,21 @@ partial class CSharpToGSharpTranslator {
             if instanceCtors.Count != 1 || (node is RecordDeclarationSyntax && !isRecordStructLift) {
                 return ConstructorLift.None
             }
-            let ctor = instanceCtors[0]
-            if ctor.Body == nil || ctor.Initializer != nil {
+            let source = instanceCtors[0]
+            if source.Body == nil || source.Initializer != nil {
                 return ConstructorLift.None
             }
             // Issue #1910: the constructor may be a merged-in member from a
             // different partial part/file; resolve it (and everything it
             // references) through that tree's own semantic model.
-            using let modelScope = this.context.UseSemanticModelFor(ctor.SyntaxTree)
-            let ctorSymbol IMethodSymbol? = this.context.GetDeclaredSymbol(ctor) as IMethodSymbol
+            using let modelScope = this.context.UseSemanticModelForSymbol(source.SyntaxTree, symbol)
+            let ctorSymbol IMethodSymbol? = this.context.GetDeclaredSymbol(source) as IMethodSymbol
             if ctorSymbol == nil {
                 return ConstructorLift.None
             }
+            let ctor = TranslationContext.GetEffectiveDeclaration(source, this.context.Compilation, out _) as
+            ConstructorDeclarationSyntax ?? source
+            using let bodyScope = this.context.UseSemanticModelFor(ctor.SyntaxTree, this.context.Compilation)
             let paramToTarget = Dictionary[
                 IParameterSymbol,
                 (Name string, Type ITypeSymbol, Property IPropertySymbol?)
@@ -2262,7 +2265,7 @@ partial class CSharpToGSharpTranslator {
                 )
             }
             return ConstructorLift{
-                Constructor: ctor,
+                Constructor: source,
                 DropConstructor: true,
                 PrimaryParameters: primaryParameters,
                 FieldsAsPrimaryParameters: fieldsAsParams,
@@ -2363,8 +2366,11 @@ partial class CSharpToGSharpTranslator {
                 if modelScope == nil {
                     return false
                 }
+                let effective = TranslationContext.GetEffectiveDeclaration(syntax, this.context.Compilation, out _) as
+                ConstructorDeclarationSyntax ?? syntax
+                using let bodyScope = this.context.UseSemanticModelFor(effective.SyntaxTree, this.context.Compilation)
                 var overwritten = false
-                for statement in syntax.Body!!.Statements {
+                for statement in effective.Body!!.Statements {
                     if statement is not Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionStatementSyntax expression {
                         return false
                     }

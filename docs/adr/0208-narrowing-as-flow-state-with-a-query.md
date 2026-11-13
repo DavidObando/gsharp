@@ -519,6 +519,13 @@ remain original inputs. Iterator, suspension, return, and constructor-folding fa
 use effective bodies before declaration emission. Field and property usage scans
 enumerate effective containing-type scopes, including all actual partial declarations.
 Each original or replacement root uses its own owning semantic model.
+Constructor overwrite proofs, record-struct literal plans, primary lifting, and
+parameter-name contexts read the same effective declaration/model pair. Original
+constructor symbols and initializer headers retain their original identity.
+Lifted-helper reservation and identifier inventories use effective scoped roots.
+Their allocator and reservation caches share the analysis model domain, separately
+from output-owned anonymous declarations. Repeated physical names reuse their
+source-site allocation instead of consuming another suffix.
 Return, ref-storage, null-flow, shape, effect, projection, import, and naming
 walks use the same inventory and declaration resolver. Body translation uses
 the replacement while retaining the original declared method and parameter symbols.

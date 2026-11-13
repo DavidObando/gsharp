@@ -4176,7 +4176,12 @@ partial class CSharpToGSharpTranslator {
                         "a G# struct literal cannot express its logic (issue #1739; issue #2435)."
                     return false
                 }
-                if !this.TryGetStructConstructorSemanticModel(ctorSymbol, ctorSyntax, out var ctorModel) {
+                if !this.TryGetStructConstructorSemanticModel(
+                    ctorSymbol,
+                    ctorSyntax,
+                    out var bodySyntax,
+                    out var ctorModel
+                ) {
                     unsupportedReason = "struct constructor syntax belongs to no reachable compilation; " +
                         "its body cannot be analyzed for a G# struct literal (issue #1739; issue #2435)."
                     return false
@@ -4185,6 +4190,10 @@ partial class CSharpToGSharpTranslator {
                 let memberNames = HashSet[string](StringComparer.Ordinal)
                 let parameterUseCounts = [ctorSymbol.Parameters.Length]int32
                 if ctorSyntax.Initializer != nil {
+                    let initializerModel = TranslationContext.GetEffectiveSemanticModel(
+                        ctorModel!!.Compilation,
+                        ctorSyntax.SyntaxTree
+                    )
                     if !ctorSyntax.Initializer!!.ThisOrBaseKeyword.IsKind(
                         Microsoft.CodeAnalysis.CSharp.SyntaxKind.ThisKeyword
                     ) {
@@ -4192,7 +4201,7 @@ partial class CSharpToGSharpTranslator {
                             "a G# struct literal cannot express it (issue #2435)."
                         return false
                     }
-                    let delegatedCtor IMethodSymbol? = ctorModel.GetSymbolInfo(ctorSyntax.Initializer!!)
+                    let delegatedCtor IMethodSymbol? = initializerModel.GetSymbolInfo(ctorSyntax.Initializer!!)
                         .Symbol as IMethodSymbol
                     if !this.TryAnalyzeStructConstructor(
                         delegatedCtor,
@@ -4222,7 +4231,7 @@ partial class CSharpToGSharpTranslator {
                             let argumentExpression = initializerArguments[delegatedOrdinal].Expression
                             if !this.TryClassifyStructInitializerValue(
                                 argumentExpression,
-                                ctorModel,
+                                initializerModel,
                                 ctorSymbol,
                                 out var parameterOrdinal,
                                 out var fixedExpression,
@@ -4248,7 +4257,7 @@ partial class CSharpToGSharpTranslator {
                         initializations.Add(remapped)
                     }
                 }
-                for statement in ctorSyntax.Body!!.Statements {
+                for statement in bodySyntax!!.Body!!.Statements {
                     if statement is not Microsoft
                         .CodeAnalysis
                         .CSharp
@@ -4323,14 +4332,18 @@ partial class CSharpToGSharpTranslator {
         private func TryGetStructConstructorSemanticModel(
             ctorSymbol IMethodSymbol,
             ctorSyntax Microsoft.CodeAnalysis.CSharp.Syntax.ConstructorDeclarationSyntax,
+            out bodySyntax Microsoft.CodeAnalysis.CSharp.Syntax.ConstructorDeclarationSyntax?,
             out ctorModel SemanticModel?
         ) bool {
             let owningCompilation = this.context.SourceCompilation(ctorSymbol)
             if owningCompilation != nil && owningCompilation.ContainsSyntaxTree(ctorSyntax.SyntaxTree) {
-                ctorModel = TranslationContext.GetEffectiveSemanticModel(owningCompilation, ctorSyntax.SyntaxTree)
+                bodySyntax = TranslationContext.GetEffectiveDeclaration(ctorSyntax, owningCompilation, out var model) as
+                Microsoft.CodeAnalysis.CSharp.Syntax.ConstructorDeclarationSyntax
+                ctorModel = model
                 return true
             }
             ctorModel = nil
+            bodySyntax = nil
             return false
         }
 
