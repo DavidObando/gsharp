@@ -235,7 +235,7 @@ func Run(seed string?) int32 {
     if s == nil { return 0 }
     return Use(ClearRef(ref s), s.Length)
 }
-Console.WriteLine(Run("abc"))`, "GS0612@13:25 GS0158@13:35", "reject", ""}
+Console.WriteLine(Run("abc"))`, "GS0158@13:35", "reject", ""}
             yield []object{"r08_5637_control_ref_address_in_first_argument_keeps_local_fact_for_second_argument", `import System
 
 func ClearAfter(ref s string?, len int32) int32 {
@@ -247,7 +247,7 @@ func Run(seed string?) int32 {
     if s == nil { return 0 }
     return ClearAfter(ref s, s.Length)
 }
-Console.WriteLine(Run("abcd"))`, "GS0612@10:23", "run", "4"}
+Console.WriteLine(Run("abcd"))`, "", "run", "4"}
             yield []object{
                 "r09_5238_enclosing_catch_filter_write_after_call_in_left_operand_removes_fact_for_right_operand",
                 `import System
