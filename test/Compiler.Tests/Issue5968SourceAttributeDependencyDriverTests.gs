@@ -557,6 +557,53 @@ class Holder {
         Assert.False(File.Exists(invalidDll))
     }
 
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func UnqualifiedInheritedArguments_UseConstructedAncestryBeforeHomonyms(homonym bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let driver = CompileBoundedStackDriver(fixture)
+        let declarations = []string{
+            "class A : G[Nested] {}",
+            "open class G[T] : Root[int32] {}",
+            "open class Root[U] { public open class Nested {} }",
+            if homonym {
+                "open class Nested {}"
+            } else {
+                ""
+            }
+        }
+        for reverse in[]bool{false, true} {
+            let sourcePath = Path.Combine(fixture.Directory, "lexical-inherited.gs")
+            let dll = Path.Combine(fixture.Directory, "lexical-inherited-" + reverse.ToString() + ".dll")
+            File.WriteAllText(
+                sourcePath,
+                string.Join(
+                    "\n",
+                    if reverse {
+                        declarations.Reverse()
+                    } else {
+                        declarations
+                    }
+                )
+            )
+            let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+                sourcePath,
+                dll,
+                driver
+            )
+            Assert.True(code == 0, output)
+            IlVerifier.Verify(dll)
+            let types = EmittedFixture.Load(dll).GetTypes()
+            let a = types.Single((type Type) -> type.Name == "A")
+            let nested = types.Single((type Type) -> type.Name == "Nested" && type.DeclaringType != nil)
+            let argument = Assert.Single(a.BaseType!!.GetGenericArguments())
+            Assert.Equal(nested, argument.GetGenericTypeDefinition())
+            Assert.Equal(typeof(int32), Assert.Single(argument.GetGenericArguments()))
+            Assert.NotNull(Activator.CreateInstance(a))
+        }
+    }
+
     @Fact
     func ConstructedInheritanceCycles_ReportLocatedDiagnosticsWithoutExpandingForever() {
         using let fixture = NativeSliceLanguageTests.Fixture()

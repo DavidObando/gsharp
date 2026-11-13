@@ -387,8 +387,7 @@ internal partial class DeclarationBinder {
                 (!rootSet.Contains(node) && (node is StructDeclarationSyntax || node is InterfaceDeclarationSyntax)) {
                 continue
             }
-            if node is TypeClauseSyntax clause &&
-                (requireRootHeaders && rootSet.Contains(node) || clause.HasQualifier) {
+            if node is TypeClauseSyntax clause {
                 ResolveTypeHeaderIdentity(
                     clause,
                     activeHeaders,
@@ -402,6 +401,63 @@ internal partial class DeclarationBinder {
             for child in node.GetChildren().Reverse() {
                 nodes.Push(child)
             }
+        }
+        return nil
+    }
+
+    private func FindPendingInheritedTypeHeader(
+        container StructSymbol,
+        name string,
+        arity int32,
+        activeHeaders HashSet[StructSymbol],
+        out found bool
+    ) StructSymbol? {
+        found = false
+        if !$scope.HasNestedTypeAliasCandidates(name) {
+            return nil
+        }
+        if $scope.TryLookupNestedTypeAlias(container.Definition ?? container, name, arity, out _) {
+            found = true
+            return nil
+        }
+        let hierarchy = container.GetHierarchy()
+        var ownerLevel = -1
+        for var level = 1; level < hierarchy.Count; level++ {
+            let ancestor = hierarchy[level]
+            if $scope.TryLookupNestedTypeAlias(ancestor.Definition ?? ancestor, name, arity, out _) {
+                ownerLevel = level
+                found = true
+                break
+            }
+            if TypeMemberModel.DeclaresAnyStaticMember(ancestor, name) {
+                return nil
+            }
+        }
+        for var level = 0; level < ownerLevel; level++ {
+            let definition = hierarchy[level].Definition ?? hierarchy[level]
+            if nestedStructPackages.ContainsKey(definition) && !structBaseBindings.ContainsKey(definition) &&
+                !activeHeaders.Contains(definition) {
+                return definition
+            }
+        }
+        return nil
+    }
+
+    private func FindPendingLexicalTypeHeader(
+        name string,
+        arity int32,
+        activeHeaders HashSet[StructSymbol]
+    ) StructSymbol? {
+        if binderCtx.CurrentTypeParameters?.ContainsKey(name) == true || !$scope.HasNestedTypeAliasCandidates(name) {
+            return nil
+        }
+        var current = binderCtx.CurrentContainingType
+        while current is StructSymbol containing {
+            let prerequisite = FindPendingInheritedTypeHeader(containing, name, arity, activeHeaders, out var found)
+            if prerequisite != nil || found {
+                return prerequisite
+            }
+            current = containing.ContainingType
         }
         return nil
     }
@@ -420,6 +476,17 @@ internal partial class DeclarationBinder {
         }
         let previousTree = $scope.SetCurrentReferencingSyntaxTree(clause.SyntaxTree)
         try {
+            if !nominalOnly {
+                let lexicalPrerequisite = FindPendingLexicalTypeHeader(
+                    identifier.ValueText,
+                    clause.GetSegmentTypeArguments(0)?.Count ?? -1,
+                    activeHeaders
+                )
+                if lexicalPrerequisite != nil {
+                    prerequisite = lexicalPrerequisite
+                    return nil
+                }
+            }
             let segments = [clause.SegmentCount]string
             segments[0] = identifier.ValueText
             for var index = 1; index < segments.Length; index++ {
@@ -457,21 +524,18 @@ internal partial class DeclarationBinder {
                 if resolved is StructSymbol container {
                     let definition = container.Definition ?? container
                     if !nominalOnly && index < segments.Length - 1 && activeHeaders.Contains(definition) &&
-                        !structBaseBindings.ContainsKey(definition) && !$scope.TryLookupNestedTypeAlias(
-                        definition,
-                        segments[index + 1],
-                        clause.GetSegmentTypeArguments(index + 1)?.Count ?? -1,
-                        out _
-                    ) {
-                        for ancestor in container.GetHierarchy().Skip(1) {
-                            let ancestorDefinition = ancestor.Definition ?? ancestor
-                            if nestedStructPackages.ContainsKey(ancestorDefinition) && !structBaseBindings.ContainsKey(
-                                ancestorDefinition
-                            ) &&
-                                !activeHeaders.Contains(ancestorDefinition) {
-                                prerequisite = ancestorDefinition
-                                return nil
-                            }
+                        !structBaseBindings
+                        .ContainsKey(definition) {
+                        let inheritedPrerequisite = FindPendingInheritedTypeHeader(
+                            container,
+                            segments[index + 1],
+                            clause.GetSegmentTypeArguments(index + 1)?.Count ?? -1,
+                            activeHeaders,
+                            out _
+                        )
+                        if inheritedPrerequisite != nil {
+                            prerequisite = inheritedPrerequisite
+                            return nil
                         }
                     }
                     let ready = if nominalOnly {

@@ -28,6 +28,7 @@ Separate source declaration scheduling into header, member, and usage-validation
    Require constructed signatures only for qualifier containers; a selected base definition does not require its complete header.
    Constraint targets require nominal identities, not completed child headers.
    Inherited qualifier lookup through an active declaration waits for the supplying ancestors' constructed signatures.
+   Apply the same supplying-ancestor readiness query to lexical inherited names before considering global homonyms.
    Plain nominal type arguments use declared identities; only qualifier lookup requires their header readiness.
    Complete constructed base signatures later; nominal identity alone does not publish header or member readiness.
    Resolve each header once in its captured declaration scope, package, tree, unsafe context, and type-parameter context.

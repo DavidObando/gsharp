@@ -1628,6 +1628,20 @@ partial class BoundScope {
         return false
     }
 
+    /// Gets whether any visible scope indexes a nested alias with this name.
+    /// @param name The nested alias name.
+    /// @returns Whether a candidate name exists.
+    internal func HasNestedTypeAliasCandidates(name string) bool {
+        var declaringScope BoundScope? = this
+        while declaringScope != nil {
+            if declaringScope.nestedAliasCandidateNames.Contains(name) {
+                return true
+            }
+            declaringScope = declaringScope.Parent
+        }
+        return false
+    }
+
     /// Resolves a nested type through a source class and its base-class chain,
     /// returning the effective base construction that declares it.
     /// @param container The source class used to qualify the nested type.
@@ -1644,11 +1658,7 @@ partial class BoundScope {
         @NotNullWhen(true) out declaringContainer StructSymbol?
     ) bool {
         // Without candidates for this name, ancestry cannot contribute a matching source type.
-        var declaringScope BoundScope? = this
-        while declaringScope != nil && !declaringScope.nestedAliasCandidateNames.Contains(simpleName) {
-            declaringScope = declaringScope.Parent
-        }
-        if declaringScope == nil {
+        if !HasNestedTypeAliasCandidates(simpleName) {
             type = nil
             declaringContainer = nil
             return false
