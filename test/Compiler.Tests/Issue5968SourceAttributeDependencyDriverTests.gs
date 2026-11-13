@@ -318,6 +318,7 @@ class Holder {
     @InlineData("self")
     @InlineData("constraint")
     @InlineData("constructed-owner")
+    @InlineData("closed-signature")
     func BaseIdentity_PrecedesGenericArgumentHeaderContracts(kind string) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let driver = CompileBoundedStackDriver(fixture)
@@ -328,20 +329,28 @@ class Holder {
             default: "B"
         }
         let declarations = []string{
-            if nestedOwner {
+            if kind == "closed-signature" {
+                "open class Root[U] {}"
+            } else if nestedOwner {
                 "open class Root {}"
             } else {
                 "open class Root { public open class Nested {} }"
             },
-            if nestedOwner {
+            if kind == "closed-signature" {
+                "open class G[T] : Root[A.Nested] { public open class Nested {} }"
+            } else if nestedOwner {
                 "open class G[T] { public open class Nested {} }"
             } else if kind == "constraint" {
                 "open class G[T A.Nested] : Root {}"
             } else {
                 "open class G[T] : Root {}"
             },
-            "class A : G[" + argumentName + "] {}",
-            if kind == "self" || kind == "constraint" {
+            if kind == "closed-signature" {
+                "class A : G[int32] {}"
+            } else {
+                "class A : G[" + argumentName + "] {}"
+            },
+            if kind == "self" || kind == "constraint" || kind == "closed-signature" {
                 ""
             } else {
                 "class B : A.Nested {}"
@@ -374,7 +383,14 @@ class Holder {
             let baseType = a.BaseType!!
             let argument = Assert.Single(baseType.GetGenericArguments())
             Assert.Equal("G`1", baseType.GetGenericTypeDefinition().Name)
-            if kind == "self" || kind == "constraint" {
+            if kind == "closed-signature" {
+                Assert.Equal(typeof(int32), argument)
+                let gString = baseType.GetGenericTypeDefinition().MakeGenericType(typeof(string))
+                let rootArgument = Assert.Single(gString.BaseType!!.GetGenericArguments())
+                Assert.Equal(nested, rootArgument.GetGenericTypeDefinition())
+                Assert.Equal(typeof(int32), Assert.Single(rootArgument.GetGenericArguments()))
+                Assert.NotNull(Activator.CreateInstance(gString))
+            } else if kind == "self" || kind == "constraint" {
                 Assert.Equal(nested, argument)
             } else {
                 Assert.Equal("B", argument.Name)
@@ -389,6 +405,29 @@ class Holder {
             }
             Assert.NotNull(Activator.CreateInstance(a))
         }
+    }
+
+    @Fact
+    func ConstructedInheritanceCycles_ReportLocatedDiagnosticsWithoutExpandingForever() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let driver = CompileBoundedStackDriver(fixture)
+        const source = `class Root : A[int32] {}
+open class A[T] : B[A[T]] {}
+open class B[T] : A[B[T]] {}`
+        let sourcePath = Path.Combine(fixture.Directory, "constructed-cycle.gs")
+        let dll = Path.Combine(fixture.Directory, "constructed-cycle.dll")
+        File.WriteAllText(sourcePath, source)
+        let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+            sourcePath,
+            dll,
+            driver
+        )
+        Assert.True(code == 1, output)
+        let locations = DiagnosticLocations(output)
+        Assert.Equal([]string{"GS0381@2,19,2,20"}, locations)
+        Assert.DoesNotContain("GS9998", output)
+        Assert.DoesNotContain("GS0639", output)
+        Assert.False(File.Exists(dll))
     }
 
     @Fact

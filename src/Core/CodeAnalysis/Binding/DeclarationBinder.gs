@@ -178,6 +178,7 @@ internal partial class DeclarationBinder {
         StructBaseBindingResult
     ]()
     private let readyStructHeaders HashSet[StructSymbol] = HashSet[StructSymbol]()
+    private let readyStructBaseIdentities HashSet[StructSymbol] = HashSet[StructSymbol]()
     private let boundStructTypeParameterConstraints HashSet[StructSymbol] = HashSet[StructSymbol]()
     private let checkedStructInheritance HashSet[StructSymbol] = HashSet[StructSymbol]()
     private let boundStructBodies HashSet[StructSymbol] = HashSet[StructSymbol]()

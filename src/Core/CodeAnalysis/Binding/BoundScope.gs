@@ -1642,6 +1642,16 @@ partial class BoundScope {
         @NotNullWhen(true) out type TypeSymbol?,
         @NotNullWhen(true) out declaringContainer StructSymbol?
     ) bool {
+        // Without nested aliases, ancestry cannot contribute a matching source type.
+        var declaringScope BoundScope? = this
+        while declaringScope != nil && declaringScope.nestedAliasCandidates.Count == 0 {
+            declaringScope = declaringScope.Parent
+        }
+        if declaringScope == nil {
+            type = nil
+            declaringContainer = nil
+            return false
+        }
         // Issue #4164: a genuine base-class cycle (e.g. `class B : C` / `class
         // C : B`) is normally caught by the post-bind cycle detector (#973),
         // but this walk runs earlier — during declaration binding, while

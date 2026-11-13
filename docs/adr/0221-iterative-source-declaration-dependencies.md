@@ -24,6 +24,8 @@ Separate source declaration scheduling into header, member, and usage-validation
 1. Complete headers with an explicit list of pending source base definitions.
    Publish resolved nominal source-base identities before constraints and generic-argument prerequisites.
    Publish a selected nominal base before awaiting that base's remaining header contracts.
+   Complete nominal ancestry with its own iterative worklist, without requiring ancestor signatures or constraints.
+   Require constructed signatures only for qualifier containers; a selected base definition does not require its complete header.
    Plain nominal type arguments use declared identities; only qualifier lookup requires their header readiness.
    Complete constructed base signatures later; nominal identity alone does not publish header or member readiness.
    Resolve each header once in its captured declaration scope, package, tree, unsafe context, and type-parameter context.
@@ -44,6 +46,7 @@ Separate source declaration scheduling into header, member, and usage-validation
    Use the existing cycle checker on the discovered work, without repeating the compilation's nested-type census.
    Retain checked acyclic results across header requests after source base identities become stable.
    Report the existing cycle diagnostic and break the offending base edge before member binding.
+   Guard all source hierarchy traversal by definition identity, including expanding constructed cycles before final cycle diagnostics.
    Attribute applications do not create header edges and cannot create inheritance cycles.
 3. Use explicit work entries for member requests and their continuations.
    Schedule source base members before derived members.

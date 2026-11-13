@@ -2182,12 +2182,13 @@ class StructSymbol : TypeSymbol {
     /// that used to keep its own unguarded copy (`TypeMemberModel`,
     /// `ExternalClrOverrideResolver`) so a fix here cannot be
     /// independently missed by a sibling copy again.
+    /// Constructed ancestors are visited by definition because generic cycles can expand arguments indefinitely.
     /// @returns This class and its ancestors, most-derived first.
     internal func GetHierarchy() List[StructSymbol] {
         let hierarchy = List[StructSymbol]()
         let visited = HashSet[StructSymbol]()
         var current StructSymbol? = this
-        while current != nil && visited.Add(current) {
+        while current != nil && visited.Add(current.Definition ?? current) {
             hierarchy.Add(current)
             current = current.BaseClass
         }

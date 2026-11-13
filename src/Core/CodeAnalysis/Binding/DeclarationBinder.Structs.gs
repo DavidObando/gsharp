@@ -142,6 +142,56 @@ internal partial class DeclarationBinder {
         }
     }
 
+    private func EnsureStructBaseIdentityBound(structSymbol StructSymbol) {
+        let work = Stack[(Symbol StructSymbol, Bind bool)]()
+        let active = HashSet[StructSymbol]()
+        work.Push((structSymbol, false))
+        while work.Count > 0 {
+            let (symbol, bind) = work.Pop()
+            if readyStructBaseIdentities.Contains(symbol) {
+                continue
+            }
+            if !bind {
+                if !active.Add(symbol) {
+                    continue
+                }
+                work.Push((symbol, true))
+                if symbol.ContainingType is StructSymbol containing {
+                    let definition = containing.Definition ?? containing
+                    if nestedStructPackages.ContainsKey(definition) {
+                        work.Push((definition, false))
+                    }
+                }
+                continue
+            }
+            var prerequisite StructSymbol? = nil
+            RunInStructDeclarationContext(
+                symbol,
+                () -> {
+                    let syntax = symbol.Declaration!!
+                    if syntax.IsClass && syntax.BaseTypeClauses.Count > 0 {
+                        let identity = ResolveTypeHeaderIdentity(
+                            syntax.BaseTypeClauses[0],
+                            active,
+                            out prerequisite,
+                            nominalOnly: true
+                        )
+                        if identity is StructSymbol sourceBase && sourceBase.IsClass && sourceBase.ClrType == nil {
+                            symbol.SetBaseClass(sourceBase)
+                        }
+                    }
+                }
+            )
+            if prerequisite != nil {
+                work.Push((symbol, true))
+                work.Push((prerequisite, false))
+                continue
+            }
+            active.Remove(symbol)
+            readyStructBaseIdentities.Add(symbol)
+        }
+    }
+
     private func EnsureStructDeclarationHeaderBound(structSymbol StructSymbol) {
         let definition = structSymbol.Definition ?? structSymbol
         if readyStructHeaders.Contains(definition) || !nestedStructPackages.ContainsKey(definition) {
@@ -178,28 +228,7 @@ internal partial class DeclarationBinder {
                 continue
             }
             if phase == bindBaseIdentity {
-                var prerequisite StructSymbol? = nil
-                RunInStructDeclarationContext(
-                    symbol,
-                    () -> {
-                        let syntax = symbol.Declaration!!
-                        if syntax.IsClass && syntax.BaseTypeClauses.Count > 0 {
-                            let identity = ResolveTypeHeaderIdentity(
-                                syntax.BaseTypeClauses[0],
-                                activeHeaders,
-                                out prerequisite
-                            )
-                            if identity is StructSymbol sourceBase && sourceBase.IsClass && sourceBase.ClrType == nil {
-                                // Nominal ancestry enables lookup; constructed contracts and readiness remain pending.
-                                symbol.SetBaseClass(sourceBase)
-                            }
-                        }
-                    }
-                )
-                if prerequisite != nil {
-                    work.Push((symbol, bindBaseIdentity))
-                    work.Push((prerequisite, requestHeader))
-                }
+                EnsureStructBaseIdentityBound(symbol)
                 continue
             }
             if phase == requestConstraints {
@@ -252,7 +281,8 @@ internal partial class DeclarationBinder {
                 () -> {
                     baseDependency = FindPendingTypeQualifierHeader(
                         symbol.Declaration!!.BaseTypeClauses.Cast[SyntaxNode](),
-                        activeHeaders
+                        activeHeaders,
+                        requireRootHeaders: false
                     )
                 }
             )
@@ -330,7 +360,8 @@ internal partial class DeclarationBinder {
 
     private func FindPendingTypeQualifierHeader(
         roots IEnumerable[SyntaxNode],
-        activeHeaders HashSet[StructSymbol]
+        activeHeaders HashSet[StructSymbol],
+        requireRootHeaders bool = true
     ) StructSymbol? {
         let nodes = Stack[SyntaxNode](roots.Reverse())
         let rootSet = HashSet[SyntaxNode](roots)
@@ -340,12 +371,13 @@ internal partial class DeclarationBinder {
                 (!rootSet.Contains(node) && (node is StructDeclarationSyntax || node is InterfaceDeclarationSyntax)) {
                 continue
             }
-            if node is TypeClauseSyntax clause {
+            if node is TypeClauseSyntax clause &&
+                (requireRootHeaders && rootSet.Contains(node) || clause.HasQualifier) {
                 ResolveTypeHeaderIdentity(
                     clause,
                     activeHeaders,
                     out var prerequisite,
-                    requireFinalHeader: rootSet.Contains(node)
+                    requireFinalHeader: requireRootHeaders && rootSet.Contains(node)
                 )
                 if prerequisite != nil {
                     return prerequisite
@@ -362,7 +394,8 @@ internal partial class DeclarationBinder {
         clause TypeClauseSyntax,
         activeHeaders HashSet[StructSymbol],
         out prerequisite StructSymbol?,
-        requireFinalHeader bool = true
+        requireFinalHeader bool = true,
+        nominalOnly bool = false
     ) TypeSymbol? {
         prerequisite = nil
         let identifier = clause.Identifier
@@ -407,10 +440,15 @@ internal partial class DeclarationBinder {
                 current = resolved
                 if resolved is StructSymbol container {
                     let definition = container.Definition ?? container
+                    let ready = if nominalOnly {
+                        readyStructBaseIdentities.Contains(definition)
+                    } else {
+                        readyStructHeaders.Contains(definition) || structBaseBindings.ContainsKey(definition)
+                    }
                     if (requireFinalHeader || index < segments.Length - 1) && nestedStructPackages.ContainsKey(
                         definition
                     ) &&
-                        !readyStructHeaders.Contains(definition) && !structBaseBindings.ContainsKey(definition) &&
+                        !ready &&
                         !activeHeaders.Contains(definition) {
                         prerequisite = definition
                         return if index == segments.Length - 1 {
