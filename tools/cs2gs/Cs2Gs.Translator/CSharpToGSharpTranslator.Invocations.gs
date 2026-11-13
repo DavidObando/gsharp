@@ -1255,15 +1255,17 @@ partial class CSharpToGSharpTranslator {
             let callLocation = callSyntax!!.GetLocation()
             let rawParamsElementType = (cast[INamedTypeSymbol](paramsCollectionArg.Parameter!!.Type)).TypeArguments[0]
             let paramsArguments = arguments.Skip(consumedSyntaxArguments).ToList()
+            // Same-run source contracts also govern callers bound through emitted reference assemblies.
             let widenPackedElement = rawParamsElementType.IsReferenceType &&
                 rawParamsElementType.NullableAnnotation != Microsoft
                 .CodeAnalysis
                 .NullableAnnotation
                 .Annotated &&
-                paramsArguments
-                .Any(
-                (a ArgumentSyntax) -> this.SinkInfersTypeFromValue(paramsCollectionArg.Parameter, a.Expression) &&
-                    this.EmittedExpandedParamsElementMayBeNull(a.Expression)
+                (
+                this.ObliviousParamsElementIsPromoted(paramsCollectionArg.Parameter!!) || paramsArguments.Any(
+                    (a ArgumentSyntax) -> this.SinkInfersTypeFromValue(paramsCollectionArg.Parameter, a.Expression) &&
+                        this.EmittedExpandedParamsElementMayBeNull(a.Expression)
+                )
             )
             let paramsElementType = if widenPackedElement {
                 rawParamsElementType.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
@@ -11719,16 +11721,9 @@ partial class CSharpToGSharpTranslator {
 
             private func GetParamsElementType(
                 parameter IParameterSymbol?
-            ) ITypeSymbol? -> if parameter?.IsParams == true {
-                (
-                    switch parameter!!.Type {
-                        case arrayType is IArrayTypeSymbol: arrayType.ElementType
-                        case INamedTypeSymbol{
-                            TypeArguments: [ITypeSymbol element]
-                        } collection when IsSupportedParamsCollectionType(collection): element
-                        default: default(ITypeSymbol?)
-                    }
-                )
+            ) ITypeSymbol? -> if parameter?.IsParams == true &&
+                (parameter!!.Type is IArrayTypeSymbol || IsSupportedParamsCollectionType(parameter!!.Type)) {
+                ObliviousNullabilityAnalyzer.ParamsElementType(parameter)
             } else {
                 default(ITypeSymbol?)
             }

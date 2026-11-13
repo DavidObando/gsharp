@@ -384,6 +384,7 @@ internal shared class ObliviousNullabilityAnalyzer {
     // declaration keys some call passes a `null` / `null!` literal into;
     // `Incoming` maps a declaration key to the keys of the PARAMETERS whose
     // value it receives unchanged (`Parent = parent`, `base(header, parent)`).
+    // A params key describes its expanded element, not the collection instance.
     // `Forwarding` is filled on first request (see `EnsureForwardingEdges`).
     private class NullArgumentGraph {
         init(owner Compilation, seeds HashSet[string]) {
@@ -743,6 +744,25 @@ internal shared class ObliviousNullabilityAnalyzer {
     /// @param siblingCompilations Other projects loaded in the same run, or `null`.
     /// @returns `true` when `null` is passed into the declaration.
     func IsNullArgumentTarget(
+        compilation CSharpCompilation?,
+        symbol ISymbol?,
+        siblingCompilations IReadOnlyList[CSharpCompilation]?
+    ) bool -> !(symbol is IParameterSymbol{IsParams: true}) &&
+        IsNullArgumentTargetCore(compilation, symbol, siblingCompilations)
+
+    /// Whether this run widens a params element, never the collection instance.
+    /// @param compilation The compilation being translated.
+    /// @param parameter The params parameter.
+    /// @param siblingCompilations Other projects in this run.
+    /// @returns True when every read admits the widened element contract.
+    func IsNullArgumentParamsElementTarget(
+        compilation CSharpCompilation?,
+        parameter IParameterSymbol?,
+        siblingCompilations IReadOnlyList[CSharpCompilation]?
+    ) bool -> parameter?.IsParams == true &&
+        IsNullArgumentTargetCore(compilation, parameter, siblingCompilations)
+
+    private func IsNullArgumentTargetCore(
         compilation CSharpCompilation?,
         symbol ISymbol?,
         siblingCompilations IReadOnlyList[CSharpCompilation]?
@@ -2598,6 +2618,9 @@ internal shared class ObliviousNullabilityAnalyzer {
                     continue
                 }
                 parameterNames.Add(parameter.Name)
+                if parameter.IsParams {
+                    memberNames.Add(parameter.ContainingSymbol.Name)
+                }
                 if parameter.ContainingSymbol is IMethodSymbol method && PositionalProperty(parameter, method) != nil {
                     memberNames.Add(parameter.Name)
                     readsPositional = true
@@ -2701,9 +2724,13 @@ internal shared class ObliviousNullabilityAnalyzer {
         candidates HashSet[string],
         reads Dictionary[string, List[(Safe bool, Slot string?)]]
     ) {
-        if model.GetSymbolInfo(name)
-            .Symbol is not{} read ||
-            OriginalNullArgumentDeclaration(read) is not{} original ||
+        if model.GetSymbolInfo(name).Symbol is not{} read {
+            return
+        }
+        if read is IMethodSymbol called {
+            CollectNullArgumentParamsCall(name, called, model, run, candidates, reads)
+        }
+        if OriginalNullArgumentDeclaration(read) is not{} original ||
             NullArgumentKeys(original) is not{Count: > 0} keys {
             return
         }
@@ -2727,10 +2754,101 @@ internal shared class ObliviousNullabilityAnalyzer {
         if IsInsideNameof(expression) ||
             expression.Parent is AssignmentExpressionSyntax store &&
             store.Left == expression &&
-            store.IsKind(SyntaxKind.SimpleAssignmentExpression) {
+            store
+            .IsKind(SyntaxKind.SimpleAssignmentExpression) {
+            if !IsInsideNameof(expression) && original is IParameterSymbol{IsParams: true} {
+                AddNullArgumentRead(reads, candidate, (false, default(string?)))
+            }
             return
         }
-        AddNullArgumentRead(reads, candidate, ClassifyNullArgumentRead(expression, model, run))
+        AddNullArgumentRead(
+            reads,
+            candidate,
+            if original is IParameterSymbol{IsParams: true} parameter {
+                ClassifyNullArgumentParamsRead(expression, parameter, model, run)
+            } else {
+                ClassifyNullArgumentRead(expression, model, run)
+            }
+        )
+    }
+
+    private func CollectNullArgumentParamsCall(
+        name ExpressionSyntax,
+        method IMethodSymbol,
+        model SemanticModel,
+        run NullArgumentRun,
+        candidates HashSet[string],
+        reads Dictionary[string, List[(Safe bool, Slot string?)]]
+    ) {
+        let parameter = OriginalNullArgumentDeclaration(method.Parameters.LastOrDefault()) as IParameterSymbol
+        if parameter?.IsParams != true || NullArgumentKeys(parameter) is not{Count: > 0} keys {
+            return
+        }
+        let key = CanonicalNullArgumentKey(keys[0], run)
+        if !candidates.Contains(key) || IsInsideNameof(name) {
+            return
+        }
+        let target ExpressionSyntax = if name.Parent is MemberAccessExpressionSyntax access && access.Name == name {
+            access
+        } else {
+            name
+        }
+        if target.Parent is not InvocationExpressionSyntax invocation || invocation.Expression != target {
+            AddNullArgumentRead(reads, key, (false, default(string?)))
+            return
+        }
+        for argument in CallArgumentOperations(invocation, model) {
+            if argument.Parameter?.IsParams != true || argument.ArgumentKind != ArgumentKind.Explicit {
+                continue
+            }
+            let value = ArgumentValueExpression(argument.Value)
+            let source = if value != nil {
+                model.GetSymbolInfo(Unwrap(value)).Symbol as IParameterSymbol
+            } else {
+                nil
+            }
+            if source != nil &&
+                SameParamsElement(source, parameter!!) &&
+                IsNullArgumentCandidate(source.OriginalDefinition) &&
+                IsEmittedByRun(source, run.Members) &&
+                NullArgumentKeys(source) is {Count: > 0} sourceKeys {
+                AddNullArgumentRead(reads, key, (false, CanonicalNullArgumentKey(sourceKeys[0], run)))
+            } else {
+                // Do not rely on unchecked invariant C[T] -> C[T?] conversions.
+                let element = if value != nil {
+                    ParamsArgumentElementType(model.GetTypeInfo(value).Type, parameter!!.Type)
+                } else {
+                    nil
+                }
+                let expected = ParamsElementType(parameter)
+                AddNullArgumentRead(
+                    reads,
+                    key,
+                    (
+                        element?.NullableAnnotation == Microsoft
+                            .CodeAnalysis
+                            .NullableAnnotation
+                            .Annotated &&
+                            expected != nil &&
+                            SymbolEqualityComparer
+                            .IncludeNullability
+                            .Equals(
+                            element,
+                            expected.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
+                        ),
+                        default(string?)
+                    )
+                )
+            }
+        }
+    }
+
+    private func ArgumentValueExpression(operation IOperation?) ExpressionSyntax? {
+        var current = operation
+        while current is IConversionOperation conversion && conversion.IsImplicit {
+            current = conversion.Operand
+        }
+        return current?.Syntax as ExpressionSyntax
     }
 
     // Issue #5574: every `Deconstruct` a deconstruction or positional pattern
@@ -3207,7 +3325,14 @@ internal shared class ObliviousNullabilityAnalyzer {
                 }
                 // An expanded `params` element is stored in the collection: it
                 // takes the null when the element type is nullable.
-                return if ExpandedParamsElementType(argument, model) is {
+                let expanded = ExpandedParamsParameter(argument, model)
+                if expanded != nil &&
+                    IsNullArgumentCandidate(expanded.OriginalDefinition) &&
+                    IsEmittedByRun(expanded, run.Members) &&
+                    NullArgumentKeys(expanded) is {Count: > 0} keys {
+                    return (false, CanonicalNullArgumentKey(keys[0], run))
+                }
+                return if ParamsElementType(expanded) is {
                     NullableAnnotation: Microsoft.CodeAnalysis.NullableAnnotation.Annotated
                 } {
                     (true, default(string?))
@@ -3241,9 +3366,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
     }
 
-    // Issue #5574: the element type of the `params` collection that `argument`
-    // is an expanded element of, or null.
-    private func ExpandedParamsElementType(argument ArgumentSyntax, model SemanticModel) ITypeSymbol? {
+    // The params parameter that receives this expanded element, never a whole collection.
+    private func ExpandedParamsParameter(argument ArgumentSyntax, model SemanticModel) IParameterSymbol? {
         if argument.NameColon != nil ||
             argument.Parent is not BaseArgumentListSyntax arguments ||
             arguments.Parent is not{} call ||
@@ -3256,12 +3380,190 @@ internal shared class ObliviousNullabilityAnalyzer {
             .IndexOf(argument) < parameter.Ordinal || MentionsTypeParameter(parameter.OriginalDefinition.Type) {
             return nil
         }
-        return switch parameter.Type {
-            case array is IArrayTypeSymbol: array.ElementType
-            case collection is INamedTypeSymbol when collection.TypeArguments.Length == 1: collection.TypeArguments[0]
-            default: default(ITypeSymbol?)
+        if model.GetOperation(argument) is IArgumentOperation{ArgumentKind: ArgumentKind.Explicit} {
+            return nil
         }
+        return OriginalNullArgumentDeclaration(parameter) as IParameterSymbol
     }
+
+    /// Gets the element position separately from the params collection instance.
+    /// @param parameter The params parameter.
+    /// @returns Its element type, or nil for another parameter shape.
+    func ParamsElementType(parameter IParameterSymbol?) ITypeSymbol? -> if parameter?.IsParams == true {
+        ParamsCollectionElementType(parameter!!.Type)
+    } else {
+        nil
+    }
+
+    private func ParamsCollectionElementType(type ITypeSymbol?) ITypeSymbol? -> switch type {
+        case array is IArrayTypeSymbol: array.ElementType
+        case collection is INamedTypeSymbol when collection.TypeArguments.Length == 1: collection.TypeArguments[0]
+        default: default(ITypeSymbol?)
+    }
+
+    // A normal-form value contributes its selected carrier view, not its own type arguments.
+    private func ParamsArgumentElementType(value ITypeSymbol?, carrier ITypeSymbol) ITypeSymbol? {
+        if value is IArrayTypeSymbol array {
+            if carrier is IArrayTypeSymbol targetArray &&
+                array.Rank == targetArray.Rank ||
+                carrier is INamedTypeSymbol &&
+                array
+                .AllInterfaces
+                .Any((view INamedTypeSymbol) -> SymbolEqualityComparer.Default.Equals(view, carrier)) {
+                return array.ElementType
+            }
+            return nil
+        }
+        if value is not INamedTypeSymbol named || carrier is not INamedTypeSymbol {
+            return nil
+        }
+        var element ITypeSymbol? = nil
+        for view in ContainerViews(named) {
+            if !SymbolEqualityComparer.Default.Equals(view, carrier) {
+                continue
+            }
+            let projected = ParamsCollectionElementType(view)
+            if element != nil && !SymbolEqualityComparer.IncludeNullability.Equals(element, projected) {
+                return nil
+            }
+            element = projected
+        }
+        return element
+    }
+
+    /// Gets the type, its base types, and its interfaces in their established order.
+    /// @param type The constructed collection type.
+    /// @returns The available constructed views.
+    func ContainerViews(type INamedTypeSymbol) List[INamedTypeSymbol] {
+        let views = List[INamedTypeSymbol]()
+        var current INamedTypeSymbol? = type
+        while current != nil {
+            views.Add(current)
+            current = current.BaseType
+        }
+        views.AddRange(type.AllInterfaces)
+        return views
+    }
+
+    // Element contracts admit cardinality reads, not element reads or unknown escapes.
+    private func ClassifyNullArgumentParamsRead(
+        expression ExpressionSyntax,
+        parameter IParameterSymbol,
+        model SemanticModel,
+        run NullArgumentRun
+    )(Safe bool, Slot string?) {
+        var value = expression
+        while value.Parent is ParenthesizedExpressionSyntax parenthesized {
+            value = parenthesized
+        }
+        if value.Parent is MemberAccessExpressionSyntax access && access.Expression == value {
+            let member = model.GetSymbolInfo(access).Symbol
+            if member is IPropertySymbol property &&
+                !property.IsIndexer &&
+                property
+                .Parameters
+                .Length == 0 &&
+                !MentionsTypeParameter(property.OriginalDefinition.Type) &&
+                !IsEmittedByRun(property, run.Members) &&
+                (
+                parameter.Type is IArrayTypeSymbol &&
+                    (property.Name is "Length" or "LongLength") ||
+                    ParamsElementType(parameter) != nil &&
+                    (property.Name is "Count" or "Length") &&
+                    property.ContainingType is INamedTypeSymbol collection &&
+                    SymbolEqualityComparer
+                    .Default
+                    .Equals(
+                    collection.OriginalDefinition,
+                    model.Compilation.GetTypeByMetadataName("System.Collections.Generic." + collection.MetadataName)
+                ) &&
+                    (
+                    SymbolEqualityComparer.Default.Equals(
+                        property.ContainingType.OriginalDefinition,
+                        parameter.Type.OriginalDefinition
+                    ) ||
+                        parameter.Type is INamedTypeSymbol named &&
+                        named
+                        .AllInterfaces
+                        .Any(
+                        (view INamedTypeSymbol) -> SymbolEqualityComparer.Default.Equals(view, property.ContainingType)
+                    )
+                )
+            ) {
+                return (true, default(string?))
+            }
+            if access.Parent is InvocationExpressionSyntax invocation &&
+                IsNullArgumentParamsCardinalityCall(invocation, model, run) {
+                return (true, default(string?))
+            }
+        }
+        if value.Parent is ArgumentSyntax cardinalityArgument &&
+            cardinalityArgument
+            .Parent
+            ?.Parent is InvocationExpressionSyntax cardinalityCall &&
+            IsNullArgumentParamsCardinalityCall(cardinalityCall, model, run) {
+            return (true, default(string?))
+        }
+        // A whole collection can forward only to the same emitted element contract.
+        if value.Parent is ArgumentSyntax argument && model.GetOperation(argument) is IArgumentOperation{
+            ArgumentKind: ArgumentKind.Explicit,
+            Parameter: {IsParams: true} target
+        } &&
+            SameParamsElement(parameter, target) &&
+            OriginalNullArgumentDeclaration(target) is IParameterSymbol original &&
+            IsNullArgumentCandidate(original) &&
+            IsEmittedByRun(target, run.Members) &&
+            NullArgumentKeys(original) is {Count: > 0} keys {
+            return (false, CanonicalNullArgumentKey(keys[0], run))
+        }
+        return (false, default(string?))
+    }
+
+    private func IsNullArgumentParamsCardinalityCall(
+        call InvocationExpressionSyntax,
+        model SemanticModel,
+        run NullArgumentRun
+    ) bool {
+        if call.Expression is GenericNameSyntax ||
+            call.Expression is MemberAccessExpressionSyntax{Name: GenericNameSyntax} ||
+            model
+            .GetSymbolInfo(call).Symbol is not IMethodSymbol method {
+            return false
+        }
+        let declaration = method.ReducedFrom ?? method
+        return declaration
+            .Parameters
+            .Length == 1 &&
+            (declaration.Name is "Count" or "LongCount" or "Any") &&
+            !IsEmittedByRun(declaration, run.Members) &&
+            SymbolEqualityComparer
+            .Default
+            .Equals(declaration.ContainingType, model.Compilation.GetTypeByMetadataName("System.Linq.Enumerable"))
+    }
+
+    private func SameParamsElement(left IParameterSymbol, right IParameterSymbol) bool -> SymbolEqualityComparer
+        .IncludeNullability
+        .Equals(ParamsElementType(left), ParamsElementType(right))
+
+    // Extension collection-params calls do not expand yet (#6002).
+    private func IsNullArgumentParamsCandidate(parameter IParameterSymbol) bool -> parameter.IsParams &&
+        ParamsElementType(parameter) is {} element &&
+        IsRepaintableReference(element) &&
+        !MentionsTypeParameter(parameter.Type) &&
+        (
+        parameter.Type is IArrayTypeSymbol ||
+            parameter.Type is INamedTypeSymbol named &&
+            (
+            named.ContainingNamespace?.ToDisplayString() == "System.Collections.Generic" &&
+                named.Name is "List" or
+                "IEnumerable" or
+                "ICollection" or
+                "IList" or
+                "IReadOnlyList" or
+                "IReadOnlyCollection"
+        )
+    ) &&
+        parameter.ContainingSymbol is IMethodSymbol{MethodKind: MethodKind.Ordinary, IsExtensionMethod: false}
 
     // Issue #5574: whether `pattern` binds the value it tests itself to a
     // variable (`var x`, also under `or` or parentheses), which then holds a
@@ -3298,6 +3600,10 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         if !KeepsNonNullContract(slot, run.Members) {
             return (true, default(string?))
+        }
+        // A non-null whole carrier cannot depend on its element's widening key.
+        if slot is IParameterSymbol{IsParams: true} {
+            return (false, default(string?))
         }
         if OriginalNullArgumentDeclaration(slot) is {} original &&
             IsNullArgumentCandidate(original) &&
@@ -3620,9 +3926,9 @@ internal shared class ObliviousNullabilityAnalyzer {
         switch symbol {
             case parameter is IParameterSymbol {
                 if parameter.Ordinal < 0 ||
-                    !IsRepaintableReference(parameter.Type) ||
+                    !(IsRepaintableReference(parameter.Type) || IsNullArgumentParamsCandidate(parameter)) ||
                     parameter.RefKind != RefKind.None ||
-                    parameter.IsParams ||
+                    (parameter.IsParams && !IsNullArgumentParamsCandidate(parameter)) ||
                     parameter.ContainingSymbol is not IMethodSymbol{
                     MethodKind: MethodKind.Constructor or MethodKind.Ordinary
                 } method ||
@@ -3966,6 +4272,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 }
                 for argument in CallArgumentOperations(node, model) {
                     if argument.Parameter is {} parameter &&
+                        !parameter.IsParams &&
                         argument
                         .Value
                         ?.Syntax is ExpressionSyntax value &&
@@ -3975,6 +4282,16 @@ internal shared class ObliviousNullabilityAnalyzer {
                         for key in NullArgumentKeys(original) {
                             seeds.Add(key)
                             symbols[key] = original
+                        }
+                    }
+                }
+                for argument in list.Arguments {
+                    if ArgumentWritesNullValue(model, argument.Expression) &&
+                        ExpandedParamsParameter(argument, model) is {} expanded &&
+                        IsNullArgumentCandidate(expanded.OriginalDefinition) {
+                        for key in NullArgumentKeys(expanded.OriginalDefinition) {
+                            seeds.Add(key)
+                            symbols[key] = expanded.OriginalDefinition
                         }
                     }
                 }
@@ -3997,13 +4314,20 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         let owner = graph.Owner
         graph.ForwardingBuilt = true
-        let AddEdge = func (target ISymbol?, source ISymbol?) {
+        let AddEdge = func (target ISymbol?, source ISymbol?, paramsElement bool) {
             let targetOriginal = OriginalNullArgumentDeclaration(target)
             let sourceOriginal = OriginalNullArgumentDeclaration(source)
             if targetOriginal is {} targetDeclaration &&
                 sourceOriginal is {} sourceDeclaration &&
                 IsNullArgumentCandidate(targetDeclaration) &&
-                IsNullArgumentCandidate(sourceDeclaration) {
+                IsNullArgumentCandidate(sourceDeclaration) &&
+                (!(targetDeclaration is IParameterSymbol{IsParams: true}) || paramsElement) &&
+                (
+                sourceDeclaration is not IParameterSymbol{IsParams: true} sourceParams ||
+                    paramsElement &&
+                    targetDeclaration is IParameterSymbol{IsParams: true} targetParams &&
+                    SameParamsElement(sourceParams, targetParams)
+            ) {
                 let sourceKeys = NullArgumentKeys(sourceDeclaration)
                 for sourceKey in sourceKeys {
                     graph.Symbols[sourceKey] = sourceDeclaration
@@ -4031,14 +4355,14 @@ internal shared class ObliviousNullabilityAnalyzer {
                     IsForwardedValueShape(assignment.Right) {
                     let target ISymbol? = model.GetSymbolInfo(assignment.Left).Symbol
                     if target is IFieldSymbol or IPropertySymbol {
-                        AddEdge(target, model.GetSymbolInfo(Unwrap(assignment.Right)).Symbol)
+                        AddEdge(target, model.GetSymbolInfo(Unwrap(assignment.Right)).Symbol, false)
                     }
                 } else if (node is ReturnStatementSyntax{Expression: {} returned} && IsForwardedValueShape(returned)) {
                     // `return p;` / `return stored;` / `return Other(..);` hands a
                     // value on as the member's result: the result must be as
                     // nullable as what it returns.
                     if ReturnOwner(node) is {} declaration && model.GetDeclaredSymbol(declaration) is {} member {
-                        AddEdge(member, model.GetSymbolInfo(Unwrap(returned)).Symbol)
+                        AddEdge(member, model.GetSymbolInfo(Unwrap(returned)).Symbol, false)
                     }
                 } else if (node is ArrowExpressionClauseSyntax arrow && IsForwardedValueShape(arrow.Expression)) {
                     if arrow.Parent is {} arrowOwner &&
@@ -4049,7 +4373,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                             arrowOwner is AccessorDeclarationSyntax
                     ) &&
                         model.GetDeclaredSymbol(arrowOwner) is {} member {
-                        AddEdge(member, model.GetSymbolInfo(Unwrap(arrow.Expression)).Symbol)
+                        AddEdge(member, model.GetSymbolInfo(Unwrap(arrow.Expression)).Symbol, false)
                     }
                 } else if CallArgumentList(node) is {} list && list.Arguments.Any(
                     (a ArgumentSyntax) -> a.RefKindKeyword.IsKind(SyntaxKind.None) &&
@@ -4061,7 +4385,20 @@ internal shared class ObliviousNullabilityAnalyzer {
                             .Value
                             ?.Syntax is ExpressionSyntax value &&
                             ReadsEnclosingParameterByName(value) {
-                            AddEdge(parameter, model.GetSymbolInfo(Unwrap(value)).Symbol)
+                            let source = model.GetSymbolInfo(Unwrap(value)).Symbol
+                            AddEdge(
+                                parameter,
+                                source,
+                                source is IParameterSymbol{IsParams: true} sourceParams &&
+                                    parameter.IsParams &&
+                                    SameParamsElement(sourceParams, parameter)
+                            )
+                        }
+                    }
+                    for argument in list.Arguments {
+                        if ReadsEnclosingParameterByName(argument.Expression) &&
+                            ExpandedParamsParameter(argument, model) is {} expanded {
+                            AddEdge(expanded, model.GetSymbolInfo(Unwrap(argument.Expression)).Symbol, true)
                         }
                     }
                 }
@@ -4077,7 +4414,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                     unreduced
                     .Parameters
                     .Length > 0 {
-                    AddEdge(unreduced.Parameters[0], model.GetSymbolInfo(Unwrap(receiver)).Symbol)
+                    AddEdge(unreduced.Parameters[0], model.GetSymbolInfo(Unwrap(receiver)).Symbol, false)
                 }
             }
         }
