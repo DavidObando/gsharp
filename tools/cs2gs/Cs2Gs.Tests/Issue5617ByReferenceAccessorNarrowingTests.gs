@@ -31,6 +31,163 @@ import Xunit
 /// output with the output of the C#.
 open class Issue5617ByReferenceAccessorNarrowingTests {
     @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RefParameter_DeepTupleAllocationPathsReplayAcrossModelPopulations(specialFirst bool) {
+        let tree = CSharpSyntaxTree.ParseText(`
+#nullable enable
+using System;
+public static class Demo {
+    private static int calls;
+    private static (((string?, int)?, int)?, (string?, int)?) Next() {
+        calls++;
+        return ((("a", 1), 2), ("b", 3));
+    }
+    private static Func<(((string, int)?, int)?, (string, int)?)> Make(
+        (((string?, int)?, int)?, (string?, int)?) value) => () => value;
+    public static string Run() {
+        calls = 0;
+        var value = Make(Next())();
+        return value.Item1.Value.Item1.Value.Item1 + value.Item2.Value.Item1 + ":" + calls;
+    }
+}`, path: "DeepTupleAllocationPaths.cs")
+        let compilation = CSharpCompilation.Create(
+            "DeepTupleAllocationPaths5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        let normal = compilation.GetSemanticModel(tree)
+        let special = compilation.GetSemanticModel(tree, ignoreAccessibility: true)
+        var previous string? = nil
+        for isSpecial in[]bool{specialFirst, !specialFirst, specialFirst} {
+            let context = TranslationContext(
+                compilation,
+                if isSpecial {
+                    special
+                } else {
+                    normal
+                },
+                tree.FilePath
+            )
+            for var pass = 0; pass < 2; pass++ {
+                let printed = GSharpPrinter.Print(
+                    CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, normal), context)
+                )
+                Assert.Equal(
+                    Encoding.UTF8.GetBytes("ab:1" + Environment.NewLine),
+                    Encoding.UTF8.GetBytes(CompileAndRun(printed, Array.Empty[byte](), strictIl: true))
+                )
+                let names = Regex
+                    .Matches(printed, "let (tupleValue(?:_[0-9]+)?)\\s*=")
+                    .Cast[Match]()
+                    .Select((match Match) -> match.Groups[1].Value)
+                    .ToArray()
+                Assert.True(names.Length >= 4, printed)
+                Assert.Equal(names.Length, names.Distinct(StringComparer.Ordinal).Count())
+                if previous != nil {
+                    Assert.Equal(Encoding.UTF8.GetBytes(previous), Encoding.UTF8.GetBytes(printed))
+                }
+                previous = printed
+            }
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RefParameter_NestedTypeEffectiveHelpersReserveTheirActualOwner(specialFirst bool) {
+        let first = CSharpSyntaxTree.ParseText(
+            "public partial class Outer { public static partial class Inner { public static int First() { return 1; } } }",
+            path: "AOuter.cs"
+        )
+        let second = CSharpSyntaxTree.ParseText(
+            "public partial class Outer { public static partial class Inner { public static int Second() { return item(1); static int item(int n) => n == 0 ? 7 : OtherB<int>(n - 1); static int OtherB<T>(int n) => item(n); } } } " +
+                "public static class Demo { public static string Run() => Outer.Inner.First() + \":\" + Outer.Inner.Second(); }",
+            path: "BInner.cs"
+        )
+        let outputs = Dictionary[bool, string]()
+        for var fresh = 0; fresh < 2; fresh++ {
+            let compilation = CSharpCompilation.Create(
+                "NestedEffectiveHelperOwner5326",
+                []SyntaxTree{first, second},
+                CSharpProjectLoader.RuntimeReferences(),
+                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+            )
+            let normal = compilation.GetSemanticModel(first)
+            let original = first
+                .GetRoot()
+                .DescendantNodes()
+                .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax]()
+                .Single()
+            let special = CreateSpeculativeBodyModel(
+                normal,
+                original,
+                "public static int First() { return item(1); static int item(int n) => n == 0 ? 42 : OtherA<int>(n - 1); static int OtherA<T>(int n) => item(n); }"
+            )
+            let firstMode = if fresh == 0 {
+                specialFirst
+            } else {
+                !specialFirst
+            }
+            for isSpecial in[]bool{firstMode, !firstMode, firstMode} {
+                for reverse in(
+                    if fresh == 0 {
+                        []bool{false, true}
+                    } else {
+                        []bool{true, false}
+                    }
+                ) {
+                    let translator = CSharpToGSharpTranslator()
+                    let printed = Dictionary[string, string](StringComparer.Ordinal)
+                    for current in(
+                        if reverse {
+                            []SyntaxTree{second, first}
+                        } else {
+                            []SyntaxTree{first, second}
+                        }
+                    ) {
+                        printed[current.FilePath] = GSharpPrinter.Print(
+                            translator.TranslateDocument(
+                                LoadedDocument(current.FilePath, current, compilation.GetSemanticModel(current)),
+                                TranslationContext(
+                                    compilation,
+                                    if isSpecial {
+                                        special
+                                    } else {
+                                        normal
+                                    },
+                                    current.FilePath
+                                )
+                            )
+                        )
+                    }
+                    let output = printed[first.FilePath] + "\n" + printed[second.FilePath]
+                    Assert.Contains("func item", output)
+                    Assert.Equal(
+                        Encoding.UTF8.GetBytes(
+                            (
+                                if isSpecial {
+                                    "42:7"
+                                } else {
+                                    "1:7"
+                                }
+                            ) +
+                                Environment.NewLine
+                        ),
+                        Encoding.UTF8.GetBytes(CompileAndRun(output, Array.Empty[byte](), strictIl: true))
+                    )
+                    if outputs.TryGetValue(isSpecial, out var previous) {
+                        Assert.Equal(Encoding.UTF8.GetBytes(previous), Encoding.UTF8.GetBytes(output))
+                    } else {
+                        outputs.Add(isSpecial, output)
+                    }
+                }
+            }
+        }
+    }
+
+    @Theory
     @InlineData(false, false)
     @InlineData(false, true)
     @InlineData(true, false)

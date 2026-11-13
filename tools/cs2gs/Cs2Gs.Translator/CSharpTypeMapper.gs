@@ -4281,9 +4281,34 @@ class CSharpTypeMapper {
                 ).Concat(named.TypeArguments)
                 case array is ArrayTypeReference: []GTypeReference{array.ElementType}
                 case slice is NativeSliceTypeReference: []GTypeReference{slice.ElementType}
+                case managed is ManagedReferenceTypeReference: []GTypeReference{managed.ElementType}
+                case pointer is PointerTypeReference: []GTypeReference{pointer.ElementType}
                 case tuple is TupleTypeReference: tuple.ElementTypes
                 case arrow is ArrowTypeReference: arrow.ParameterTypes.Concat(arrow.ReturnTypes)
-                default: Array.Empty[GTypeReference]()
+                case function is FunctionPointerTypeReference: function.ParameterTypes.Concat(
+                    if function.ReturnType is {} result {
+                        []GTypeReference{result}
+                    } else {
+                        Array.Empty[GTypeReference]()
+                    }
+                )
+                default: throw InvalidOperationException("Unknown anonymous storage type contract.")
+            }
+            let structure = switch type {
+                case named is NamedTypeReference: "named:${named.TypeArguments.Count}:${named.ContainingType != nil}"
+                case array is ArrayTypeReference: "array:${array.Rank}"
+                case slice is NativeSliceTypeReference: "slice:${slice.IsReadOnly}"
+                case managed is ManagedReferenceTypeReference: "managed:${managed.IsReadOnly}"
+                case _ is PointerTypeReference: "pointer"
+                case tuple is TupleTypeReference: "tuple:${tuple.ElementTypes.Count}:" + string.Join(
+                    "|",
+                    tuple.ElementNames ?? Array.Empty[string]()
+                )
+                case arrow is ArrowTypeReference: "arrow:${arrow.IsAsync}:${arrow.ParameterTypes.Count}:${arrow.ReturnTypes.Count}"
+                case function is FunctionPointerTypeReference: "function:${function.IsManaged}:${function.IsUnmanagedExtended}:${function.CallingConvention}:" +
+                    string.Join("|", function.UnmanagedConventions) +
+                    ":${function.ParameterTypes.Count}:${function.ReturnType != nil}"
+                default: throw InvalidOperationException("Unknown anonymous storage type contract.")
             }
             return (
                 if type.IsNullable {
@@ -4299,6 +4324,7 @@ class CSharpTypeMapper {
                     ""
                 }
             ) +
+                structure +
                 "[" +
                 string.Join(
                 ",",

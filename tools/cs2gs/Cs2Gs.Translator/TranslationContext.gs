@@ -941,17 +941,29 @@ class TranslationContext {
             return root.DescendantNodes(descendIntoChildren)
         }
 
-        internal func GetEffectiveScopeRoots(root SyntaxNode, owner Compilation) sequence[SyntaxNode] {
+        internal func GetEffectiveScopeRoots(root SyntaxNode, owner Compilation) IEnumerable[SyntaxNode] ->
+        GetEffectiveScopeRoots(root, owner, (_ SyntaxNode) -> true)
+
+        internal func GetEffectiveScopeRoots(
+            root SyntaxNode,
+            owner Compilation,
+            descendIntoChildren Func[SyntaxNode, bool]
+        ) sequence[SyntaxNode] {
             yield root
-            if ActiveSpeculativeBody() is {} overlay && object.ReferenceEquals(owner, overlay.Model.Compilation) &&
-                (
-                object.ReferenceEquals(root, overlay.Original.Body) ||
-                    overlay
-                    .Original
-                    .AncestorsAndSelf()
-                    .Any((node SyntaxNode) -> object.ReferenceEquals(node, root))
-            ) {
-                yield overlay.Replacement.Body!!
+            if ActiveSpeculativeBody() is {} overlay && object.ReferenceEquals(owner, overlay.Model.Compilation) {
+                if object.ReferenceEquals(root, overlay.Original.Body) {
+                    yield overlay.Replacement.Body!!
+                } else {
+                    var current SyntaxNode? = overlay.Original
+                    var reachable = true
+                    while current != nil && !object.ReferenceEquals(current, root) && reachable {
+                        reachable = descendIntoChildren(current)
+                        current = current.Parent
+                    }
+                    if reachable && object.ReferenceEquals(current, root) {
+                        yield overlay.Replacement.Body!!
+                    }
+                }
             }
         }
 

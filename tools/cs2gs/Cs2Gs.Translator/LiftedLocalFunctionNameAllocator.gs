@@ -12,11 +12,12 @@ import SystemObject = System.Object
 
 internal class LiftedLocalFunctionNameAllocator {
     private let gate object = SystemObject()
-    private let assigned Dictionary[ISymbol, string] = Dictionary[ISymbol, string](SymbolEqualityComparer.Default)
+    private let assigned Dictionary[ISymbol, Dictionary[ISymbol, string]] =
+    Dictionary[ISymbol, Dictionary[ISymbol, string]](SymbolEqualityComparer.Default)
     private let assignedSynthesizedMembers Dictionary[(Symbol IMethodSymbol, Role string), string] =
     Dictionary[(Symbol IMethodSymbol, Role string), string]()
-    private let scopedLocalNames Dictionary[(Site SyntaxNode, Ordinal int32, Stem string), string] =
-    Dictionary[(Site SyntaxNode, Ordinal int32, Stem string), string]()
+    private let scopedLocalNames Dictionary[(Site SyntaxNode, Ordinal int32, Stem string, Path string), string] =
+    Dictionary[(Site SyntaxNode, Ordinal int32, Stem string, Path string), string]()
     private let usedByType Dictionary[ISymbol, HashSet[string]] = Dictionary[ISymbol, HashSet[string]](
         SymbolEqualityComparer.Default
     )
@@ -118,9 +119,18 @@ internal class LiftedLocalFunctionNameAllocator {
         }
     }
 
-    func GetOrAllocateScopedLocalName(site SyntaxNode, ordinal int32, stem string, allocate() -> string) string {
+    func GetOrAllocateScopedLocalName(site SyntaxNode, ordinal int32, stem string, allocate() -> string) string ->
+    this.GetOrAllocateScopedLocalName(site, ordinal, stem, "", allocate)
+
+    func GetOrAllocateScopedLocalName(
+        site SyntaxNode,
+        ordinal int32,
+        stem string,
+        path string,
+        allocate() -> string
+    ) string {
         lock this.gate {
-            let key = (site, ordinal, stem)
+            let key = (site, ordinal, stem, path)
             if this.scopedLocalNames.TryGetValue(key, out var existing) {
                 return existing
             }
@@ -254,9 +264,23 @@ internal class LiftedLocalFunctionNameAllocator {
         }
     }
 
-    func TryGetAllocated(localFunction IMethodSymbol, out allocated string?) bool {
+    private func AssignedTo(owner ISymbol) Dictionary[ISymbol, string] {
+        if !this.assigned.TryGetValue(owner, out var names) {
+            names = Dictionary[ISymbol, string](SymbolEqualityComparer.Default)
+            this.assigned.Add(owner, names)
+        }
+        return names
+    }
+
+    func TryGetAllocated(localFunction IMethodSymbol, out allocated string?) bool ->
+    this.TryGetAllocated(localFunction, localFunction.ContainingType, out allocated)
+
+    func TryGetAllocated(localFunction IMethodSymbol, emittedOwner INamedTypeSymbol?, out allocated string?) bool {
         lock this.gate {
-            return this.assigned.TryGetValue(localFunction.OriginalDefinition, out allocated)
+            let owner ISymbol = cast[ISymbol](emittedOwner?.OriginalDefinition) ??
+                cast[ISymbol](localFunction.ContainingType?.OriginalDefinition) ??
+                localFunction.ContainingAssembly
+            return this.AssignedTo(owner).TryGetValue(localFunction.OriginalDefinition, out allocated)
         }
     }
 
@@ -269,12 +293,13 @@ internal class LiftedLocalFunctionNameAllocator {
     ) string? {
         lock this.gate {
             let functionKey = localFunction.OriginalDefinition
-            if this.assigned.TryGetValue(functionKey, out var assignedName) {
-                return assignedName
-            }
             let owner ISymbol? = cast[ISymbol](emittedOwner?.OriginalDefinition) ??
                 cast[ISymbol](localFunction.ContainingType?.OriginalDefinition) ??
                 localFunction.ContainingAssembly
+            let assigned = this.AssignedTo(owner!!)
+            if assigned.TryGetValue(functionKey, out var assignedName) {
+                return assignedName
+            }
             if !this.usedByType.TryGetValue(owner!!, out var used) {
                 used = HashSet[string](StringComparer.Ordinal)
                 this.usedByType.Add(owner!!, used)
@@ -292,7 +317,7 @@ internal class LiftedLocalFunctionNameAllocator {
             }
             used.Add(candidate!!)
             this.helperNames.Add(candidate!!)
-            this.assigned.Add(functionKey, candidate!!)
+            assigned.Add(functionKey, candidate!!)
             return candidate
         }
     }
@@ -376,7 +401,9 @@ internal class LiftedLocalFunctionNameAllocator {
         }
         if !recordAdaptersOnly {
             for pair in this.assigned {
-                if pair.Value != name || pair.Key.ContainingType is not INamedTypeSymbol other {
+                if pair.Key is not INamedTypeSymbol other || !cast[ICollection[string]](pair.Value.Values).Contains(
+                    name
+                ) {
                     continue
                 }
                 if this.IsTypeOrBase(type, other) || this.IsTypeOrBase(other, type) {
@@ -414,11 +441,12 @@ internal class LiftedLocalFunctionNameAllocator {
     func AllocateBackingField(property IPropertySymbol?, occupied ISet[string], baseName string) string {
         lock this.gate {
             let propertyKey = property!!.OriginalDefinition
-            if this.assigned.TryGetValue(propertyKey, out var assignedName) {
-                return assignedName
-            }
             let owner ISymbol? = cast[ISymbol](property!!.ContainingType?.OriginalDefinition) ??
                 property!!.ContainingAssembly
+            let assigned = this.AssignedTo(owner!!)
+            if assigned.TryGetValue(propertyKey, out var assignedName) {
+                return assignedName
+            }
             if !this.usedByType.TryGetValue(owner!!, out var used) {
                 used = HashSet[string](StringComparer.Ordinal)
                 this.usedByType.Add(owner!!, used)
@@ -428,7 +456,7 @@ internal class LiftedLocalFunctionNameAllocator {
                 candidate = baseName + suffix.ToString()
             }
             used.Add(candidate)
-            this.assigned.Add(propertyKey, candidate)
+            assigned.Add(propertyKey, candidate)
             if !this.backingFieldsByOwner.TryGetValue(owner!!, out var ownerFields) {
                 ownerFields = List[(Property IPropertySymbol, Name string)]()
                 this.backingFieldsByOwner.Add(owner!!, ownerFields)

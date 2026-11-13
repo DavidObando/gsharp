@@ -29,6 +29,78 @@ import Xunit
 /// emitted once and reused by later documents.
 open class Issue2292AnonymousTypePackageScopeTests {
     @Theory
+    @InlineData(false, false)
+    @InlineData(true, false)
+    @InlineData(false, true)
+    @InlineData(true, true)
+    func ManagedAnonymousContractsRemainInvariantAcrossDocumentOrder(nullableFirst bool, sameContract bool) {
+        let references = List[Microsoft.CodeAnalysis.MetadataReference](CSharpProjectLoader.RuntimeReferences())
+        {
+            Microsoft
+                .CodeAnalysis
+                .MetadataReference
+                .CreateFromFile(typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location)
+        }
+        let project = CSharpProjectLoader.LoadInMemory(
+            [](string, string){
+                (
+                    "First.cs",
+                    "#nullable enable\nusing Gsharp.Values; public static class First { public static string Run() { var array = new string[]{\"safe\"}; var value = new { Reference = ManagedRef<string>.FromArray(array, 0) }; return value.Reference.Borrow() + \":\"; } }"
+                ),
+                (
+                    "Second.cs",
+                    if sameContract {
+                        "#nullable enable\nusing Gsharp.Values; public static class Second { public static string Run() { var array = new string[]{\"next\"}; var value = new { Reference = ManagedRef<string>.FromArray(array, 0) }; return value.Reference.Borrow(); } }"
+                    } else {
+                        "#nullable enable\nusing Gsharp.Values; public static class Second { public static string Run() { var array = new string?[]{null}; var value = new { Reference = ManagedRef<string?>.FromArray(array, 0) }; return value.Reference.Borrow() ?? \"nil\"; } }"
+                    }
+                )
+            },
+            references
+        )
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        let translator = CSharpToGSharpTranslator()
+        for special in[]bool{false, true, false} {
+            let printed = [2]string
+            for index in(
+                if nullableFirst {
+                    []int32{1, 0}
+                } else {
+                    []int32{0, 1}
+                }
+            ) {
+                let document = project.Documents[index]
+                printed[index] = GSharpPrinter.Print(
+                    translator.TranslateDocument(
+                        document,
+                        TranslationContext(
+                            project.Compilation,
+                            project.Compilation.GetSemanticModel(document.SyntaxTree, ignoreAccessibility: special),
+                            document.FilePath
+                        )
+                    )
+                )
+            }
+            CompileFilesTogether(("First.gs", printed[0]), ("Second.gs", printed[1]))
+            CompileAndRunOutput(
+                [](Name string, Text string){("First.gs", printed[0]), ("Second.gs", printed[1])},
+                if sameContract {
+                    "safe:next"
+                } else {
+                    "safe:nil"
+                },
+                []string{typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location}
+            )
+            if sameContract {
+                Assert.Single(AnonymousTypeNames(printed[0]).Concat(AnonymousTypeNames(printed[1])))
+            } else {
+                Assert.Matches("data class [^\\n]+\\(Reference managed\\[string\\]\\)", printed[0])
+                Assert.Matches("data class [^\\n]+\\(Reference managed\\[string\\?\\]\\)", printed[1])
+            }
+        }
+    }
+
+    @Theory
     @InlineData(0, 0)
     @InlineData(0, 1)
     @InlineData(1, 0)
@@ -233,15 +305,37 @@ open class Issue2292AnonymousTypePackageScopeTests {
         return (printed, WeakReference(context), WeakReference(catalog))
     }
 
-    private func CompileAndRunOutput(printed string, expected string = "43") {
+    private func CompileAndRunOutput(
+        printed string,
+        expected string = "43",
+        extraReferences IReadOnlyList[string]? = nil
+    ) ->
+    this.CompileAndRunOutput([](Name string, Text string){("Output.gs", printed)}, expected, extraReferences)
+
+    private func CompileAndRunOutput(
+        files IReadOnlyList[(Name string, Text string)],
+        expected string,
+        extraReferences IReadOnlyList[string]? = nil
+    ) {
         let compiler = FindCompiler() ?? throw InvalidOperationException("Compiler missing.")
         let directory = Path.Combine(AppContext.BaseDirectory, "issue2292-runtime", Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(directory)
         try {
-            let source = Path.Combine(directory, "Output.gs")
             let dll = Path.Combine(directory, "Output.dll")
-            File.WriteAllText(source, printed + "\nSystem.Console.WriteLine(First.Run() + Second.Run())\n")
-            let (compileExit, compileOutput) = RunDotnet("\"" + compiler + "\" /out:\"" + dll + "\" \"" + source + "\"")
+            let sources = List[string]()
+            for file in files {
+                let path = Path.Combine(directory, file.Name)
+                File.WriteAllText(path, file.Text)
+                sources.Add("\"" + path + "\"")
+            }
+            let driver = Path.Combine(directory, "Driver.gs")
+            File.WriteAllText(driver, "System.Console.WriteLine(First.Run() + Second.Run())\n")
+            sources.Add("\"" + driver + "\"")
+            let extra = extraReferences ?? Array.Empty[string]()
+            let arguments = string.Join(" ", extra.Select((path string) -> "/reference:\"" + path + "\""))
+            let (compileExit, compileOutput) = RunDotnet(
+                "\"" + compiler + "\" /out:\"" + dll + "\" " + string.Join(" ", sources) + " " + arguments
+            )
             Assert.True(compileExit == 0, compileOutput)
             File.WriteAllText(
                 Path.ChangeExtension(dll, ".runtimeconfig.json"),
@@ -254,9 +348,15 @@ open class Issue2292AnonymousTypePackageScopeTests {
                 )
             )
             let (verifyExit, verifyOutput) = RunDotnet(
-                "tool run ilverify \"" + dll + "\" -s System.Private.CoreLib " + references
+                "tool run ilverify \"" + dll + "\" -s System.Private.CoreLib " + references + " " + string.Join(
+                    " ",
+                    extra.Select((path string) -> "-r \"" + path + "\"")
+                )
             )
             Assert.True(verifyExit == 0, verifyOutput)
+            for reference in extra {
+                File.Copy(reference, Path.Combine(directory, Path.GetFileName(reference)), overwrite: true)
+            }
             let (runExit, output) = RunDotnet("\"" + dll + "\"")
             Assert.True(runExit == 0, output)
             Assert.Equal(Encoding.UTF8.GetBytes(expected + Environment.NewLine), Encoding.UTF8.GetBytes(output))

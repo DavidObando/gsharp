@@ -2220,15 +2220,15 @@ partial class CSharpToGSharpTranslator {
 
         private func AllocateLiftedLocalFunctionName(localFunction IMethodSymbol, localName string?) string? {
             let allocator = LiftedLocalFunctionNameAllocator.For(this.context.Compilation)
-            if allocator.TryGetAllocated(localFunction, out var existing) {
+            let aggregate INamedTypeSymbol? = this.state.CurrentEmittedAggregate ?? localFunction.ContainingType
+            if allocator.TryGetAllocated(localFunction, aggregate, out var existing) {
                 if !this.isPreallocatingLiftedHelpers {
                     this.typeMapper.ReserveSiblingMemberName(existing)
                 }
                 return existing
             }
-            let aggregate INamedTypeSymbol? = this.state.CurrentEmittedAggregate ?? localFunction.ContainingType
             this.EnsurePartialAggregateLiftedLocalFunctionsAllocated(aggregate)
-            if allocator.TryGetAllocated(localFunction, out existing) {
+            if allocator.TryGetAllocated(localFunction, aggregate, out existing) {
                 if !this.isPreallocatingLiftedHelpers {
                     this.typeMapper.ReserveSiblingMemberName(existing)
                 }
@@ -2439,16 +2439,19 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func ContainerHasLocalFunction(container Microsoft.CodeAnalysis.SyntaxNode) bool -> TranslationContext
-            .GetEffectiveScopeRoots(container, this.context.Compilation)
+            .GetEffectiveScopeRoots(container, this.context.Compilation, this.IsHelperTraversalChild)
             .SelectMany(
             (root Microsoft.CodeAnalysis.SyntaxNode) -> TranslationContext.GetEffectiveNodes(
                 root,
                 this.context.Compilation,
-                (child Microsoft.CodeAnalysis.SyntaxNode) -> child == root || child is not TypeDeclarationSyntax
+                this.IsHelperTraversalChild
             )
         )
             .OfType[LocalFunctionStatementSyntax]()
             .Any()
+
+        private func IsHelperTraversalChild(child Microsoft.CodeAnalysis.SyntaxNode) bool ->
+        child is not TypeDeclarationSyntax
 
         private func CollectPrimaryConstructorParameterNames(
             symbol INamedTypeSymbol?,
@@ -2572,14 +2575,11 @@ partial class CSharpToGSharpTranslator {
 
         private func PreallocateLiftedLocalFunctionsInContainer(container Microsoft.CodeAnalysis.SyntaxNode) {
             let owner = this.context.Compilation
-            for root in TranslationContext.GetEffectiveScopeRoots(container, owner) {
+            for root in TranslationContext.GetEffectiveScopeRoots(container, owner, this.IsHelperTraversalChild) {
                 using let modelScope = this.context.UseSemanticModelFor(root.SyntaxTree, owner)
-                for node in TranslationContext.GetEffectiveNodes(
-                    root,
-                    owner,
-                    (child Microsoft.CodeAnalysis.SyntaxNode) -> child == root || child is not TypeDeclarationSyntax
-                )
-                    .Prepend(root) {
+                for node in TranslationContext.GetEffectiveNodes(root, owner, this.IsHelperTraversalChild).Prepend(
+                    root
+                ) {
                     switch node {
                         case switchNode is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchStatementSyntax {
                             if switchNode.Sections.Any(
@@ -2754,12 +2754,14 @@ partial class CSharpToGSharpTranslator {
         private func AllocateScopedSynthesizedLocalName(
             stem string,
             site Microsoft.CodeAnalysis.SyntaxNode,
-            extraCollision((string) -> bool)? = nil
+            extraCollision((string) -> bool)? = nil,
+            allocationPath string = ""
         ) string -> LiftedLocalFunctionNameAllocator
             .For(this.context.Compilation).GetOrAllocateScopedLocalName(
             site,
             0,
             stem,
+            allocationPath,
             () -> this.AllocateScopedSynthesizedLocalNameCore(stem, site, extraCollision)
         )
 

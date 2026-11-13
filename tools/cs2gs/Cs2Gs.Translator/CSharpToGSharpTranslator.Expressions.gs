@@ -10710,7 +10710,7 @@ partial class CSharpToGSharpTranslator {
                         let targetNestedNullable = !SymbolEqualityComparer.Default.Equals(nestedTuple, elementType)
                         let sourceNestedNullable = this.SourceTupleElementIsNullableTuple(value, childPath)
                         if sourceNestedNullable && targetNestedNullable {
-                            let nestedTemp = this.FreshTupleValueName(value)
+                            let nestedTemp = this.FreshTupleValueName(value, childPath)
                             let nestedReceiver GExpression = IdentifierExpression(nestedTemp)
                             let nestedRebuilt = this.BuildBridgedTupleLiteral(
                                 value,
@@ -10730,7 +10730,7 @@ partial class CSharpToGSharpTranslator {
                             )
                             elements.Add(BlockExpression(nestedStatements, nestedGuard))
                         } else {
-                            let nestedTemp = this.FreshTupleValueName(value)
+                            let nestedTemp = this.FreshTupleValueName(value, childPath)
                             let nestedReceiver GExpression = IdentifierExpression(nestedTemp)
                             var nestedInit GExpression = elementAccess
                             if sourceNestedNullable {
@@ -11263,8 +11263,19 @@ partial class CSharpToGSharpTranslator {
             return paths
         }
 
-        private func FreshTupleValueName(node Microsoft.CodeAnalysis.SyntaxNode) string ->
-        this.AllocateScopedSynthesizedLocalName("tupleValue", node)
+        private func FreshTupleValueName(
+            node Microsoft.CodeAnalysis.SyntaxNode,
+            path IReadOnlyList[int32]? = nil
+        ) string ->
+        this.AllocateScopedSynthesizedLocalName(
+            "tupleValue",
+            node,
+            allocationPath: if path == nil {
+                ""
+            } else {
+                string.Join(".", path)
+            }
+        )
 
         private func FormatTupleProjection(path List[int32]) string {
             let sb = StringBuilder()

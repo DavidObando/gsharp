@@ -526,6 +526,12 @@ Lifted-helper reservation and identifier inventories use effective scoped roots.
 Their allocator and reservation caches share the analysis model domain, separately
 from output-owned anonymous declarations. Repeated physical names reuse their
 source-site allocation instead of consuming another suffix.
+Allocation keys also include the semantic operation path. Nested tuple positions
+retain distinct names without depending on which sibling positions require bridges.
+Effective replacement roots obey the same nested-type traversal boundary as original
+nodes. Helper assignments are indexed by their actual emitted owner and source symbol.
+Anonymous output contract keys recursively include every physical type child,
+including managed-reference elements, and retain invariant and readonly structure.
 Return, ref-storage, null-flow, shape, effect, projection, import, and naming
 walks use the same inventory and declaration resolver. Body translation uses
 the replacement while retaining the original declared method and parameter symbols.
