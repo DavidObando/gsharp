@@ -153,20 +153,13 @@ shared class SymbolDisplay {
                 AppendField(builder, format, field)
             }
             case importedFunction is ImportedFunctionSymbol {
-                let symbolicSignature = importedFunction.SignatureReceiverType is {} receiver &&
-                    TypeSymbol.RequiresSymbolicProjection(receiver) || TypeSymbol.ContainsSameCompilationUserType(
-                    importedFunction.Type
-                ) ||
-                    TypeSymbol.ContainsTypeParameter(importedFunction.Type)
+                let symbolicSignature = RequiresSignatureProjection(importedFunction.SignatureReceiver) ||
+                    RequiresSignatureProjection(importedFunction.Type)
                 AppendClrMethod(
                     builder,
                     format,
                     importedFunction.Method,
-                    if symbolicSignature {
-                        importedFunction.Type
-                    } else {
-                        default(TypeSymbol?)
-                    },
+                    importedFunction.Type,
                     if symbolicSignature {
                         importedFunction
                     } else {
@@ -546,6 +539,12 @@ shared class SymbolDisplay {
         builder.Type(FormatClrTypeName(event.EventHandlerType, format.QualifyNames))
     }
 
+    private func RequiresSignatureProjection(type TypeSymbol?) bool -> type != nil &&
+        (
+        TypeSymbol.RequiresSymbolicProjection(type) || TypeSymbol.ContainsFixedLengthArray(type) ||
+            TypeSymbol.ContainsNamedTupleElement(type)
+    )
+
     private func AppendClrMethod(
         builder PartBuilder,
         format SymbolDisplayFormat,
@@ -567,12 +566,16 @@ shared class SymbolDisplay {
         builder.Space()
         if format.QualifyNames && method.DeclaringType != nil {
             builder.Punctuation("(")
+            let receiver = importedFunction?.SignatureReceiver
+            let declaring = if receiver != nil && RequiresSignatureProjection(receiver) {
+                MemberLookup.GetClrMemberDeclaringTypeSymbol(receiver, method)
+            } else {
+                default(TypeSymbol?)
+            }
             builder.Type(
-                if !method.IsStatic &&
-                    importedFunction?.SignatureReceiverType is {} receiver &&
-                    TypeSymbol
-                    .RequiresSymbolicProjection(receiver) {
-                    FormatType(MemberLookup.GetClrMemberDeclaringTypeSymbol(receiver, method))
+                if declaring != nil &&
+                    (!method.IsStatic || ClrTypeUtilities.AreSame(declaring.ClrType, method.DeclaringType)) {
+                    FormatType(declaring)
                 } else {
                     FormatClrTypeName(method.DeclaringType, qualifyNames: true)
                 }
@@ -593,7 +596,7 @@ shared class SymbolDisplay {
             builder.Space()
             let parameterType = importedFunction?.GetParameterType(i)
             builder.Type(
-                if parameterType != nil && TypeSymbol.RequiresSymbolicProjection(parameterType) {
+                if parameterType != nil && RequiresSignatureProjection(parameterType) {
                     if parameterType is ByRefTypeSymbol byRef {
                         "${FormatType(byRef.PointeeType, format.QualifyNames)}@"
                     } else {
@@ -605,12 +608,7 @@ shared class SymbolDisplay {
             )
         }
         builder.Punctuation(")")
-        if returnTypeOverride != nil &&
-            (
-            TypeSymbol.RequiresSymbolicProjection(returnTypeOverride) || TypeSymbol.ContainsSameCompilationUserType(
-                returnTypeOverride
-            )
-        ) {
+        if returnTypeOverride != nil && RequiresSignatureProjection(returnTypeOverride) {
             let symbolicReturn = if isAsync && AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(
                 returnTypeOverride,
                 out var awaitedReturn

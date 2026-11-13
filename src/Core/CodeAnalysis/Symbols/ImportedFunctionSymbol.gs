@@ -71,17 +71,19 @@ class ImportedFunctionSymbol : Symbol {
         set;
     }
 
+    internal prop SignatureReceiver TypeSymbol? -> SignatureReceiverType ?? ImportedClass.ConstructedReceiver
+
     /// Gets a parameter's declared type at this symbol's constructed receiver.
     /// @param parameterIndex The zero-based metadata parameter index.
     /// @returns The parameter type, including its declared nullability.
     internal func GetParameterType(parameterIndex int32) TypeSymbol -> MemberLookup.GetClrMethodParameterTypeSymbol(
-        SignatureReceiverType ?? ImportedTypeSymbol.GetWithoutNullability(
+        SignatureReceiver ?? ImportedTypeSymbol.GetWithoutNullability(
             ImportedClass.ClassType,
             NullabilityFreeReason.TypeStructure
         ),
         Method,
         parameterIndex,
-        SignatureMethodTypeArguments
+        MemberLookup.MergeSymbolicAndClosedMethodTypeArgs(Method, SignatureMethodTypeArguments)
     )
 
     /// Gets the imported return's managed-reference capability.

@@ -45,6 +45,21 @@ class Issue5492ImportedMethodDisplayTests {
         false
     )
     @InlineData("Item", "Add", "func Add(key string, value Item)", "Item", true)
+    @InlineData("[3]int32", "Add", "func Add(key string, value [3]int32)", "[3]int32", false)
+    @InlineData(
+        "[3]int32",
+        "GetEnumerator",
+        "func GetEnumerator() IEnumerator[[3]int32]",
+        "System.Collections.Generic.IEnumerator[[3]int32]",
+        false
+    )
+    @InlineData(
+        "(line int32, column int32)",
+        "Add",
+        "func Add(key string, value (line int32, column int32))",
+        "(line int32, column int32)",
+        false
+    )
     func ReceiverSignature_IsSharedByBoundSymbolHoverSignatureHelpAndCompletion(
         element string,
         member string,
@@ -144,13 +159,16 @@ func Use(d RECEIVER, s sequence[ELEMENT], value ELEMENT) {
         }
     }
 
-    @Fact
-    func GenericMethod_KeepsReceiverAndMethodTypeArgumentsDistinct() {
-        const source = `import System.Collections.Generic
+    @Theory
+    @InlineData("")
+    @InlineData("[string]")
+    func GenericMethod_KeepsReceiverAndMethodTypeArgumentsDistinct(typeArguments string) {
+        let source = `import System
+import System.Collections.Generic
 class Item { }
-func Use(items List[Item]) {
-    let result = items.ConvertAll[string]((item Item) -> "text")
-}`
+func Use(items List[Item], converter Converter[Item, string]) {
+    let result = items.ConvertAllTYPE_ARGUMENTS(converter)
+}`.Replace("TYPE_ARGUMENTS", typeArguments)
         let content = LanguageServerTestHelpers.Content(source)
         let compilation = ServerCompilation.Create(content.SyntaxTree)
         Assert.Empty(compilation.GlobalScope.Diagnostics)
@@ -187,9 +205,9 @@ func Use(items List[Item]) {
     }
 
     @Theory
-    @InlineData("ToString", "func ToString() string")
+    @InlineData("ToString", "func ToString() string?")
     @InlineData("IsNullOrEmpty", "func IsNullOrEmpty(value string) bool")
-    func OrdinaryClrSignatures_KeepTheirExistingLabels(member string, expected string) {
+    func OrdinaryClrSignatures_PreserveReturnAnnotationsAndMetadataParameterForms(member string, expected string) {
         const source = `func Use(value object) {
     let text = value.ToString()
     let empty = string.IsNullOrEmpty(text)
@@ -226,6 +244,53 @@ func Use(items List[Item]) {
                 )
             )
                 .Detail
+        )
+    }
+
+    @Fact
+    func SymbolicStaticContainer_PreservesParameterAndReturnArguments() {
+        const source = `import System
+import System.Collections.Generic
+class Item { }
+func Use(comparison Comparison[Item]) {
+    let comparer = Comparer[Item].Create(comparison)
+}`
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = ServerCompilation.Create(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let position = LanguageServerTestHelpers.PositionOf(source, "Create")
+        let token = Assert.IsAssignableFrom[SyntaxToken](
+            SemanticLookup.FindTokenAt(content.SyntaxTree, SemanticLookup.ToOffset(content, position))
+        )
+        let symbol = Assert.IsType[ImportedFunctionSymbol](
+            compilation.GetSemanticModel(content.SyntaxTree).GetSymbolInfo(token).Symbol
+        )
+        let help = Assert.IsType[SignatureHelp](
+            SignatureHelpComputer.ComputeSignatureHelp(
+                content,
+                Position(position.Line, position.Character + "Create(".Length)
+            )
+        )
+        const expected = "func Create(comparison Comparison[Item]) Comparer[Item]"
+        let label = HoverComputer.FormatSymbol(symbol)
+        let hover = Assert.IsType[Hover](HoverComputer.ComputeHover(content, position)).Contents.ToString()
+        output.WriteLine("bound return: ${SymbolDisplay.ToTypeDisplayString(symbol.Type)}")
+        output.WriteLine("symbol: $label")
+        output.WriteLine("hover: $hover")
+        output.WriteLine("signature: ${help.Signatures.ElementAt(help.ActiveSignature).Label}")
+        let staticCompletions = CompletionComputer
+            .ComputeCompletions(content, position)
+            .Where((item CompletionItem) -> item.Label == "Create")
+            .ToArray()
+        output.WriteLine("static completion count: ${staticCompletions.Length}")
+        Assert.Equal("System.Collections.Generic.Comparer[Item]", SymbolDisplay.ToTypeDisplayString(symbol.Type))
+        Assert.Equal(expected, label)
+        Assert.Equal(expected, help.Signatures.ElementAt(help.ActiveSignature).Label)
+        Assert.Contains(
+            "func (System.Collections.Generic.Comparer[Item]) Create(comparison System.Comparison[Item]) System.Collections.Generic.Comparer[Item]",
+            hover,
+            StringComparison.Ordinal
         )
     }
 }

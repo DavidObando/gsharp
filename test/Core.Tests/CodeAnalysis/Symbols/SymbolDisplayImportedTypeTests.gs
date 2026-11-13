@@ -23,6 +23,26 @@ import Xunit
 /// rather than the raw assembly-qualified (cref:System.Type.FullName)
 /// that (cref:TypeSymbol.Name) carries for closed generics.
 open class SymbolDisplayImportedTypeTests {
+    @Theory
+    @InlineData("NullableReturn", "string?")
+    @InlineData("ObliviousReturn", "string!")
+    func Issue5492_ImportedSymbol_PreservesDeclaredReturnAnnotation(methodName string, expectedType string) {
+        using let fixture = CSharpFixture(`#nullable enable
+public class ImportedReturns {
+    public static string? NullableReturn() => null;
+#nullable disable
+    public static string ObliviousReturn() => null;
+}`)
+        let type = fixture.Load().GetType("ImportedReturns", throwOnError: true)!!
+        let method = type.GetMethod(methodName)!!
+        let symbol = ImportedFunctionSymbol(methodName, ImportedClassSymbol(type, nil), method, nil)
+        Assert.Equal(expectedType, SymbolDisplay.ToTypeDisplayString(symbol.Type))
+        Assert.Equal(
+            "func " + methodName + "() " + expectedType,
+            SymbolDisplay.ToDisplayString(symbol, SymbolDisplayFormat.Signature)
+        )
+    }
+
     @Fact
     func LocalVariable_OfConstructedGenericTask_RendersFriendlyName() {
         let type = ImportedTypeSymbol.Get(typeof(Task[string]))
