@@ -1484,7 +1484,12 @@ class CSharpTypeMapper {
         let nullability = string.Join(
             "|",
             mappedPropertyTypes.Select(
-                (type GTypeReference) -> AnonymousOutputContractKey(type, this.anonymousTypeRegistry)
+                (type GTypeReference, index int32) -> AnonymousOutputContractKey(
+                    type,
+                    this.anonymousTypeRegistry,
+                    properties[index].Type,
+                    context.Compilation
+                )
             )
         )
         let hasContractVariant = nullability.Contains('?') || nullability.Contains('@')
@@ -2974,7 +2979,7 @@ class CSharpTypeMapper {
             string.Join(
                 "|",
                 mappedPropertyTypes!!.Select(
-                    (type GTypeReference) -> AnonymousOutputContractKey(type, this.anonymousTypeRegistry)
+                    (type GTypeReference) -> AnonymousIncomingContractKey(type, this.anonymousTypeRegistry)
                 )
             )
         )
@@ -4279,7 +4284,42 @@ class CSharpTypeMapper {
             )
         )
 
-        private func AnonymousOutputContractKey(type GTypeReference, registry AnonymousTypeRegistry) string {
+        private func AnonymousIncomingContractKey(type GTypeReference, registry AnonymousTypeRegistry) string ->
+        AnonymousOutputContractKey(type, registry, nil, nil)
+
+        private func AnonymousOutputContractKey(
+            mapped GTypeReference,
+            registry AnonymousTypeRegistry,
+            sourceType ITypeSymbol?,
+            owner Compilation?
+        ) string {
+            var sourceType = sourceType
+            if sourceType is INamedTypeSymbol{
+                OriginalDefinition: {SpecialType: SpecialType.System_Nullable_T}
+            } nullable &&
+                nullable
+                .TypeArguments
+                .Length == 1 {
+                sourceType = nullable.TypeArguments[0]
+            }
+            var type = mapped
+            if owner != nil &&
+                type is NamedTypeReference qualified &&
+                qualified
+                .TypeArguments
+                .Count == 1 &&
+                sourceType is INamedTypeSymbol source {
+                if IsRecognizedManagedReferenceConsumerType(source, owner) {
+                    type = ManagedReferenceTypeReference(
+                        qualified.TypeArguments[0],
+                        source.Name == "ReadOnlyManagedRef"
+                    ){IsNullable = mapped.IsNullable}
+                } else if IsRecognizedRuntimeConsumerType(source, owner, "Slice", "ReadOnlySlice") {
+                    type = NativeSliceTypeReference(qualified.TypeArguments[0], source.Name == "ReadOnlySlice"){
+                        IsNullable = mapped.IsNullable
+                    }
+                }
+            }
             let children IEnumerable[GTypeReference] = switch type {
                 case named is NamedTypeReference: (
                     if named.ContainingType is {} containing {
@@ -4303,6 +4343,7 @@ class CSharpTypeMapper {
                 )
                 default: throw InvalidOperationException("Unknown anonymous storage type contract.")
             }
+            let sourceChildren = AnonymousContractSourceChildren(type, sourceType)
             let structure = switch type {
                 case named is NamedTypeReference: "named:${named.TypeArguments.Count}:${named.ContainingType != nil}"
                 case array is ArrayTypeReference: "array:${array.Rank}"
@@ -4335,11 +4376,81 @@ class CSharpTypeMapper {
             ) +
                 structure +
                 "[" +
-                string.Join(
+                string
+                .Join(
                 ",",
-                children.Select((child GTypeReference) -> AnonymousOutputContractKey(child, registry))
+                children.Select(
+                    (child GTypeReference, index int32) -> AnonymousOutputContractKey(
+                        child,
+                        registry,
+                        if index < sourceChildren.Count {
+                            sourceChildren[index]
+                        } else {
+                            nil
+                        },
+                        owner
+                    )
+                )
             ) +
                 "]"
+        }
+
+        private func AnonymousContractSourceChildren(mapped GTypeReference, source ITypeSymbol?) IReadOnlyList[
+            ITypeSymbol?
+        ] {
+            let children = List[ITypeSymbol?]()
+            switch mapped {
+                case named is NamedTypeReference when source is INamedTypeSymbol sourceNamed {
+                    if named.ContainingType != nil {
+                        children.Add(sourceNamed.ContainingType)
+                    }
+                    for argument in sourceNamed.TypeArguments {
+                        children.Add(argument)
+                    }
+                }
+                case _ is ManagedReferenceTypeReference or _ is NativeSliceTypeReference when
+                source is INamedTypeSymbol generic && generic.TypeArguments.Length == 1 {
+                    children.Add(generic.TypeArguments[0])
+                }
+                case _ is ArrayTypeReference when source is IArrayTypeSymbol array {
+                    children.Add(array.ElementType)
+                }
+                case _ is PointerTypeReference when source is IPointerTypeSymbol pointer {
+                    children.Add(pointer.PointedAtType)
+                }
+                case _ is TupleTypeReference when source is INamedTypeSymbol{IsTupleType: true} tuple {
+                    for element in tuple.TupleElements {
+                        children.Add(element.Type)
+                    }
+                }
+                case arrow is ArrowTypeReference when source is INamedTypeSymbol{DelegateInvokeMethod: {} invoke} {
+                    for parameter in invoke.Parameters {
+                        children.Add(parameter.Type)
+                    }
+                    if !invoke.ReturnsVoid {
+                        let result = if arrow.IsAsync &&
+                            invoke.ReturnType is INamedTypeSymbol envelope &&
+                            envelope
+                            .TypeArguments
+                            .Length == 1 {
+                            envelope.TypeArguments[0]
+                        } else {
+                            invoke.ReturnType
+                        }
+                        children.Add(result)
+                    }
+                }
+                case _ is FunctionPointerTypeReference when source is IFunctionPointerTypeSymbol pointer {
+                    for parameter in pointer.Signature.Parameters {
+                        children.Add(parameter.Type)
+                    }
+                    if !pointer.Signature.ReturnsVoid {
+                        children.Add(pointer.Signature.ReturnType)
+                    }
+                }
+                default { }
+            }
+            return children
         }
 
         private func MergeAnonymousNullability(mapped GTypeReference, symbol ITypeSymbol?) GTypeReference {

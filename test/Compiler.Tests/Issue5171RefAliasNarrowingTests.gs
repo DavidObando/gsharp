@@ -28,6 +28,227 @@ import Xunit
 /// IL-verifies, runs and asserts the output.
 open class Issue5171RefAliasNarrowingTests {
     @Theory
+    @InlineData("left + right", "ref")
+    @InlineData("-left", "ref")
+    @InlineData("left + right", "alias")
+    @InlineData("-left", "alias")
+    @InlineData("left + right", "value")
+    @InlineData("-left", "value")
+    func ImportedOperatorRootReplacementInvalidatesReadonlyDescendants(expression string, rootKind string) {
+        using let library = CSharpFixture(`
+#nullable enable
+namespace RootReplacement;
+public sealed class Box {
+    public readonly string? Name;
+    public Box(string? name) { Name = name; }
+}
+public static class Store { public static Box Value = new Box("safe"); }
+public readonly struct Token {
+    public static Token operator +(Token x, Token y) { Store.Value = new Box(null); return x; }
+    public static Token operator -(Token x) { Store.Value = new Box(null); return x; }
+}`)
+        let directory = Path.Combine(
+            AppContext.BaseDirectory,
+            "external-member-root-effects",
+            Guid.NewGuid().ToString("N")
+        )
+        Directory.CreateDirectory(directory)
+        try {
+            let header = if rootKind == "alias" {
+                "func Guard(left Token, right Token) int32 {\n    let ref box Box = Store.Value\n"
+            } else {
+                "func Guard(" +
+                    (
+                    if rootKind == "ref" {
+                        "ref "
+                    } else {
+                        ""
+                    }
+                ) +
+                    "box Box, left Token, right Token) int32 {\n"
+            }
+            let call = if rootKind == "alias" {
+                "Guard(default(Token), default(Token))"
+            } else {
+                "Guard(" +
+                    (
+                    if rootKind == "ref" {
+                        "ref "
+                    } else {
+                        ""
+                    }
+                ) +
+                    "Store.Value, default(Token), default(Token))"
+            }
+            let source = "import System\nimport RootReplacement\n" +
+                header +
+                "    if box.Name == nil { return 0 }\n    let _ = " +
+                expression +
+                "\n    return box.Name.Length\n}\nfunc Main() { Store.Value = Box(\"safe\")\n    try { Console.WriteLine(" +
+                call +
+                ") } catch (error NullReferenceException) { Console.WriteLine(\"cleared\") }\n}"
+            let output = Path.Combine(directory, "RootReplacement.dll")
+            let (exit, log) = Compile(directory, source, output, []string{library.AssemblyPath})
+            if rootKind == "value" {
+                Assert.True(exit == 0, log)
+                IlVerifier.Verify(output, []string{library.AssemblyPath})
+                File.Copy(
+                    library.AssemblyPath,
+                    Path.Combine(directory, Path.GetFileName(library.AssemblyPath)),
+                    overwrite: true
+                )
+                let (runExit, stdout) = RunDotnet(output)
+                Assert.Equal(0, runExit)
+                Assert.Equal(Encoding.UTF8.GetBytes("4" + Environment.NewLine), Encoding.UTF8.GetBytes(stdout))
+            } else {
+                let read = source.IndexOf("return box.Name.Length", StringComparison.Ordinal)
+                let line = source.Substring(0, read).Count((value char) -> value == '\n') + 1
+                Assert.NotEqual(0, exit)
+                Assert.False(File.Exists(output))
+                Assert.True(
+                    log.Contains(Path.Combine(directory, "RootReplacement.gs") + "($line,21,$line,27): error GS0158"),
+                    log
+                )
+                let asserted = source.Replace("return box.Name.Length", "return box.Name!!.Length")
+                let (checkedExit, checkedLog) = Compile(directory, asserted, output, []string{library.AssemblyPath})
+                Assert.True(checkedExit == 0, checkedLog)
+                IlVerifier.Verify(output, []string{library.AssemblyPath})
+                File.Copy(
+                    library.AssemblyPath,
+                    Path.Combine(directory, Path.GetFileName(library.AssemblyPath)),
+                    overwrite: true
+                )
+                let (runExit, stdout) = RunDotnet(output)
+                Assert.Equal(0, runExit)
+                Assert.Equal(Encoding.UTF8.GetBytes("cleared" + Environment.NewLine), Encoding.UTF8.GetBytes(stdout))
+            }
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    @Theory
+    @InlineData("construct", "bare")
+    @InlineData("source-add", "bare")
+    @InlineData("source-remove", "bare")
+    @InlineData("clr-add", "bare")
+    @InlineData("clr-remove", "bare")
+    @InlineData("fieldlike", "bare")
+    @InlineData("construct", "member")
+    @InlineData("source-add", "member")
+    @InlineData("source-remove", "member")
+    @InlineData("clr-add", "member")
+    @InlineData("clr-remove", "member")
+    @InlineData("fieldlike", "member")
+    @InlineData("source-add", "value")
+    @InlineData("source-remove", "value")
+    @InlineData("clr-add", "value")
+    @InlineData("clr-remove", "value")
+    @InlineData("fieldlike", "value")
+    func CalleeExecutingConstructionAndEventInventoryInvalidatesExternalStorage(kind string, rootKind string) {
+        using let library = CSharpFixture(`
+#nullable enable
+using System;
+namespace MissingCalleeEffects;
+public sealed class Box { public readonly string? Name; public Box(string? name) { Name = name; } }
+public static class Store { public static string? Value = "safe"; public static Box Box = new Box("safe"); }
+public sealed class Writer { public Writer() { Store.Value = null; Store.Box = new Box(null); } }
+public sealed class Events {
+    public event Action Changed {
+        add { Store.Value = null; Store.Box = new Box(null); }
+        remove { Store.Value = null; Store.Box = new Box(null); }
+    }
+}`)
+        let directory = Path.Combine(AppContext.BaseDirectory, "callee-inventory-effects", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let action = switch kind {
+                case "construct": "let _ = T()"
+                case "source-add": "source.Changed += () -> {}"
+                case "source-remove": "source.Changed -= () -> {}"
+                case "clr-add": "external.Changed += () -> {}"
+                case "clr-remove": "external.Changed -= () -> {}"
+                default: "plain.Changed += () -> {}"
+            }
+            let root = switch rootKind {
+                case "member": "box.Name"
+                case "value": "owned.Name"
+                default: "text"
+            }
+            let source = `import System
+import MissingCalleeEffects
+class SourceEvents {
+    event Changed Action {
+        add {
+            Store.Value = nil
+            Store.Box = Box(nil)
+        }
+        remove {
+            Store.Value = nil
+            Store.Box = Box(nil)
+        }
+    }
+}
+class PlainEvents { event Changed Action }
+func Guard[T init()](ref text string?, ref box Box, source SourceEvents, external Events, plain PlainEvents) int32 {
+` + (
+                if rootKind == "value" {
+                    "    let owned = box\n"
+                } else {
+                    ""
+                }
+            ) + "    if " + root + " == nil { return 0 }\n    " + action + "\n    return " + root + `.Length
+}
+func Main() {
+    Store.Value = "safe"
+    Store.Box = Box("safe")
+    try { Console.WriteLine(Guard[Writer](ref Store.Value, ref Store.Box, SourceEvents(), Events(), PlainEvents())) }
+    catch (error NullReferenceException) { Console.WriteLine("cleared") }
+}`
+            let output = Path.Combine(directory, "Inventory.dll")
+            let (exit, log) = Compile(directory, source, output, []string{library.AssemblyPath})
+            if kind == "fieldlike" || rootKind == "value" {
+                Assert.True(exit == 0, log)
+                IlVerifier.Verify(output, []string{library.AssemblyPath})
+                File.Copy(
+                    library.AssemblyPath,
+                    Path.Combine(directory, Path.GetFileName(library.AssemblyPath)),
+                    overwrite: true
+                )
+                let (runExit, stdout) = RunDotnet(output)
+                Assert.Equal(0, runExit)
+                Assert.Equal(Encoding.UTF8.GetBytes("4" + Environment.NewLine), Encoding.UTF8.GetBytes(stdout))
+            } else {
+                Assert.NotEqual(0, exit)
+                Assert.False(File.Exists(output))
+                let read = source.IndexOf("return " + root + ".Length", StringComparison.Ordinal)
+                let line = source.Substring(0, read).Count((value char) -> value == '\n') + 1
+                let column = 13 + root.Length
+                Assert.True(
+                    log.Contains(
+                        Path.Combine(directory, "Inventory.gs") + "($line,$column,$line,${column + 6}): error GS0158"
+                    ),
+                    log
+                )
+                let asserted = source.Replace("return " + root + ".Length", "return " + root + "!!.Length")
+                let (checkedExit, checkedLog) = Compile(directory, asserted, output, []string{library.AssemblyPath})
+                Assert.True(checkedExit == 0, checkedLog)
+                IlVerifier.Verify(output, []string{library.AssemblyPath})
+                File.Copy(
+                    library.AssemblyPath,
+                    Path.Combine(directory, Path.GetFileName(library.AssemblyPath)),
+                    overwrite: true
+                )
+                let (runExit, stdout) = RunDotnet(output)
+                Assert.Equal(0, runExit)
+                Assert.Equal(Encoding.UTF8.GetBytes("cleared" + Environment.NewLine), Encoding.UTF8.GetBytes(stdout))
+            }
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    @Theory
     @InlineData(false)
     @InlineData(true)
     func EnumerableReturningAggregateExecutesItsCallbackImmediately(inHelper bool) {

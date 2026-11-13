@@ -538,6 +538,13 @@ creation's invariant storage before output identity is computed.
 Cached physical local names also replay current-body occupancy. The same occupancy
 commit handles fresh allocations, reservations, record-local replay, and designators.
 The physical naming registry remains model-scoped; each visitor owns its body state.
+Output contracts canonicalize native and qualified runtime representations only
+with the same recognized source-type identity that selects those forms during mapping.
+Incoming merge keys retain scope-correct rendering contracts.
+Call effects apply to external alias roots even when facts contain readonly
+member links. A replaced root loses every descendant fact. The shared direct-callee
+inventory includes generic construction and source/custom CLR event accessors;
+noncalling fieldlike source events retain their separate assignment behavior.
 Return, ref-storage, null-flow, shape, effect, projection, import, and naming
 walks use the same inventory and declaration resolver. Body translation uses
 the replacement while retaining the original declared method and parameter symbols.

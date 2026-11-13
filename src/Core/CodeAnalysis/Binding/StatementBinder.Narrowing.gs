@@ -5834,8 +5834,8 @@ internal partial class StatementBinder {
 
         /// ADR-0208 R12 and R20 (#5292, #5827, #5326): whether the statement can store into the storage that the root of
         /// [`path`](paramref) names. A fact on the root itself dies on every reference-storage write or call whose effect
-        /// summary can overwrite the root's storage. A fact on a member path dies only on a write whose location can hold
-        /// the root's storage (cref:StatementBinder.StorageWriteMayOverwriteRoot), or on a write that the collector cannot type.
+        /// summary can overwrite the root's storage. Root replacement also removes descendant facts, including readonly links.
+        /// Typed member writes use (cref:StatementBinder.StorageWriteMayOverwriteRoot); an untyped write remains conservative.
         /// @param path The path of the fact.
         /// @returns `true` when the statement can overwrite the storage of the root.
         func MayWriteStorageOf(path AccessPath) bool {
@@ -5853,13 +5853,9 @@ internal partial class StatementBinder {
                     }
                 }
             }
-            if callExpressions.Count > 0 && !StatementBinder.HasMemberLinks(path) &&
-                callEffectsMayOverwriteRoot != nil {
+            if callExpressions.Count > 0 && callEffectsMayOverwriteRoot != nil {
                 let root = StatementBinder.EffectiveMemberRoot(path)
-                if root == nil {
-                    return true
-                }
-                if !StatementBinder.IsExternalStorageAlias(root) {
+                if root == nil || !StatementBinder.IsExternalStorageAlias(root) {
                     return false
                 }
                 if StatementBinder.CallsMayWriteAliasedStorage(root) {
@@ -6122,23 +6118,9 @@ internal partial class StatementBinder {
                 MarkMayMutateGlobalRoots(invalidateCallableAliases: false)
                 runsEscapedClosureHere = true
             }
-            let sourceConstructionRunsUserCode = (
-                node is BoundConstructorCallExpression construction &&
-                    (
-                    construction.SelectedConstructor != nil || StatementBinder.ConstructionRunsUserCode(
-                        construction.StructType
-                    )
-                )
-            ) ||
-                (
-                node is BoundStructLiteralExpression literal &&
-                    (
-                    StatementBinder.ConstructionRunsUserCode(literal.StructType) || literal.Initializers.Any(
-                        (initializer BoundFieldInitializer) -> initializer.Property is {} property &&
-                            StatementBinder.SourcePropertyRunsUserCode(property, receiverType: nil, isWrite: true)
-                    )
-                )
-            )
+            let sourceConstructionRunsUserCode = node is BoundConstructorCallExpression or
+                BoundStructLiteralExpression &&
+                StatementBinder.HasDirectCalleeEffects(node)
             // ADR-0208 R11 (#5170): any call, property getter or constructor
             // with user code may assign a mutable global. A static member access runs the type initializer (#5504).
             if sourcePropertyRunsUserCode ||
@@ -6148,20 +6130,6 @@ internal partial class StatementBinder {
                 if node is not BoundStructLiteralExpression {
                     runsEscapedClosureHere = true
                 }
-            }
-            // ADR-0208 R15 (#5237): a call of any kind can run a closure that escaped, except a call through a
-            // callable value, which keeps its own classification (AnalyzeCallableInvocation).
-            if !isStableSystemIndexOp &&
-                node is BoundClrConstructorCallExpression or
-                BoundClrConversionCallExpression or
-                BoundClrBinaryOperatorExpression or
-                BoundClrUnaryOperatorExpression or
-                BoundFunctionPointerInvocationExpression or
-                BoundEventSubscriptionExpression or
-                BoundClrEventSubscriptionExpression or
-                BoundTypeParameterConstructionExpression {
-                MarkRunsEscapedClosure(invalidateCallableAliases: false)
-                runsEscapedClosureHere = true
             }
             // A custom interpolated-string handler constructs the handler and calls its AppendLiteral /
             // AppendFormatted methods; the default handler calls `ToString` on a hole of a type other than a
@@ -6195,14 +6163,7 @@ internal partial class StatementBinder {
                     allEntryCallableState.CapturedVariables.Add(captured)
                 }
             }
-            if !isStableSystemIndexOp &&
-                (
-                node is BoundCallOperationExpression or
-                    BoundClrBinaryOperatorExpression or
-                    BoundClrUnaryOperatorExpression
-            ) &&
-                node is not BoundCallExpression{IsConditionalElided: true} &&
-                !IsCallableValueInvocation(node) {
+            if StatementBinder.HasDirectCalleeEffects(node) && !IsCallableValueInvocation(node) {
                 MarkRunsEscapedClosure(invalidateCallableAliases: false)
                 runsEscapedClosureHere = true
                 callExpressions.Add(node)
@@ -6211,9 +6172,6 @@ internal partial class StatementBinder {
                 if !baseClassCall.IsPropertyAccessor && baseClassCall.Method != nil {
                     MarkMayMutateGlobalRoots(writesReferenceStorage: false, invalidateCallableAliases: false)
                     runsEscapedClosureHere = true
-                    callExpressions.Add(node)
-                } else if baseClassCall.IsSetterAccessor {
-                    callExpressions.Add(node)
                 }
             }
             if node is BoundCallOperationExpression{CalledFunction: FunctionSymbol function} {
@@ -11885,21 +11843,18 @@ internal partial class StatementBinder {
             if IsStableSystemIndexOperation(node) {
                 return false
             }
-            if node is BoundAssignmentExpression or
+            if HasDirectCalleeEffects(node) ||
+                node is BoundAssignmentExpression or
                 BoundCallOperationExpression or
-                BoundClrConversionCallExpression or
-                BoundClrBinaryOperatorExpression or
-                BoundClrUnaryOperatorExpression or
-                BoundFunctionPointerInvocationExpression or
                 BoundEventSubscriptionExpression or
                 BoundClrEventSubscriptionExpression or
-                BoundTypeParameterConstructionExpression or
                 BoundStructLiteralExpression or
                 BoundInterpolatedStringExpression or
                 BoundIsExpression or
                 BoundNullConditionalAccessExpression {
                 return true
             }
+
             if node is BoundAddressOfExpression{IsReadOnly: false} {
                 return true
             }
@@ -11911,6 +11866,38 @@ internal partial class StatementBinder {
                 SourcePropertyAccessRunsUserCode(node) ||
                 ClrAccessRunsUserCode(node) ||
                 StaticMemberAccessRunsUserCode(node)
+        }
+
+        /// Identifies expressions whose own operation executes a callee, separately from their operands.
+        internal func HasDirectCalleeEffects(node BoundExpression) bool {
+            if IsStableSystemIndexOperation(node) {
+                return false
+            }
+            return switch node {
+                case _ is BoundCallExpression{IsConditionalElided: true}: false
+                case _ is BoundCallOperationExpression or
+                    BoundClrConstructorCallExpression or
+                    BoundConstructorChainingExpression or
+                    BoundClrConversionCallExpression or
+                    BoundClrBinaryOperatorExpression or
+                    BoundClrUnaryOperatorExpression or
+                    BoundFunctionPointerInvocationExpression or
+                    BoundTypeParameterConstructionExpression or
+                    BoundClrEventSubscriptionExpression: true
+                case subscription is BoundEventSubscriptionExpression: !subscription.Event.IsFieldLike
+                case construction is BoundConstructorCallExpression: construction.SelectedConstructor != nil ||
+                    ConstructionRunsUserCode(construction.StructType)
+                case literal is BoundStructLiteralExpression: ConstructionRunsUserCode(literal.StructType) ||
+                    literal
+                    .Initializers
+                    .Any(
+                    (initializer BoundFieldInitializer) -> initializer.Property is {} property &&
+                        SourcePropertyRunsUserCode(property, receiverType: nil, isWrite: true)
+                )
+                case call is BoundBaseClassCallExpression: call.IsSetterAccessor ||
+                    (!call.IsPropertyAccessor && call.Method != nil)
+                default: false
+            }
         }
 
         /// Returns whether an expression kind can invoke user code or assign
