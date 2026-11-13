@@ -11611,6 +11611,9 @@ partial class CSharpToGSharpTranslator {
             if translated != nil && TranslatedExpressionIsStaticallyNonNull(translated) {
                 return true
             }
+            if this.IsGSharpFlowNarrowedReadonlyFieldRead(expression) {
+                return true
+            }
             // A checked cast sets its own top-level nullability, independently of nested nullable positions.
             if Unparenthesize(expression) is CastExpressionSyntax cast &&
                 cast.Type is not NullableTypeSyntax &&
@@ -21468,20 +21471,82 @@ partial class CSharpToGSharpTranslator {
                 Implements("System.Collections.IDictionary")
         }
 
+        // A semantic readonly guard can survive calls that invalidate G# member narrowing.
+        private func IsGSharpFlowNarrowedReadonlyFieldRead(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            readPosition int32? = nil
+        ) bool {
+            if this.IsGuardCapturedFieldRead(expression) {
+                return true
+            }
+            if !IsUnqualifiedOrThisQualifiedFieldRead(expression) ||
+                this
+                .context
+                .GetSymbolInfo(expression)
+                .Symbol is not IFieldSymbol field ||
+                ObliviousNullabilityAnalyzer.NullGuardDominatingRead(
+                expression,
+                this.context.SemanticModel
+            ) is not{} guardTest {
+                return false
+            }
+            var whenTrue = false
+            if !(
+                (
+                    guardTest is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .BinaryExpressionSyntax comparison &&
+                        this.TryGetNullComparisonNonNullPolarity(comparison, field, out whenTrue)
+                ) ||
+                    (
+                    guardTest is IsPatternExpressionSyntax pattern &&
+                        TryGetPatternNonNullPolarity(pattern.Pattern, out whenTrue)
+                )
+            ) {
+                return false
+            }
+            let regions = this.ComputeBooleanFlowRegions(guardTest, whenTrue, includeWhenClauseRegion: false)
+            let scope_ = NearestFunctionBoundary(expression!!)
+            return scope_ != nil && regions.Any(
+                (region Microsoft.CodeAnalysis.SyntaxNode) -> region.Span.Contains(expression!!.Span)
+            ) &&
+                !this.ClosureAssignedLocalLosesNarrowing(
+                field,
+                GetConditionRoot(guardTest),
+                expression!!,
+                scope_,
+                regions,
+                readPosition
+            )
+        }
+
         private func ClosureAssignedLocalLosesNarrowing(
             symbol ISymbol?,
             narrowingGuard Microsoft.CodeAnalysis.SyntaxNode,
             use Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
-            $scope Microsoft.CodeAnalysis.SyntaxNode
+            $scope Microsoft.CodeAnalysis.SyntaxNode,
+            memberRegions IReadOnlyList[Microsoft.CodeAnalysis.SyntaxNode]? = nil,
+            readPosition int32? = nil
         ) bool {
             let closureAssigned = this.IsClosureAssignedVariable(symbol)
             let byReference = this.IsByReferenceVariable(symbol)
-            if !closureAssigned && !byReference {
+            let memberPath = memberRegions != nil
+            let readStart = readPosition ?? use.SpanStart
+            if !closureAssigned && !byReference && !memberPath {
                 return false
             }
             // ADR-0208 R15 (#5237): a closure-assigned variable loses its fact at every node that may run source code.
             let RunsSourceCode = func (node Microsoft.CodeAnalysis.SyntaxNode) bool {
-                return closureAssigned && this.NodeMayRunEscapedClosure(node)
+                // Member paths use the same call barriers, limited to their proven non-null regions.
+                return (closureAssigned || memberPath) &&
+                    (
+                    memberRegions == nil || memberRegions.Any(
+                        (region Microsoft.CodeAnalysis.SyntaxNode) -> region.Span.Contains(node.Span)
+                    )
+                ) &&
+                    this.NodeMayRunEscapedClosure(node)
             }
             // ADR-0208 R11, R12, R14, R16 and R17 (#5520, #5617, #5650): a by-reference variable loses its fact at a
             // node that gsc counts as a write of by-reference storage, which includes a loop whose iteration runs user
@@ -21555,7 +21620,7 @@ partial class CSharpToGSharpTranslator {
                                 .End &&
                                 node
                                 .Span
-                                .End <= use.SpanStart &&
+                                .End <= readStart &&
                                 (RunsSourceCode(node) || WritesReferenceStorage(node)) &&
                                 !this.IsInSiblingBranchOfRead(node, use, $scope)
                         )
@@ -21565,7 +21630,7 @@ partial class CSharpToGSharpTranslator {
                             .End &&
                             node
                             .Span
-                            .End <= use.SpanStart &&
+                            .End <= readStart &&
                             (RunsSourceCode(node) || WritesReferenceStorage(node)) &&
                             !this.IsInSiblingBranchOfRead(node, use, $scope)
                     }
@@ -21582,6 +21647,9 @@ partial class CSharpToGSharpTranslator {
                 enclosing != $scope;
                 enclosing = enclosing!!
                 .Parent {
+                if enclosing.SpanStart >= readStart {
+                    continue
+                }
                 if enclosing is Microsoft
                     .CodeAnalysis
                     .CSharp
@@ -21630,7 +21698,10 @@ partial class CSharpToGSharpTranslator {
                 enclosing != $scope;
                 enclosing = enclosing!!
                 .Parent {
-                if closureAssigned &&
+                if enclosing.SpanStart >= readStart {
+                    continue
+                }
+                if (closureAssigned || memberPath) &&
                     enclosing is Microsoft
                     .CodeAnalysis
                     .CSharp
@@ -21650,6 +21721,9 @@ partial class CSharpToGSharpTranslator {
                 node != $scope;
                 node = node!!
                 .Parent {
+                if node.SpanStart >= readStart {
+                    continue
+                }
                 if node is Microsoft
                     .CodeAnalysis
                     .CSharp
@@ -21997,12 +22071,14 @@ partial class CSharpToGSharpTranslator {
                 .NameColonSyntax {
                 return true
             }
+            // Source instance fields emit direct loads; imported storage remains conservative.
             if node is Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax memberAccess {
                 let accessed ISymbol? = this.context.GetSymbolInfo(memberAccess).Symbol
                 return accessed is IMethodSymbol or
                     INamespaceSymbol or
                     ITypeSymbol ||
-                    accessed is IFieldSymbol{IsConst: true}
+                    accessed is IFieldSymbol{IsConst: true} ||
+                    (accessed is IFieldSymbol{IsStatic: false} field && this.IsSourceSymbol(field))
             }
             if node is Microsoft
                 .CodeAnalysis
@@ -22100,7 +22176,8 @@ partial class CSharpToGSharpTranslator {
                     ITypeSymbol or
                     INamespaceSymbol or
                     IMethodSymbol ||
-                    symbol is IFieldSymbol{IsConst: true}
+                    symbol is IFieldSymbol{IsConst: true} ||
+                    (symbol is IFieldSymbol{IsStatic: false} field && this.IsSourceSymbol(field))
             }
             // Arithmetic, comparison and assignment of built-in numeric values (or a comparison of
             // any value with `null`) is a plain operation; anything else may be an operator call.
