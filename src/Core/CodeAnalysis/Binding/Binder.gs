@@ -4584,19 +4584,26 @@ partial class Binder {
                 return nil
             }
             if !object.ReferenceEquals(syntax, binderCtx.UnconstrainedNullableSequenceElementReturn) &&
-                elementType is NullableTypeSymbol{UnderlyingType: TypeParameterSymbol typeParameter} &&
-                !typeParameter.HasValueTypeConstraint &&
-                !typeParameter.HasReferenceTypeConstraint &&
-                typeParameter.ClassConstraint == nil {
-                Diagnostics.ReportUnconstrainedNullableSequenceElement(
-                    Invariant.Required(
-                        syntax.SequenceElementType,
-                        "IsSequence implies the parser set SequenceElementType",
-                        expression: "syntax.SequenceElementType"
-                    )
-                        .Location,
-                    typeParameter.Name
+                elementType is NullableTypeSymbol{UnderlyingType: TypeParameterSymbol typeParameter} {
+                let location = Invariant.Required(
+                    syntax.SequenceElementType,
+                    "IsSequence implies the parser set SequenceElementType",
+                    expression: "syntax.SequenceElementType"
                 )
+                    .Location
+                if $scope.IsDeferringUserGenericConstraintChecks() {
+                    $scope.GetPendingUserGenericConstraintChecks().Add(
+                        PendingUserGenericConstraintCheck(
+                            Diagnostics,
+                            ImmutableArray[TypeParameterSymbol].Empty,
+                            ImmutableArray.Create[TypeSymbol](typeParameter),
+                            location,
+                            () -> ReportUnconstrainedNullableSequenceElement(typeParameter, location)
+                        )
+                    )
+                } else {
+                    ReportUnconstrainedNullableSequenceElement(typeParameter, location)
+                }
             }
             if syntax.IsAsyncSequence {
                 return AsyncSequenceTypeSymbol.Get(elementType)
@@ -5029,6 +5036,19 @@ partial class Binder {
             return nil
         }
         return ArrayTypeSymbol.Get(element, length)
+    }
+
+    private func ReportUnconstrainedNullableSequenceElement(
+        typeParameter TypeParameterSymbol,
+        location TextLocation
+    ) bool {
+        if typeParameter.HasValueTypeConstraint ||
+            typeParameter.HasReferenceTypeConstraint ||
+            typeParameter.ClassConstraint != nil {
+            return false
+        }
+        Diagnostics.ReportUnconstrainedNullableSequenceElement(location, typeParameter.Name)
+        return true
     }
 
     private func ReportIllegalUnmanagedPointee(pointeeType TypeSymbol, location TextLocation) bool {

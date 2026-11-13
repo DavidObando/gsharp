@@ -65,6 +65,7 @@ Separate source declaration scheduling into header, member, and usage-validation
    Imported generic constraint checks share the existing deferred constraint queue.
    Drain them after source constructors, members, and interface contracts are complete.
    Validate all declaration-phase pointer pointees through the same post-member queue, including imported wrappers over source layouts.
+   Defer nullable sequence-element validation until named type-parameter bounds are complete.
    Forward late child-binder diagnostics to the compilation bag after child snapshots have been published.
    Partial-declaration rollback and failure cleanup apply to both source and imported checks.
 

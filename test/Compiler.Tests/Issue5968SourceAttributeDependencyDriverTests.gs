@@ -477,6 +477,86 @@ class Holder {
         }
     }
 
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func NamedConstraintSequenceElements_ValidateAfterBounds(asynchronous bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let driver = CompileBoundedStackDriver(fixture)
+        let sequenceKind = if asynchronous {
+            "async sequence"
+        } else {
+            "sequence"
+        }
+        let declarations = []string{
+            "open class Animal {}",
+            "open class Box[U] {}",
+            "class Derived[T Animal] : Box[" + sequenceKind + "[T?]] {}"
+        }
+        for reverse in[]bool{false, true} {
+            let sourcePath = Path.Combine(fixture.Directory, "sequence-bound.gs")
+            let dll = Path.Combine(fixture.Directory, "sequence-bound-" + reverse.ToString() + ".dll")
+            File.WriteAllText(
+                sourcePath,
+                string.Join(
+                    "\n",
+                    if reverse {
+                        declarations.Reverse()
+                    } else {
+                        declarations
+                    }
+                )
+            )
+            let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+                sourcePath,
+                dll,
+                driver
+            )
+            Assert.True(code == 0, output)
+            IlVerifier.Verify(dll)
+            let types = EmittedFixture.Load(dll).GetTypes()
+            let animal = types.Single((type Type) -> type.Name == "Animal")
+            let derived = types.Single((type Type) -> type.Name == "Derived`1")
+            Assert.Equal(
+                animal,
+                Assert.Single(Assert.Single(derived.GetGenericArguments()).GetGenericParameterConstraints())
+            )
+            let closed = derived.MakeGenericType(animal)
+            let argument = Assert.Single(closed.BaseType!!.GetGenericArguments())
+            Assert.Equal(
+                if asynchronous {
+                    "System.Collections.Generic.IAsyncEnumerable`1"
+                } else {
+                    "System.Collections.Generic.IEnumerable`1"
+                },
+                argument.GetGenericTypeDefinition().FullName
+            )
+            Assert.Equal(animal, Assert.Single(argument.GetGenericArguments()))
+            Assert.NotNull(Activator.CreateInstance(closed))
+        }
+        let invalidPath = Path.Combine(fixture.Directory, "unbounded-sequence.gs")
+        let invalidDll = Path.Combine(fixture.Directory, "unbounded-sequence.dll")
+        File.WriteAllText(invalidPath, string.Join("\n", declarations).Replace("[T Animal]", "[T]"))
+        let (invalidCode, invalidOutput) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+            invalidPath,
+            invalidDll,
+            driver
+        )
+        Assert.True(invalidCode == 1, invalidOutput)
+        let column = if asynchronous {
+            "39"
+        } else {
+            "33"
+        }
+        let endColumn = if asynchronous {
+            "41"
+        } else {
+            "35"
+        }
+        Assert.Equal([]string{"GS0508@3," + column + ",3," + endColumn}, DiagnosticLocations(invalidOutput))
+        Assert.False(File.Exists(invalidDll))
+    }
+
     @Fact
     func ConstructedInheritanceCycles_ReportLocatedDiagnosticsWithoutExpandingForever() {
         using let fixture = NativeSliceLanguageTests.Fixture()
