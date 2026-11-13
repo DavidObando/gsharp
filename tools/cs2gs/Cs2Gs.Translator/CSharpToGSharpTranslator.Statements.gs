@@ -600,8 +600,26 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func MapInferredLocalDeclarationType(local ILocalSymbol, location Location) GTypeReference? {
-            var mapped = this.typeMapper.MapEventType(local.Type, this.context, location)
+            var mapped = this.GetDeconstructedTupleStorageType(local) ?? this.typeMapper.MapEventType(
+                local.Type,
+                this.context,
+                location
+            )
             let initializer = this.GetInferredLocalInitializer(local, out _, out _)
+            if initializer != nil && SymbolEqualityComparer.Default.Equals(
+                local.Type,
+                this.context.GetTypeInfo(initializer).Type
+            ) {
+                mapped = this.PromoteCreationTupleArguments(mapped, local.Type, initializer)
+                if initializer is ArrayCreationExpressionSyntax creation &&
+                    local.Type is IArrayTypeSymbol createdArray &&
+                    mapped is ArrayTypeReference mappedCreation &&
+                    this.MapArrayCreationElementType(creation) is {} createdElement {
+                    mapped = ArrayTypeReference(createdElement, createdArray.Rank){
+                        IsNullable = mappedCreation.IsNullable
+                    }
+                }
+            }
             let source = if initializer != nil {
                 this.context.GetSymbolInfo(initializer).Symbol
             } else {

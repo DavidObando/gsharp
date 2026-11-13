@@ -4454,7 +4454,52 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             let initializer = this.GetInferredLocalInitializer(local, out _, out _)
-            return initializer == nil || this.GSharpExpressionIsStaticallyNonNull(initializer)
+            if initializer != nil {
+                return this.GSharpExpressionIsStaticallyNonNull(initializer)
+            }
+            let element = this.DeconstructedElementDeclaration(local)
+            if element != nil {
+                return this.DeclaredValueIsStaticallyNonNull(
+                    element,
+                    ObliviousNullabilityAnalyzer.SymbolValueType(element)
+                )
+            }
+            let storage = this.GetDeconstructedTupleStorageType(local)
+            return storage != nil && !storage.IsNullable
+        }
+
+        private func GetDeconstructedTupleStorageType(local ILocalSymbol) GTypeReference? {
+            if local
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is not SingleVariableDesignationSyntax single ||
+                single
+                .Ancestors()
+                .OfType[AssignmentExpressionSyntax]()
+                .FirstOrDefault() is not{} assignment ||
+                this
+                .context
+                .GetTypeInfo(assignment.Right)
+                .Type is not INamedTypeSymbol{IsTupleType: true} tuple ||
+                !TryFindDeconstructionPath(single, assignment.Left, List[int32](), out var path) {
+                return nil
+            }
+            let source = this.context.GetSymbolInfo(assignment.Right).Symbol
+            var mapped = if source is IMethodSymbol method {
+                this.MapDelegateLikeReturnType(method, isAsync: false, assignment.Right.GetLocation())
+            } else {
+                this.PromoteIfUsedAsNullable(
+                    this.typeMapper.Map(tuple, this.context, assignment.Right.GetLocation()),
+                    source
+                )
+            }
+            for index in path!! {
+                if mapped is not TupleTypeReference current || index >= current.ElementTypes.Count {
+                    return nil
+                }
+                mapped = current.ElementTypes[index]
+            }
+            return mapped
         }
 
         private func TryGetDeconstructionTargets(
