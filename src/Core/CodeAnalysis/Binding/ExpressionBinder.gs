@@ -3002,7 +3002,12 @@ internal partial class ExpressionBinder {
                     name,
                     MemberQuery.Static(MemberKinds.Method)
                 )
-                if TryBuildUserMethodGroup(receiver: nil, sharedMethods, out methodGroup) {
+                if TryBuildUserMethodGroup(
+                    receiver: nil,
+                    sharedMethods,
+                    out methodGroup,
+                    staticOwnerType: enclosingType
+                ) {
                     return true
                 }
             }
@@ -6288,11 +6293,6 @@ internal partial class ExpressionBinder {
                 (function.Package == nil && !isConvertibleLocalFunction) {
                 return false
             }
-            for parameter in function.Parameters {
-                if parameter.IsVariadic {
-                    return false
-                }
-            }
             return true
         }
 
@@ -6738,6 +6738,7 @@ internal partial class ExpressionBinder {
             closedParameters = nil
             closedReturn = nil
             methodTypeArguments = default(ImmutableArray[TypeSymbol])
+            // ADR-0173: method groups match physical parameters in normal form, without variadic expansion or optional omission.
             let parameterOffset = if candidate.IsExtension && receiver != nil {
                 1
             } else {
@@ -6909,9 +6910,8 @@ internal partial class ExpressionBinder {
             }
             let effThis ParameterSymbol? = GetEffectiveThisParameter(binderCtx, current)
             if effThis != nil && effThis.Type is StructSymbol thisStruct {
-                if HasNonVariadicMethod(
-                    TypeMemberModel.GetMethods(thisStruct, name, MemberQuery.Instance(MemberKinds.Method))
-                ) {
+                if !TypeMemberModel.GetMethods(thisStruct, name, MemberQuery.Instance(MemberKinds.Method))
+                    .IsDefaultOrEmpty {
                     return true
                 }
             }
@@ -6919,35 +6919,18 @@ internal partial class ExpressionBinder {
                 let enclosingType StructSymbol? = (current.ReceiverType as StructSymbol) ??
                     (current.StaticOwnerType as StructSymbol) ??
                     (current.LexicalEnclosingType as StructSymbol)
-                if enclosingType != nil &&
-                    HasNonVariadicMethod(
-                    TypeMemberModel.GetMethods(enclosingType, name, MemberQuery.Static(MemberKinds.Method))
-                ) {
+                if enclosingType != nil && !TypeMemberModel.GetMethods(
+                    enclosingType,
+                    name,
+                    MemberQuery.Static(MemberKinds.Method)
+                )
+                    .IsDefaultOrEmpty {
                     return true
                 }
             }
             return entryScope.TryLookupSymbol(name) is FunctionSymbol single &&
                 IsMethodGroupCandidateUsable(single) &&
                 (single.ReturnRefKind == RefKind.None || single.LocalDeclaration == nil)
-        }
-
-        internal func HasNonVariadicMethod(methods ImmutableArray[FunctionSymbol]) bool {
-            if methods.IsDefaultOrEmpty {
-                return false
-            }
-            for method in methods {
-                var hasVariadic = false
-                for parameter in method.Parameters {
-                    if parameter.IsVariadic {
-                        hasVariadic = true
-                        break
-                    }
-                }
-                if !hasVariadic {
-                    return true
-                }
-            }
-            return false
         }
 
         internal func TryResolveInterfaceInstancePropertyByBareName(

@@ -1246,9 +1246,15 @@ internal class ConversionClassifier {
         // reference-variant slot binds the delegate AT the target type — the
         // fall-through path would wrap it in a delegate-to-delegate variance
         // conversion the emitter cannot express.
+        // Owner-aware groups retain natural typing. A callable target still selects their physical signature.
         if expression is BoundMethodGroupExpression userMethodGroup &&
             (
             userMethodGroup.FunctionType == nil ||
+                (
+                userMethodGroup.StaticOwnerType != nil &&
+                    !userMethodGroup.HasTargetDelegateType &&
+                    MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(type!!, out _)
+            ) ||
                 userMethodGroup
                 .Function
                 ?.ReturnRefKind != RefKind.None ||
