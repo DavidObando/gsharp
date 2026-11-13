@@ -150,10 +150,12 @@ class Box {
             return items
         }
         func Generic[T](items ...List[T]) int32 -> items.Count
+        func Forward[T](item T) int32 -> Generic[T](item)
     }
 }
 class Owner[T] {
     func Count(items ...List[T]) int32 -> items.Count
+    func Pack(item T) int32 -> Count(item)
 }
 func values(items ...List[Value]) int32 -> items[0].Number
 func codes(items ...List[Code]) int32 -> int32(items[0])
@@ -165,9 +167,9 @@ let physical (List[Node]) -> List[Node] = Box.Keep
 let delegated = physical(existing)
 let box = Box(node, node)
 let value = Value{Number: 7}
-Console.Write("${object.ReferenceEquals(existing, kept)}:${object.ReferenceEquals(existing, delegated)}:${existing.Count}:${box.Count}:${box.Read(node)}:${Box.Generic[Node](node)}:${Owner[Node]().Count(node)}:${values(value)}:${codes(Code.Second)}:${nested(existing)}")
+Console.Write("${object.ReferenceEquals(existing, kept)}:${object.ReferenceEquals(existing, delegated)}:${existing.Count}:${box.Count}:${box.Read(node)}:${Box.Forward[Node](node)}:${Owner[Node]().Pack(node)}:${values(value)}:${codes(Code.Second)}:${nested(existing)}:${Box.Forward[Value](value)}:${Owner[Value]().Pack(value)}:${object.ReferenceEquals(Box.Keep(), Box.Keep())}")
 `)
-        Assert.Equal(Encoding.UTF8.GetBytes("True:True:3:2:1:1:1:7:1:3"), output)
+        Assert.Equal(Encoding.UTF8.GetBytes("True:True:3:2:1:1:1:7:1:3:1:1:False"), output)
     }
 
     @Fact
