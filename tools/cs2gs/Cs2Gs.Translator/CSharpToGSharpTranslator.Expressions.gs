@@ -23380,6 +23380,20 @@ partial class CSharpToGSharpTranslator {
             (conversion.Conversion.IsReference || conversion.Conversion.IsIdentity)
 
         private func FindNullForgivingTarget(value PostfixUnaryExpressionSyntax)(Type ITypeSymbol?, Symbol ISymbol?) {
+            let conversion = this.context.SemanticModel.GetConversion(value)
+            if (conversion.IsIdentity || conversion.IsReference) && this.FindEnclosingArgumentThroughReferenceCasts(
+                value
+            ) is {} argument &&
+                this.TryGetExpandedParamsElementTarget(
+                argument,
+                this.GetArgumentParameter(argument),
+                out var element,
+                out var parameter
+            ) &&
+                parameter != nil &&
+                this.NullArgumentParamsElementIsPromoted(parameter) {
+                return (element, parameter)
+            }
             let ExplicitLocalTypeIsNullable = func (local ILocalSymbol) bool {
                 return local
                     .Type

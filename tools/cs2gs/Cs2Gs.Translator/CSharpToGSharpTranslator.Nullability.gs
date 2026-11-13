@@ -2641,13 +2641,7 @@ partial class CSharpToGSharpTranslator {
                 this.ConnectRefStorage(target, conditional.WhenFalse, model, visited)
                 return
             }
-            var receiver ExpressionSyntax = storage
-            var depth = 0
-            while receiver is ElementAccessExpressionSyntax access && model.GetTypeInfo(access.Expression)
-                .Type is IArrayTypeSymbol {
-                depth++
-                receiver = UnwrapParenthesesAndSuppressions(access.Expression)!!
-            }
+            let (_, depth) = ObliviousNullabilityAnalyzer.RefArrayStorage(storage, model, out var receiver)
             var source = if receiver is DeclarationExpressionSyntax{
                 Designation: SingleVariableDesignationSyntax designation
             } {

@@ -6536,17 +6536,9 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
-        private func IsRangeElementAccess(access ElementAccessExpressionSyntax) bool {
-            let rangeType ITypeSymbol? = this.context.Compilation.GetTypeByMetadataName("System.Range")
-            return rangeType != nil &&
-                access
-                .ArgumentList
-                .Arguments
-                .Count == 1 &&
-                SymbolEqualityComparer
-                .Default
-                .Equals(this.context.GetTypeInfo(access.ArgumentList.Arguments[0].Expression).Type, rangeType)
-        }
+        private func IsRangeElementAccess(
+            access ElementAccessExpressionSyntax
+        ) bool -> ObliviousNullabilityAnalyzer.IsRangeElementAccess(access, this.context.SemanticModel)
 
         // The initializer of a `var` local whose emitted declaration has no type
         // clause (see `InferredLocalDeclarationIsNullable`), so G# infers the local
