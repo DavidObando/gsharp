@@ -10974,7 +10974,10 @@ internal shared class ObliviousNullabilityAnalyzer {
                     SyntaxKind.NotEqualsExpression
                 }
             ) {
-                if symbol is IFieldSymbol && model.GetOperation(binary) is IBinaryOperation{OperatorMethod: not nil} {
+                if symbol is IFieldSymbol && model.GetOperation(binary) is not IBinaryOperation{
+                    OperatorMethod: nil,
+                    Type: {SpecialType: SpecialType.System_Boolean}
+                } {
                     return false
                 }
                 return (IsSymbolIdentifier(binary.Left, symbol) && IsNullLiteral(binary.Right)) ||

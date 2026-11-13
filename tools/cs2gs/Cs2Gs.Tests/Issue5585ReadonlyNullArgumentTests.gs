@@ -122,6 +122,22 @@ public class Holder {
         Assert.False(ObliviousNullabilityAnalyzer.IsNullGuardDominatedRead(argument.Expression, model))
     }
 
+    @Fact
+    func DynamicallyBoundComparison_DoesNotProveAReadonlyFieldNonNull() {
+        let compilation = Compile(`
+#nullable enable
+public class Holder {
+    private readonly dynamic stored = new object();
+    public void Read() { if (stored != null) Consume(stored); }
+    private static void Consume(object value) { }
+}
+`)
+        let tree = Assert.Single(compilation.SyntaxTrees)
+        let model = compilation.GetSemanticModel(tree)
+        let argument = Assert.Single(tree.GetRoot().DescendantNodes().OfType[ArgumentSyntax]())
+        Assert.False(ObliviousNullabilityAnalyzer.IsNullGuardDominatedRead(argument.Expression, model))
+    }
+
     @Theory
     @InlineData("readonly", "return int.Parse(stored);")
     @InlineData("", "if (stored != null) return int.Parse(stored); return -1;")
