@@ -16,6 +16,7 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- **Retain scoped anonymous input spellings in cs2gs** (#5326). Include recursively rendered aliases and qualifiers in merge-cache input identity. Preserve structural nullability contracts, canonical output deduplication, and evidence grouping.
 - **Invalidate external descendant facts at every explicit callee in G#** (#5326). Root replacement now drops readonly member narrowings. Generic constructors and event accessors enter the shared call-effect inventory. Canonicalize equivalent native and qualified managed-reference and slice identities in anonymous output while retaining scope-correct incoming contracts.
 - **Keep anonymous merge inputs and cached local occupancy distinct in cs2gs** (#5326). Key anonymous merges by their incoming physical contracts without changing evidence grouping. Replaying a cached synthesized name now also reserves it in the current body, preventing later deconstruction collisions during retranslation.
 - **Preserve semantic allocation paths and physical contracts in cs2gs** (#5326). Keep nested tuple temporaries distinct while replaying stable names. Apply nested-type boundaries to replacement helper inventories and reserve names against their emitted owners. Include managed-reference elements and all physical type children in anonymous declaration contracts.

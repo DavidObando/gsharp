@@ -9,6 +9,7 @@ import Cs2Gs.CodeModel.Printing
 import Cs2Gs.CodeModel.RoundTrip
 import Cs2Gs.Translator
 import Cs2Gs.Translator.Loading
+import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
 import System
 import System.Collections.Generic
@@ -29,6 +30,233 @@ import Xunit
 /// through every mapper the translator creates, so an identical shape is
 /// emitted once and reused by later documents.
 open class Issue2292AnonymousTypePackageScopeTests {
+    @Theory
+    @InlineData("plain", false)
+    @InlineData("plain", true)
+    @InlineData("array", false)
+    @InlineData("array", true)
+    @InlineData("generic", false)
+    @InlineData("generic", true)
+    @InlineData("tuple", false)
+    @InlineData("tuple", true)
+    @InlineData("arrow", false)
+    @InlineData("arrow", true)
+    @InlineData("containing", false)
+    @InlineData("containing", true)
+    func AnonymousIncomingContractsRetainScopedOrdinaryAliases(kind string, shadowedFirst bool) {
+        let value = switch kind {
+            case "array": "new Alias[]{element}"
+            case "generic": "new List<Alias>{element}"
+            case "tuple": "(element, 7)"
+            case "arrow": "new Func<Alias>(() => element)"
+            case "containing": "dictionary.Values"
+            default: "element"
+        }
+        let read = switch kind {
+            case "array", "generic": "second.Value[0]"
+            case "tuple": "second.Value.Item1"
+            case "arrow": "second.Value()"
+            case "containing": "second.Value.Count"
+            default: "second.Value"
+        }
+        let body = if shadowedFirst {
+            "object previous = value; { int Alias = 0; int StringBuilder = 0; var shadowed = new { Value = value }; previous = shadowed; " +
+                "if (Alias != 0 || StringBuilder != 0) return \"bad\"; } var second = new { Value = value }; " +
+                "return second.Equals(previous).ToString() + \":\" + " +
+                read +
+                ".ToString() + \":0\";"
+        } else {
+            "var first = new { Value = value }; { int Alias = 0; int StringBuilder = 0; var second = new { Value = value }; " +
+                "return first.Equals(second).ToString() + \":\" + " +
+                read +
+                ".ToString() + \":\" + (Alias + StringBuilder); }"
+        }
+        let preparation = if kind == "containing" {
+            "var dictionary = new Dictionary<Alias, int>(); dictionary.Add(element, 7); "
+        } else {
+            ""
+        }
+        let source = "#nullable enable\nusing System; using System.Collections.Generic; using System.Linq; " +
+            "using Alias = System.Text.StringBuilder; public static class First { public static string Run() { " +
+            "var element = new System.Text.StringBuilder(\"same\"); " +
+            preparation +
+            "var value = " +
+            value +
+            "; " +
+            body +
+            " } } public static class Second { public static string Run() => \"\"; }"
+        let project = CSharpProjectLoader.LoadInMemory([](string, string){("ScopedOrdinaryAlias.cs", source)})
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        let document = Assert.Single(project.Documents)
+        let expectedOutput = if kind == "containing" {
+            "True:1:0"
+        } else {
+            "True:same:0"
+        }
+        CompileAndRunNative(project.Compilation, expectedOutput)
+        let translator = CSharpToGSharpTranslator()
+        var previous string? = nil
+        for special in[]bool{shadowedFirst, !shadowedFirst, shadowedFirst} {
+            let context = TranslationContext(
+                project.Compilation,
+                project.Compilation.GetSemanticModel(document.SyntaxTree, ignoreAccessibility: special),
+                document.FilePath
+            )
+            for var pass = 0; pass < 2; pass++ {
+                let printed = GSharpPrinter.Print(translator.TranslateDocument(document, context))
+                if previous == nil {
+                    CompileAndRunOutput(printed, expectedOutput)
+                } else {
+                    Assert.Equal(Encoding.UTF8.GetBytes(previous), Encoding.UTF8.GetBytes(printed))
+                }
+                previous = printed
+                Assert.Single(AnonymousTypeNames(printed))
+                using let analysis = ObliviousNullabilityAnalyzer.UseCatalogScope(context)
+                let Mapper = () -> {
+                    let result = CSharpTypeMapper()
+                    result.ReserveImportNames(
+                        []ImportDirective{ImportDirective("System.Text.StringBuilder", "Alias")},
+                        []Microsoft.CodeAnalysis.SyntaxTree{document.SyntaxTree},
+                        context
+                    )
+                    return result
+                }
+                let creations = document
+                    .GetRoot()
+                    .DescendantNodes()
+                    .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.AnonymousObjectCreationExpressionSyntax]()
+                    .ToArray()
+                Assert.Equal(2, creations.Length)
+                for reverse in[]bool{false, true} {
+                    let mapper = Mapper()
+                    let spellings = HashSet[string](StringComparer.Ordinal)
+                    for var replay = 0; replay < 2; replay++ {
+                        for index in(
+                            if reverse {
+                                []int32{1, 0}
+                            } else {
+                                []int32{0, 1}
+                            }
+                        ) {
+                            let creation = creations[index]
+                            let type = Assert.IsAssignableFrom[Microsoft.CodeAnalysis.INamedTypeSymbol](
+                                context.SemanticModel.GetTypeInfo(creation).Type
+                            )
+                            let property = Assert.Single(type.GetMembers().OfType[IPropertySymbol]())
+                            let incoming = []GTypeReference{
+                                mapper.Map(property.Type, context, creation.GetLocation()) ??
+                                    throw InvalidOperationException("Mapping missing.")
+                            }
+                            let fresh = Mapper().GetOrCreateAnonymousDataClassShape(
+                                type,
+                                context,
+                                creation.GetLocation(),
+                                incoming
+                            )
+                            let expected = GSharpPrinter.RenderTypeReference(
+                                Assert.Single(
+                                    fresh.PropertyTypes ?? throw InvalidOperationException("Fresh storage missing.")
+                                )
+                            )
+                            spellings.Add(expected)
+                            let shape = mapper.GetOrCreateAnonymousDataClassShape(
+                                type,
+                                context,
+                                creation.GetLocation(),
+                                incoming
+                            )
+                            let actual = GSharpPrinter.RenderTypeReference(
+                                Assert.Single(
+                                    shape.PropertyTypes ?? throw InvalidOperationException("Storage missing.")
+                                )
+                            )
+                            Assert.True(expected == actual, "Expected ${expected}, actual ${actual}.\n" + printed)
+                        }
+                    }
+                    Assert.Equal(2, spellings.Count)
+                }
+            }
+        }
+    }
+
+    @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func OrdinaryAliasesAcrossDocumentsSharePhysicalOutput(generic bool, reversedFirst bool) {
+        let carrier = if generic {
+            "List[ALIAS]"
+        } else {
+            "ALIAS"
+        }
+        let csCarrier = carrier.Replace("[", "<").Replace("]", ">")
+        let value = if generic {
+            "new List<A>{element}"
+        } else {
+            "element"
+        }
+        let project = CSharpProjectLoader.LoadInMemory(
+            [](string, string){
+                (
+                    "First.cs",
+                    "#nullable enable\nusing System.Collections.Generic; using A = System.Text.StringBuilder; " +
+                        "public static class First { public static object Make(" +
+                        csCarrier.Replace("ALIAS", "A") +
+                        " value) => new { Value = value }; public static string Run() { " +
+                        "var element = new System.Text.StringBuilder(\"same\"); var value = " +
+                        value +
+                        "; return Make(value).Equals(Second.Make(value)).ToString(); } }"
+                ),
+                (
+                    "Second.cs",
+                    "#nullable enable\nusing System.Collections.Generic; using B = System.Text.StringBuilder; " +
+                        "public static class Second { public static object Make(" +
+                        csCarrier.Replace("ALIAS", "B") +
+                        " value) => new { Value = value }; public static string Run() => \"\"; }"
+                )
+            }
+        )
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        CompileAndRunNative(project.Compilation, "True")
+        let translator = CSharpToGSharpTranslator()
+        var previous string? = nil
+        for special in[]bool{reversedFirst, !reversedFirst, reversedFirst} {
+            for reverse in[]bool{reversedFirst, !reversedFirst} {
+                let printed = [2]string
+                for index in(
+                    if reverse {
+                        []int32{1, 0}
+                    } else {
+                        []int32{0, 1}
+                    }
+                ) {
+                    let document = project.Documents[index]
+                    printed[index] = GSharpPrinter.Print(
+                        translator.TranslateDocument(
+                            document,
+                            TranslationContext(
+                                project.Compilation,
+                                project.Compilation.GetSemanticModel(document.SyntaxTree, ignoreAccessibility: special),
+                                document.FilePath
+                            )
+                        )
+                    )
+                }
+                Assert.Single(AnonymousTypeNames(printed[0]).Concat(AnonymousTypeNames(printed[1])))
+                if previous == nil {
+                    CompileAndRunOutput(
+                        [](Name string, Text string){("First.gs", printed[0]), ("Second.gs", printed[1])},
+                        "True"
+                    )
+                } else {
+                    Assert.Equal(Encoding.UTF8.GetBytes(previous), Encoding.UTF8.GetBytes(printed[0] + printed[1]))
+                }
+                previous = printed[0] + printed[1]
+            }
+        }
+    }
+
     @Theory
     @InlineData("ManagedRef")
     @InlineData("ReadOnlyManagedRef")
@@ -740,19 +968,7 @@ open class Issue2292AnonymousTypePackageScopeTests {
                 Path.ChangeExtension(dll, ".runtimeconfig.json"),
                 "{\"runtimeOptions\":{\"tfm\":\"net10.0\",\"framework\":{\"name\":\"Microsoft.NETCore.App\",\"version\":\"10.0.0\"}}}"
             )
-            let references = string.Join(
-                " ",
-                Directory.EnumerateFiles(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "*.dll").Select(
-                    (path string) -> "-r \"" + path + "\""
-                )
-            )
-            let (verifyExit, verifyOutput) = RunDotnet(
-                "tool run ilverify \"" + dll + "\" -s System.Private.CoreLib " + references + " " + string.Join(
-                    " ",
-                    extra.Select((path string) -> "-r \"" + path + "\"")
-                )
-            )
-            Assert.True(verifyExit == 0, verifyOutput)
+            VerifyOutputIL(dll, extra)
             for reference in extra {
                 File.Copy(reference, Path.Combine(directory, Path.GetFileName(reference)), overwrite: true)
             }
@@ -762,6 +978,49 @@ open class Issue2292AnonymousTypePackageScopeTests {
         } finally {
             Directory.Delete(directory, recursive: true)
         }
+    }
+
+    private func CompileAndRunNative(compilation CSharpCompilation, expected string) {
+        let directory = Path.Combine(AppContext.BaseDirectory, "issue2292-native", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let driver = CSharpSyntaxTree.ParseText(
+                "System.Console.WriteLine(First.Run() + Second.Run());",
+                path: "NativeDriver.cs"
+            )
+            let executable = compilation.AddSyntaxTrees(driver).WithOptions(
+                compilation.Options.WithOutputKind(Microsoft.CodeAnalysis.OutputKind.ConsoleApplication)
+            )
+            let dll = Path.Combine(directory, "Native.dll")
+            let emitted = executable.Emit(dll)
+            Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics))
+            File.WriteAllText(
+                Path.ChangeExtension(dll, ".runtimeconfig.json"),
+                "{\"runtimeOptions\":{\"tfm\":\"net10.0\",\"framework\":{\"name\":\"Microsoft.NETCore.App\",\"version\":\"10.0.0\"}}}"
+            )
+            VerifyOutputIL(dll, Array.Empty[string]())
+            let (exit, output) = RunDotnet("\"" + dll + "\"")
+            Assert.True(exit == 0, output)
+            Assert.Equal(Encoding.UTF8.GetBytes(expected + Environment.NewLine), Encoding.UTF8.GetBytes(output))
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    private func VerifyOutputIL(dll string, extra IReadOnlyList[string]) {
+        let references = string.Join(
+            " ",
+            Directory.EnumerateFiles(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "*.dll").Select(
+                (path string) -> "-r \"" + path + "\""
+            )
+        )
+        let (verifyExit, verifyOutput) = RunDotnet(
+            "tool run ilverify \"" + dll + "\" -s System.Private.CoreLib " + references + " " + string.Join(
+                " ",
+                extra.Select((path string) -> "-r \"" + path + "\"")
+            )
+        )
+        Assert.True(verifyExit == 0, verifyOutput)
     }
 
     @Fact

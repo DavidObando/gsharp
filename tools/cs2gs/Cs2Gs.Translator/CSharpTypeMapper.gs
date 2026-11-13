@@ -4284,8 +4284,10 @@ class CSharpTypeMapper {
             )
         )
 
-        private func AnonymousIncomingContractKey(type GTypeReference, registry AnonymousTypeRegistry) string ->
-        AnonymousOutputContractKey(type, registry, nil, nil)
+        private func AnonymousIncomingContractKey(type GTypeReference, registry AnonymousTypeRegistry) string {
+            let spelling = GSharpPrinter.RenderTypeReference(type)
+            return "${spelling.Length}:$spelling" + AnonymousOutputContractKey(type, registry, nil, nil)
+        }
 
         private func AnonymousOutputContractKey(
             mapped GTypeReference,

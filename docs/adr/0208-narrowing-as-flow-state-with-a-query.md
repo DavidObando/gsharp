@@ -541,6 +541,8 @@ The physical naming registry remains model-scoped; each visitor owns its body st
 Output contracts canonicalize native and qualified runtime representations only
 with the same recognized source-type identity that selects those forms during mapping.
 Incoming merge keys retain scope-correct rendering contracts.
+They include the existing printer's recursive type spelling and the complete structural contract.
+Ordinary aliases and qualifiers remain input distinctions, not physical output distinctions.
 Call effects apply to external alias roots even when facts contain readonly
 member links. A replaced root loses every descendant fact. The shared direct-callee
 inventory includes generic construction and source/custom CLR event accessors;
