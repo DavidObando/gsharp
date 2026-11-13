@@ -3687,7 +3687,7 @@ partial class CSharpToGSharpTranslator {
                                 this
                                 .context
                                 .GetDeclaredSymbol(single) is ILocalSymbol local &&
-                                this.InferredLocalDefaultRequiresTypedDeclaration(local)
+                                this.DeconstructionLocalRequiresTypedDeclaration(local, declaration.Type.IsVar)
                         )
                     )
                 ) {
@@ -3877,7 +3877,7 @@ partial class CSharpToGSharpTranslator {
                     .GetDeclaredSymbol(directSingle) is ILocalSymbol directLocal && !this.IsLocalReassigned(
                     directLocal
                 ) &&
-                    (!directDecl.Type.IsVar || !this.InferredLocalDefaultRequiresTypedDeclaration(directLocal)) &&
+                    !this.DeconstructionLocalRequiresTypedDeclaration(directLocal, directDecl.Type.IsVar) &&
                     (
                     directDecl
                         .Type
@@ -4267,8 +4267,11 @@ partial class CSharpToGSharpTranslator {
             if designation is SingleVariableDesignationSyntax single {
                 let name = this.EmittedName(single, single.Identifier)
                 let local ILocalSymbol? = this.context.GetDeclaredSymbol(single) as ILocalSymbol
-                var type = if inferredType && local != nil && this.InferredLocalDefaultRequiresTypedDeclaration(local) {
-                    MakeNullable(this.typeMapper.MapEventType(local.Type, this.context, single.GetLocation()))
+                var type = if inferredType && local != nil && this.DeconstructionLocalRequiresTypedDeclaration(
+                    local,
+                    true
+                ) {
+                    MakeNullable(this.MapInferredLocalDeclarationType(local, single.GetLocation()))
                 } else if !inferredType && local != nil {
                     this.typeMapper.Map(local.Type, this.context, single.GetLocation())
                 } else {
@@ -4291,6 +4294,10 @@ partial class CSharpToGSharpTranslator {
                             conversion,
                             single.GetLocation()
                         )
+                    }
+                    if type != nil {
+                        this.state.EmittedLocalTypeClauses.Add(local)
+                        this.RecordEmittedLocalNullability(local, type, nil, initializer)
                     }
                 }
                 (conversions ?? statements).Add(
@@ -4326,7 +4333,8 @@ partial class CSharpToGSharpTranslator {
                     this
                     .context
                     .GetDeclaredSymbol(childSingle) is ILocalSymbol local && !this.IsLocalReassigned(local) &&
-                    !(inferredType && this.InferredLocalDefaultRequiresTypedDeclaration(local)) {
+                    !this
+                    .DeconstructionLocalRequiresTypedDeclaration(local, inferredType) {
                     temps.Add(this.EmittedName(childSingle, childSingle.Identifier)!!)
                     directNames[i] = true
                 } else {
@@ -4424,6 +4432,76 @@ partial class CSharpToGSharpTranslator {
             )
         }
 
+        // Native tuple bindings cannot carry a leaf's nullable storage clause.
+        private func DeconstructionLocalRequiresTypedDeclaration(local ILocalSymbol, inferredType bool) bool {
+            if !inferredType {
+                return IsAnnotatedNullableReference(local.Type) || this.ShouldPromoteToNullableReference(local)
+            }
+            if this.InferredLocalDefaultRequiresTypedDeclaration(local) {
+                return true
+            }
+            if !this.IsLocalReassigned(local) ||
+                !(
+                this.InferredLocalDeclarationIsNullable(local) ||
+                    local
+                    .Type
+                    .IsReferenceType &&
+                    this.TryGetRefStorageSlot(local, 0) is {} slot && this.RefStorageIsNullable(
+                    slot,
+                    includeArrays: true
+                )
+            ) {
+                return false
+            }
+            let initializer = this.GetInferredLocalInitializer(local, out _, out _)
+            if initializer != nil {
+                return this.GSharpExpressionIsStaticallyNonNull(initializer)
+            }
+            let element = this.DeconstructedElementDeclaration(local)
+            if element != nil {
+                return this.DeclaredValueIsStaticallyNonNull(
+                    element,
+                    ObliviousNullabilityAnalyzer.SymbolValueType(element)
+                )
+            }
+            let storage = this.GetDeconstructedTupleStorageType(local)
+            return storage != nil && !storage.IsNullable
+        }
+
+        private func GetDeconstructedTupleStorageType(local ILocalSymbol) GTypeReference? {
+            if local
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is not SingleVariableDesignationSyntax single ||
+                single
+                .Ancestors()
+                .OfType[AssignmentExpressionSyntax]()
+                .FirstOrDefault() is not{} assignment ||
+                this
+                .context
+                .GetTypeInfo(assignment.Right)
+                .Type is not INamedTypeSymbol{IsTupleType: true} tuple ||
+                !TryFindDeconstructionPath(single, assignment.Left, List[int32](), out var path) {
+                return nil
+            }
+            let source = this.context.GetSymbolInfo(assignment.Right).Symbol
+            var mapped = if source is IMethodSymbol method {
+                this.MapDelegateLikeReturnType(method, isAsync: false, assignment.Right.GetLocation())
+            } else {
+                this.PromoteIfUsedAsNullable(
+                    this.typeMapper.Map(tuple, this.context, assignment.Right.GetLocation()),
+                    source
+                )
+            }
+            for index in path!! {
+                if mapped is not TupleTypeReference current || index >= current.ElementTypes.Count {
+                    return nil
+                }
+                mapped = current.ElementTypes[index]
+            }
+            return mapped
+        }
+
         private func TryGetDeconstructionTargets(
             left ExpressionSyntax,
             out binding BindingKind,
@@ -4453,7 +4531,7 @@ partial class CSharpToGSharpTranslator {
                     // designation, not a declarator.
                     if designation is SingleVariableDesignationSyntax indexCheckSingle {
                         if this.context.GetDeclaredSymbol(indexCheckSingle) is ILocalSymbol local {
-                            if this.InferredLocalDefaultRequiresTypedDeclaration(local) {
+                            if this.DeconstructionLocalRequiresTypedDeclaration(local, true) {
                                 return false
                             }
                             if this.IsLocalReassigned(local) {
@@ -4497,10 +4575,7 @@ partial class CSharpToGSharpTranslator {
                     // designation per tuple element.
                     if declaration.Designation is SingleVariableDesignationSyntax indexCheckSingle {
                         if this.context.GetDeclaredSymbol(indexCheckSingle) is ILocalSymbol local &&
-                            declaration
-                            .Type
-                            .IsVar &&
-                            this.InferredLocalDefaultRequiresTypedDeclaration(local) {
+                            this.DeconstructionLocalRequiresTypedDeclaration(local, declaration.Type.IsVar) {
                             return false
                         }
                         if this.context.GetDeclaredSymbol(indexCheckSingle) is ILocalSymbol reassignedLocal &&

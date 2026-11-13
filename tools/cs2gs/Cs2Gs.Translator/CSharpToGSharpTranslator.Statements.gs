@@ -374,45 +374,9 @@ partial class CSharpToGSharpTranslator {
                     // documents — structurally equivalent delegates are not
                     // interchangeable — and falls through to Map unchanged for
                     // every non-delegate type, so only this shape moves.
-                    var mappedInferredType = this.typeMapper.MapEventType(
-                        inferredLocal.Type,
-                        this.context,
-                        declaration!!.Type.GetLocation()
+                    type = MakeNullable(
+                        this.MapInferredLocalDeclarationType(inferredLocal, declaration!!.Type.GetLocation())
                     )
-                    if inferredLocal.Type is IArrayTypeSymbol inferredArraySymbol &&
-                        mappedInferredType is ArrayTypeReference mappedInferredArray &&
-                        this
-                        .TryResolveLocalWidenedImplicitArrayInitializer(
-                        inferredLocal,
-                        out var localDepthOffset,
-                        HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
-                    ) is {} originInitArray {
-                        let promotedInferredElem = if localDepthOffset == 0 {
-                            this.PromoteInferredDelegateArrayElementType(
-                                mappedInferredArray.ElementType,
-                                inferredArraySymbol.ElementType,
-                                originInitArray
-                            )
-                        } else {
-                            let originComponent = this.GetImplicitArrayComponent(originInitArray)
-                            this.PromoteImplicitArrayLevel(
-                                mappedInferredArray.ElementType,
-                                inferredArraySymbol.ElementType,
-                                originInitArray,
-                                originComponent.Levels,
-                                originComponent.Depth + localDepthOffset
-                            )
-                        }
-                        if promotedInferredElem != nil && !object.ReferenceEquals(
-                            promotedInferredElem,
-                            mappedInferredArray.ElementType
-                        ) {
-                            mappedInferredType = ArrayTypeReference(promotedInferredElem, mappedInferredArray.Rank){
-                                IsNullable = mappedInferredArray.IsNullable
-                            }
-                        }
-                    }
-                    type = MakeNullable(mappedInferredType)
                 } else if initializer != nil &&
                     (
                     declarator.Initializer!!.Value is BaseObjectCreationExpressionSyntax and
@@ -633,6 +597,65 @@ partial class CSharpToGSharpTranslator {
                 return true
             }
             return this.InferredLocalDefaultRequiresTypedDeclaration(local)
+        }
+
+        private func MapInferredLocalDeclarationType(local ILocalSymbol, location Location) GTypeReference? {
+            var mapped = this.GetDeconstructedTupleStorageType(local) ?? this.typeMapper.MapEventType(
+                local.Type,
+                this.context,
+                location
+            )
+            let initializer = this.GetInferredLocalInitializer(local, out _, out _)
+            if initializer != nil && SymbolEqualityComparer.Default.Equals(
+                local.Type,
+                this.context.GetTypeInfo(initializer).Type
+            ) {
+                mapped = this.PromoteCreationTupleArguments(mapped, local.Type, initializer)
+                if initializer is ArrayCreationExpressionSyntax creation &&
+                    local.Type is IArrayTypeSymbol createdArray &&
+                    mapped is ArrayTypeReference mappedCreation &&
+                    this.MapArrayCreationElementType(creation) is {} createdElement {
+                    mapped = ArrayTypeReference(createdElement, createdArray.Rank){
+                        IsNullable = mappedCreation.IsNullable
+                    }
+                }
+            }
+            let source = if initializer != nil {
+                this.context.GetSymbolInfo(initializer).Symbol
+            } else {
+                default(ISymbol?)
+            }
+            if source != nil && SymbolEqualityComparer.Default.Equals(
+                local.Type,
+                ObliviousNullabilityAnalyzer.SymbolValueType(source)
+            ) {
+                mapped = this.PromoteIfUsedAsNullable(mapped, source)
+            }
+            if local.Type is IArrayTypeSymbol array &&
+                mapped is ArrayTypeReference mappedArray &&
+                this
+                .TryResolveLocalWidenedImplicitArrayInitializer(
+                local,
+                out var depth,
+                HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
+            ) is {} origin {
+                let element = if depth == 0 {
+                    this.PromoteInferredDelegateArrayElementType(mappedArray.ElementType, array.ElementType, origin)
+                } else {
+                    let component = this.GetImplicitArrayComponent(origin)
+                    this.PromoteImplicitArrayLevel(
+                        mappedArray.ElementType,
+                        array.ElementType,
+                        origin,
+                        component.Levels,
+                        component.Depth + depth
+                    )
+                }
+                if element != nil && !object.ReferenceEquals(element, mappedArray.ElementType) {
+                    mapped = ArrayTypeReference(element, mappedArray.Rank){IsNullable = mappedArray.IsNullable}
+                }
+            }
+            return this.PromoteIfUsedAsNullable(mapped, local)
         }
 
         private func InferredLocalDefaultRequiresTypedDeclaration(local ILocalSymbol?) bool {

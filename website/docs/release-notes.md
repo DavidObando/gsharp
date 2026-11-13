@@ -18,6 +18,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 - Convert variadic method groups to delegates using their physical parameter signatures. Preserve carrier identity, overload selection, and receiver evaluation. Function values do not gain variadic expansion. (Fixes #6003)
 
+- Preserve nullable writable storage in flat `cs2gs` deconstruction declarations. Materialize typed locals when tuple inference loses their contract. Reuse ordinary inferred-local nullability, live default-origin analysis, and ref-storage contracts. Preserve nested nullable positions and retain native bindings when inference already matches. Keep required read assertions and evaluate the source once. (Fixes #5994)
+
 - Initialize captured switch-pattern variables before evaluating `when` guards. Immediate and escaping guard closures now retain the matched values in both switch forms, including after false guards. Pattern bindings remain read-only. (Fixes #5998)
 
 - Avoid redundant null assertions on inferred deconstruction locals from non-null positional properties. Reuse the emitted declaration's nullability decision. Keep nullable and changed locals guarded. (Fixes #5597)
