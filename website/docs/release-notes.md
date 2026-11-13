@@ -16,6 +16,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Clarify ADR-0209's existing public-copy preference for well-known types, nonpublic fallback, and searched/dependency module partition. Consumer-specific access remains compilation-owned. This changes documentation only. (Fixes #5204)
+
 - Construct expanded List and span variadic carriers over source-declared elements and generic type parameters. Preserve symbolic element types through ordinary constructor emission, including nullable elements and nested collections. Normal-form arguments retain their carrier identity. (Fixes #6010)
 
 - Reject release packages whose embedded nuspec ID or version differs from the filename. Reuse package metadata verification before publishing. (Fixes #5550)
