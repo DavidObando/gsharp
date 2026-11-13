@@ -10732,17 +10732,27 @@ internal shared class ObliviousNullabilityAnalyzer {
         return nil
     }
 
-    // Explicit layout can alias readonly fields with mutable storage.
+    // Explicit or unresolved layout cannot prove that readonly storage is separate.
     private func MayHaveOverlappingFields(type INamedTypeSymbol?) bool -> type == nil || type.GetAttributes().Any(
-        (attribute AttributeData) -> attribute.AttributeClass?.ToDisplayString() ==
-        "System.Runtime.InteropServices.StructLayoutAttribute" &&
+        (attribute AttributeData) -> attribute.AttributeClass == nil ||
             attribute
-            .ConstructorArguments
-            .Length > 0 &&
-            attribute
-            .ConstructorArguments[0]
-            .Value is int32 layout &&
-            layout == int32(System.Runtime.InteropServices.LayoutKind.Explicit)
+            .AttributeClass
+            ?.TypeKind == TypeKind.Error ||
+            (
+            attribute.AttributeClass?.ToDisplayString() == "System.Runtime.InteropServices.StructLayoutAttribute" &&
+                (
+                attribute
+                    .ConstructorArguments
+                    .Length != 1 ||
+                    attribute
+                    .ConstructorArguments[0]
+                    .Value is not int32 layout ||
+                    (
+                    layout != int32(System.Runtime.InteropServices.LayoutKind.Auto) &&
+                        layout != int32(System.Runtime.InteropServices.LayoutKind.Sequential)
+                )
+            )
+        )
     )
 
     private func IsNullGuardDominatedExpression(value ExpressionSyntax, model SemanticModel) bool {

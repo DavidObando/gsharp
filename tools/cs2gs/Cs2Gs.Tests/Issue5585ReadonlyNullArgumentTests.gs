@@ -199,13 +199,14 @@ public class Holder {
 
     @Theory
     @InlineData("Explicit", false)
+    @InlineData("ShortExplicit", false)
     @InlineData("Sequential", true)
     @InlineData("Auto", true)
     func ReadonlyGuard_RequiresNonOverlappingStorage(layout string, expected bool) {
         let source = `
 #nullable enable
 using System.Runtime.InteropServices;
-[StructLayout(LayoutKind.LAYOUT)]
+[StructLayout(LAYOUT)]
 public class Holder {
     OFFSET private readonly string? stored;
     OFFSET private string? alias;
@@ -213,7 +214,15 @@ public class Holder {
     public void Read() { if (stored != null) { Clear(); Consume(stored); } }
     private static void Consume(string value) { }
 }
-`.Replace("LAYOUT", layout).Replace(
+`.Replace(
+            "LAYOUT",
+            if layout == "ShortExplicit" {
+                "(short)LayoutKind.Explicit"
+            } else {
+                "LayoutKind." + layout
+            }
+        )
+            .Replace(
             "OFFSET",
             if layout == "Explicit" {
                 "[FieldOffset(0)]"
