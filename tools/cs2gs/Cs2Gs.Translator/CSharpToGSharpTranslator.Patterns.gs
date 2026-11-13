@@ -4647,16 +4647,12 @@ partial class CSharpToGSharpTranslator {
                             )
                         ) &&
                             Unparenthesize(argument.Expression) is ElementAccessExpressionSyntax elementAccess {
-                            var target ExpressionSyntax = elementAccess
-                            var accessPosition = ""
-                            while target is ElementAccessExpressionSyntax currentAccess &&
-                                this
-                                .context
-                                .GetTypeInfo(currentAccess.Expression)
-                                .Type is IArrayTypeSymbol {
-                                accessPosition = JoinPosition("0", accessPosition)
-                                target = Unparenthesize(currentAccess.Expression)!!
-                            }
+                            let (_, accessDepth) = ObliviousNullabilityAnalyzer.RefArrayStorage(
+                                elementAccess,
+                                this.context.SemanticModel,
+                                out var target
+                            )
+                            let accessPosition = string.Join(".", Enumerable.Repeat("0", accessDepth))
                             if accessPosition == position && this.IsArrayStorageAlias(target, normalizedOwner) &&
                                 this
                                 .context

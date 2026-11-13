@@ -2261,15 +2261,12 @@ partial class CSharpToGSharpTranslator {
                                 byRefParameter
                             )
                         ) {
-                            var target ExpressionSyntax = elementAccess
-                            var accessPosition = ""
-                            while target is ElementAccessExpressionSyntax currentAccess && model.GetTypeInfo(
-                                currentAccess.Expression
+                            let (_, accessDepth) = ObliviousNullabilityAnalyzer.RefArrayStorage(
+                                elementAccess,
+                                model,
+                                out var target
                             )
-                                .Type is IArrayTypeSymbol {
-                                accessPosition = JoinPosition("0", accessPosition)
-                                target = Unparenthesize(currentAccess.Expression)!!
-                            }
+                            let accessPosition = string.Join(".", Enumerable.Repeat("0", accessDepth))
                             if accessPosition != "" {
                                 this.AddAliasedSourcePositions(
                                     flow,

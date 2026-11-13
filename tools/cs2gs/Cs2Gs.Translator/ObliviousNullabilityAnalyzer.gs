@@ -5094,15 +5094,33 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
     }
 
+    internal func IsRangeElementAccess(access ElementAccessExpressionSyntax, model SemanticModel) bool {
+        let rangeType ITypeSymbol? = model.Compilation.GetTypeByMetadataName("System.Range")
+        return rangeType != nil && access.ArgumentList.Arguments.Count == 1 && SymbolEqualityComparer.Default.Equals(
+            model.GetTypeInfo(access.ArgumentList.Arguments[0].Expression).Type,
+            rangeType
+        )
+    }
+
     internal func RefArrayStorage(expression ExpressionSyntax, model SemanticModel, preserveSubstitution bool = false)(
         Owner ISymbol?,
         Depth int32
-    ) {
-        var receiver = Unwrap(expression, unwrapSuppressions: true)
+    ) -> RefArrayStorage(expression, model, out _, preserveSubstitution)
+
+    internal func RefArrayStorage(
+        expression ExpressionSyntax,
+        model SemanticModel,
+        out receiver ExpressionSyntax,
+        preserveSubstitution bool = false
+    )(Owner ISymbol?, Depth int32) {
+        // A slice consumes syntax, but not an element position. Return the receiver from this same walk.
+        receiver = Unwrap(expression, unwrapSuppressions: true)
         var depth = 0
         while receiver is ElementAccessExpressionSyntax access && model.GetTypeInfo(access.Expression)
             .Type is IArrayTypeSymbol {
-            depth++
+            if !IsRangeElementAccess(access, model) {
+                depth++
+            }
             receiver = Unwrap(access.Expression, unwrapSuppressions: true)
         }
         let symbol = model.GetSymbolInfo(receiver).Symbol
@@ -7692,11 +7710,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         if current is ElementAccessExpressionSyntax access && model.GetTypeInfo(access.Expression)
             .Type is IArrayTypeSymbol {
-            let (storageOwner, depth) = RefArrayStorage(access, model, preserveSubstitution: true)
-            var receiver ExpressionSyntax = access
-            for var i = 0; i < depth && receiver is ElementAccessExpressionSyntax element; i++ {
-                receiver = Unwrap(element.Expression, unwrapSuppressions)
-            }
+            let (storageOwner, depth) = RefArrayStorage(access, model, out var receiver, preserveSubstitution: true)
             var resolvedReceiver = false
             for parent in EnumerateTupleContainerSources(receiver, model, unwrapSuppressions, visited) {
                 var type ITypeSymbol? = parent.StorageType
