@@ -249,8 +249,16 @@ internal partial class OverloadResolver {
             } else {
                 syntax.Identifier.Location
             }
-            for tp in tps {
+            for var i = 0; i < tps.Length; i++ {
+                let tp = tps[i]
                 let typeArg = substitution[tp]
+                if Binder.ReportByRefLikeGenericTypeArgument(
+                    Diagnostics,
+                    typeArg,
+                    syntax.TypeArgumentList?.Arguments[i].Location ?? syntax.Identifier.Location
+                ) {
+                    return BoundErrorExpression(syntax)
+                }
                 if !satisfiesConstraint(typeArg, tp, substitution) {
                     Diagnostics.ReportTypeArgumentDoesNotSatisfyConstraint(
                         constraintLocation,
@@ -1853,8 +1861,16 @@ internal partial class OverloadResolver {
         } else {
             syntax.Identifier.Location
         }
-        for tp in tps {
+        for var i = 0; i < tps.Length; i++ {
+            let tp = tps[i]
             let typeArg = substitution[tp]
+            if Binder.ReportByRefLikeGenericTypeArgument(
+                Diagnostics,
+                typeArg,
+                syntax.TypeArgumentList?.Arguments[i].Location ?? syntax.Identifier.Location
+            ) {
+                return false
+            }
             if !satisfiesConstraint(typeArg, tp, substitution) {
                 Diagnostics.ReportTypeArgumentDoesNotSatisfyConstraint(
                     constraintLocation,

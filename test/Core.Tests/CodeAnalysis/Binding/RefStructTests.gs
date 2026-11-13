@@ -443,7 +443,7 @@ func probe(d Dictionary[string, int32]) int32 {
     }
 
     // Issue #5216: a parameter without the flag still rejects the argument. `List[T]` reports
-    // GS0219 in a type position and GS0152 on a constructor call, and `Array.Empty[T]` finds no
+    // GS0219 in a type position and on a constructor call, and `Array.Empty[T]` finds no
     // applicable function (GS0159).
     @Fact
     func NoAllowsRefStruct_ImportedGenericType_RejectsByRefLikeTypeArgument() {
@@ -457,7 +457,7 @@ func f() {
 `
         let diagnostics = Bind(source)
         let errors = diagnostics.Where((d Diagnostic) -> d.IsError).Select((d Diagnostic) -> d.Id).ToArray()
-        Assert.Equal([]string{"GS0219", "GS0152"}, errors)
+        Assert.Equal([]string{"GS0219", "GS0219"}, errors)
     }
 
     @Fact

@@ -714,14 +714,22 @@ internal partial class ExpressionBinder {
                 // create a new ImportedClassSymbol for the nested type and bind
                 // the right segment against it, enabling chained static/enum
                 // member access on nested types.
-                if classSymbol != nil &&
-                    TryResolveNestedTypeFromAccessorLeft(classSymbol, nested.LeftPart, out var nestedClassSymbol) {
-                    if nested.IsNullConditional {
-                        // Null-conditional on a type is semantically meaningless
-                        // but fall through to avoid a crash.
+                if classSymbol != nil {
+                    if TryResolveNestedTypeFromAccessorLeft(
+                        classSymbol,
+                        nested.LeftPart,
+                        out var nestedClassSymbol,
+                        out var nestedFailureHandled
+                    ) {
+                        if nested.IsNullConditional {
+                            // Null-conditional on a type is semantically meaningless.
+                            return BoundErrorExpression(nil)
+                        }
+                        return BindAccessorStep(nil, nestedClassSymbol, nested.RightPart)
+                    }
+                    if nestedFailureHandled {
                         return BoundErrorExpression(nil)
                     }
-                    return BindAccessorStep(nil, nestedClassSymbol, nested.RightPart)
                 }
                 let head = BindAccessorStep(receiver, classSymbol, nested.LeftPart, receiverSyntax, receiverStart)
                 if head is BoundErrorExpression {
@@ -2074,9 +2082,11 @@ internal partial class ExpressionBinder {
     private func TryResolveNestedTypeFromAccessorLeft(
         classSymbol ImportedClassSymbol,
         leftPart ExpressionSyntax,
-        @NotNullWhen(true) out nestedClassSymbol ImportedClassSymbol?
+        @NotNullWhen(true) out nestedClassSymbol ImportedClassSymbol?,
+        out failureHandled bool
     ) bool {
         nestedClassSymbol = nil
+        failureHandled = false
         if leftPart is NameExpressionSyntax nameExpr {
             let name = nameExpr.IdentifierToken.ValueText
             // Only resolve as a nested type when the name is NOT a static
@@ -2148,16 +2158,27 @@ internal partial class ExpressionBinder {
                 nestedGenericType!!,
                 combinedArgs.MoveToImmutable(),
                 leftPart,
-                out nestedClassSymbol
+                out nestedClassSymbol,
+                out failureHandled
             )
         }
         if leftPart is AccessorExpressionSyntax accessor {
             // Multi-level nesting: recursively resolve the left side first,
             // then resolve the right side as a nested type of that.
-            if !TryResolveNestedTypeFromAccessorLeft(classSymbol, accessor.LeftPart, out var intermediateSymbol) {
+            if !TryResolveNestedTypeFromAccessorLeft(
+                classSymbol,
+                accessor.LeftPart,
+                out var intermediateSymbol,
+                out failureHandled
+            ) {
                 return false
             }
-            return TryResolveNestedTypeFromAccessorLeft(intermediateSymbol!!, accessor.RightPart, out nestedClassSymbol)
+            return TryResolveNestedTypeFromAccessorLeft(
+                intermediateSymbol!!,
+                accessor.RightPart,
+                out nestedClassSymbol,
+                out failureHandled
+            )
         }
         return false
     }

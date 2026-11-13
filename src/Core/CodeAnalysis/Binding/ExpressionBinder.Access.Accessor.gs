@@ -712,7 +712,17 @@ internal partial class ExpressionBinder {
             }
         } else if leftPart is AccessorExpressionSyntax inheritedImportedNestedType &&
             !inheritedImportedNestedType.IsNullConditional &&
-            TryResolveInheritedImportedNestedType(inheritedImportedNestedType, out var inheritedImportedNestedSymbol) {
+            (
+            TryResolveInheritedImportedNestedType(
+                inheritedImportedNestedType,
+                out var inheritedImportedNestedSymbol,
+                out var inheritedNestedFailureHandled
+            ) ||
+                inheritedNestedFailureHandled
+        ) {
+            if inheritedNestedFailureHandled {
+                return BoundErrorExpression(syntax)
+            }
             classSymbol = inheritedImportedNestedSymbol
         } else if leftPart is IndexExpressionSyntax nestedTypeIndex &&
             !nestedTypeIndex.IsNullConditional &&
@@ -783,9 +793,11 @@ internal partial class ExpressionBinder {
 
     private func TryResolveInheritedImportedNestedType(
         syntax AccessorExpressionSyntax,
-        @NotNullWhen(true) out nestedClassSymbol ImportedClassSymbol?
+        @NotNullWhen(true) out nestedClassSymbol ImportedClassSymbol?,
+        out failureHandled bool
     ) bool {
         nestedClassSymbol = nil
+        failureHandled = false
         var sourceType StructSymbol? = nil
         if syntax.LeftPart is NameExpressionSyntax sourceName &&
             TryLookupSourceTypeWithImportPrecedence(
@@ -812,7 +824,12 @@ internal partial class ExpressionBinder {
             return false
         }
         let importedBaseSymbol = CreateInheritedImportedClassSymbol(importedBaseType!!, syntax.LeftPart)
-        if !TryResolveNestedTypeFromAccessorLeft(importedBaseSymbol, syntax.RightPart, out nestedClassSymbol) {
+        if !TryResolveNestedTypeFromAccessorLeft(
+            importedBaseSymbol,
+            syntax.RightPart,
+            out nestedClassSymbol,
+            out failureHandled
+        ) {
             return false
         }
         nestedClassSymbol = CloseImportedNestedType(
@@ -997,7 +1014,7 @@ internal partial class ExpressionBinder {
     ) bool {
         nestedType = nil
         failureHandled = false
-        let segments = List[(Name string, Args ImmutableArray[TypeSymbol])]()
+        let segments = List[(Name string, Args ImmutableArray[TypeSymbol], Syntax ExpressionSyntax)]()
         if !TryFlattenUserTypeExpressionSegments(expr, segments) || segments.Count < 2 {
             return false
         }
@@ -1036,6 +1053,12 @@ internal partial class ExpressionBinder {
                 inheritedDeclaringContainers[i - 1] = declaringContainer
                 definitions[i] = inheritedNested!!
             } else {
+                return false
+            }
+        }
+        for segment in segments {
+            if ReportByRefLikeSourceTypeArguments(segment.Args, segment.Syntax) {
+                failureHandled = true
                 return false
             }
         }
@@ -1275,7 +1298,7 @@ internal partial class ExpressionBinder {
     /// @returns Whether the expression is a well-formed user-type name chain.
     private func TryFlattenUserTypeExpressionSegments(
         expr ExpressionSyntax,
-        segments List[(Name string, Args ImmutableArray[TypeSymbol])]
+        segments List[(Name string, Args ImmutableArray[TypeSymbol], Syntax ExpressionSyntax)]
     ) bool {
         // Issue #942 regression guard: flattening speculatively binds each
         // bracketed segment's contents as TYPE arguments. When the expression is
@@ -1301,18 +1324,18 @@ internal partial class ExpressionBinder {
     /// @returns Whether the expression is a well-formed user-type name chain.
     private func TryFlattenUserTypeExpressionSegmentsCore(
         expr ExpressionSyntax,
-        segments List[(Name string, Args ImmutableArray[TypeSymbol])]
+        segments List[(Name string, Args ImmutableArray[TypeSymbol], Syntax ExpressionSyntax)]
     ) bool {
         switch expr {
             case name is NameExpressionSyntax {
-                segments.Add((name.IdentifierToken.ValueText, default(ImmutableArray[TypeSymbol])))
+                segments.Add((name.IdentifierToken.ValueText, default(ImmutableArray[TypeSymbol]), name))
                 return true
             }
             case generic is GenericNameExpressionSyntax {
                 if !TryBindGenericSegmentArguments(generic, out var genericArgs) {
                     return false
                 }
-                segments.Add((generic.Identifier.ValueText, genericArgs))
+                segments.Add((generic.Identifier.ValueText, genericArgs, generic))
                 return true
             }
             case index is IndexExpressionSyntax when !index.IsNullConditional {
@@ -1320,7 +1343,7 @@ internal partial class ExpressionBinder {
                     if !TryBindTypeArgumentExpressions(index.Indices, out var rootArgs) {
                         return false
                     }
-                    segments.Add((indexTargetName.IdentifierToken.ValueText, rootArgs))
+                    segments.Add((indexTargetName.IdentifierToken.ValueText, rootArgs, index))
                     return true
                 }
                 if !TryFlattenUserTypeExpressionSegments(index.Target, segments) || segments.Count == 0 {
@@ -1333,7 +1356,7 @@ internal partial class ExpressionBinder {
                 if !TryBindTypeArgumentExpressions(index.Indices, out var lastArgs) {
                     return false
                 }
-                segments[segments.Count - 1] = (last.Name, lastArgs)
+                segments[segments.Count - 1] = (last.Name, lastArgs, index)
                 return true
             }
             case accessor is AccessorExpressionSyntax when !accessor.IsNullConditional {
@@ -2280,7 +2303,8 @@ internal partial class ExpressionBinder {
                     if TryResolveNestedTypeFromAccessorLeft(
                         importedBaseSymbol,
                         nested.LeftPart,
-                        out var importedNested
+                        out var importedNested,
+                        out var importedNestedFailureHandled
                     ) {
                         importedNested = CloseImportedNestedType(
                             importedBase,
@@ -2290,6 +2314,9 @@ internal partial class ExpressionBinder {
                             importedBaseSymbol.ConstructedReceiver
                         )
                         return BindAccessorStep(receiver: nil, importedNested, nested.RightPart)
+                    }
+                    if importedNestedFailureHandled {
+                        return BoundErrorExpression(nil)
                     }
                 }
                 let head = BindUserTypeStaticAccessorStep(structSym, nested.LeftPart)
@@ -2487,7 +2514,7 @@ internal partial class ExpressionBinder {
         constructedEnum = nil
         constructedInterface = nil
         failureHandled = false
-        let segments = List[(Name string, Args ImmutableArray[TypeSymbol])]()
+        let segments = List[(Name string, Args ImmutableArray[TypeSymbol], Syntax ExpressionSyntax)]()
         if !TryFlattenUserTypeExpressionSegments(typeExpr, segments) || segments.Count == 0 {
             return false
         }
@@ -2538,6 +2565,10 @@ internal partial class ExpressionBinder {
                 } else {
                     return false
                 }
+            }
+            if ReportByRefLikeSourceTypeArguments(segments[i].Args, segments[i].Syntax) {
+                failureHandled = true
+                return false
             }
             if nested is EnumSymbol nestedEnum {
                 if i < segments.Count - 1 {
@@ -3059,6 +3090,10 @@ internal partial class ExpressionBinder {
             return false
         }
         if userGenericDef {
+            if ReportByRefLikeSourceTypeArguments(typeArgs, index) {
+                failureHandled = true
+                return false
+            }
             switch alias {
                 case structDef is StructSymbol {
                     constructedStruct = StructSymbol.Construct(
@@ -3300,6 +3335,10 @@ internal partial class ExpressionBinder {
         }
         let typeArgs = typeArgsBuilder.ToImmutable()
         if userGenericDef {
+            if ReportByRefLikeSourceTypeArguments(typeArgs, generic) {
+                failureHandled = true
+                return false
+            }
             switch alias {
                 case structDef is StructSymbol {
                     constructedStruct = StructSymbol.Construct(
@@ -3617,6 +3656,48 @@ internal partial class ExpressionBinder {
         out _
     )
 
+    private func ReportByRefLikeSourceTypeArguments(
+        arguments ImmutableArray[TypeSymbol],
+        syntax ExpressionSyntax
+    ) bool {
+        if arguments.IsDefaultOrEmpty {
+            return false
+        }
+        for var i = 0; i < arguments.Length; i++ {
+            if Binder.ReportByRefLikeGenericTypeArgument(
+                Diagnostics,
+                arguments[i],
+                GetGenericTypeArgumentLocation(syntax, i, arguments.Length)
+            ) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func GetGenericTypeArgumentLocation(
+        syntax ExpressionSyntax,
+        index int32,
+        totalArgumentCount int32
+    ) TextLocation {
+        let ownCount = switch syntax {
+            case indexed is IndexExpressionSyntax: indexed.Indices.Count
+            case generic is GenericNameExpressionSyntax: generic.TypeArgumentList.Arguments.Count
+            case call is CallExpressionSyntax: call.TypeArgumentList?.Arguments.Count ?? 0
+            default: 0
+        }
+        let ownIndex = index - (totalArgumentCount - ownCount)
+        if index < 0 || index >= totalArgumentCount || ownIndex < 0 || ownIndex >= ownCount {
+            return syntax.Location
+        }
+        return switch syntax {
+            case indexed is IndexExpressionSyntax: indexed.Indices[ownIndex].Location
+            case generic is GenericNameExpressionSyntax: generic.TypeArgumentList.Arguments[ownIndex].Location
+            case call is CallExpressionSyntax: call.TypeArgumentList?.Arguments[ownIndex].Location ?? syntax.Location
+            default: syntax.Location
+        }
+    }
+
     /// Closes an open imported CLR generic definition over the CLR types of the
     /// bound type arguments (e.g. `ArrayPool`1` + `byte` ->
     /// `ArrayPool<byte>`) and surfaces it as an
@@ -3699,7 +3780,8 @@ internal partial class ExpressionBinder {
             clrArgs,
             typeArgs,
             receiverSyntax.Location,
-            bindingScope: $scope
+            bindingScope: $scope,
+            typeArgumentLocation: (i int32) -> GetGenericTypeArgumentLocation(receiverSyntax, i, typeArgs.Length)
         ) {
             // Issue #4051: this failure EXPLAINED itself. Say so, so the caller
             // stops rather than re-reading `Name[Arg]` as an index expression
