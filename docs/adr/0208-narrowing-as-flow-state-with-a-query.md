@@ -545,6 +545,7 @@ Call effects apply to external alias roots even when facts contain readonly
 member links. A replaced root loses every descendant fact. The shared direct-callee
 inventory includes generic construction and source/custom CLR event accessors;
 noncalling fieldlike source events retain their separate assignment behavior.
+Composite literals retain their ordered constructor and initializer callable-state updates.
 Return, ref-storage, null-flow, shape, effect, projection, import, and naming
 walks use the same inventory and declaration resolver. Body translation uses
 the replacement while retaining the original declared method and parameter symbols.

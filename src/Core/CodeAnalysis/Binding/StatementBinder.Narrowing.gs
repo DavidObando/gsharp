@@ -6164,8 +6164,11 @@ internal partial class StatementBinder {
                 }
             }
             if StatementBinder.HasDirectCalleeEffects(node) && !IsCallableValueInvocation(node) {
-                MarkRunsEscapedClosure(invalidateCallableAliases: false)
-                runsEscapedClosureHere = true
+                // Struct literals invalidate callable state at each execution phase in VisitStructLiteralExpression.
+                if node is not BoundStructLiteralExpression {
+                    MarkRunsEscapedClosure(invalidateCallableAliases: false)
+                    runsEscapedClosureHere = true
+                }
                 callExpressions.Add(node)
             }
             if node is BoundBaseClassCallExpression baseClassCall {
