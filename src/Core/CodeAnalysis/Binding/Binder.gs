@@ -12259,6 +12259,9 @@ partial class Binder {
             }
             // Validate symbolic arguments before erasure or an open sibling can hide a ref struct.
             for var i = 0; i < symbolicArgs.Length; i++ {
+                if !TypeSymbol.IsByRefLike(symbolicArgs[i]) {
+                    continue
+                }
                 if ReportByRefLikeGenericTypeArgument(
                     diagnostics,
                     symbolicArgs[i],
