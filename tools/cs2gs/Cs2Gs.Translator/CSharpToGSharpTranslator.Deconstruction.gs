@@ -1624,7 +1624,7 @@ partial class CSharpToGSharpTranslator {
                         .Equals(
                         (
                             TranslationContext
-                                .GetSemanticModel(owner, reference.SyntaxTree)
+                                .GetEffectiveSemanticModel(owner, reference.SyntaxTree)
                                 .GetSymbolInfo(initializer)
                                 .Symbol as IMethodSymbol
                         )?.OriginalDefinition,

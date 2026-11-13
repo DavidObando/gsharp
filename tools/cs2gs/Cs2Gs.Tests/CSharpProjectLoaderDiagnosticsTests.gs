@@ -25,6 +25,83 @@ import Xunit
 /// hand-written source file merely because its name matches a generated-file
 /// pattern (it must check for an actual generated marker instead).
 open class CSharpProjectLoaderDiagnosticsTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ScopedEffectiveModelReader_PreservesBindingsAndRestoresNormalPeers(speculative bool) {
+        let first = CSharpSyntaxTree.ParseText(
+            "public class Hidden { private static int Value = 1; } public class Reader { public static int Read() { return Hidden.Value; } }",
+            path: "ScopedModelA.cs"
+        )
+        let second = CSharpSyntaxTree.ParseText("public class Other {}", path: "ScopedModelB.cs")
+        let compilation = CSharpCompilation.Create(
+            "ScopedModel5326",
+            []SyntaxTree{first, second},
+            CSharpProjectLoader.RuntimeReferences()
+        )
+        var supplied = compilation.GetSemanticModel(first, ignoreAccessibility: true)
+        var member = first.GetRoot().DescendantNodes().OfType[MemberAccessExpressionSyntax]().Single()
+        if speculative {
+            let original = first.GetRoot().DescendantNodes().OfType[MethodDeclarationSyntax]().Single()
+            let replacement = Assert.IsAssignableFrom[BaseMethodDeclarationSyntax](
+                SyntaxFactory.ParseMemberDeclaration("public static int Read() { return Hidden.Value + 1; }")
+            )
+            Assert.True(
+                Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .CSharpExtensions
+                    .TryGetSpeculativeSemanticModelForMethodBody(
+                    supplied,
+                    original.Body!!.SpanStart,
+                    replacement,
+                    out var speculativeModel
+                )
+            )
+            supplied = speculativeModel ?? throw InvalidOperationException("Speculative model missing.")
+            member = replacement.DescendantNodes().OfType[MemberAccessExpressionSyntax]().Single()
+            Assert.True(supplied.IsSpeculativeSemanticModel)
+        }
+        Assert.NotNull(supplied.GetSymbolInfo(member).Symbol)
+        let context = TranslationContext(compilation, supplied, supplied.SyntaxTree.FilePath)
+        let normalMember = first.GetRoot().DescendantNodes().OfType[MemberAccessExpressionSyntax]().Single()
+        let peer = TranslationContext(compilation, compilation.GetSemanticModel(second), second.FilePath)
+        {
+            using let analysis = ObliviousNullabilityAnalyzer.UseCatalogScope(context)
+            Assert.NotNull(
+                TranslationContext
+                    .GetEffectiveSemanticModel(compilation, supplied.SyntaxTree)
+                    .GetSymbolInfo(member)
+                    .Symbol
+            )
+            {
+                using let treeScope = context.UseSemanticModelFor(second, compilation)
+                Assert.NotNull(
+                    TranslationContext
+                        .GetEffectiveSemanticModel(compilation, supplied.SyntaxTree)
+                        .GetSymbolInfo(member)
+                        .Symbol
+                )
+                Assert.False(TranslationContext.GetEffectiveSemanticModel(compilation, second).IgnoresAccessibility)
+            }
+            {
+                using let peerScope = ObliviousNullabilityAnalyzer.UseCatalogScope(peer)
+                Assert.Null(
+                    TranslationContext.GetEffectiveSemanticModel(compilation, first).GetSymbolInfo(normalMember).Symbol
+                )
+            }
+            Assert.NotNull(
+                TranslationContext
+                    .GetEffectiveSemanticModel(compilation, supplied.SyntaxTree)
+                    .GetSymbolInfo(member)
+                    .Symbol
+            )
+            let other = compilation.WithAssemblyName("OtherScopedModelOwner5326")
+            Assert.Null(TranslationContext.GetEffectiveSemanticModel(other, first).GetSymbolInfo(normalMember).Symbol)
+        }
+        Assert.Null(TranslationContext.GetSemanticModel(compilation, first).GetSymbolInfo(normalMember).Symbol)
+    }
+
     @Fact
     func ImplicitSharedTreeScope_RetainsRootFallbackFromThirdCompilation() {
         let shared = CSharpSyntaxTree.ParseText(

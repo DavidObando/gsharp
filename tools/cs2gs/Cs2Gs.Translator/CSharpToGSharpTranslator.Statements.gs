@@ -1664,7 +1664,7 @@ partial class CSharpToGSharpTranslator {
                 let model = if declaration.SyntaxTree == this.context.SemanticModel.SyntaxTree {
                     this.context.SemanticModel
                 } else {
-                    this.context.Compilation.GetSemanticModel(declaration.SyntaxTree)
+                    this.context.GetOwnedSemanticModel(declaration.SyntaxTree, this.context.Compilation)
                 }
                 let executable SyntaxNode? = declaration.Ancestors().FirstOrDefault(
                     (node SyntaxNode) -> node is BaseMethodDeclarationSyntax ||

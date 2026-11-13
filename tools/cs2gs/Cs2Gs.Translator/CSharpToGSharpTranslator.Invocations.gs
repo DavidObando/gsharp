@@ -4327,7 +4327,7 @@ partial class CSharpToGSharpTranslator {
         ) bool {
             let owningCompilation = this.context.SourceCompilation(ctorSymbol)
             if owningCompilation != nil && owningCompilation.ContainsSyntaxTree(ctorSyntax.SyntaxTree) {
-                ctorModel = TranslationContext.GetSemanticModel(owningCompilation, ctorSyntax.SyntaxTree)
+                ctorModel = TranslationContext.GetEffectiveSemanticModel(owningCompilation, ctorSyntax.SyntaxTree)
                 return true
             }
             ctorModel = nil

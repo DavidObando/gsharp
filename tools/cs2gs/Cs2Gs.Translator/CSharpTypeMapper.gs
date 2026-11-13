@@ -276,6 +276,7 @@ class CSharpTypeMapper {
     /// @param location The originating C# source location for diagnostics.
     /// @returns The canonical G# type reference (never `null`).
     func Map(type ITypeSymbol?, context TranslationContext, location Location?) GTypeReference? {
+        using let modelScope = ObliviousNullabilityAnalyzer.UseCatalogScope(context)
         if type == nil || type.TypeKind == TypeKind.Error {
             context.Report(
                 TranslationDiagnostic(
@@ -422,6 +423,7 @@ class CSharpTypeMapper {
     /// @param location The originating C# source location for diagnostics.
     /// @returns The canonical G# type reference for the event's handler type.
     func MapEventType(type ITypeSymbol?, context TranslationContext, location Location?) GTypeReference? {
+        using let modelScope = ObliviousNullabilityAnalyzer.UseCatalogScope(context)
         // Issue #4127/#4129 (a #3841/#2835 self-hosting regression, #3501):
         // a property pattern containing an ENUM-constant sub-pattern
         // (`TypeKind: TypeKind.Delegate`) matched against a value whose
@@ -453,6 +455,7 @@ class CSharpTypeMapper {
     /// @param location The originating source location.
     /// @returns The canonical G# type reference.
     func MapExplicitType(type ITypeSymbol, context TranslationContext, location Location?) GTypeReference? {
+        using let modelScope = ObliviousNullabilityAnalyzer.UseCatalogScope(context)
         if type is INamedTypeSymbol named &&
             named.TypeKind == TypeKind.Delegate &&
             named.DelegateInvokeMethod != nil &&
@@ -587,8 +590,10 @@ class CSharpTypeMapper {
         anonymousType INamedTypeSymbol,
         context TranslationContext,
         location Location?
-    ) NamedTypeReference -> this
-        .GetOrCreateAnonymousDataClassShape(anonymousType, context, location).Type
+    ) NamedTypeReference {
+        using let modelScope = ObliviousNullabilityAnalyzer.UseCatalogScope(context)
+        return this.GetOrCreateAnonymousDataClassShape(anonymousType, context, location).Type
+    }
 
     /// Records the retained top-level-statements entry point whose source body
     /// is emitted outside its containing `Program` type.
@@ -607,6 +612,7 @@ class CSharpTypeMapper {
         contributingTrees IEnumerable[Microsoft.CodeAnalysis.SyntaxTree],
         context TranslationContext
     ) {
+        using let modelScope = ObliviousNullabilityAnalyzer.UseCatalogScope(context)
         let compilation = context.Compilation
         let names = this.nameAllocator ?? EmittedNameAllocator.For(compilation)
         let importedNamespaces = HashSet[INamespaceSymbol](SymbolEqualityComparer.Default)
@@ -758,7 +764,7 @@ class CSharpTypeMapper {
                 CompilationMeasurements.Count("translation.import_semantic_model_reuses")
                 context.SemanticModel
             } else {
-                TranslationContext.GetSemanticModel(compilation, tree)
+                TranslationContext.GetEffectiveSemanticModel(compilation, tree)
             }
             for node in tree.GetRoot().DescendantNodes() {
                 if node is Microsoft
@@ -934,7 +940,7 @@ class CSharpTypeMapper {
                 .IgnoresAccessibility {
                 context.SemanticModel
             } else {
-                TranslationContext.GetSemanticModel(context.Compilation, tree)
+                TranslationContext.GetEffectiveSemanticModel(context.Compilation, tree)
             }
             let root = tree.GetRoot()
             let usings = root
@@ -1024,7 +1030,7 @@ class CSharpTypeMapper {
         let semanticModel = if object.ReferenceEquals(context.SemanticModel.SyntaxTree, location!!.SourceTree) {
             context.SemanticModel
         } else {
-            TranslationContext.GetSemanticModel(context.Compilation, location!!.SourceTree!!)
+            TranslationContext.GetEffectiveSemanticModel(context.Compilation, location!!.SourceTree!!)
         }
         return semanticModel
             .LookupNamespacesAndTypes(position, name: name)
@@ -1045,7 +1051,7 @@ class CSharpTypeMapper {
         let semanticModel = if object.ReferenceEquals(context.SemanticModel.SyntaxTree, location!!.SourceTree) {
             context.SemanticModel
         } else {
-            TranslationContext.GetSemanticModel(context.Compilation, location!!.SourceTree!!)
+            TranslationContext.GetEffectiveSemanticModel(context.Compilation, location!!.SourceTree!!)
         }
         return semanticModel.LookupSymbols(position).Any(
             (symbol ISymbol) -> (
@@ -2739,7 +2745,7 @@ class CSharpTypeMapper {
             if object.ReferenceEquals(context.SemanticModel.SyntaxTree, tree) {
                 context.SemanticModel
             } else {
-                TranslationContext.GetSemanticModel(context.Compilation, tree!!)
+                TranslationContext.GetEffectiveSemanticModel(context.Compilation, tree!!)
             }
         }
         let path = tree!!.FilePath
@@ -2759,7 +2765,7 @@ class CSharpTypeMapper {
                 ) &&
                     linkedTree
                     .GetText().ContentEquals(text) {
-                    models.Add(TranslationContext.GetSemanticModel(compilation, linkedTree))
+                    models.Add(TranslationContext.GetEffectiveSemanticModel(compilation, linkedTree))
                 }
             }
         }
@@ -4049,7 +4055,7 @@ class CSharpTypeMapper {
                 StringComparer.Ordinal
             )
             for tree in compilation.SyntaxTrees {
-                let model = TranslationContext.GetSemanticModel(compilation, tree)
+                let model = TranslationContext.GetEffectiveSemanticModel(compilation, tree)
                 for creation in tree.GetRoot().DescendantNodes().OfType[AnonymousObjectCreationExpressionSyntax]() {
                     if model.GetTypeInfo(creation).Type is not INamedTypeSymbol candidateType {
                         continue

@@ -258,12 +258,12 @@ partial class CSharpToGSharpTranslator {
             // members from thousands of sites.
             return DeclaringUsageScans.GetValue(
                 owner!!,
-                (_ CSharpCompilation) -> ConcurrentDictionary[ISymbol, bool](SymbolEqualityComparer.Default)
+                (_ Compilation) -> ConcurrentDictionary[ISymbol, bool](SymbolEqualityComparer.Default)
             )
                 .GetOrAdd(
                 source!!,
                 (member ISymbol) -> ScopeUsesAsNullable(
-                    TranslationContext.GetSemanticModel(owner!!, scope_.SyntaxTree),
+                    TranslationContext.GetEffectiveSemanticModel(owner!!, scope_.SyntaxTree),
                     member,
                     scope_
                 )
@@ -1137,7 +1137,7 @@ partial class CSharpToGSharpTranslator {
             }
             let delegateMetadataName = GetMetadataTypeName(delegateType.OriginalDefinition)
             for tree in this.context.Compilation.SyntaxTrees {
-                let model = TranslationContext.GetSemanticModel(this.context.Compilation, tree)
+                let model = TranslationContext.GetEffectiveSemanticModel(this.context.Compilation, tree)
                 for declaration in tree.GetRoot().DescendantNodes().OfType[DelegateDeclarationSyntax]() {
                     if model.GetDeclaredSymbol(declaration) is not INamedTypeSymbol declarationSymbol ||
                         GetMetadataTypeName(declarationSymbol) != delegateMetadataName {
@@ -2673,6 +2673,7 @@ partial class CSharpToGSharpTranslator {
                     source
             }
             this.JoinRefStorageSlots(target, this.GetRefStorageSlot(source!!, depth))
+            this.context.AfterRefStorageConnection?.Invoke(target.Symbol, source!!)
             var type = this.RefStorageSlotType(target)
             var nestedDepth = 0
             while type is IArrayTypeSymbol array {
@@ -2764,8 +2765,8 @@ partial class CSharpToGSharpTranslator {
             this.linkedRefStoragePromotions = cache.LinkedPromotions
             for tree in compilation.SyntaxTrees {
                 this.context.CancellationToken.ThrowIfCancellationRequested()
-                let model = TranslationContext.GetSemanticModel(compilation, tree)
                 using let modelScope = this.context.UseSemanticModelFor(tree, compilation)
+                let model = this.context.SemanticModel
                 for reference in tree.GetRoot().DescendantNodes().OfType[RefExpressionSyntax]() {
                     if this.RefStorageDestination(reference, model) is {} destination {
                         this.ConnectRefStorage(this.GetRefStorageSlot(destination, 0), reference.Expression, model)
@@ -2840,7 +2841,7 @@ partial class CSharpToGSharpTranslator {
                 // Foreign visitors compute local constraints without repository recursion.
                 let ownerContext = this.context.CreateRelatedContext(
                     owner,
-                    TranslationContext.GetSemanticModel(owner, tree),
+                    TranslationContext.GetEffectiveSemanticModel(owner, tree),
                     tree.FilePath
                 )
                 let ownerVisitor = DeclarationVisitor(
@@ -2934,7 +2935,7 @@ partial class CSharpToGSharpTranslator {
                                     continue
                                 }
                                 let symbol = TranslationContext
-                                    .GetSemanticModel(target.context.Compilation, tree)
+                                    .GetEffectiveSemanticModel(target.context.Compilation, tree)
                                     .GetDeclaredSymbol(node)
                                     ?.OriginalDefinition
                                 if symbol == nil {
@@ -3080,7 +3081,7 @@ partial class CSharpToGSharpTranslator {
                 let owner = this.context.SourceCompilation(local)
                 if owner == nil ||
                     !TranslationContext
-                    .GetSemanticModel(owner, declaration.SyntaxTree)
+                    .GetEffectiveSemanticModel(owner, declaration.SyntaxTree)
                     .GetNullableContext(declaration.SpanStart)
                     .HasFlag(NullableContext.AnnotationsEnabled) {
                     return false
@@ -3686,10 +3687,9 @@ partial class CSharpToGSharpTranslator {
         shared {
             // Issue #4356 follow-up: DeclaringCompilationPromotes' usage-scan
             // results, per declaring compilation (see there).
-            private let DeclaringUsageScans ConditionalWeakTable[
-                CSharpCompilation,
+            private let DeclaringUsageScans ObliviousNullabilityAnalyzer.ScopedCompilationCache[
                 ConcurrentDictionary[ISymbol, bool]
-            ] = ConditionalWeakTable[CSharpCompilation, ConcurrentDictionary[ISymbol, bool]]()
+            ] = ObliviousNullabilityAnalyzer.ScopedCompilationCache[ConcurrentDictionary[ISymbol, bool]]()
 
             private let RefStorageCaches ConditionalWeakTable[object, RefStorageCatalogCache] = ConditionalWeakTable[
                 object,

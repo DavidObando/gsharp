@@ -488,6 +488,15 @@ shape caches use a context-local domain, inherited by related visitors.
 Effect and projection inventories also retain the actual ownership graph in
 that domain; related visitors cannot replace another graph's selected bindings.
 Normal document peers still share the normal graph/catalog caches.
+The analysis scope carries the effective supplied model as well as its identity.
+Model-sensitive builders use `GetEffectiveSemanticModel`, which matches actual
+compilation and tree identity before using that model. Other owners and trees
+use normal models. Nested catalog queries retain the supplied-model input in
+separate weak publications; nested normal contexts restore normal binding.
+Ref-storage scans enter the owning scope before capturing its active model.
+Normal declaration inventories retain the separate normal-model reader.
+An unscoped cache lookup uses the same canonical default compilation domain as
+an ordinary query, without computing its taint graph merely to inspect the cache.
 Implicit one-argument tree scopes prefer an active owner, then the root, before
 requiring a unique external owner. An explicit selected owner always wins.
 

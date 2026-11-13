@@ -2086,7 +2086,7 @@ partial class CSharpToGSharpTranslator {
                     // including its body-based suspension/nullability context.
                     let ownerContext = TranslationContext(
                         owner,
-                        TranslationContext.GetSemanticModel(owner, reference.SyntaxTree),
+                        TranslationContext.GetEffectiveSemanticModel(owner, reference.SyntaxTree),
                         reference.SyntaxTree.FilePath,
                         this.context.SiblingCompilations,
                         this.context.RepositoryCompilations

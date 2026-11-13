@@ -3782,7 +3782,7 @@ partial class CSharpToGSharpTranslator {
                     failureReason = "the Deconstruct declaration's compilation owner is unknown"
                     return nil
                 }
-                declaringModel = TranslationContext.GetSemanticModel(owner, declaringSyntax.SyntaxTree)
+                declaringModel = TranslationContext.GetEffectiveSemanticModel(owner, declaringSyntax.SyntaxTree)
                 declaringPosition = declaringSyntax.Span.Start
             }
             var match ISymbol? = nil

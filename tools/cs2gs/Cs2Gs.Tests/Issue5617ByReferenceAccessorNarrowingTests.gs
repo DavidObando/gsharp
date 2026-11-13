@@ -33,6 +33,254 @@ open class Issue5617ByReferenceAccessorNarrowingTests {
     @Theory
     @InlineData(false)
     @InlineData(true)
+    func RefParameter_PrivateRefStorageConsumesTheSuppliedModel(specialFirst bool) {
+        let tree = CSharpSyntaxTree.ParseText(`
+public static class Secrets { private static string Storage = null; }
+public static class Demo {
+    private static void Set(ref string value) {}
+    public static void Probe() { Set(ref Secrets.Storage); }
+}`, path: "PrivateRefStorage.cs")
+        let compilation = CSharpCompilation.Create(
+            "PrivateRefStorage5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        let normal = compilation.GetSemanticModel(tree)
+        let special = compilation.GetSemanticModel(tree, ignoreAccessibility: true)
+        let member = tree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax]()
+            .Single()
+        Assert.Null(normal.GetSymbolInfo(member).Symbol)
+        Assert.NotNull(special.GetSymbolInfo(member).Symbol)
+        let normalContext = TranslationContext(compilation, normal, tree.FilePath)
+        let specialContext = TranslationContext(compilation, special, tree.FilePath)
+        let normalEdges = List[(Target ISymbol, Source ISymbol)]()
+        let specialEdges = List[(Target ISymbol, Source ISymbol)]()
+        normalContext.AfterRefStorageConnection = (target ISymbol, source ISymbol) -> normalEdges.Add((target, source))
+        specialContext.AfterRefStorageConnection = (target ISymbol, source ISymbol) -> specialEdges.Add(
+            (target, source)
+        )
+        for isSpecial in[]bool{specialFirst, !specialFirst, specialFirst} {
+            let context = if isSpecial {
+                specialContext
+            } else {
+                normalContext
+            }
+            let model = if isSpecial {
+                special
+            } else {
+                normal
+            }
+            let printed = GSharpPrinter.Print(
+                CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, model), context)
+            )
+            Assert.Equal(isSpecial, printed.Contains("func Set(ref value string?)", StringComparison.Ordinal))
+            let edges = if isSpecial {
+                specialEdges
+            } else {
+                normalEdges
+            }
+            Assert.Equal(
+                isSpecial,
+                edges.Any(
+                    (edge(Target ISymbol, Source ISymbol)) ->
+                    edge.Target is IParameterSymbol{Name: "value"} &&
+                        edge.Source is IFieldSymbol{Name: "Storage"} &&
+                        SymbolEqualityComparer
+                        .Default
+                        .Equals(edge.Source, special.GetSymbolInfo(member).Symbol)
+                )
+            )
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RefParameter_PrivateNullFlowUsesScopedSeedsAndTupleBindings(specialFirst bool) {
+        let tree = CSharpSyntaxTree.ParseText(`
+public static class Secrets {
+    private static string Value = "safe";
+    private static (string First, string Second) Pair = ("safe", "safe");
+    private static void Accept(string value) {}
+}
+public static class Demo {
+    public static void Mutate() { Secrets.Value = null; Secrets.Pair = (null, "safe"); Secrets.Accept(null); }
+    public static string Read() => Secrets.Value;
+}`, path: "PrivateNullFlow.cs")
+        let compilation = CSharpCompilation.Create(
+            "PrivateNullFlow5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        let normal = compilation.GetSemanticModel(tree)
+        let special = compilation.GetSemanticModel(tree, ignoreAccessibility: true)
+        let secrets = compilation.GetTypeByMetadataName("Secrets") ??
+            throw InvalidOperationException("Secrets missing.")
+        let value = Assert.IsAssignableFrom[IFieldSymbol](Assert.Single(secrets.GetMembers("Value")))
+        let pair = Assert.IsAssignableFrom[IFieldSymbol](Assert.Single(secrets.GetMembers("Pair")))
+        let parameter = Assert.IsAssignableFrom[IMethodSymbol](Assert.Single(secrets.GetMembers("Accept")))
+            .Parameters[0]
+        let read = Assert.IsAssignableFrom[IMethodSymbol](
+            Assert.Single(
+                (
+                    compilation.GetTypeByMetadataName("Demo") ?? throw InvalidOperationException("Demo missing.")
+                ).GetMembers("Read")
+            )
+        )
+        let access = tree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax]()
+            .First(
+            (
+                member Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax
+            ) -> member.ToString() == "Secrets.Value"
+        )
+        Assert.Null(normal.GetSymbolInfo(access).Symbol)
+        Assert.NotNull(special.GetSymbolInfo(access).Symbol)
+        let normalContext = TranslationContext(compilation, normal, tree.FilePath)
+        let specialContext = TranslationContext(compilation, special, tree.FilePath)
+        for isSpecial in[]bool{specialFirst, !specialFirst, specialFirst} {
+            let context = if isSpecial {
+                specialContext
+            } else {
+                normalContext
+            }
+            let model = if isSpecial {
+                special
+            } else {
+                normal
+            }
+            using let analysis = ObliviousNullabilityAnalyzer.UseCatalogScope(context)
+            Assert.Equal(
+                isSpecial,
+                ObliviousNullabilityAnalyzer.IsNullArgumentTarget(compilation, parameter, context.SiblingCompilations)
+            )
+            Assert.Equal(isSpecial, ObliviousNullabilityAnalyzer.IsTainted(compilation, value))
+            Assert.Equal(isSpecial, ObliviousNullabilityAnalyzer.IsTainted(compilation, read))
+            Assert.Equal(
+                isSpecial,
+                ObliviousNullabilityAnalyzer.IsTupleElementTainted(
+                    compilation,
+                    pair,
+                    []int32{0},
+                    context.SiblingCompilations
+                )
+            )
+            Assert.Equal(
+                isSpecial,
+                ObliviousNullabilityAnalyzer.IsTupleElementTainted(
+                    compilation,
+                    pair,
+                    []int32{0},
+                    List[CSharpCompilation]{compilation}
+                )
+            )
+            let printed = GSharpPrinter.Print(
+                CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, model), context)
+            )
+            Assert.Equal(isSpecial, printed.Contains("func Read() string?", StringComparison.Ordinal))
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RefParameter_PrivateAnonymousInitializerUsesTheScopedShapeEvidence(specialFirst bool) {
+        let tree = CSharpSyntaxTree.ParseText(`
+#nullable enable
+public static class Secrets { private static string? Read() => null; }
+public static class Demo {
+    public static object Make() {
+        var first = new { Item = "safe" };
+        var second = new { Item = Secrets.Read() };
+        return first;
+    }
+}`, path: "PrivateAnonymousShape.cs")
+        let compilation = CSharpCompilation.Create(
+            "PrivateAnonymousShape5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        let normal = compilation.GetSemanticModel(tree)
+        let special = compilation.GetSemanticModel(tree, ignoreAccessibility: true)
+        let call = tree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax]()
+            .Single()
+        Assert.Null(normal.GetSymbolInfo(call).Symbol)
+        Assert.NotNull(special.GetSymbolInfo(call).Symbol)
+        for isSpecial in[]bool{specialFirst, !specialFirst, specialFirst} {
+            let model = if isSpecial {
+                special
+            } else {
+                normal
+            }
+            let context = TranslationContext(compilation, model, tree.FilePath)
+            let firstCreation = tree
+                .GetRoot()
+                .DescendantNodes()
+                .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.AnonymousObjectCreationExpressionSyntax]()
+                .First()
+            let directMapper = CSharpTypeMapper()
+            directMapper.Map(model.GetTypeInfo(firstCreation).Type, context, firstCreation.GetLocation())
+            let declaration = Assert.Single(directMapper.PendingAnonymousDataClasses)
+            let parameter = Assert.Single(
+                declaration.PrimaryConstructorParameters ??
+                    throw InvalidOperationException("Anonymous constructor missing.")
+            )
+            Assert.Equal(isSpecial, parameter.Type.IsNullable)
+            let contract = GSharpPrinter.Print(
+                Cs2Gs.CodeModel.Ast.CompilationUnit(members: []Cs2Gs.CodeModel.Ast.GNode{declaration})
+            )
+            let argument = if isSpecial {
+                "nil"
+            } else {
+                "\"safe\""
+            }
+            let result = if isSpecial {
+                "if value.Item == nil { \"nil\" } else { \"wrong\" }"
+            } else {
+                "value.Item"
+            }
+            let runtime = contract +
+                "\npublic class Demo {\nshared {\npublic func Run() string {\nlet value = " +
+                declaration.Name +
+                "(" +
+                argument +
+                ")\nreturn " +
+                result +
+                "\n}\n}\n}\n"
+            Assert.Equal(
+                Encoding.UTF8.GetBytes(
+                    (
+                        if isSpecial {
+                            "nil"
+                        } else {
+                            "safe"
+                        }
+                    ) +
+                        Environment.NewLine
+                ),
+                Encoding.UTF8.GetBytes(CompileAndRun(runtime, Array.Empty[byte](), strictIl: true))
+            )
+            let printed = GSharpPrinter.Print(
+                CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, model), context)
+            )
+            Assert.Equal(isSpecial, Regex.IsMatch(printed, "data class [^\\n]+\\(Item string\\?\\)"))
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
     func RefParameter_SpecialSuppliedModelsKeepTheirBoundCallbackAndProjectionInventories(specialFirst bool) {
         let tree = CSharpSyntaxTree.ParseText(`
 using System;

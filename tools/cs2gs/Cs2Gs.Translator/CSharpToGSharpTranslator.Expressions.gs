@@ -15224,7 +15224,7 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return false
             }
-            let model = this.context.Compilation.GetSemanticModel(value.SyntaxTree)
+            let model = this.context.GetOwnedSemanticModel(value.SyntaxTree, this.context.Compilation)
             if literal.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.NullLiteralExpression) {
                 return !model.GetConversion(value).IsUserDefined && model.GetTypeInfo(value)
                     .ConvertedType is not IFunctionPointerTypeSymbol
@@ -19028,7 +19028,7 @@ partial class CSharpToGSharpTranslator {
                     for compilation in this.context.SourceCompilations(false) {
                         for tree in compilation.SyntaxTrees {
                             this.context.EffectIndexes.TreeVisits++
-                            let model = TranslationContext.GetSemanticModel(compilation, tree)
+                            let model = TranslationContext.GetEffectiveSemanticModel(compilation, tree)
                             for syntax in tree.GetRoot(this.context.CancellationToken).DescendantNodes() {
                                 this.context.CancellationToken.ThrowIfCancellationRequested()
                                 let address = switch syntax {
@@ -19160,7 +19160,7 @@ partial class CSharpToGSharpTranslator {
             let seen = HashSet[IParameterSymbol](SymbolEqualityComparer.Default)
             while bindings != nil &&
                 TranslationContext
-                .GetSemanticModel(current.Owner, current.Expression.SyntaxTree)
+                .GetEffectiveSemanticModel(current.Owner, current.Expression.SyntaxTree)
                 .GetSymbolInfo(current.Expression)
                 .Symbol is IParameterSymbol parameter &&
                 seen.Add(parameter) && bindings.TryGetValue(parameter.OriginalDefinition, out var actual) {
@@ -19201,7 +19201,7 @@ partial class CSharpToGSharpTranslator {
                         for tree in compilation.SyntaxTrees {
                             this.context.EffectIndexes.TreeVisits++
                             this.context.CancellationToken.ThrowIfCancellationRequested()
-                            let model = TranslationContext.GetSemanticModel(compilation, tree)
+                            let model = TranslationContext.GetEffectiveSemanticModel(compilation, tree)
                             for declaration in tree
                                 .GetRoot(this.context.CancellationToken)
                                 .DescendantNodes()

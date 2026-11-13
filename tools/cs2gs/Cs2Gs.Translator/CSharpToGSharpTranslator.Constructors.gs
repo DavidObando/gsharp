@@ -2339,9 +2339,8 @@ partial class CSharpToGSharpTranslator {
             return ownedMethods
                 .Where(
                 (m MethodDeclarationSyntax) -> this.CanLowerOwnedExtension(m) && !this.IsPreservedOwnedExtension(
-                    TranslationContext.GetSemanticModel(this.context.Compilation, m.SyntaxTree).GetDeclaredSymbol(
-                        m
-                    ) as IMethodSymbol
+                    TranslationContext.GetEffectiveSemanticModel(this.context.Compilation, m.SyntaxTree)
+                        .GetDeclaredSymbol(m) as IMethodSymbol
                 )
             )
                 .OrderBy((m MethodDeclarationSyntax) -> m.SyntaxTree.FilePath, StringComparer.Ordinal)

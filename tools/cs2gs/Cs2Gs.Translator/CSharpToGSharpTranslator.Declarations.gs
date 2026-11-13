@@ -1320,8 +1320,7 @@ partial class CSharpToGSharpTranslator {
                             .IsPreservedOwnedExtension(
                             this
                                 .context
-                                .Compilation
-                                .GetSemanticModel(method.SyntaxTree)
+                                .GetOwnedSemanticModel(method.SyntaxTree, this.context.Compilation)
                                 .GetDeclaredSymbol(method) as IMethodSymbol
                         )
                     )

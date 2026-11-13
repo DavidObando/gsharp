@@ -57,7 +57,7 @@ internal class ObliviousSignatureGroups {
     init(compilation Compilation) {
         let visited = HashSet[ISymbol](SymbolEqualityComparer.Default)
         for tree in compilation.SyntaxTrees {
-            let model = TranslationContext.GetSemanticModel(compilation, tree)
+            let model = TranslationContext.GetEffectiveSemanticModel(compilation, tree)
             for declaration in tree.GetRoot().DescendantNodes().OfType[BaseTypeDeclarationSyntax]() {
                 if model.GetDeclaredSymbol(declaration) is not INamedTypeSymbol type || !visited.Add(type) {
                     continue

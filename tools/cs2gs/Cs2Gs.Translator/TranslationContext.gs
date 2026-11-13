@@ -70,6 +70,7 @@ class TranslationContext {
     }
 
     internal prop HasNonstandardSemanticModel bool -> this.specialModelDomain != nil
+    internal prop SuppliedNonstandardModel SemanticModel? -> this.specialModelDomain?.Model
 
     // Special supplied models cannot share facts derived from normal binding.
     internal prop CatalogIdentity object -> this.specialModelDomain ??
@@ -181,6 +182,7 @@ class TranslationContext {
     internal var AfterStorageComparerFactory Action?
     internal var BeforeOwnershipTree Action?
     internal var BeforeRefStoragePublication Action?
+    internal var AfterRefStorageConnection Action[ISymbol, ISymbol]?
 
     internal class DeferredCallbackIndex {
         init(
@@ -793,6 +795,7 @@ class TranslationContext {
             Dictionary[SyntaxTree, SemanticModel]
         ] = ConditionalWeakTable[Compilation, Dictionary[SyntaxTree, SemanticModel]]()
 
+        /// Reads normal declaration facts without publishing privileged models.
         internal func GetSemanticModel(compilation Compilation, tree SyntaxTree) SemanticModel {
             let models = SemanticModelsByCompilation.GetOrCreateValue(compilation)
             lock models {
@@ -801,6 +804,17 @@ class TranslationContext {
                     models[tree] = model
                 }
                 return model
+            }
+        }
+
+        /// Reads the scoped supplied model only for its actual compilation and tree.
+        internal func GetEffectiveSemanticModel(compilation Compilation, tree SyntaxTree) SemanticModel {
+            let supplied = ObliviousNullabilityAnalyzer.ScopedSemanticModel
+            return if supplied != nil && object.ReferenceEquals(supplied.Compilation, compilation) &&
+                object.ReferenceEquals(supplied.SyntaxTree, tree) {
+                supplied
+            } else {
+                GetSemanticModel(compilation, tree)
             }
         }
 

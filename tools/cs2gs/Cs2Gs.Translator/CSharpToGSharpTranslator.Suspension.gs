@@ -57,7 +57,7 @@ partial class CSharpToGSharpTranslator {
             let model = if this.context.SemanticModel.SyntaxTree == node.SyntaxTree {
                 this.context.SemanticModel
             } else {
-                this.context.Compilation.GetSemanticModel(node.SyntaxTree)
+                this.context.GetOwnedSemanticModel(node.SyntaxTree, this.context.Compilation)
             }
             for descendant in node.DescendantNodes() {
                 if !((descendant is IdentifierNameSyntax || descendant is GenericNameSyntax)) {
