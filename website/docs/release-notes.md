@@ -16,6 +16,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Preserve nullable writable storage in flat `cs2gs` deconstruction declarations. Materialize typed locals when tuple inference loses their contract. Keep required read assertions and evaluate the source once. (Fixes #5994)
+
 - Avoid redundant null assertions on inferred deconstruction locals from non-null positional properties. Reuse the emitted declaration's nullability decision. Keep nullable and changed locals guarded. (Fixes #5597)
 
 - Omit author-written null assertions in `cs2gs` when an unwidened oblivious source declaration already emits a non-null G# value. Apply the same decision to plain reads, pattern captures, and inferred deconstruction destinations. Keep required nullable, analyzer-mapped, and unknown-value assertions, including bridges into non-null stores. (Fixes #5609)
