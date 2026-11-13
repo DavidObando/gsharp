@@ -81,10 +81,6 @@ shared class HoverComputer {
     /// @param symbol The symbol to render.
     /// @returns The compact signature label.
     func FormatSymbol(symbol Symbol) string {
-        // An imported method renders from its reflected signature, so each overload has its own label.
-        if symbol is ImportedFunctionSymbol imported {
-            return SymbolDisplay.ToDisplayString(imported.Method, SymbolDisplayFormat.Signature)
-        }
         return SymbolDisplay.ToDisplayString(symbol, SymbolDisplayFormat.Signature)
     }
 
@@ -162,6 +158,13 @@ async sequence[T]
         // wins over a type of the same name (`Single` in `items.Single(...)` is not `System.Single`).
         if MemberTokenResolver.TryResolveMember(tree, compilation, token, out var member, out var overloadCount) &&
             BoundSemantics.GetMemberInfo(member) is {} memberInfo {
+            if member is ImportedFunctionSymbol imported {
+                return HoverModel(
+                    SymbolDisplay.ToDisplayString(imported, SymbolDisplayFormat.Hover, compilation),
+                    BuildDocumentation(imported),
+                    overloadCount
+                )
+            }
             return BuildMemberModel(memberInfo, overloadCount)
         }
         let clrType Type? = SemanticLookup.ResolveImportedClrType(
@@ -1211,29 +1214,37 @@ shared class SignatureHelpComputer {
                 .Skip(skip)
                 .Select((p ParameterSymbol) -> ParameterInformation{Label: "${p.Name} ${FormatType(p.Type)}"})
                 .ToList()
-            case imported is ImportedFunctionSymbol: ImportedFunctionSymbol
-                .GetLogicalParameters(imported.Method)
-                .Skip(skip)
-                .Select(
-                (p ParameterInfo) -> ParameterInformation{
-                    Label: "${p.Name} ${SymbolDisplay.ToTypeDisplayString(p.ParameterType, SymbolDisplayFormat.Signature.QualifyNames)}"
-                }
-            )
-                .ToList()
+            case imported is ImportedFunctionSymbol: ImportedParameters(imported).Skip(skip).ToList()
             default: List[ParameterInformation]()
         }
         return SignatureInformation{Label: FormatSignatureLabel(candidate, isReceiverExtension), Parameters: parameters}
+    }
+
+    private func ImportedParameters(imported ImportedFunctionSymbol) List[ParameterInformation] {
+        let parameters = List[ParameterInformation]()
+        let parts = SymbolDisplay.ToDisplayParts(imported, SymbolDisplayFormat.Signature)
+        for var i = 0; i < parts.Length; i++ {
+            if parts[i].Kind != SymbolDisplayPartKind.ParameterName {
+                continue
+            }
+            let label = StringBuilder(parts[i].Text)
+            for i++; i < parts.Length; i++ {
+                if parts[i].Kind == SymbolDisplayPartKind.Punctuation &&
+                    (parts[i].Text == "," || parts[i].Text == ")") {
+                    break
+                }
+                label.Append(parts[i].Text)
+            }
+            parameters.Add(ParameterInformation{Label: label.ToString()})
+        }
+        return parameters
     }
 
     private func FormatSignatureLabel(candidate Symbol, isReceiverExtension bool) string {
         if !isReceiverExtension {
             return HoverComputer.FormatSymbol(candidate)
         }
-        let parts = if candidate is ImportedFunctionSymbol imported {
-            SymbolDisplay.ToDisplayParts(imported.Method, SymbolDisplayFormat.Signature)
-        } else {
-            SymbolDisplay.ToDisplayParts(candidate, SymbolDisplayFormat.Signature)
-        }
+        let parts = SymbolDisplay.ToDisplayParts(candidate, SymbolDisplayFormat.Signature)
         var firstParam = -1
         for var i = 0; i < parts.Length; i++ {
             if parts[i].Kind == SymbolDisplayPartKind.ParameterName {

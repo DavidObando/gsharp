@@ -91,7 +91,14 @@ class BoundImportedInstanceCallExpression : BoundCallOperationExpression {
     /// review).
     override prop CalledFunction Symbol -> (
         if calledFunction == nil {
-            (calledFunction = BoundCallOperationExpression.ImportedCallee(Method, Type))
+            (
+                calledFunction = BoundCallOperationExpression.ImportedCallee(
+                    Method,
+                    Type,
+                    ConstrainedInterfaceType ?? Receiver.Type,
+                    TypeArgumentSymbols
+                )
+            )
         } else {
             calledFunction
         }

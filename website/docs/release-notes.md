@@ -16,6 +16,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Preserve symbolic receiver types in imported method labels for hover, signature help, and member completion. Show source-defined arguments instead of erased `object` placeholders. (Fixes #5492)
+
 - Construct expanded List and span variadic carriers over source-declared elements and generic type parameters. Preserve symbolic element types through ordinary constructor emission, including nullable elements and nested collections. Normal-form arguments retain their carrier identity. (Fixes #6010)
 
 - Reject release packages whose embedded nuspec ID or version differs from the filename. Reuse package metadata verification before publishing. (Fixes #5550)

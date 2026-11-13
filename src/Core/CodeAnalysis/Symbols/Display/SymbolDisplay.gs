@@ -4,6 +4,7 @@
 
 package GSharp.Core.CodeAnalysis.Symbols.Display
 
+import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
@@ -152,7 +153,26 @@ shared class SymbolDisplay {
                 AppendField(builder, format, field)
             }
             case importedFunction is ImportedFunctionSymbol {
-                AppendClrMethod(builder, format, importedFunction.Method, importedFunction.Type)
+                let symbolicSignature = importedFunction.SignatureReceiverType is {} receiver &&
+                    TypeSymbol.RequiresSymbolicProjection(receiver) || TypeSymbol.ContainsSameCompilationUserType(
+                    importedFunction.Type
+                ) ||
+                    TypeSymbol.ContainsTypeParameter(importedFunction.Type)
+                AppendClrMethod(
+                    builder,
+                    format,
+                    importedFunction.Method,
+                    if symbolicSignature {
+                        importedFunction.Type
+                    } else {
+                        default(TypeSymbol?)
+                    },
+                    if symbolicSignature {
+                        importedFunction
+                    } else {
+                        default(ImportedFunctionSymbol?)
+                    }
+                )
             }
             case importedClass is ImportedClassSymbol {
                 return ToDisplayParts(importedClass.ClassType, format)
@@ -530,7 +550,8 @@ shared class SymbolDisplay {
         builder PartBuilder,
         format SymbolDisplayFormat,
         method MethodInfo,
-        returnTypeOverride TypeSymbol? = nil
+        returnTypeOverride TypeSymbol? = nil,
+        importedFunction ImportedFunctionSymbol? = nil
     ) {
         // ADR-0023 parity: a CLR method compiled from `async`/`await` exposes a
         // `Task[R]` (or `ValueTask[R]`) return in metadata, but G# renders async
@@ -546,7 +567,16 @@ shared class SymbolDisplay {
         builder.Space()
         if format.QualifyNames && method.DeclaringType != nil {
             builder.Punctuation("(")
-            builder.Type(FormatClrTypeName(method.DeclaringType, qualifyNames: true))
+            builder.Type(
+                if !method.IsStatic &&
+                    importedFunction?.SignatureReceiverType is {} receiver &&
+                    TypeSymbol
+                    .RequiresSymbolicProjection(receiver) {
+                    FormatType(MemberLookup.GetClrMemberDeclaringTypeSymbol(receiver, method))
+                } else {
+                    FormatClrTypeName(method.DeclaringType, qualifyNames: true)
+                }
+            )
             builder.Punctuation(")")
             builder.Space()
         }
@@ -561,7 +591,18 @@ shared class SymbolDisplay {
             }
             builder.Add(SymbolDisplayPartKind.ParameterName, parameters[i].Name ?? string.Empty)
             builder.Space()
-            builder.Type(FormatClrTypeName(parameters[i].ParameterType, format.QualifyNames))
+            let parameterType = importedFunction?.GetParameterType(i)
+            builder.Type(
+                if parameterType != nil && TypeSymbol.RequiresSymbolicProjection(parameterType) {
+                    if parameterType is ByRefTypeSymbol byRef {
+                        "${FormatType(byRef.PointeeType, format.QualifyNames)}@"
+                    } else {
+                        FormatType(parameterType, format.QualifyNames)
+                    }
+                } else {
+                    FormatClrTypeName(parameters[i].ParameterType, format.QualifyNames)
+                }
+            )
         }
         builder.Punctuation(")")
         if returnTypeOverride != nil &&
@@ -580,7 +621,7 @@ shared class SymbolDisplay {
             }
             if !IsVoid(symbolicReturn) {
                 builder.Space()
-                builder.Type(FormatType(symbolicReturn))
+                builder.Type(FormatType(symbolicReturn, format.QualifyNames))
             }
             return
         }
@@ -646,7 +687,9 @@ shared class SymbolDisplay {
         }
     }
 
-    private func FormatType(type TypeSymbol?) string {
+    private func FormatType(type TypeSymbol?) string -> FormatType(type, qualifyNames: true)
+
+    private func FormatType(type TypeSymbol?, qualifyNames bool) string {
         if type == nil || IsVoid(type) {
             return "void"
         }
@@ -658,10 +701,10 @@ shared class SymbolDisplay {
             out var sliceElement,
             out var readOnlySlice
         ) {
-            return "${(if readOnlySlice { "readonly " } else { string.Empty })}slice[${FormatType(sliceElement)}]"
+            return "${(if readOnlySlice { "readonly " } else { string.Empty })}slice[${FormatType(sliceElement, qualifyNames)}]"
         }
         if ManagedReferenceTypes.TryGetElement(type, out var managedElement, out var readOnlyManaged) {
-            return "${(if readOnlyManaged { "readonly " } else { string.Empty })}managed[${FormatType(managedElement)}]"
+            return "${(if readOnlyManaged { "readonly " } else { string.Empty })}managed[${FormatType(managedElement, qualifyNames)}]"
         }
         // Reconstruct the display name from the type's structure rather than
         // returning the raw TypeSymbol.Name. For constructed generics backed by
@@ -680,13 +723,13 @@ shared class SymbolDisplay {
                 // element, generic arg, tuple element). Non-function nullable
                 // types are rendered unchanged.
                 if nullable.UnderlyingType is SliceTypeSymbol nullableSlice {
-                    return "[]?${FormatType(nullableSlice.ElementType)}"
+                    return "[]?${FormatType(nullableSlice.ElementType, qualifyNames)}"
                 }
                 if nullable.UnderlyingType is ArrayTypeSymbol nullableArray {
-                    return "[${nullableArray.Length}]?${FormatType(nullableArray.ElementType)}"
+                    return "[${nullableArray.Length}]?${FormatType(nullableArray.ElementType, qualifyNames)}"
                 }
                 if nullable.UnderlyingType is RectangularArrayTypeSymbol nullableRectangular {
-                    return "[${String(',', nullableRectangular.Rank - 1)}]?${FormatType(nullableRectangular.ElementType)}"
+                    return "[${String(',', nullableRectangular.Rank - 1)}]?${FormatType(nullableRectangular.ElementType, qualifyNames)}"
                 }
                 // Issue #4361 (review): an IMPORTED nullable array — an
                 // annotated/imported CLR `T[]` under the `?`, which the
@@ -696,9 +739,9 @@ shared class SymbolDisplay {
                 // (or `[]string?`), ADR-0132's spelling of a slice of nullable
                 // ELEMENTS. The positional form is `[]?string!`.
                 if TryGetImportedArrayElement(nullable.UnderlyingType, out var nullableImportedElement) {
-                    return "[]?${FormatType(nullableImportedElement)}"
+                    return "[]?${FormatType(nullableImportedElement, qualifyNames)}"
                 }
-                let underlying = FormatType(nullable.UnderlyingType)
+                let underlying = FormatType(nullable.UnderlyingType, qualifyNames)
                 return if nullable.UnderlyingType is FunctionTypeSymbol or FunctionPointerTypeSymbol {
                     "($underlying)?"
                 } else {
@@ -713,13 +756,13 @@ shared class SymbolDisplay {
                 // platform function type parenthesises for issue #2160's
                 // reason: `((int32) -> void)!`, never `(int32) -> void!`.
                 if platform.UnderlyingType is SliceTypeSymbol platformSlice {
-                    return "[]!${FormatType(platformSlice.ElementType)}"
+                    return "[]!${FormatType(platformSlice.ElementType, qualifyNames)}"
                 }
                 if platform.UnderlyingType is ArrayTypeSymbol platformArray {
-                    return "[${platformArray.Length}]!${FormatType(platformArray.ElementType)}"
+                    return "[${platformArray.Length}]!${FormatType(platformArray.ElementType, qualifyNames)}"
                 }
                 if platform.UnderlyingType is RectangularArrayTypeSymbol platformRectangular {
-                    return "[${String(',', platformRectangular.Rank - 1)}]!${FormatType(platformRectangular.ElementType)}"
+                    return "[${String(',', platformRectangular.Rank - 1)}]!${FormatType(platformRectangular.ElementType, qualifyNames)}"
                 }
                 // Issue #4361: an IMPORTED platform array (`string[]` read from
                 // oblivious metadata) is not a `SliceTypeSymbol` — it is an
@@ -728,9 +771,9 @@ shared class SymbolDisplay {
                 // ADR-0132's spelling of a slice of platform ELEMENTS: the
                 // opposite type.
                 if TryGetImportedArrayElement(platform.UnderlyingType, out var platformImportedElement) {
-                    return "[]!${FormatType(platformImportedElement)}"
+                    return "[]!${FormatType(platformImportedElement, qualifyNames)}"
                 }
-                let platformUnderlying = FormatType(platform.UnderlyingType)
+                let platformUnderlying = FormatType(platform.UnderlyingType, qualifyNames)
                 return if platform.UnderlyingType is FunctionTypeSymbol {
                     "($platformUnderlying)!"
                 } else {
@@ -738,26 +781,26 @@ shared class SymbolDisplay {
                 }
             }
             case annotated is NullabilityAnnotatedTypeSymbol {
-                return if TryFormatWithPlatformArguments(annotated, out var withPlatformArguments) {
+                return if TryFormatWithPlatformArguments(annotated, out var withPlatformArguments, qualifyNames) {
                     withPlatformArguments!!
                 } else {
-                    FormatType(annotated.BaseType)
+                    FormatType(annotated.BaseType, qualifyNames)
                 }
             }
             case function is FunctionTypeSymbol {
-                return FormatFunctionType(function)
+                return FormatFunctionType(function, qualifyNames)
             }
             case functionPointer is FunctionPointerTypeSymbol {
-                return FormatFunctionPointerType(functionPointer)
+                return FormatFunctionPointerType(functionPointer, qualifyNames)
             }
             case array is ArrayTypeSymbol {
-                return "[${array.Length}]${FormatType(array.ElementType)}"
+                return "[${array.Length}]${FormatType(array.ElementType, qualifyNames)}"
             }
             case rectangular is RectangularArrayTypeSymbol {
-                return "[${String(',', rectangular.Rank - 1)}]${FormatType(rectangular.ElementType)}"
+                return "[${String(',', rectangular.Rank - 1)}]${FormatType(rectangular.ElementType, qualifyNames)}"
             }
             case slice is SliceTypeSymbol {
-                return "[]${FormatType(slice.ElementType)}"
+                return "[]${FormatType(slice.ElementType, qualifyNames)}"
             }
             case asyncSequence is AsyncSequenceTypeSymbol {
                 // Issue #4020: an async sequence used to display as
@@ -768,25 +811,25 @@ shared class SymbolDisplay {
                 // to the wrong one. `async sequence[T]` is the spelling the
                 // author writes for this type (ADR-0041), so it is both
                 // unambiguous and round-trippable.
-                return "async sequence[${FormatType(asyncSequence.ElementType)}]"
+                return "async sequence[${FormatType(asyncSequence.ElementType, qualifyNames)}]"
             }
             case sequence_ is SequenceTypeSymbol {
-                return "sequence[${FormatType(sequence_.ElementType)}]"
+                return "sequence[${FormatType(sequence_.ElementType, qualifyNames)}]"
             }
             case map_ is MapTypeSymbol {
-                return "map[${FormatType(map_.KeyType)},${FormatType(map_.ValueType)}]"
+                return "map[${FormatType(map_.KeyType, qualifyNames)},${FormatType(map_.ValueType, qualifyNames)}]"
             }
             case channel is ChannelTypeSymbol {
-                return ChannelTypeSymbol.FormatName(FormatType(channel.ElementType), channel.Direction)
+                return ChannelTypeSymbol.FormatName(FormatType(channel.ElementType, qualifyNames), channel.Direction)
             }
             case pointer is PointerTypeSymbol {
-                return "*${FormatType(pointer.PointeeType)}"
+                return "*${FormatType(pointer.PointeeType, qualifyNames)}"
             }
             case byRef is ByRefTypeSymbol {
-                return "*${FormatType(byRef.PointeeType)}"
+                return "*${FormatType(byRef.PointeeType, qualifyNames)}"
             }
             case pinned is PinnedTypeSymbol {
-                return "pinned ${FormatType(pinned.UnderlyingType)}"
+                return "pinned ${FormatType(pinned.UnderlyingType, qualifyNames)}"
             }
             case tuple is TupleTypeSymbol {
                 // ADR-0172: render declared element names name-first,
@@ -795,9 +838,9 @@ shared class SymbolDisplay {
                     ", ",
                     tuple.ElementTypes.Select(
                         (t TypeSymbol, i int32) -> if tuple.HasNames && tuple.ElementNames[i] is {} elementName {
-                            "$elementName ${FormatType(t)}"
+                            "$elementName ${FormatType(t, qualifyNames)}"
                         } else {
-                            FormatType(t)
+                            FormatType(t, qualifyNames)
                         }
                     )
                 ) +
@@ -811,7 +854,7 @@ shared class SymbolDisplay {
                 // TupleTypeSymbol case above does for tuples. Rubber-duck
                 // follow-up: members are get-only auto-properties, not plain
                 // fields (see AnonymousTypeCache), so render Properties here.
-                return "{ ${string.Join(", ", aggregate.Properties.Select((p PropertySymbol) -> "${p.Name}: ${FormatType(p.Type)}"))} }"
+                return "{ ${string.Join(", ", aggregate.Properties.Select((p PropertySymbol) -> "${p.Name}: ${FormatType(p.Type, qualifyNames)}"))} }"
             }
             case aggregate is StructSymbol {
                 return FormatSourceType(
@@ -846,7 +889,7 @@ shared class SymbolDisplay {
                 )
             }
             case imported is ImportedTypeSymbol {
-                return FormatImportedType(imported)
+                return FormatImportedType(imported, qualifyNames)
             }
             default {
                 return type.Name
@@ -873,7 +916,8 @@ shared class SymbolDisplay {
     /// @returns `true` when a nested argument is platform-typed.
     private func TryFormatWithPlatformArguments(
         annotated NullabilityAnnotatedTypeSymbol,
-        @NotNullWhen(true) out formatted string?
+        @NotNullWhen(true) out formatted string?,
+        qualifyNames bool = true
     ) bool {
         formatted = nil
         let clr = annotated.ClrType
@@ -881,7 +925,7 @@ shared class SymbolDisplay {
             if !ContainsPlatformType(element) {
                 return false
             }
-            formatted = "[]${FormatType(element)}"
+            formatted = "[]${FormatType(element, qualifyNames)}"
             return true
         }
         if !(clr != nil && clr.IsGenericType == true && clr.IsGenericTypeDefinition == false) {
@@ -912,7 +956,7 @@ shared class SymbolDisplay {
             }
         )
             .ToImmutableArray()
-        formatted = FormatImportedGenericTypeName(clr.GetGenericTypeDefinition(), displayArguments)
+        formatted = FormatImportedGenericTypeName(clr.GetGenericTypeDefinition(), displayArguments, qualifyNames)
         return true
     }
 
@@ -1081,7 +1125,7 @@ shared class SymbolDisplay {
     /// consistently. A trailing variadic parameter is rendered with the
     /// `...` prefix and its element type (ADR-0102 follow-up / issue #818),
     /// and a void return renders as `void`.
-    private func FormatFunctionType(function FunctionTypeSymbol) string {
+    private func FormatFunctionType(function FunctionTypeSymbol, qualifyNames bool = true) string {
         let hasVariadicFlags = !function.IsVariadic.IsDefaultOrEmpty
         let sb = StringBuilder()
         sb.Append('(')
@@ -1093,23 +1137,26 @@ shared class SymbolDisplay {
                 sb.Append("...")
                 sb.Append(
                     if function.ParameterTypes[i] is SliceTypeSymbol slice {
-                        FormatType(slice.ElementType)
+                        FormatType(slice.ElementType, qualifyNames)
                     } else {
-                        FormatType(function.ParameterTypes[i])
+                        FormatType(function.ParameterTypes[i], qualifyNames)
                     }
                 )
             } else {
-                sb.Append(FormatType(function.ParameterTypes[i]))
+                sb.Append(FormatType(function.ParameterTypes[i], qualifyNames))
             }
         }
         sb.Append(") -> ")
-        sb.Append(FormatType(function.ReturnType))
+        sb.Append(FormatType(function.ReturnType, qualifyNames))
         return sb.ToString()
     }
 
-    private func FormatFunctionPointerType(functionPointer FunctionPointerTypeSymbol) string {
-        let parameters = string.Join(", ", functionPointer.ParameterTypes.Select(FormatGenericTypeArgument))
-        let returnType = FormatGenericTypeArgument(functionPointer.ReturnType)
+    private func FormatFunctionPointerType(functionPointer FunctionPointerTypeSymbol, qualifyNames bool = true) string {
+        let parameters = string.Join(
+            ", ",
+            functionPointer.ParameterTypes.Select((t TypeSymbol) -> FormatType(t, qualifyNames))
+        )
+        let returnType = FormatType(functionPointer.ReturnType, qualifyNames)
         if !functionPointer.IsManaged {
             // ADR-0095 v2 / issue #3611: the open model renders the source
             // spelling — bare `unmanaged (…)` for the platform default,
@@ -1137,22 +1184,22 @@ shared class SymbolDisplay {
     /// their G# spellings). A #313 symbolic construction — whose CLR form is
     /// type-erased to `object` — is rebuilt from its open definition plus
     /// the symbolic (cref:ImportedTypeSymbol.TypeArguments).
-    private func FormatImportedType(imported ImportedTypeSymbol) string {
+    private func FormatImportedType(imported ImportedTypeSymbol, qualifyNames bool = true) string {
         if !imported.TypeArguments.IsDefaultOrEmpty {
             if imported.ClrType is {IsArray: true, IsSZArray: false} nonSzClr && nonSzClr.GetArrayRank() == 1 &&
                 imported
                 .TypeArguments
                 .Length == 1 {
-                return "[*]${FormatGenericTypeArgument(imported.TypeArguments[0])}"
+                return "[*]${FormatType(imported.TypeArguments[0], qualifyNames)}"
             }
             let definition Type? = imported.OpenDefinition
             return if definition == nil {
-                "${StripGenericArity(imported.Name)}[${string.Join(", ", imported.TypeArguments.Select(FormatGenericTypeArgument))}]"
+                "${StripGenericArity(imported.Name)}[${string.Join(", ", imported.TypeArguments.Select((t TypeSymbol) -> FormatType(t, qualifyNames)))}]"
             } else {
-                FormatImportedGenericTypeName(definition, imported.TypeArguments)
+                FormatImportedGenericTypeName(definition, imported.TypeArguments, qualifyNames)
             }
         }
-        return FormatClrTypeName(imported.ClrType, qualifyNames: true)
+        return FormatClrTypeName(imported.ClrType, qualifyNames)
     }
 
     /// Strips the CLR generic-arity suffix (``1`) and normalizes nested
@@ -1250,20 +1297,24 @@ shared class SymbolDisplay {
         }
     }
 
-    private func FormatImportedGenericTypeName(definition Type, typeArguments ImmutableArray[TypeSymbol]) string {
+    private func FormatImportedGenericTypeName(
+        definition Type,
+        typeArguments ImmutableArray[TypeSymbol],
+        qualifyNames bool = true
+    ) string {
         let declaringArgumentCount = definition.DeclaringType?.GetGenericArguments().Length ?? 0
         let ownArguments = typeArguments.Skip(declaringArgumentCount).ToImmutableArray()
         var name = StripGenericArity(definition.Name)
         if definition.IsNested {
             // A nested type always has a declaring type.
-            name = "${FormatImportedGenericTypeName(definition.DeclaringType!!, typeArguments.Take(declaringArgumentCount).ToImmutableArray())}.$name"
-        } else if !string.IsNullOrEmpty(definition.Namespace) {
+            name = "${FormatImportedGenericTypeName(definition.DeclaringType!!, typeArguments.Take(declaringArgumentCount).ToImmutableArray(), qualifyNames)}.$name"
+        } else if qualifyNames && !string.IsNullOrEmpty(definition.Namespace) {
             name = "${definition.Namespace}.$name"
         }
         return if ownArguments.IsDefaultOrEmpty {
             name
         } else {
-            "$name[${string.Join(", ", ownArguments.Select(FormatGenericTypeArgument))}]"
+            "$name[${string.Join(", ", ownArguments.Select((t TypeSymbol) -> FormatType(t, qualifyNames)))}]"
         }
     }
 
