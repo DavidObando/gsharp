@@ -1105,14 +1105,14 @@ parenthesized single element is an error because `(T)` is grouping, not a
 A
 variadic COLLECTION carrier (`...List[T]`, `...ReadOnlySpan[T]`) packs its
 expanded call-site arguments via the carrier's CLR construction form
-(`new List<T>(T[])`, the span's `T[]` constructor). When the element type is
-a same-compilation type whose CLR shape is still erased at bind time, no
-closed construction exists; use the array carrier (`...T`) instead, or pass
-an existing collection directly.
+(`new List<T>(T[])`, the span's `T[]` constructor). Source-declared elements
+and generic type parameters use symbolic constructor emission.
+GS0544 reports an unavailable carrier representation or supported constructor.
+Use the array carrier (`...T`) instead, or pass an existing collection directly.
 
 | ID | Severity | Message | Example |
 |---|---|---|---|
-| GS0544 | Error | `Variadic carrier '<carrier>' cannot be constructed over element type '<element>' at this call site; use an array carrier ('...T') or pass the collection directly.` | `func F(xs ...List[MyLocalClass])` called expanded |
+| GS0544 | Error | `Variadic carrier '<carrier>' cannot be constructed over element type '<element>' at this call site; use an array carrier ('...T') or pass the collection directly.` | Expanded List/span carrier without a supported constructor |
 
 ## Interpolated-string handler missing from the target framework (GS0545)
 
