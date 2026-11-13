@@ -1674,6 +1674,35 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
+        // Inferred, unchanged locals inherit the emitted positional declaration, not Roslyn's local annotation.
+        private func InferredDeconstructedPositionalParameter(local ILocalSymbol) IParameterSymbol? {
+            if !IsImplicitlyTypedLocal(local) ||
+                this
+                .state
+                .EmittedLocalTypeClauses
+                .Contains(local) ||
+                local
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is not SingleVariableDesignationSyntax designation ||
+                this.IsSymbolReassigned(local, this.GetNullabilityScope(local) ?? designation.SyntaxTree.GetRoot()) ||
+                !this.TryGetDeconstructionSlotInfo(designation, out var conversion, out var sourceType) ||
+                !conversion.IsIdentity ||
+                this.DeconstructedElementDeclaration(local) is not IPropertySymbol property ||
+                NormalizePositionalRecordProperty(property) is not IParameterSymbol parameter ||
+                !SymbolEqualityComparer
+                .Default
+                .Equals(parameter.Type, sourceType) || !this.EmittedAssemblyIdentities()!!.Contains(
+                parameter.ContainingAssembly.Identity
+            ) ||
+                !parameter
+                .DeclaringSyntaxReferences
+                .Any((reference SyntaxReference) -> this.IsTranslatedByThisRun(reference.SyntaxTree)) {
+                return nil
+            }
+            return parameter
+        }
+
         /// Issue #5254: whether G# infers the type of the sink from [`value`](paramref). That holds
         /// for a method type parameter that has no constraint a nullable type argument would break.
         /// A constrained parameter keeps its non-null type argument, so its argument needs the `!!`.
