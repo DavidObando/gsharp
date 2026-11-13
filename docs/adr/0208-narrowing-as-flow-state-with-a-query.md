@@ -543,6 +543,8 @@ with the same recognized source-type identity that selects those forms during ma
 Incoming merge keys retain scope-correct rendering contracts.
 They include the existing printer's recursive type spelling and the complete structural contract.
 Ordinary aliases and qualifiers remain input distinctions, not physical output distinctions.
+Merge results use the same actual-compilation and catalog/model analysis domain as their shape evidence.
+An invalid snapshot retains its original untrusted reference and properties without publishing image ownership.
 Call effects apply to external alias roots even when facts contain readonly
 member links. A replaced root loses every descendant fact. The shared direct-callee
 inventory includes generic construction and source/custom CLR event accessors;

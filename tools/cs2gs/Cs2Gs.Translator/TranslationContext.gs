@@ -762,11 +762,8 @@ class TranslationContext {
             properties MetadataReferenceProperties = default(MetadataReferenceProperties),
             snapshots Dictionary[string, PortableExecutableReference]? = nil
         ) PortableExecutableReference {
-            return if TryCreateOwnedMetadataReference(path, properties, snapshots, out var reference) {
-                reference ?? throw InvalidOperationException("The owned reference was not created.")
-            } else {
-                MetadataReference.CreateFromFile(path, properties: properties)
-            }
+            let _ = TryCreateOwnedMetadataReference(path, properties, snapshots, out var reference)
+            return reference ?? throw InvalidOperationException("The metadata reference was not created.")
         }
 
         func TryCreateOwnedMetadataReference(
@@ -790,29 +787,34 @@ class TranslationContext {
                 reference = projected
                 return true
             }
+            reference = MetadataReference.CreateFromFile(path, properties: properties)
             let image = ImmutableArray.CreateRange(File.ReadAllBytes(path))
-            let captured = MetadataReference.CreateFromImage(image, properties: properties, filePath: path)
-            let metadata = captured.GetMetadata()
-            if metadata is AssemblyMetadata assembly {
-                for module in assembly.GetModules() {
-                    let reader = module.GetMetadataReader()
-                    for file in reader.AssemblyFiles {
-                        if reader.GetAssemblyFile(file).ContainsMetadata {
-                            return false
+            try {
+                let captured = MetadataReference.CreateFromImage(image, properties: properties, filePath: path)
+                let metadata = captured.GetMetadata()
+                if metadata is AssemblyMetadata assembly {
+                    for module in assembly.GetModules() {
+                        let reader = module.GetMetadataReader()
+                        for file in reader.AssemblyFiles {
+                            if reader.GetAssemblyFile(file).ContainsMetadata {
+                                return false
+                            }
                         }
                     }
+                } else if metadata is ModuleMetadata module {
+                    let _ = module.GetMetadataReader()
                 }
-            } else if metadata is ModuleMetadata module {
-                let _ = module.GetMetadataReader()
+                let ownedFingerprint = StrongBox[string](Convert.ToHexString(SHA256.HashData(image.AsSpan())))
+                OwnedEffectImages.Add(captured, ownedFingerprint)
+                OwnedEffectMetadata.Add(metadata.Id, ownedFingerprint)
+                if snapshots != nil {
+                    snapshots[key] = captured
+                }
+                reference = captured
+                return true
+            } catch (error BadImageFormatException) {
+                return false
             }
-            let ownedFingerprint = StrongBox[string](Convert.ToHexString(SHA256.HashData(image.AsSpan())))
-            OwnedEffectImages.Add(captured, ownedFingerprint)
-            OwnedEffectMetadata.Add(metadata.Id, ownedFingerprint)
-            if snapshots != nil {
-                snapshots[key] = captured
-            }
-            reference = captured
-            return true
         }
 
         internal func HasTrustedEffectImage(reference PortableExecutableReference, identity string) bool {

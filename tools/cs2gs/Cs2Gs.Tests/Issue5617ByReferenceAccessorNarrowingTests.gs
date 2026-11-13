@@ -16,6 +16,8 @@ import System.Diagnostics
 import System.IO
 import System.Linq
 import System.Reflection
+import System.Reflection.Metadata
+import System.Reflection.PortableExecutable
 import System.Runtime.Loader
 import System.Text
 import System.Text.RegularExpressions
@@ -1282,6 +1284,7 @@ public static class Demo {
             .Single()
         Assert.Null(normal.GetSymbolInfo(call).Symbol)
         Assert.NotNull(special.GetSymbolInfo(call).Symbol)
+        let sharedMapper = CSharpTypeMapper()
         for isSpecial in[]bool{specialFirst, !specialFirst, specialFirst} {
             let model = if isSpecial {
                 special
@@ -1294,6 +1297,24 @@ public static class Demo {
                 .DescendantNodes()
                 .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.AnonymousObjectCreationExpressionSyntax]()
                 .First()
+            using let analysis = ObliviousNullabilityAnalyzer.UseCatalogScope(context)
+            let shared = sharedMapper.GetOrCreateAnonymousDataClassShape(
+                model.GetTypeInfo(firstCreation).Type as INamedTypeSymbol,
+                context,
+                firstCreation.GetLocation()
+            )
+            let propertyTypes = shared.PropertyTypes ??
+                throw InvalidOperationException("Anonymous property contract missing.")
+            Assert.Equal(isSpecial, Assert.Single(propertyTypes).IsNullable)
+            Assert.Same(
+                propertyTypes,
+                sharedMapper.GetOrCreateAnonymousDataClassShape(
+                    model.GetTypeInfo(firstCreation).Type as INamedTypeSymbol,
+                    context,
+                    firstCreation.GetLocation()
+                )
+                    .PropertyTypes
+            )
             let directMapper = CSharpTypeMapper()
             directMapper.Map(model.GetTypeInfo(firstCreation).Type, context, firstCreation.GetLocation())
             let declaration = Assert.Single(directMapper.PendingAnonymousDataClasses)
@@ -1340,6 +1361,77 @@ public static class Demo {
                 CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, model), context)
             )
             Assert.Equal(isSpecial, Regex.IsMatch(printed, "data class [^\\n]+\\(Item string\\?\\)"))
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RefParameter_AnonymousMergeCacheUsesActualCompilation(nullableFirst bool) {
+        let tree = CSharpSyntaxTree.ParseText(`
+#nullable enable
+public static class Demo {
+    public static object Make() {
+        var first = new { Item = "safe" };
+        var second = new { Item = Provider.Read() };
+        return first;
+    }
+}`, path: "SharedAnonymous.cs")
+        let Build = (nullable bool) -> CSharpCompilation.Create(
+            "SameAnonymousAssembly5326",
+            []SyntaxTree{
+                tree,
+                CSharpSyntaxTree.ParseText(
+                    if nullable {
+                        "#nullable enable\npublic static class Provider { public static string? Read() => null; }"
+                    } else {
+                        "#nullable enable\npublic static class Provider { public static string Read() => \"safe\"; }"
+                    },
+                    path: "Provider.cs"
+                )
+            },
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        let nullableCompilation = Build(true)
+        let nonnullableCompilation = Build(false)
+        Assert.NotSame(nullableCompilation, nonnullableCompilation)
+        Assert.Equal(nullableCompilation.Assembly.Identity, nonnullableCompilation.Assembly.Identity)
+        let mapper = CSharpTypeMapper()
+        var incomingSpelling string? = nil
+        let creation = tree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.AnonymousObjectCreationExpressionSyntax]()
+            .First()
+        for nullable in[]bool{nullableFirst, !nullableFirst, nullableFirst} {
+            let compilation = if nullable {
+                nullableCompilation
+            } else {
+                nonnullableCompilation
+            }
+            let model = compilation.GetSemanticModel(tree)
+            let context = TranslationContext(compilation, model, tree.FilePath)
+            let type = Assert.IsAssignableFrom[INamedTypeSymbol](model.GetTypeInfo(creation).Type)
+            let property = Assert.Single(type.GetMembers().OfType[IPropertySymbol]())
+            let spelling = GSharpPrinter.RenderTypeReference(
+                mapper.Map(property.Type, context, creation.GetLocation()) ??
+                    throw InvalidOperationException("Incoming mapping missing.")
+            )
+            if incomingSpelling != nil {
+                Assert.Equal(incomingSpelling, spelling)
+            }
+            incomingSpelling = spelling
+            let shape = mapper.GetOrCreateAnonymousDataClassShape(type, context, creation.GetLocation())
+            Assert.Equal(
+                nullable,
+                Assert.Single(shape.PropertyTypes ?? throw InvalidOperationException("Property contract missing."))
+                    .IsNullable
+            )
+            Assert.Same(
+                shape.PropertyTypes,
+                mapper.GetOrCreateAnonymousDataClassShape(type, context, creation.GetLocation()).PropertyTypes
+            )
         }
     }
 
@@ -4590,6 +4682,135 @@ public static class Demo {
     }
 
     @Fact
+    func RefParameter_InvalidHostMetadataDoesNotPoisonDefaultReferences() {
+        let directory = Path.Combine(AppContext.BaseDirectory, "InvalidHostMetadata5326", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let invalid = Path.Combine(directory, "InvalidDependency.dll")
+            let image = CorruptMetadataImage()
+            File.WriteAllBytes(invalid, image)
+            using let invalidReader = PEReader(MemoryStream(image))
+            Assert.True(invalidReader.HasMetadata)
+            Assert.NotNull(invalidReader.PEHeaders.CorHeader)
+            Assert.Throws[BadImageFormatException](
+                () -> {
+                    let _ = invalidReader.GetMetadataReader()
+                }
+            )
+            let source = `
+using System;
+using System.IO;
+using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Runtime.Loader;
+using Microsoft.CodeAnalysis;
+using Cs2Gs.Translator.Loading;
+public static class Probe {
+    public static int Main(string[] args) {
+        AssemblyLoadContext.Default.Resolving += (context, name) => {
+            var path = Path.Combine(args[0], name.Name + ".dll");
+            return File.Exists(path) ? context.LoadFromAssemblyPath(path) : null;
+        };
+        return Run(args[1]);
+    }
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static int Run(string invalid) {
+        var original = (string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES");
+        if (!original.Split(Path.PathSeparator).Contains(invalid))
+            throw new Exception("Invalid dependency is not a real host TPA input.");
+        object cached = null;
+        for (int pass = 0; pass < 2; pass++) {
+            var loaded = CSharpProjectLoader.LoadInMemory(new[] { ("Use.cs", "public class Use {}") });
+            if (!loaded.Compilation.GetDiagnostics().Any(d => d.Id == "CS0009"))
+                throw new Exception("Missing original bad-reference diagnostic.");
+            var reference = loaded.Compilation.References.OfType<PortableExecutableReference>()
+                .Single(r => r.FilePath == invalid);
+            if (!reference.Properties.Equals(MetadataReferenceProperties.Assembly))
+                throw new Exception("Reference properties changed.");
+            var current = CSharpProjectLoader.RuntimeReferences();
+            if (cached != null && !ReferenceEquals(cached, current))
+                throw new Exception("Default reference publication changed.");
+            cached = current;
+        }
+        Console.WriteLine("CS0009|CS0009|retained|same-defaults");
+        return 0;
+    }
+}`
+            let compilation = CSharpCompilation.Create(
+                "InvalidMetadataHost5326",
+                []SyntaxTree{CSharpSyntaxTree.ParseText(source)},
+                CSharpProjectLoader.RuntimeReferences(),
+                CSharpCompilationOptions(OutputKind.ConsoleApplication)
+            )
+            let path = Path.Combine(directory, "Probe.dll")
+            let emitted = compilation.Emit(path)
+            Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics))
+            File.WriteAllText(
+                Path.ChangeExtension(path, ".runtimeconfig.json"),
+                "{\"runtimeOptions\":{\"tfm\":\"net10.0\",\"framework\":{\"name\":\"Microsoft.NETCore.App\",\"version\":\"10.0.0\"}}}"
+            )
+            let (exit, output) = RunDotnet(
+                path,
+                Path.GetDirectoryName(typeof(CSharpProjectLoader).Assembly.Location)!!,
+                invalid
+            )
+            Assert.True(exit == 0, output)
+            Assert.Equal(
+                Encoding.UTF8.GetBytes("CS0009|CS0009|retained|same-defaults" + Environment.NewLine),
+                Encoding.UTF8.GetBytes(output)
+            )
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    @Theory
+    @InlineData("metadata")
+    @InlineData("headers")
+    @InlineData("valid")
+    func RefParameter_MetadataSnapshotFallbackPreservesProperties(kind string) {
+        let directory = Path.Combine(AppContext.BaseDirectory, "MetadataFallback5326", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let path = Path.Combine(directory, "System.Console.dll")
+            File.WriteAllBytes(
+                path,
+                if kind == "metadata" {
+                    CorruptMetadataImage()
+                } else if kind == "headers" {
+                    []byte{0}
+                } else {
+                    File.ReadAllBytes(typeof(Console).Assembly.Location)
+                }
+            )
+            let properties = MetadataReferenceProperties
+                .Assembly
+                .WithAliases(ImmutableArray.Create("framework", "secondary"))
+                .WithEmbedInteropTypes(true)
+            let snapshots = Dictionary[string, PortableExecutableReference](StringComparer.Ordinal)
+            let reference = TranslationContext.CreateOwnedMetadataReference(path, properties, snapshots)
+            Assert.Equal(properties, reference.Properties)
+            Assert.Equal(path, reference.FilePath)
+            if kind == "valid" {
+                Assert.Single(snapshots)
+                Assert.True(TranslationContext.HasTrustedEffectImage(reference, typeof(Console).Assembly.FullName!!))
+                File.Delete(path)
+                Assert.Same(reference, TranslationContext.CreateOwnedMetadataReference(path, properties, snapshots))
+            } else {
+                Assert.Empty(snapshots)
+                Assert.False(TranslationContext.HasTrustedEffectImage(reference, typeof(Console).Assembly.FullName!!))
+                let compilation = CSharpCompilation.Create(
+                    "InvalidReference5326",
+                    references: []MetadataReference{reference}
+                )
+                Assert.Contains(compilation.GetDiagnostics(), (diagnostic Diagnostic) -> diagnostic.Id == "CS0009")
+            }
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    @Fact
     func RefParameter_CanceledComparerIndexPublishesNothingAndRetriesOnce() {
         let tree = CSharpSyntaxTree.ParseText(`
 using System;
@@ -6011,6 +6232,23 @@ public class Demo
             } finally {
                 loadContext.Unload()
             }
+        }
+
+        private func CorruptMetadataImage()[]byte {
+            let image = File.ReadAllBytes(typeof(Console).Assembly.Location)
+            using let reader = PEReader(MemoryStream(image))
+            let headers = reader.PEHeaders
+            let metadata = (
+                headers.CorHeader ?? throw InvalidOperationException("CLI header missing.")
+            ).MetadataDirectory
+            let section = headers.SectionHeaders.First(
+                (value SectionHeader) -> metadata.RelativeVirtualAddress >= value.VirtualAddress &&
+                    metadata.RelativeVirtualAddress < value.VirtualAddress +
+                    value.SizeOfRawData
+            )
+            let offset = section.PointerToRawData + metadata.RelativeVirtualAddress - section.VirtualAddress
+            Array.Clear(image, offset, 4)
+            return image
         }
 
         private func EmitCSharp(name string, source string)[]byte {

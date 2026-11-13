@@ -92,10 +92,10 @@ class CSharpTypeMapper {
     // of its shapes exactly once.
     private let declaredAnonymousShapes HashSet[string] = HashSet[string](StringComparer.Ordinal)
 
-    private let anonymousShapeContracts Dictionary[
-        (Shape string, Input string),
-        IReadOnlyList[GTypeReference]
-    ] = Dictionary[(Shape string, Input string), IReadOnlyList[GTypeReference]]()
+    private let anonymousShapeContracts ObliviousNullabilityAnalyzer.ScopedCompilationCache[
+        Dictionary[(Shape string, Input string), IReadOnlyList[GTypeReference]]
+    ] = ObliviousNullabilityAnalyzer
+        .ScopedCompilationCache[Dictionary[(Shape string, Input string), IReadOnlyList[GTypeReference]]]()
     private let synthesizedTypeAliases Dictionary[string, string] = Dictionary[string, string](StringComparer.Ordinal)
     private let barePrintedMetadataTypes List[(SimpleName string, Symbol INamedTypeSymbol)] = List[
         (SimpleName string, Symbol INamedTypeSymbol)
@@ -2973,6 +2973,11 @@ class CSharpTypeMapper {
         mappedPropertyTypes IReadOnlyList[GTypeReference]?,
         context TranslationContext
     ) IReadOnlyList[GTypeReference] {
+        using let analysis = ObliviousNullabilityAnalyzer.UseCatalogScope(context)
+        let contracts = this.anonymousShapeContracts.GetValue(
+            context.Compilation,
+            (owner Compilation) -> Dictionary[(Shape string, Input string), IReadOnlyList[GTypeReference]]()
+        )
         let shapeKey = AnonymousShapeKey(properties)
         let inputKey = (
             shapeKey,
@@ -2983,7 +2988,7 @@ class CSharpTypeMapper {
                 )
             )
         )
-        if this.anonymousShapeContracts.TryGetValue(inputKey, out var existing) {
+        if contracts.TryGetValue(inputKey, out var existing) {
             return existing
         }
         let merged = properties.Select(
@@ -3007,7 +3012,7 @@ class CSharpTypeMapper {
                 }
             }
         }
-        this.anonymousShapeContracts[inputKey] = merged
+        contracts[inputKey] = merged
         return merged
     }
 
