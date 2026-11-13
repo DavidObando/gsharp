@@ -12035,6 +12035,7 @@ partial class CSharpToGSharpTranslator {
                 return !acceptsNil
             }
             // Issue #5609: an unwidened oblivious source declaration emits bare `T`, not an imported platform type.
+            // Locals and lambda inputs need emitted or initializer facts before this fallback.
             return type is {IsReferenceType: true} referenceType &&
                 (
                 referenceType.NullableAnnotation == Microsoft
@@ -12047,12 +12048,15 @@ partial class CSharpToGSharpTranslator {
                         .NullableAnnotation
                         .None &&
                         symbol is {} sourceSymbol &&
+                        sourceSymbol is not ILocalSymbol &&
+                        sourceSymbol.ContainingSymbol is not IMethodSymbol{MethodKind: MethodKind.AnonymousFunction} &&
                         this.IsSourceSymbol(sourceSymbol)
                 )
             ) &&
-                !this.IsImportedObliviousNullableMember(symbol) && !this.LocalInitializedFromImportedObliviousNullable(
-                symbol
-            ) &&
+                !this
+                .typeMapper
+                .MapsToNullableAnalyzerType(referenceType) && !this.IsImportedObliviousNullableMember(symbol) &&
+                !this.LocalInitializedFromImportedObliviousNullable(symbol) &&
                 (symbol == nil || !this.IsTranslatorWidenedDeclaration(symbol))
         }
 
@@ -14174,7 +14178,12 @@ partial class CSharpToGSharpTranslator {
                     this.IsEmittedReadOnlyCapture(symbol!!, declaration, declaringScope) &&
                     (
                     isDeconstructedForEachLeaf || this.IsClosureBoundary(scope_) ||
-                        (this.IsObliviousCompilation() && symbol is ILocalSymbol)
+                        (this.IsObliviousCompilation() && symbol is ILocalSymbol) ||
+                        (
+                        symbol is IParameterSymbol parameter && this.typeMapper.MapsToNullableAnalyzerType(
+                            parameter.Type
+                        )
+                    )
                 )
             ) {
                 return false

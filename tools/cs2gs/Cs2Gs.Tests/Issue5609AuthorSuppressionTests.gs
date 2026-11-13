@@ -16,6 +16,63 @@ import System.Text
 import Xunit
 
 class Issue5609AuthorSuppressionTests {
+    @Theory
+    @InlineData("#nullable disable")
+    @InlineData("#nullable enable")
+    func AnalyzerNamespaceValues_KeepRequiredAssertionsInEveryCaptureForm(directive string) {
+        AssertRuns((`
+DIRECTIVE
+namespace Demo {
+    public class Holder {
+        public Holder(Microsoft.CodeAnalysis.INamespaceSymbol child) { Child = child; }
+        public Microsoft.CodeAnalysis.INamespaceSymbol Child { get; }
+    }
+    public static class P {
+        public static object Direct(Microsoft.CodeAnalysis.INamespaceSymbol ns) => ns!;
+        public static object Local(Microsoft.CodeAnalysis.INamespaceSymbol ns) { var x = ns; return x!; }
+        public static object Is(Microsoft.CodeAnalysis.INamespaceSymbol ns) => ns is var c ? c! : new object();
+        public static object Arm(Microsoft.CodeAnalysis.INamespaceSymbol ns) => ns switch { var c => c! };
+        public static object Case(Microsoft.CodeAnalysis.INamespaceSymbol ns) { switch (ns) { case var c: return c!; } }
+        public static object Property(Holder h) => h is { Child: var c } ? c! : new object();
+        public static object Guarded(Microsoft.CodeAnalysis.INamespaceSymbol ns) {
+            if (ns == null) return "nil";
+            return ns!;
+        }
+    }
+}`).Replace("DIRECTIVE", directive), `
+using Demo;
+public static class Host {
+    static string Read(System.Func<object> f) {
+        try { return f() == null ? "nil" : "value"; }
+        catch (System.NullReferenceException) { return "NRE"; }
+    }
+    public static void Main() {
+        System.Console.Write(Read(() => P.Direct(null)) + "|" + Read(() => P.Local(null)) + "|" +
+            Read(() => P.Is(null)) + "|" + Read(() => P.Arm(null)) + "|" + Read(() => P.Case(null)) + "|" +
+            Read(() => P.Property(new Holder(null))) + "|" + P.Guarded(null));
+    }
+}`, "NRE|NRE|NRE|NRE|NRE|NRE|nil", (
+                printed string
+            ) -> {
+                Assert.Contains(
+                    "func Direct(ns string?) object -> ns!!",
+                    printed
+                )
+                Assert.Contains(
+                    "return x!!",
+                    printed
+                )
+                Assert.Contains(
+                    "c!!",
+                    printed
+                )
+                Assert.DoesNotContain(
+                    "return ns!!",
+                    printed
+                )
+            }, nativeExpected: "nil|nil|nil|nil|nil|nil|nil", analyzerApiMode: true)
+    }
+
     @Fact
     func ObliviousNonNullDeclarations_OmitAuthorAssertionsInEveryCaptureForm() {
         AssertRuns(`
@@ -182,12 +239,17 @@ public static class Host {
             expected string,
             verifyTranslation Action[string],
             nativeExpected string? = nil,
-            legacySource string? = nil
+            legacySource string? = nil,
+            analyzerApiMode bool = false
         ) {
             let directory = Path.Combine(AppContext.BaseDirectory, "issue-5609", Guid.NewGuid().ToString("N"))
             Directory.CreateDirectory(directory)
             try {
                 let references = List[MetadataReference](CSharpProjectLoader.RuntimeReferences())
+                if analyzerApiMode {
+                    let roslyn = typeof(INamespaceSymbol).Assembly.Location
+                    File.Copy(roslyn, Path.Combine(directory, Path.GetFileName(roslyn)))
+                }
                 if legacySource != nil {
                     let legacyPath = Path.Combine(directory, "Legacy.dll")
                     EmitCSharp(legacySource, "Legacy", legacyPath, references)
@@ -201,7 +263,9 @@ public static class Host {
                 Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics))
                 let document = Assert.Single(project.Documents)
                 let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
-                let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+                let printed = GSharpPrinter.Print(
+                    CSharpToGSharpTranslator(analyzerApiMode: analyzerApiMode).TranslateDocument(document, context)
+                )
                 Assert.Empty(
                     context.Diagnostics.Where(
                         (d TranslationDiagnostic) -> d.Severity == TranslationSeverity.Unsupported
@@ -234,7 +298,19 @@ public static class Host {
                 let compiled = ProcessRunner.Run("dotnet", arguments)
                 Assert.False(compiled.TimedOut, compiled.Output)
                 Assert.True(compiled.ExitCode == 0, compiled.Output + "\n" + printed)
-                Assert.DoesNotContain("GS0536", compiled.Output)
+                Assert.True(
+                    !compiled.Output.Contains("GS0536", StringComparison.Ordinal),
+                    compiled.Output + "\n" + printed
+                )
+                if analyzerApiMode {
+                    EmitCSharp(
+                        host,
+                        "Host",
+                        hostPath,
+                        List[MetadataReference](references){MetadataReference.CreateFromFile(library)},
+                        OutputKind.ConsoleApplication
+                    )
+                }
                 VerifyStrictIL(library, directory)
                 VerifyStrictIL(hostPath, directory)
                 AssertOutput(hostPath, expected)
