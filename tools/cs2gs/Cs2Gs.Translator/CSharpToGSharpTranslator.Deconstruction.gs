@@ -4267,13 +4267,11 @@ partial class CSharpToGSharpTranslator {
             if designation is SingleVariableDesignationSyntax single {
                 let name = this.EmittedName(single, single.Identifier)
                 let local ILocalSymbol? = this.context.GetDeclaredSymbol(single) as ILocalSymbol
-                var type = if inferredType && local != nil && this.InferredLocalDefaultRequiresTypedDeclaration(local) {
-                    MakeNullable(this.typeMapper.MapEventType(local.Type, this.context, single.GetLocation()))
-                } else if inferredType && local != nil && this.DeconstructionLocalRequiresTypedDeclaration(
+                var type = if inferredType && local != nil && this.DeconstructionLocalRequiresTypedDeclaration(
                     local,
                     true
                 ) {
-                    this.typeMapper.MapEventType(local.Type, this.context, single.GetLocation())
+                    MakeNullable(this.MapInferredLocalDeclarationType(local, single.GetLocation()))
                 } else if !inferredType && local != nil {
                     this.typeMapper.Map(local.Type, this.context, single.GetLocation())
                 } else {
@@ -4435,15 +4433,28 @@ partial class CSharpToGSharpTranslator {
         }
 
         // Native tuple bindings cannot carry a leaf's nullable storage clause.
-        private func DeconstructionLocalRequiresTypedDeclaration(local ILocalSymbol, inferredType bool) bool ->
-        if inferredType {
-            this.InferredLocalDeclarationIsNullable(local) || local.Type.IsReferenceType && this.TryGetRefStorageSlot(
-                local,
-                0
-            ) is {} slot &&
-                this.RefStorageIsNullable(slot, includeArrays: true)
-        } else {
-            IsAnnotatedNullableReference(local.Type) || this.ShouldPromoteToNullableReference(local)
+        private func DeconstructionLocalRequiresTypedDeclaration(local ILocalSymbol, inferredType bool) bool {
+            if !inferredType {
+                return IsAnnotatedNullableReference(local.Type) || this.ShouldPromoteToNullableReference(local)
+            }
+            if this.InferredLocalDefaultRequiresTypedDeclaration(local) {
+                return true
+            }
+            if !this.IsLocalReassigned(local) ||
+                !(
+                this.InferredLocalDeclarationIsNullable(local) ||
+                    local
+                    .Type
+                    .IsReferenceType &&
+                    this.TryGetRefStorageSlot(local, 0) is {} slot && this.RefStorageIsNullable(
+                    slot,
+                    includeArrays: true
+                )
+            ) {
+                return false
+            }
+            let initializer = this.GetInferredLocalInitializer(local, out _, out _)
+            return initializer == nil || this.GSharpExpressionIsStaticallyNonNull(initializer)
         }
 
         private func TryGetDeconstructionTargets(

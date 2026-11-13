@@ -6,6 +6,51 @@ import System
 import Xunit
 
 class Issue5994FlatDeconstructionStorageTests {
+    @Theory
+    @InlineData("var items = new Node[1]; items[0] = null; items[0] = new Node();", "arr[0]", "[]?Node?", "Node?")
+    @InlineData(
+        "var items = new Node?[1][]; items[0] = null; items[0] = new Node?[1];",
+        "arr[0]",
+        "[]?[]?Node?",
+        "Node?[]?"
+    )
+    func MaterializedArrayLeaves_KeepNullableElementStorage(
+        setup string,
+        element string,
+        storageType string,
+        itemType string
+    ) {
+        Issue5609AuthorSuppressionTests.AssertRuns((`
+#nullable disable
+using System;
+namespace Demo {
+    public class Node { }
+    public record Entry(ITEMTYPE Item, int Id);
+    public static class Use {
+        static Entry Empty() { Console.Write("D|"); return new Entry(null, 7); }
+        public static int Read() {
+            SETUP
+            var pair = (items, 7);
+            var (arr, _) = pair;
+            int id;
+            (ELEMENT, id) = Empty();
+            Console.Write((ELEMENT == null ? "nil|" : "value|") + id + "|");
+            arr = null;
+            Console.Write("cleared|");
+            return arr.Length;
+        }
+    }
+}`).Replace("SETUP", setup).Replace("ELEMENT", element).Replace("ITEMTYPE", itemType), `
+public static class Host {
+    public static void Main() {
+        try { System.Console.Write(Demo.Use.Read()); }
+        catch (System.NullReferenceException) { System.Console.Write("NRE"); }
+    }
+}`, "D|nil|7|cleared|NRE", (
+                printed string
+            ) -> Assert.Contains("var arr " + storageType + " =", printed, StringComparison.Ordinal))
+    }
+
     @Fact
     func OverwrittenCallback_PreservesTheInferredTypeParameterContract() {
         Issue5609AuthorSuppressionTests.AssertRuns(`
