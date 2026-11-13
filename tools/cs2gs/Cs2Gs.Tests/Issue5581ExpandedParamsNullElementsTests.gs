@@ -3,6 +3,10 @@
 package Cs2Gs.Tests
 
 import Cs2Gs.Pipeline
+import Cs2Gs.Translator.Loading
+import Microsoft.CodeAnalysis
+import Microsoft.CodeAnalysis.CSharp
+import Microsoft.CodeAnalysis.CSharp.Syntax
 import System
 import System.Collections.Generic
 import System.IO
@@ -13,6 +17,97 @@ import System.Text.RegularExpressions
 import Xunit
 
 class Issue5581ExpandedParamsNullElementsTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func SameRunReferencePacking_UsesTheEmittedElementContract(inferred bool) {
+        let calls = if inferred {
+            `Counter.Generic(null!, "x") + "|" + Counter.Generic("x") + "|" +
+            Counter.Generic(null!, Pick(1), Pick(2)) + "|" +
+            Counter.Nullable(null, "x") + "|" + Counter.Strict("ok") + "|" + trace`
+        } else {
+            `Counter.Count(null!, "x") + "|" + Counter.CountE(null!, "x") + "|" +
+            Counter.CountA(null!, "x") + "|" + Counter.Count() + "|" +
+            Counter.Count("x") + "|" + Counter.Count(null!, Pick(1), Pick(2)) + "|" +
+            Counter.Nullable(null, "x") + "|" + Counter.Strict("ok") + "|" +
+            Counter.Count(new List<string?> { null, "x" }) + "|" + trace`
+        }
+        let source = `
+#nullable enable
+using System.Collections.Generic;
+namespace Demo {
+    public static class P {
+        static int trace;
+        static string Pick(int n) { trace = trace * 10 + n; return "x"; }
+        public static void Main() => System.Console.Write(` + calls + `);
+    }
+}
+`
+        let expected = if inferred {
+            "2|1|3|2|2|12"
+        } else {
+            "2|2|2|0|1|3|2|2|2|12"
+        }
+        WithTranslation(
+            source,
+            (directory string, printed string, compiled ProcessRunResult) -> {
+                let library = Path.Combine(directory, "Library.dll")
+                AssertSuccessfulTarget(directory, compiled, expected, library)
+                AssertStrictIl(library)
+                let compact = Regex.Replace(printed, `\s+`, string.Empty)
+                Assert.Contains("Counter.Strict(List[string]{\"ok\"})", compact)
+                Assert.Contains("Counter.Nullable(cast[IEnumerable[string?]](List[string?]{nil,\"x\"}))", compact)
+                Assert.DoesNotContain("!!", printed)
+                let contract = CSharpCompilation.Create(
+                    "ContractProbe",
+                    references: CSharpProjectLoader.RuntimeReferences().Concat(
+                        []MetadataReference{
+                            MetadataReference.CreateFromFile(Path.Combine(directory, "Library.ref.dll"))
+                        }
+                    )
+                )
+                    .GetTypeByMetadataName("Demo.Counter")!!
+                let strict = cast[INamedTypeSymbol](
+                    cast[IMethodSymbol](contract.GetMembers("Strict").Single()).Parameters[0].Type
+                )
+                Assert.Equal(NullableAnnotation.NotAnnotated, strict.TypeArguments[0].NullableAnnotation)
+                if inferred {
+                    Assert.Contains("Counter.Generic(List[string?]{default(string),\"x\"})", compact)
+                } else {
+                    for name in[]string{"Count", "CountE", "CountA"} {
+                        let parameter = cast[IMethodSymbol](contract.GetMembers(name).Single()).Parameters[0]
+                        Assert.Equal(NullableAnnotation.NotAnnotated, parameter.Type.NullableAnnotation)
+                        let element = if parameter.Type is IArrayTypeSymbol array {
+                            array.ElementType
+                        } else {
+                            cast[INamedTypeSymbol](parameter.Type).TypeArguments[0]
+                        }
+                        Assert.Equal(NullableAnnotation.Annotated, element.NullableAnnotation)
+                    }
+                    Assert.Contains("Counter.Count(List[string?]{nil,\"x\"})", compact)
+                    Assert.Contains("Counter.Count(List[string?]())", compact)
+                    Assert.Contains("Counter.Count(List[string?]{\"x\"})", compact)
+                }
+            },
+            expected,
+            `
+#nullable enable
+using System.Collections.Generic;
+using System.Linq;
+namespace Demo {
+    public static class Counter {
+        public static int Count(params List<string> items) => items.Count;
+        public static int CountE(params IEnumerable<string> items) => items.Count();
+        public static int CountA(params string[] items) => items.Length;
+        public static int Generic<T>(params List<T> items) => items.Count;
+        public static int Nullable(params IEnumerable<string?> items) => items.Count();
+        public static int Strict(params List<string> items) => items[0].Length;
+    }
+}
+`
+        )
+    }
+
     @Fact
     func ExpandedNullElements_PreserveTheIssueOutputThroughThePublicDrivers() {
         WithTranslation(`
@@ -276,33 +371,84 @@ public class Bag<T> : List<string> { }
         private func WithTranslation(
             source string,
             verify Action[string, string, ProcessRunResult],
-            nativeExpected string? = nil
+            nativeExpected string? = nil,
+            librarySource string? = nil
         ) {
             let directory = Path.Combine(AppContext.BaseDirectory, "issue-5581", Guid.NewGuid().ToString("N"))
             let native = Path.Combine(directory, "native")
             Directory.CreateDirectory(native)
             try {
                 GsharpTestProjectRunner.WriteIsolationBoundary(native)
-                File.WriteAllText(Path.Combine(native, "Probe.cs"), source)
+                let app = if librarySource == nil {
+                    native
+                } else {
+                    Path.Combine(native, "App")
+                }
+                Directory.CreateDirectory(app)
+                if librarySource != nil {
+                    let library = Path.Combine(native, "Library")
+                    Directory.CreateDirectory(library)
+                    File.WriteAllText(Path.Combine(library, "Library.cs"), librarySource)
+                    File.WriteAllText(
+                        Path.Combine(library, "Library.csproj"),
+                        `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable></PropertyGroup></Project>`
+                    )
+                }
+                File.WriteAllText(Path.Combine(app, "Probe.cs"), source)
+                let reference = if librarySource == nil {
+                    string.Empty
+                } else {
+                    `<ItemGroup><ProjectReference Include="../Library/Library.csproj" /></ItemGroup>`
+                }
                 File.WriteAllText(
-                    Path.Combine(native, "Probe.csproj"),
-                    `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><OutputType>Exe</OutputType><Nullable>enable</Nullable></PropertyGroup></Project>`
+                    Path.Combine(app, "Probe.csproj"),
+                    `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><OutputType>Exe</OutputType><Nullable>enable</Nullable></PropertyGroup>` +
+                        reference +
+                        `</Project>`
                 )
                 AssertProcess(ProcessRunner.Run("git", []string{"init", "--quiet"}, native))
                 let nativeBuild = ProcessRunner.Run(
                     "dotnet",
                     []string{"build", "Probe.csproj", "-c", "Release", "--nologo"},
-                    native
+                    app
                 )
                 AssertProcess(nativeBuild)
                 if nativeExpected != nil {
                     AssertOutput(
                         ProcessRunner.Run(
                             "dotnet",
-                            []string{Path.Combine(native, "bin", "Release", "net10.0", "Probe.dll")}
+                            []string{Path.Combine(app, "bin", "Release", "net10.0", "Probe.dll")}
                         ),
                         nativeExpected
                     )
+                }
+                if librarySource != nil {
+                    let loaded = CSharpProjectLoader
+                        .LoadProjectAsync(Path.Combine(app, "Probe.csproj"), configuration: "Release")
+                        .GetAwaiter()
+                        .GetResult()
+                    let counter = loaded.Compilation.GetTypeByMetadataName("Demo.Counter")!!
+                    Assert.Empty(counter.GetMembers("Count").Single().DeclaringSyntaxReferences)
+                    let reference = loaded
+                        .Compilation
+                        .References
+                        .OfType[PortableExecutableReference]()
+                        .Single(
+                        (candidate PortableExecutableReference) ->
+                        loaded.Compilation.GetAssemblyOrModuleSymbol(candidate)?.Name == "Library"
+                    )
+                    Assert.EndsWith(Path.Combine("ref", "Library.dll"), reference.FilePath)
+                    let tree = loaded
+                        .Compilation
+                        .SyntaxTrees
+                        .Single((candidate SyntaxTree) -> Path.GetFileName(candidate.FilePath) == "Probe.cs")
+                    let model = loaded.Compilation.GetSemanticModel(tree)
+                    for call in tree.GetRoot().DescendantNodes().OfType[InvocationExpressionSyntax]() {
+                        if model.GetSymbolInfo(call).Symbol is IMethodSymbol{Name: "Generic"} generic {
+                            Assert.Empty(generic.DeclaringSyntaxReferences)
+                            Assert.Equal(NullableAnnotation.NotAnnotated, generic.TypeArguments[0].NullableAnnotation)
+                        }
+                    }
                 }
                 let compiler = GscInvoker.Resolve(nil, "Release", AppContext.BaseDirectory)
                 Assert.NotNull(compiler)
@@ -334,22 +480,56 @@ public class Bag<T> : List<string> { }
                         native
                     )
                 )
-                let gs = Path.Combine(translated, "Probe.gs")
-                let compiled = ProcessRunner.Run(
-                    "dotnet",
-                    []string{compiler!!, "/target:exe", "/out:" + Path.Combine(directory, "Target.dll"), gs}
-                )
+                let compileArguments = List[string]{
+                    compiler!!,
+                    "/target:exe",
+                    "/out:" + Path.Combine(directory, "Target.dll")
+                }
+                if librarySource != nil {
+                    let library = Path.Combine(directory, "Library.dll")
+                    let reference = Path.Combine(directory, "Library.ref.dll")
+                    AssertProcess(
+                        ProcessRunner.Run(
+                            "dotnet",
+                            []string{
+                                compiler!!,
+                                "/target:library",
+                                "/assemblyname:Library",
+                                "/out:" + library,
+                                "/refout:" + reference,
+                                Path.Combine(translated, "Library", "Library.gs")
+                            }
+                        )
+                    )
+                    compileArguments.Add("/reference:" + reference)
+                }
+                let gs = if librarySource == nil {
+                    Path.Combine(translated, "Probe.gs")
+                } else {
+                    Path.Combine(translated, "App", "Probe.gs")
+                }
+                compileArguments.Add(gs)
+                let compiled = ProcessRunner.Run("dotnet", compileArguments)
                 verify(directory, File.ReadAllText(gs), compiled)
             } finally {
                 Directory.Delete(directory, recursive: true)
             }
         }
 
-        private func AssertSuccessfulTarget(directory string, compiled ProcessRunResult, expected string) {
+        private func AssertSuccessfulTarget(
+            directory string,
+            compiled ProcessRunResult,
+            expected string,
+            references ...string
+        ) {
             AssertProcess(compiled)
             Assert.DoesNotContain(": warning ", compiled.Output)
             let assembly = Path.Combine(directory, "Target.dll")
             AssertOutput(ProcessRunner.Run("dotnet", []string{assembly}), expected)
+            AssertStrictIl(assembly, references)
+        }
+
+        private func AssertStrictIl(assembly string, additionalReferences ...string) {
             let arguments = List[string]{"tool", "run", "ilverify", assembly, "-s", "System.Private.CoreLib"}
             let references = Directory.EnumerateFiles(
                 Path.GetDirectoryName(typeof(object).Assembly.Location)!!,
@@ -357,7 +537,7 @@ public class Bag<T> : List<string> { }
             )
                 .ToArray()
             Assert.NotEmpty(references)
-            for reference in references {
+            for reference in references.Concat(additionalReferences) {
                 arguments.Add("-r")
                 arguments.Add(reference)
             }

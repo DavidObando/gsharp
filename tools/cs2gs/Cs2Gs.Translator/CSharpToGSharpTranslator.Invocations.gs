@@ -1255,15 +1255,17 @@ partial class CSharpToGSharpTranslator {
             let callLocation = callSyntax!!.GetLocation()
             let rawParamsElementType = (cast[INamedTypeSymbol](paramsCollectionArg.Parameter!!.Type)).TypeArguments[0]
             let paramsArguments = arguments.Skip(consumedSyntaxArguments).ToList()
+            // Same-run source contracts also govern callers bound through emitted reference assemblies.
             let widenPackedElement = rawParamsElementType.IsReferenceType &&
                 rawParamsElementType.NullableAnnotation != Microsoft
                 .CodeAnalysis
                 .NullableAnnotation
                 .Annotated &&
-                paramsArguments
-                .Any(
-                (a ArgumentSyntax) -> this.SinkInfersTypeFromValue(paramsCollectionArg.Parameter, a.Expression) &&
-                    this.EmittedExpandedParamsElementMayBeNull(a.Expression)
+                (
+                this.ObliviousParamsElementIsPromoted(paramsCollectionArg.Parameter!!) || paramsArguments.Any(
+                    (a ArgumentSyntax) -> this.SinkInfersTypeFromValue(paramsCollectionArg.Parameter, a.Expression) &&
+                        this.EmittedExpandedParamsElementMayBeNull(a.Expression)
+                )
             )
             let paramsElementType = if widenPackedElement {
                 rawParamsElementType.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
