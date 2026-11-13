@@ -13,6 +13,13 @@ import Microsoft.CodeAnalysis.CSharp.Syntax
 import GSharp.Core.CodeAnalysis.Syntax
 
 partial class CSharpToGSharpTranslator {
+    shared {
+        internal func IsUnqualifiedOrThisQualifiedFieldRead(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+        ) bool ->
+        DeclarationVisitor.IsUnqualifiedOrThisQualifiedFieldAccess(expression)
+    }
+
     private partial class DeclarationVisitor : CSharpSyntaxVisitor[GMember] {
         /// Issue #4262 follow-up (5-item plan, item 2): a statement-level
         /// early-return null guard on a field/property
@@ -113,7 +120,11 @@ partial class CSharpToGSharpTranslator {
                         BindingKind.Let,
                         capturedName,
                         type: nil,
-                        initializer: EnsureNonNullAssertion(fieldRead)
+                        initializer: if this.GSharpExpressionIsStaticallyNonNull(eligibleUses[0], fieldRead) {
+                            fieldRead
+                        } else {
+                            EnsureNonNullAssertion(fieldRead)
+                        }
                     )
                 )
                 for use in eligibleUses {
@@ -448,7 +459,7 @@ partial class CSharpToGSharpTranslator {
                 default: false
             }
 
-            private func IsUnqualifiedOrThisQualifiedFieldAccess(
+            internal func IsUnqualifiedOrThisQualifiedFieldAccess(
                 expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
             ) bool {
                 var expression = expression

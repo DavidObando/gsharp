@@ -11593,6 +11593,14 @@ partial class CSharpToGSharpTranslator {
             if translated != nil && TranslatedExpressionIsStaticallyNonNull(translated) {
                 return true
             }
+            if IsUnqualifiedOrThisQualifiedFieldRead(expression) &&
+                this
+                .context
+                .GetSymbolInfo(expression)
+                .Symbol is IFieldSymbol &&
+                ObliviousNullabilityAnalyzer.IsNullGuardDominatedRead(expression, this.context.SemanticModel) {
+                return true
+            }
             // A checked cast sets its own top-level nullability, independently of nested nullable positions.
             if Unparenthesize(expression) is CastExpressionSyntax cast &&
                 cast.Type is not NullableTypeSyntax &&
