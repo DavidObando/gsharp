@@ -1370,6 +1370,12 @@ internal partial class OverloadResolver {
         // The extension's first parameter is the receiver; user arguments line
         // up against parameters[1..].
         let userParamCount = extension.Parameters.Length - 1
+        let isVariadic = userParamCount > 0 && extension.Parameters[extension.Parameters.Length - 1].IsVariadic
+        let fixedUserParamCount = if isVariadic {
+            userParamCount - 1
+        } else {
+            userParamCount
+        }
         // ADR-0063 / issue #1556: count the leading non-optional user
         // parameters. A receiver-form (extension) call may omit any trailing
         // parameter that declares a default value, mirroring the free-function,
@@ -1377,15 +1383,24 @@ internal partial class OverloadResolver {
         // occupies `Parameters[0]`, so the scan runs over the user slice
         // `Parameters[1..]` and the omitted trailing slots are synthesized from
         // each parameter's captured default constant below.
-        var requiredUserParamCount = userParamCount
-        for var i = userParamCount - 1; i >= 0; i-- {
+        var requiredUserParamCount = fixedUserParamCount
+        for var i = fixedUserParamCount - 1; i >= 0; i-- {
             if extension.Parameters[i + 1].HasExplicitDefaultValue {
                 requiredUserParamCount = i
             } else {
                 break
             }
         }
-        if arguments.Length < requiredUserParamCount || arguments.Length > userParamCount {
+        if isVariadic && arguments.Length < requiredUserParamCount {
+            Diagnostics.ReportTooFewArgumentsForVariadic(
+                ce.Identifier.Location,
+                extension.Name,
+                requiredUserParamCount,
+                arguments.Length
+            )
+            return BoundErrorExpression(nil)
+        }
+        if !isVariadic && (arguments.Length < requiredUserParamCount || arguments.Length > userParamCount) {
             Diagnostics.ReportWrongArgumentCount(ce.Location, extension.Name, userParamCount, arguments.Length)
             return BoundErrorExpression(nil)
         }
@@ -1402,7 +1417,17 @@ internal partial class OverloadResolver {
         let extensionParameterIsOptional(int32) -> bool = (parameterIndex int32) -> extension
             .Parameters[parameterIndex + 1]
             .HasExplicitDefaultValue
-        if !argumentNames.IsDefault {
+        if isVariadic &&
+            !ValidateExpandedVariadicNamedArguments(
+            argumentNames,
+            fixedUserParamCount,
+            extensionParameterNameAt,
+            extension.Name,
+            ce
+        ) {
+            return BoundErrorExpression(nil)
+        }
+        if !argumentNames.IsDefault && !isVariadic {
             if !TryReorderUserCallArguments(
                 ce.Arguments,
                 arguments,
@@ -1427,19 +1452,15 @@ internal partial class OverloadResolver {
             }
             permutedArguments = arguments
         }
-        // ADR-0063 / issue #1556: pad any omitted trailing optional parameters
-        // with their captured default values so the generic-inference and
-        // per-position conversion loops below bind the full user parameter list
-        // (matching the free-function, static, and user-instance call paths).
-        // Named-argument calls are reordered above against the full parameter
-        // count, so this positional pad is gated on the unnamed shape.
-        if argumentNames.IsDefault && permutedArguments.Length < userParamCount {
-            let padded = ImmutableArray.CreateBuilder[BoundExpression](userParamCount)
+        // Pad only fixed optional parameters; the carrier is synthesized below.
+        if (argumentNames.IsDefault || isVariadic) && permutedArguments.Length < fixedUserParamCount {
+            let padded = ImmutableArray.CreateBuilder[BoundExpression](fixedUserParamCount)
             padded.AddRange(permutedArguments)
-            for var i = permutedArguments.Length; i < userParamCount; i++ {
+            for var i = permutedArguments.Length; i < fixedUserParamCount; i++ {
                 padded.Add(CreateOptionalUserDefaultArgument(extension.Parameters[i + 1]))
             }
             permutedArguments = padded.MoveToImmutable()
+            Array.Resize(&permutedSyntax, fixedUserParamCount)
         }
         // Issue #326: a generic extension function
         // `func (r R) Name[T](item T) T` resolves its type parameters either
@@ -1483,6 +1504,10 @@ internal partial class OverloadResolver {
                     if i >= permutedSyntax.Length || permutedSyntax[i] == nil {
                         continue
                     }
+                    if isVariadic && i == fixedUserParamCount {
+                        InferVariadicArguments(extension.Parameters[i + 1].Type, permutedArguments, i, substitution)
+                        break
+                    }
                     if permutedArguments[i].Type != nil {
                         inferTypeArguments(
                             extension.Parameters[i + 1].Type,
@@ -1520,6 +1545,31 @@ internal partial class OverloadResolver {
                     return BoundErrorExpression(nil)
                 }
             }
+        }
+        // Match ordinary calls before converting physical parameter slots. The receiver stays outside the packed argument vector.
+        if isVariadic {
+            let variadicParameter = extension.Parameters[extension.Parameters.Length - 1]
+            let carrierType = if substitution != nil {
+                substituteType(variadicParameter.Type, substitution)
+            } else {
+                variadicParameter.Type
+            }
+            var hasVariadicErrors = false
+            permutedArguments = PackOrPassThroughVariadicArguments(
+                conversions,
+                Diagnostics,
+                ce,
+                permutedArguments,
+                fixedUserParamCount,
+                carrierType,
+                variadicParameter.Name,
+                (i int32) -> permutedSyntax[i]?.Location ?? ce.Location,
+                &hasVariadicErrors
+            )
+            if hasVariadicErrors {
+                return BoundErrorExpression(nil)
+            }
+            Array.Resize(&permutedSyntax, userParamCount)
         }
         let convertedArgs = ImmutableArray.CreateBuilder[BoundExpression](extension.Parameters.Length)
         let receiverParamType = if substitution != nil {
@@ -1708,6 +1758,29 @@ internal partial class OverloadResolver {
             return completeSuspendingCall(suspendingCall, extension.Type, ce.Location, extension.Name)
         }
         return MakeExtensionCall(nil)
+    }
+
+    private func InferVariadicArguments(
+        carrierType TypeSymbol,
+        arguments ImmutableArray[BoundExpression],
+        firstArgument int32,
+        substitution Dictionary[TypeParameterSymbol, TypeSymbol]
+    ) {
+        let elementType = VariadicCarriers.GetElementType(carrierType)
+        let argumentType = RefCapabilities.GetValueArgumentInferenceType(arguments[firstArgument].Type)
+        if arguments.Length - firstArgument == 1 && argumentType is SliceTypeSymbol passThroughSlice {
+            inferTypeArguments(elementType, passThroughSlice.ElementType, substitution)
+        } else if arguments.Length - firstArgument == 1 && Conversion.Classify(argumentType, carrierType).IsImplicit {
+            inferTypeArguments(carrierType, argumentType, substitution)
+        } else {
+            for var i = firstArgument; i < arguments.Length; i++ {
+                inferTypeArguments(
+                    elementType,
+                    RefCapabilities.GetValueArgumentInferenceType(arguments[i].Type),
+                    substitution
+                )
+            }
+        }
     }
 
     func BindUserInstanceCall(
@@ -1901,27 +1974,8 @@ internal partial class OverloadResolver {
                         .Parameters
                         .Length - 1 &&
                         VariadicCarriers.GetElementType(paramType) is {} variadicInferElement &&
-                        variadicInferElement != TypeSymbol
-                        .Error {
-                        // Normalized first, so a top-level `T!` over a slice is still a
-                        // pass-through carrier.
-                        let argType = RefCapabilities.GetValueArgumentInferenceType(permutedArguments[i].Type)
-                        if permutedArguments.Length - i == 1 && argType is SliceTypeSymbol passThroughSlice {
-                            inferTypeArguments(variadicInferElement, passThroughSlice.ElementType, substitution)
-                        } else if permutedArguments.Length - i == 1 && Conversion.Classify(argType, paramType)
-                            .IsImplicit {
-                            // Carrier pass-through (`f(existingList)`): let the
-                            // general structural walk unify the carrier shapes.
-                            inferTypeArguments(paramType, argType, substitution)
-                        } else {
-                            for var j = i; j < permutedArguments.Length; j++ {
-                                inferTypeArguments(
-                                    variadicInferElement,
-                                    RefCapabilities.GetValueArgumentInferenceType(permutedArguments[j].Type),
-                                    substitution
-                                )
-                            }
-                        }
+                        variadicInferElement != TypeSymbol.Error {
+                        InferVariadicArguments(paramType, permutedArguments, i, substitution)
                         break
                     }
                     inferTypeArguments(
