@@ -14392,28 +14392,46 @@ partial class CSharpToGSharpTranslator {
                 }
                 return true
             }
-            for guardCall in index.StringGuardsFor(symbol) {
-                CompilationMeasurements.Count("translation.guard_candidate_visits")
-                if guardCall.SpanStart >= effectiveTarget.SpanStart ||
-                    !ObliviousNullabilityAnalyzer.IsBuiltInStringNullGuard(
-                    guardCall,
-                    symbol,
-                    this.context.SemanticModel
-                ) ||
-                    !this
-                    .ComputeBooleanFlowRegions(guardCall, whenTrue: false, includeWhenClauseRegion: false).Any(
-                    (region Microsoft.CodeAnalysis.SyntaxNode) -> region.Span.Contains(effectiveTarget.Span)
-                ) ||
-                    this.ClosureAssignedLocalLosesNarrowing(symbol, guardCall, expression, $scope) ||
-                    this.SymbolIsWrittenBetween(symbol, guardCall, effectiveTarget, $scope) || this.HasLoopCarriedWrite(
-                    expression,
-                    symbol,
-                    $scope,
-                    guardCall
-                ) {
-                    continue
+            var receiver = expression
+            while receiver.Parent is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax parenthesized {
+                receiver = parenthesized
+            }
+            // String API facts apply to receivers, not inferred destinations or authored forgiveness.
+            if (
+                receiver.Parent is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .MemberAccessExpressionSyntax member &&
+                    member.Expression == receiver
+            ) ||
+                (
+                receiver.Parent is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ElementAccessExpressionSyntax element &&
+                    element.Expression == receiver
+            ) {
+                for guardCall in index.StringGuardsFor(symbol) {
+                    CompilationMeasurements.Count("translation.guard_candidate_visits")
+                    if guardCall.SpanStart >= effectiveTarget.SpanStart ||
+                        !ObliviousNullabilityAnalyzer.IsBuiltInStringNullGuard(
+                        guardCall,
+                        symbol,
+                        this.context.SemanticModel
+                    ) ||
+                        !this
+                        .ComputeBooleanFlowRegions(guardCall, whenTrue: false, includeWhenClauseRegion: false).Any(
+                        (region Microsoft.CodeAnalysis.SyntaxNode) -> region.Span.Contains(effectiveTarget.Span)
+                    ) ||
+                        this.ClosureAssignedLocalLosesNarrowing(symbol, guardCall, expression, $scope) ||
+                        this.SymbolIsWrittenBetween(symbol, guardCall, effectiveTarget, $scope) ||
+                        this.HasLoopCarriedWrite(expression, symbol, $scope, guardCall) {
+                        continue
+                    }
+                    return true
                 }
-                return true
             }
             return this.IsGSharpSwitchNarrowedLocal(expression, effectiveTarget, symbol, $scope)
         }
