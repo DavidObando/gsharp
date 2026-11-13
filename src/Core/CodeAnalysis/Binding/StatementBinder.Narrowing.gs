@@ -5855,7 +5855,10 @@ internal partial class StatementBinder {
             }
             if callExpressions.Count > 0 && callEffectsMayOverwriteRoot != nil {
                 let root = StatementBinder.EffectiveMemberRoot(path)
-                if root == nil || !StatementBinder.IsExternalStorageAlias(root) {
+                if root == nil {
+                    return true
+                }
+                if !StatementBinder.IsExternalStorageAlias(root) {
                     return false
                 }
                 if StatementBinder.CallsMayWriteAliasedStorage(root) {
