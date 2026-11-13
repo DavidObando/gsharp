@@ -95,6 +95,19 @@ shared class SymbolDisplay {
         return FormatClrTypeName(type, qualifyNames)
     }
 
+    /// Reports whether reflection loses information from an imported signature.
+    /// @param symbol The imported method symbol.
+    /// @returns True when the constructed signature must be retained for display.
+    func RequiresSymbolicSignature(symbol ImportedFunctionSymbol) bool -> RequiresSignatureProjection(
+        symbol.SignatureReceiver
+    ) ||
+        RequiresSignatureProjection(symbol.Type) ||
+        (
+        !symbol.SignatureMethodTypeArguments.IsDefaultOrEmpty && symbol.SignatureMethodTypeArguments.Any(
+            RequiresSignatureProjection
+        )
+    )
+
     /// Renders [`symbol`](paramref) to classified display parts under [`format`](paramref).
     /// @param symbol The symbol to render.
     /// @param format The display options.
@@ -153,16 +166,7 @@ shared class SymbolDisplay {
                 AppendField(builder, format, field)
             }
             case importedFunction is ImportedFunctionSymbol {
-                let symbolicSignature = RequiresSignatureProjection(importedFunction.SignatureReceiver) ||
-                    RequiresSignatureProjection(importedFunction.Type) ||
-                    (
-                    !importedFunction
-                        .SignatureMethodTypeArguments
-                        .IsDefaultOrEmpty &&
-                        importedFunction
-                        .SignatureMethodTypeArguments
-                        .Any(RequiresSignatureProjection)
-                )
+                let symbolicSignature = RequiresSymbolicSignature(importedFunction)
                 AppendClrMethod(
                     builder,
                     format,

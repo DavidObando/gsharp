@@ -1151,7 +1151,9 @@ shared class SignatureHelpComputer {
         }
         let signatures = candidates.Select(
             (c Symbol, i int32) -> {
-                let displayCandidate = if i == active && resolved is ImportedFunctionSymbol imported {
+                let displayCandidate = if i == active &&
+                    resolved is ImportedFunctionSymbol imported &&
+                    SymbolDisplay.RequiresSymbolicSignature(imported) {
                     cast[Symbol](imported)
                 } else {
                     c
