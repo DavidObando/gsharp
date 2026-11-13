@@ -926,6 +926,7 @@ class TranslationContext {
             owner Compilation,
             descendIntoChildren Func[SyntaxNode, bool]
         ) IEnumerable[SyntaxNode] {
+            // The traversal root owns its scope; child predicates only restrict descendants.
             if ActiveSpeculativeBody() is {} overlay && object.ReferenceEquals(owner, overlay.Model.Compilation) &&
                 object
                 .ReferenceEquals(root.SyntaxTree, overlay.Original.SyntaxTree) {
@@ -934,11 +935,13 @@ class TranslationContext {
                 }
                 return root.DescendantNodes(
                     (node SyntaxNode) -> !object.ReferenceEquals(node, overlay.Original.Body) &&
-                        descendIntoChildren(node)
+                        (object.ReferenceEquals(node, root) || descendIntoChildren(node))
                 )
                     .Where((node SyntaxNode) -> !object.ReferenceEquals(node, overlay.Original.Body))
             }
-            return root.DescendantNodes(descendIntoChildren)
+            return root.DescendantNodes(
+                (node SyntaxNode) -> object.ReferenceEquals(node, root) || descendIntoChildren(node)
+            )
         }
 
         internal func GetEffectiveScopeRoots(root SyntaxNode, owner Compilation) IEnumerable[SyntaxNode] ->
