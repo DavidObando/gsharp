@@ -78,9 +78,10 @@ one shared resolver — free functions, methods, constructors, primary
 constructors, interface methods, named delegates, lambdas, and
 function-type clauses (`(...List[int32]) -> R`).
 
-**Diagnostics**: **GS0544** when a List/span carrier's element is a
-same-compilation (erased) type with no closed CLR construction shape at
-the call site — use the array carrier there.
+**Diagnostics**: **GS0544** when a List/span carrier has no supported
+construction shape. Source-declared elements and generic type parameters
+use the ordinary symbolic constructed-type emission path (issue #6010).
+Their erased binding representation does not prevent construction.
 
 **cs2gs** (ADR-0115 amendment): `params X<T>` declarations translate to
 `...X[T]` for supported carriers (spans included — retiring the #3627
