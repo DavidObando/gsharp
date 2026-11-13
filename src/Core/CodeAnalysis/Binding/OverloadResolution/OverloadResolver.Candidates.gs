@@ -422,9 +422,9 @@ internal partial class OverloadResolver {
         let bindsCarrierInNormalForm = isVariadic &&
             argumentCount - fixedParamCount == 1 &&
             fixedParamCount < boundArguments.Length &&
-            boundArguments[fixedParamCount]?.Type is {} passThroughType &&
+            boundArguments[fixedParamCount] is {} passThroughArgument &&
             variadicCarrierType != nil &&
-            IsVariadicCarrierPassThrough(passThroughType, variadicCarrierType)
+            IsVariadicCarrierPassThrough(conversions, passThroughArgument, variadicCarrierType)
         let variadicElementType TypeSymbol? = if isVariadic &&
             variadicCarrierType != nil &&
             VariadicCarriers.GetElementType(variadicCarrierType) is {} elem && elem != TypeSymbol.Error {
@@ -804,9 +804,9 @@ internal partial class OverloadResolver {
                 -1
             }
             let bindsCarrierInNormalForm = singleVariadicArgument >= 0 &&
-                boundArguments[singleVariadicArgument]?.Type is {} carrierPassThroughArgType &&
+                boundArguments[singleVariadicArgument] is {} carrierPassThroughArgument &&
                 variadicCarrierType != nil &&
-                IsVariadicCarrierPassThrough(carrierPassThroughArgType, variadicCarrierType)
+                IsVariadicCarrierPassThrough(conversions, carrierPassThroughArgument, variadicCarrierType)
             for var i = 0; i < boundArguments.Count; i++ {
                 let slot = MapArgumentIndexToParameterSlot(cand, argumentNames, i, parameterOffset, paramLen)
                 if slot < 0 {
@@ -1436,8 +1436,8 @@ internal partial class OverloadResolver {
                 Math.Min(argumentCount, boundArguments.Count)
             )
             let isSlicePassThrough = singleVariadicArgument >= 0 &&
-                boundArguments[singleVariadicArgument]?.Type is {} passThroughArgumentType &&
-                IsVariadicCarrierPassThrough(passThroughArgumentType, carrierType)
+                boundArguments[singleVariadicArgument] is {} passThroughArgument &&
+                IsVariadicCarrierPassThrough(conversions, passThroughArgument, carrierType)
             // A tail element that still mentions a type parameter — `...T`, but
             // also a composite like `...in chan[T]` (ADR-0174 D9's `merge`) —
             // cannot be classified until inference has run, so applicability is
@@ -2365,15 +2365,19 @@ internal partial class OverloadResolver {
         /// Classify the conversion instead: an identity or implicit conversion to
         /// the carrier is exactly what "the argument already is the carrier" means,
         /// and it is the same test the final argument coercion applies.
-        /// @param argumentType The single trailing argument's type.
+        /// @param conversions The ordinary argument conversion classifier.
+        /// @param argument The single trailing argument.
         /// @param carrierType The candidate's variadic carrier parameter type.
         /// @returns `true` when the argument binds as the carrier itself.
-        private func IsVariadicCarrierPassThrough(argumentType TypeSymbol, carrierType TypeSymbol) bool {
-            if object.ReferenceEquals(argumentType, carrierType) {
-                return true
-            }
-            let conversion = Conversion.Classify(argumentType, carrierType)
-            return conversion.Exists && (conversion.IsIdentity || conversion.IsImplicit)
+        private func IsVariadicCarrierPassThrough(
+            conversions ConversionClassifier,
+            argument BoundExpression,
+            carrierType TypeSymbol
+        ) bool {
+            let argument = conversions.ResolveReboundSibling(argument)
+            let conversion = conversions.ClassifyArgumentConversion(argument, carrierType)
+            return (conversion.Exists && (conversion.IsIdentity || conversion.IsImplicit)) ||
+                conversions.CanApplyUserDefinedImplicitArgumentConversion(argument, carrierType)
         }
 
         private func HasSameAsyncLambdaResultShape(argumentType TypeSymbol?, parameterType TypeSymbol) bool {

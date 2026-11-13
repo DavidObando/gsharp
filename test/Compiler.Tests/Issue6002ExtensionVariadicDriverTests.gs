@@ -292,6 +292,54 @@ Console.Write(Picker().Pick(prefix: 7, items: items))
 `, "12|12|12|12|12")
     }
 
+    @Theory
+    @InlineData("Span")
+    @InlineData("ReadOnlySpan")
+    func ImplicitArrayCarriers_PreserveSpanViewsAndElementInference(carrier string) {
+        using let driver = Driver()
+        driver.Check(`import System
+func (receiver int32) Count[T](items ...CARRIER[T]) int32 -> items.Length
+func (receiver int32) Closed(items ...CARRIER[int32]) int32 -> items.Length
+func Ordinary[T](items ...CARRIER[T]) int32 -> items.Length
+class Counter {
+    func Count[T](items ...CARRIER[T]) int32 -> items.Length
+}
+let values = []int32{1, 2}
+Console.Write((0).Count(values))
+Console.Write("|")
+Console.Write((0).Closed(values))
+Console.Write("|")
+Console.Write(Ordinary(values))
+Console.Write("|")
+Console.Write(Counter().Count(values))
+Console.Write("|")
+Console.Write((0).Count[int32]())
+Console.Write("|")
+Console.Write((0).Count(1, 2))
+`.Replace("CARRIER", carrier), "2|2|2|2|0|2")
+    }
+
+    @Fact
+    func ImplicitSpanCarrier_KeepsBackingStorageAndArgumentEvaluationOrder() {
+        using let driver = Driver()
+        driver.Check(`import System
+func (receiver int32) Touch(items ...Span[int32]) {
+    items[0] = 9
+}
+func Receiver() int32 {
+    Console.Write("R")
+    return 0
+}
+func Values(items []int32) []int32 {
+    Console.Write("A")
+    return items
+}
+let values = []int32{1, 2}
+Receiver().Touch(Values(values))
+Console.Write(values[0])
+`, "RA9")
+    }
+
     private class Driver : IDisposable {
         private let directory string
 

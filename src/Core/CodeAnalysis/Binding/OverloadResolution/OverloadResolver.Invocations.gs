@@ -1778,12 +1778,12 @@ internal partial class OverloadResolver {
             let normalSubstitution = Dictionary[TypeParameterSymbol, TypeSymbol](substitution.Comparer)
             MemberLookup.CopySourceTypeInference(substitution, normalSubstitution)
             inferTypeArguments(carrierType, argumentType, normalSubstitution)
+            if argumentType is SliceTypeSymbol sliceArgument {
+                inferTypeArguments(elementType, sliceArgument.ElementType, normalSubstitution)
+            }
             let normalCarrier = substituteType(carrierType, normalSubstitution)
-            if !normalSubstitution.Values.Any(MemberLookup.IsSymbolicInferenceConflict) && Conversion.Classify(
-                argumentType,
-                normalCarrier
-            )
-                .IsImplicit {
+            if !normalSubstitution.Values.Any(MemberLookup.IsSymbolicInferenceConflict) &&
+                IsVariadicCarrierPassThrough(conversions, arguments[firstArgument], normalCarrier) {
                 MemberLookup.CopySourceTypeInference(normalSubstitution, substitution)
                 return
             }
