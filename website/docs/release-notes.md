@@ -16,6 +16,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Allow up to 30 minutes for NuGet SDK indexing and 10 minutes for the VS Code Marketplace post-upload query. Polls stop when the expected version appears. (Fixes #5619)
+
 - Correct release documentation: the recorded rehearsal accepted duplicate symbol packages with 201 Created; duplicate NuGet packages returned 409 Conflict. This changes documentation only. (Fixes #5620)
 
 - Show child-process status in hot-reload E2E failures with verbose `dotnet watch` output. This diagnostic-only change does not resolve the intermittent startup failure. (Part of #5976)
