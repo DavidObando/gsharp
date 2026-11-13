@@ -3543,9 +3543,6 @@ internal shared class ObliviousNullabilityAnalyzer {
         if slot is ILocalSymbol local {
             return (IsSafeExplicitlyNullableReferenceLocal(local, model, run, localSafety), default(string?))
         }
-        if slot is IParameterSymbol{IsParams: true} {
-            return (false, default(string?))
-        }
         // A slot whose declaration is typed by a type parameter (`this T x`,
         // `T? x`, `List<T> xs`) is bound to the inferred argument, which the
         // translation asserts with `!!` whatever the slot's annotation (#5254).
@@ -3554,6 +3551,10 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         if !KeepsNonNullContract(slot, run.Members) {
             return (true, default(string?))
+        }
+        // A non-null whole carrier cannot depend on its element's widening key.
+        if slot is IParameterSymbol{IsParams: true} {
+            return (false, default(string?))
         }
         if OriginalNullArgumentDeclaration(slot) is {} original &&
             IsNullArgumentCandidate(original) &&

@@ -136,6 +136,37 @@ public static class P {
     }
 
     @Fact
+    func NullableImportedParamsCarrier_PreservesWholeCollectionNullForwarding() {
+        WithTranslation(`
+#nullable enable
+using System;
+public class Node { public int Value = 7; }
+public static class P {
+    static object Make(object?[] args) => Activator.CreateInstance(typeof(Node), args)!;
+    public static void Main() => Console.Write(((Node)Make(null!)).Value);
+}
+`, (
+                directory string,
+                printed string,
+                compiled ProcessRunResult
+            ) -> {
+                AssertSuccessfulTarget(
+                    directory,
+                    compiled,
+                    "7"
+                )
+                Assert.Contains(
+                    "Make(nil)",
+                    printed
+                )
+                Assert.DoesNotContain(
+                    "args!!",
+                    printed
+                )
+            }, "7")
+    }
+
+    @Fact
     func UnsafeReadsAndUnchangedCollectionIdentities_KeepAuthoredNilRejected() {
         WithTranslation(`
 #nullable enable
