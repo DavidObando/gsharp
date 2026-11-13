@@ -71,6 +71,9 @@ class TranslationContext {
 
     internal prop HasNonstandardSemanticModel bool -> this.specialModelDomain != nil
     internal prop SuppliedNonstandardModel SemanticModel? -> this.specialModelDomain?.Model
+    // Output ownership must outlive contexts without retaining compilations or model domains.
+    internal prop DeclarationIdentity object -> SourceOwnershipByCompilation.GetOrCreateValue(this.Compilation)
+        .Declarations
 
     // Special supplied models cannot share facts derived from normal binding.
     internal prop CatalogIdentity object -> this.specialModelDomain ??
@@ -473,6 +476,7 @@ class TranslationContext {
     }
 
     private class SourceOwnershipPublication {
+        let Declarations object = System.Object()
         var Index SourceOwnershipIndex?
         var Snapshot SourceCatalogSnapshot?
         let Catalogs ConditionalWeakTable[object, SourceCatalogs] = ConditionalWeakTable[object, SourceCatalogs]()
@@ -925,6 +929,20 @@ class TranslationContext {
                     .Where((node SyntaxNode) -> !object.ReferenceEquals(node, overlay.Original.Body))
             }
             return root.DescendantNodes()
+        }
+
+        internal func GetEffectiveScopeRoots(root SyntaxNode, owner Compilation) sequence[SyntaxNode] {
+            yield root
+            if ActiveSpeculativeBody() is {} overlay && object.ReferenceEquals(owner, overlay.Model.Compilation) &&
+                (
+                object.ReferenceEquals(root, overlay.Original.Body) ||
+                    overlay
+                    .Original
+                    .AncestorsAndSelf()
+                    .Any((node SyntaxNode) -> object.ReferenceEquals(node, root))
+            ) {
+                yield overlay.Replacement.Body!!
+            }
         }
 
         internal func GetEffectiveDeclaration(

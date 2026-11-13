@@ -3473,7 +3473,8 @@ partial class CSharpToGSharpTranslator {
             return currentStates
         }
 
-        private func DeclarationMaySuspendAsync(declaration SyntaxNode) bool {
+        private func DeclarationMaySuspendAsync(source SyntaxNode) bool {
+            let declaration = TranslationContext.GetEffectiveDeclaration(source, this.context.Compilation)
             let isAsync = switch declaration {
                 case localFn is LocalFunctionStatementSyntax: localFn.Modifiers.Any(SyntaxKind.AsyncKeyword)
                 case methodDecl is BaseMethodDeclarationSyntax: methodDecl.Modifiers.Any(SyntaxKind.AsyncKeyword)

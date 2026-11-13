@@ -1477,7 +1477,16 @@ class CSharpTypeMapper {
         )
             .ToList()
         mappedPropertyTypes = this.MergeAnonymousShapeContracts(properties, mappedPropertyTypes, context)
-        let shapeKey = AnonymousShapeKey(properties)
+        // Different emitted contracts need different declarations, without exposing model-domain identity in names.
+        let nullability = string.Join("|", mappedPropertyTypes.Select(AnonymousNullabilityKey))
+        let shapeKey = AnonymousShapeKey(properties) +
+            (
+            if nullability.Contains('?') {
+                "#nullable:" + nullability
+            } else {
+                ""
+            }
+        )
         // A shape synthesized by an earlier file in the same package is reused
         // without redeclaration. A new shape gets the same deterministic name
         // in every document or project that translates it (#2598).
@@ -4248,6 +4257,32 @@ class CSharpTypeMapper {
                 )
             )
         )
+
+        private func AnonymousNullabilityKey(type GTypeReference) string {
+            let children IEnumerable[GTypeReference] = switch type {
+                case named is NamedTypeReference: (
+                    if named.ContainingType is {} containing {
+                        []GTypeReference{containing}
+                    } else {
+                        Array.Empty[GTypeReference]()
+                    }
+                ).Concat(named.TypeArguments)
+                case array is ArrayTypeReference: []GTypeReference{array.ElementType}
+                case slice is NativeSliceTypeReference: []GTypeReference{slice.ElementType}
+                case tuple is TupleTypeReference: tuple.ElementTypes
+                case arrow is ArrowTypeReference: arrow.ParameterTypes.Concat(arrow.ReturnTypes)
+                default: Array.Empty[GTypeReference]()
+            }
+            return (
+                if type.IsNullable {
+                    "?"
+                } else {
+                    ""
+                }
+            ) +
+                "[" +
+                string.Join(",", children.Select(AnonymousNullabilityKey)) + "]"
+        }
 
         private func MergeAnonymousNullability(mapped GTypeReference, symbol ITypeSymbol?) GTypeReference {
             let nullable = mapped.IsNullable ||

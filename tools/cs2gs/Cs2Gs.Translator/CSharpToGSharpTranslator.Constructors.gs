@@ -588,10 +588,13 @@ partial class CSharpToGSharpTranslator {
                 if modelScope == nil {
                     continue
                 }
-                if !this.IsFoldableStaticConstructor(ctor, typeSymbol) {
+                let effective = TranslationContext.GetEffectiveDeclaration(ctor, this.context.Compilation) as
+                ConstructorDeclarationSyntax ?? ctor
+                using let bodyModel = this.context.UseSemanticModelFor(effective.SyntaxTree, this.context.Compilation)
+                if !this.IsFoldableStaticConstructor(effective, typeSymbol) {
                     continue
                 }
-                for statement in ctor.Body!!.Statements {
+                for statement in effective.Body!!.Statements {
                     if statement is Microsoft
                         .CodeAnalysis
                         .CSharp
@@ -623,9 +626,12 @@ partial class CSharpToGSharpTranslator {
         /// C#'s field-initializers-then-cctor evaluation order. Anything else is
         /// reported as unsupported instead of silently folded.
         private func IsFoldableStaticConstructor(
-            node Microsoft.CodeAnalysis.CSharp.Syntax.ConstructorDeclarationSyntax,
+            source Microsoft.CodeAnalysis.CSharp.Syntax.ConstructorDeclarationSyntax,
             typeSymbol INamedTypeSymbol?
         ) bool {
+            let node = TranslationContext.GetEffectiveDeclaration(source, this.context.Compilation) as
+            ConstructorDeclarationSyntax ?? source
+            using let bodyModel = this.context.UseSemanticModelFor(node.SyntaxTree, this.context.Compilation)
             if node.Body == nil {
                 return node.ExpressionBody == nil
             }
@@ -1155,7 +1161,7 @@ partial class CSharpToGSharpTranslator {
                 // `func GetEnumerator() IEnumerator` (issue #985). A G# generator may
                 // return `IEnumerator[T]`, so the `yield` body is unaffected — only
                 // `IEnumerable[T]` returns are rewritten to `sequence[T]`.
-                if IsIteratorBody(iteratorBodySource) &&
+                if IsIteratorBody(iteratorBodySource, this.context.Compilation) &&
                     returnType is INamedTypeSymbol{IsGenericType: true} enumerable &&
                     enumerable.Name == "IEnumerable" {
                     if preserveEnvelope {
@@ -5473,7 +5479,8 @@ partial class CSharpToGSharpTranslator {
                     .LiteralExpressionSyntax
             }
 
-            private func IsIteratorBody(node MethodDeclarationSyntax?) bool {
+            private func IsIteratorBody(source MethodDeclarationSyntax?, owner Compilation?) bool {
+                let node = TranslationContext.GetEffectiveDeclaration(source!!, owner) as MethodDeclarationSyntax
                 let body Microsoft
                     .CodeAnalysis
                     .SyntaxNode? = cast[Microsoft.CodeAnalysis.SyntaxNode](node!!.Body) ??

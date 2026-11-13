@@ -464,8 +464,13 @@ preserves the pipeline's fresh-context-per-retranslation behavior and avoids
 invalidating live projection boundaries during a pass. Existing CLR constructor
 and semantic-model-scope overloads remain executable for compiled consumers.
 Equivalent ordered compilation catalogs also reuse a weak canonical version,
-even when callers supply different list instances. Declaration ownership can
-then deduplicate anonymous classes without sharing privileged model results.
+even when callers supply different list instances. These analysis identities do
+not own emitted declarations. The translator retains declaration registries for
+its output lifetime, partitioned by opaque actual-compilation tokens and package.
+The tokens retain no compilation, catalog, or semantic model. Normal and special
+models share declaration ownership, but retain separate shape evidence. Ordered
+emitted nullability contracts distinguish declarations when that evidence differs.
+Synthetic names remain content-derived; unchanged non-nullable shapes keep their names.
 Derived signature and producer visitors use the related-context factory, retaining
 cancellation and the captured model/catalog inputs.
 
@@ -508,7 +513,11 @@ the actual owning declaration. Inventories omit that declaration's original body
 and add the supplied replacement body under its actual speculative model.
 Inventory and declaration readers require the actual compilation as input.
 A different compilation sharing the original tree keeps its original body.
-Signatures, unaffected declarations, and other trees remain original inputs.
+Declared symbols, signature headers, unaffected declarations, and other trees
+remain original inputs. Iterator, suspension, return, and constructor-folding facts
+use effective bodies before declaration emission. Field and property usage scans
+enumerate effective containing-type scopes, including all actual partial declarations.
+Each original or replacement root uses its own owning semantic model.
 Return, ref-storage, null-flow, shape, effect, projection, import, and naming
 walks use the same inventory and declaration resolver. Body translation uses
 the replacement while retaining the original declared method and parameter symbols.

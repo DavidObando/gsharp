@@ -14,6 +14,7 @@ import System.Collections.Generic
 import System.Diagnostics
 import System.IO
 import System.Linq
+import System.Runtime.CompilerServices
 import System.Text
 import System.Text.RegularExpressions
 import Xunit
@@ -27,6 +28,216 @@ import Xunit
 /// through every mapper the translator creates, so an identical shape is
 /// emitted once and reused by later documents.
 open class Issue2292AnonymousTypePackageScopeTests {
+    @Theory
+    @InlineData(0, 0)
+    @InlineData(0, 1)
+    @InlineData(1, 0)
+    @InlineData(1, 1)
+    @InlineData(0, 2)
+    @InlineData(2, 0)
+    @InlineData(2, 2)
+    func OutputDeclarationOwnership_SurvivesCollectedContextsAndMixedModels(firstMode int32, secondMode int32) {
+        let project = CSharpProjectLoader.LoadInMemory(
+            [](string, string){
+                (
+                    "First.cs",
+                    "public static class First { public static int Run() { var item = new { Id = 21 }; return item.Id; } }"
+                ),
+                (
+                    "Second.cs",
+                    "public static class Second { public static int Run() { var item = new { Id = 22 }; return item.Id; } }"
+                )
+            }
+        )
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        let translator = CSharpToGSharpTranslator()
+        let first = TranslateTemporaryContext(translator, project.Compilation, project.Documents[0], firstMode)
+        GC.Collect()
+        GC.WaitForPendingFinalizers()
+        GC.Collect()
+        Assert.False(first.Context.IsAlive)
+        Assert.False(first.Catalog.IsAlive)
+        let second = TranslateTemporaryContext(translator, project.Compilation, project.Documents[1], secondMode)
+        CompileFilesTogether(("First.gs", first.Printed), ("Second.gs", second.Printed))
+        TranslationTestValidation.AssertBinds(first.Printed, second.Printed)
+        CompileAndRunOutput(first.Printed + "\n" + second.Printed)
+    }
+
+    @Fact
+    func OutputDeclarationOwnership_DoesNotRetainTheSourceCompilation() {
+        let translator = CSharpToGSharpTranslator()
+        let compilation = TranslateCollectibleProject(translator)
+        GC.Collect()
+        GC.WaitForPendingFinalizers()
+        GC.Collect()
+        Assert.False(compilation.IsAlive)
+        GC.KeepAlive(translator)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func OutputDeclarationOwnership_DistinguishesEffectivePropertyContracts(specialFirst bool) {
+        let project = CSharpProjectLoader.LoadInMemory(
+            [](string, string){
+                (
+                    "First.cs",
+                    "public static class First { public static string Run() { var item = new { Item = \"safe\" }; return item.Item + \":\"; } }"
+                ),
+                (
+                    "Second.cs",
+                    "public static class Second { public static string Run() { var item = new { Item = \"safe\" }; return item.Item ?? \"nil\"; } }"
+                )
+            }
+        )
+        let second = project.Documents[1]
+        let original = second
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax]()
+            .Single()
+        let replacement = Assert.IsAssignableFrom[Microsoft.CodeAnalysis.CSharp.Syntax.BaseMethodDeclarationSyntax](
+            Microsoft
+                .CodeAnalysis
+                .CSharp
+                .SyntaxFactory
+                .ParseMemberDeclaration(
+                "public static string Run() { var item = new { Item = (string)null }; return item.Item ?? \"nil\"; }"
+            )
+        )
+        Assert.True(
+            Microsoft
+                .CodeAnalysis
+                .CSharp
+                .CSharpExtensions
+                .TryGetSpeculativeSemanticModelForMethodBody(
+                second.SemanticModel,
+                original.Body!!.SpanStart,
+                replacement,
+                out var speculative
+            )
+        )
+        let special = speculative ?? throw InvalidOperationException("Speculative model missing.")
+        let translator = CSharpToGSharpTranslator()
+        let printed = [2]string
+        for index in(
+            if specialFirst {
+                []int32{1, 0}
+            } else {
+                []int32{0, 1}
+            }
+        ) {
+            let document = project.Documents[index]
+            let model = if index == 1 {
+                special
+            } else {
+                document.SemanticModel
+            }
+            let catalog = List[Microsoft.CodeAnalysis.CSharp.CSharpCompilation]{project.Compilation}
+            let context = TranslationContext(project.Compilation, model, document.FilePath, catalog, catalog)
+            printed[index] = GSharpPrinter.Print(translator.TranslateDocument(document, context))
+        }
+        Assert.Matches("data class [^\\n]+\\(Item string\\)", printed[0])
+        Assert.Matches("data class [^\\n]+\\(Item string\\?\\)", printed[1])
+        CompileFilesTogether(("First.gs", printed[0]), ("Second.gs", printed[1]))
+        CompileAndRunOutput(printed[0] + "\n" + printed[1], "safe:nil")
+    }
+
+    @MethodImpl(MethodImplOptions.NoInlining)
+    private func TranslateCollectibleProject(translator CSharpToGSharpTranslator) WeakReference {
+        let project = CSharpProjectLoader.LoadInMemory(
+            [](string, string){
+                (
+                    "Collectible.cs",
+                    "public static class Collectible { public static object Make() => new { Id = 42 }; }"
+                )
+            }
+        )
+        let document = project.Documents[0]
+        let catalog = List[Microsoft.CodeAnalysis.CSharp.CSharpCompilation]{project.Compilation}
+        let context = TranslationContext(
+            project.Compilation,
+            document.SemanticModel,
+            document.FilePath,
+            catalog,
+            catalog
+        )
+        Assert.Contains(
+            "data class AnonymousType",
+            GSharpPrinter.Print(translator.TranslateDocument(document, context))
+        )
+        return WeakReference(project.Compilation)
+    }
+
+    @MethodImpl(MethodImplOptions.NoInlining)
+    private func TranslateTemporaryContext(
+        translator CSharpToGSharpTranslator,
+        compilation Microsoft.CodeAnalysis.CSharp.CSharpCompilation,
+        document LoadedDocument,
+        mode int32
+    )(Printed string, Context WeakReference, Catalog WeakReference) {
+        var model = compilation.GetSemanticModel(document.SyntaxTree, ignoreAccessibility: mode == 1)
+        if mode == 2 {
+            let original = document
+                .GetRoot()
+                .DescendantNodes()
+                .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax]()
+                .Single()
+            let replacement = Assert.IsAssignableFrom[Microsoft.CodeAnalysis.CSharp.Syntax.BaseMethodDeclarationSyntax](
+                Microsoft.CodeAnalysis.CSharp.SyntaxFactory.ParseMemberDeclaration(original.ToString())
+            )
+            Assert.True(
+                Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .CSharpExtensions
+                    .TryGetSpeculativeSemanticModelForMethodBody(
+                    model,
+                    original.Body!!.SpanStart,
+                    replacement,
+                    out var speculative
+                )
+            )
+            model = speculative ?? throw InvalidOperationException("Speculative model missing.")
+        }
+        let catalog = List[Microsoft.CodeAnalysis.CSharp.CSharpCompilation]{compilation}
+        let context = TranslationContext(compilation, model, document.FilePath, catalog, catalog)
+        let printed = GSharpPrinter.Print(translator.TranslateDocument(document, context))
+        return (printed, WeakReference(context), WeakReference(catalog))
+    }
+
+    private func CompileAndRunOutput(printed string, expected string = "43") {
+        let compiler = FindCompiler() ?? throw InvalidOperationException("Compiler missing.")
+        let directory = Path.Combine(AppContext.BaseDirectory, "issue2292-runtime", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let source = Path.Combine(directory, "Output.gs")
+            let dll = Path.Combine(directory, "Output.dll")
+            File.WriteAllText(source, printed + "\nSystem.Console.WriteLine(First.Run() + Second.Run())\n")
+            let (compileExit, compileOutput) = RunDotnet("\"" + compiler + "\" /out:\"" + dll + "\" \"" + source + "\"")
+            Assert.True(compileExit == 0, compileOutput)
+            File.WriteAllText(
+                Path.ChangeExtension(dll, ".runtimeconfig.json"),
+                "{\"runtimeOptions\":{\"tfm\":\"net10.0\",\"framework\":{\"name\":\"Microsoft.NETCore.App\",\"version\":\"10.0.0\"}}}"
+            )
+            let references = string.Join(
+                " ",
+                Directory.EnumerateFiles(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "*.dll").Select(
+                    (path string) -> "-r \"" + path + "\""
+                )
+            )
+            let (verifyExit, verifyOutput) = RunDotnet(
+                "tool run ilverify \"" + dll + "\" -s System.Private.CoreLib " + references
+            )
+            Assert.True(verifyExit == 0, verifyOutput)
+            let (runExit, output) = RunDotnet("\"" + dll + "\"")
+            Assert.True(runExit == 0, output)
+            Assert.Equal(Encoding.UTF8.GetBytes(expected + Environment.NewLine), Encoding.UTF8.GetBytes(output))
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
     @Fact
     func DistinctAnonymousShapes_InDifferentFiles_SamePackage_GetDistinctSyntheticNames() {
         const SourceA = `

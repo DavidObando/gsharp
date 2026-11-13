@@ -550,7 +550,7 @@ partial class CSharpToGSharpTranslator {
             let bodySource = method.PartialImplementationPart ?? method
             let isIterator = bodySource.DeclaringSyntaxReferences.Any(
                 (reference SyntaxReference) -> reference.GetSyntax() is MethodDeclarationSyntax methodDeclaration &&
-                    IsIteratorBody(methodDeclaration)
+                    IsIteratorBody(methodDeclaration, this.context.SourceCompilation(bodySource))
             )
             return isIterator && this.AwaitedReturnIsTainted(enumerable.TypeArguments[0], method)
         }
@@ -3750,54 +3750,78 @@ partial class CSharpToGSharpTranslator {
             // compilation's own model, or (for a member another project of the run
             // declares, see DeclaringCompilationPromotes) the declaring
             // compilation's, so the consumer asks exactly what the producer asked.
-            private func ScopeUsesAsNullable(model SemanticModel, symbol ISymbol?, $scope SyntaxNode?) bool {
+            private func ScopeUsesAsNullable(declaringModel SemanticModel, symbol ISymbol?, $scope SyntaxNode?) bool {
                 let counterpart ISymbol? = PartialCounterpart(symbol)
-                let BindsTo = func (expression ExpressionSyntax) bool {
-                    return model.GetSymbolInfo(Unparenthesize(expression)!!)
-                        .Symbol is {} bound &&
-                        (
-                        SymbolEqualityComparer.Default.Equals(bound, symbol) ||
-                            (counterpart != nil && SymbolEqualityComparer.Default.Equals(bound, counterpart))
+                let scopes IEnumerable[SyntaxNode] = if $scope is TypeDeclarationSyntax &&
+                    symbol?.ContainingType is {} containing {
+                    containing
+                        .DeclaringSyntaxReferences
+                        .Where(
+                        (reference SyntaxReference) -> declaringModel.Compilation.ContainsSyntaxTree(
+                            reference.SyntaxTree
+                        )
                     )
+                        .Select((reference SyntaxReference) -> reference.GetSyntax())
+                } else {
+                    []SyntaxNode{$scope!!}
                 }
-                for node in $scope!!.DescendantNodes() {
-                    switch node {
-                        case binary is BinaryExpressionSyntax when binary.IsKind(SyntaxKind.EqualsExpression) ||
-                            binary
-                            .IsKind(SyntaxKind.NotEqualsExpression) {
-                            if (IsNullLiteral(binary.Right) && BindsTo(binary.Left)) ||
-                                (IsNullLiteral(binary.Left) && BindsTo(binary.Right)) {
+                for root in scopes.SelectMany(
+                    (source SyntaxNode) ->
+                    TranslationContext.GetEffectiveScopeRoots(source, declaringModel.Compilation)
+                ) {
+                    let model = TranslationContext.GetEffectiveSemanticModel(
+                        declaringModel.Compilation,
+                        root.SyntaxTree
+                    )
+                    let BindsTo = func (expression ExpressionSyntax) bool {
+                        return model.GetSymbolInfo(Unparenthesize(expression)!!)
+                            .Symbol is {} bound &&
+                            (
+                            SymbolEqualityComparer.Default.Equals(bound, symbol) ||
+                                (counterpart != nil && SymbolEqualityComparer.Default.Equals(bound, counterpart))
+                        )
+                    }
+                    for node in TranslationContext.GetEffectiveNodes(root, declaringModel.Compilation) {
+                        switch node {
+                            case binary is BinaryExpressionSyntax when binary.IsKind(SyntaxKind.EqualsExpression) ||
+                                binary
+                                .IsKind(SyntaxKind.NotEqualsExpression) {
+                                if (IsNullLiteral(binary.Right) && BindsTo(binary.Left)) ||
+                                    (IsNullLiteral(binary.Left) && BindsTo(binary.Right)) {
+                                    return true
+                                }
+                            }
+                            case assignment is AssignmentExpressionSyntax when assignment.IsKind(
+                                SyntaxKind.SimpleAssignmentExpression
+                            ) &&
+                                BindsTo(assignment.Left) &&
+                                IsNullOrSuppressedNull(assignment.Right) {
                                 return true
                             }
-                        }
-                        case assignment is AssignmentExpressionSyntax when assignment.IsKind(
-                            SyntaxKind.SimpleAssignmentExpression
-                        ) &&
-                            BindsTo(assignment.Left) &&
-                            IsNullOrSuppressedNull(assignment.Right) {
-                            return true
-                        }
-                        case coalesceAssignment is AssignmentExpressionSyntax when coalesceAssignment.IsKind(
-                            SyntaxKind.CoalesceAssignmentExpression
-                        ) &&
-                            BindsTo(coalesceAssignment.Left) {
-                            return true
-                        }
-                        case coalesce is BinaryExpressionSyntax when coalesce.IsKind(SyntaxKind.CoalesceExpression) &&
-                            symbol is ILocalSymbol &&
-                            BindsTo(coalesce.Left) {
-                            return true
-                        }
-                        case isPattern is IsPatternExpressionSyntax when BindsTo(isPattern.Expression) &&
-                            IsNullConstantPattern(isPattern.Pattern) {
-                            return true
-                        }
-                        case declarator is VariableDeclaratorSyntax when declarator.Initializer != nil &&
-                            IsNullOrSuppressedNull(declarator.Initializer!!.Value) &&
-                            SymbolEqualityComparer
-                            .Default
-                            .Equals(model.GetDeclaredSymbol(declarator), symbol) {
-                            return true
+                            case coalesceAssignment is AssignmentExpressionSyntax when coalesceAssignment.IsKind(
+                                SyntaxKind.CoalesceAssignmentExpression
+                            ) &&
+                                BindsTo(coalesceAssignment.Left) {
+                                return true
+                            }
+                            case coalesce is BinaryExpressionSyntax when coalesce.IsKind(
+                                SyntaxKind.CoalesceExpression
+                            ) &&
+                                symbol is ILocalSymbol &&
+                                BindsTo(coalesce.Left) {
+                                return true
+                            }
+                            case isPattern is IsPatternExpressionSyntax when BindsTo(isPattern.Expression) &&
+                                IsNullConstantPattern(isPattern.Pattern) {
+                                return true
+                            }
+                            case declarator is VariableDeclaratorSyntax when declarator.Initializer != nil &&
+                                IsNullOrSuppressedNull(declarator.Initializer!!.Value) &&
+                                SymbolEqualityComparer
+                                .Default
+                                .Equals(model.GetDeclaredSymbol(declarator), symbol) {
+                                return true
+                            }
                         }
                     }
                 }

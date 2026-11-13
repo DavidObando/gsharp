@@ -31,6 +31,293 @@ import Xunit
 /// output with the output of the C#.
 open class Issue5617ByReferenceAccessorNarrowingTests {
     @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RefParameter_SpeculativeConstructorFactsPrecedeInitializerFolding(replacementFolds bool) {
+        let folded = "Slot = \"from-literal\";"
+        let unfolded = "Slot = Touch();"
+        let tree = CSharpSyntaxTree.ParseText(
+            "public static class Demo { public static string Slot = \"initial\"; static Demo() { " +
+                (
+                if replacementFolds {
+                    unfolded
+                } else {
+                    folded
+                }
+            ) +
+                " } private static string Touch() => \"from-call\"; public static string Run() => Slot; }",
+            path: "SpeculativeConstructorFacts.cs"
+        )
+        let compilation = CSharpCompilation.Create(
+            "SpeculativeConstructorFacts5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        let normal = compilation.GetSemanticModel(tree)
+        let original = tree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.ConstructorDeclarationSyntax]()
+            .Single()
+        let replacement = Assert.IsAssignableFrom[Microsoft.CodeAnalysis.CSharp.Syntax.BaseMethodDeclarationSyntax](
+            SyntaxFactory.ParseMemberDeclaration(
+                "static Demo() { " +
+                    (
+                    if replacementFolds {
+                        folded
+                    } else {
+                        unfolded
+                    }
+                ) +
+                    " }"
+            )
+        )
+        Assert.True(
+            Microsoft
+                .CodeAnalysis
+                .CSharp
+                .CSharpExtensions
+                .TryGetSpeculativeSemanticModelForMethodBody(
+                normal,
+                original.Body!!.SpanStart,
+                replacement,
+                out var speculative
+            )
+        )
+        let supplied = speculative ?? throw InvalidOperationException("Speculative model missing.")
+        let printed = GSharpPrinter.Print(
+            CSharpToGSharpTranslator().TranslateDocument(
+                LoadedDocument(tree.FilePath, tree, normal),
+                TranslationContext(compilation, supplied, tree.FilePath)
+            )
+        )
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(
+                (
+                    if replacementFolds {
+                        "from-literal"
+                    } else {
+                        "from-call"
+                    }
+                ) +
+                    Environment.NewLine
+            ),
+            Encoding.UTF8.GetBytes(CompileAndRun(printed, Array.Empty[byte](), strictIl: true))
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RefParameter_SpeculativeIteratorFactsPrecedeSignatureMapping(replacementYields bool) {
+        let iterator = "yield return null;"
+        let ordinary = "return new[] { \"safe\" };"
+        let tree = CSharpSyntaxTree.ParseText(
+            "using System.Collections.Generic; public static class Demo { public static IEnumerable<string> Items() { " +
+                (
+                if replacementYields {
+                    ordinary
+                } else {
+                    iterator
+                }
+            ) +
+                " } public static string Keep() => \"other\"; public static string Run() { foreach(var value in Items()) return (value ?? \"nil\") + \":\" + Keep(); return \"empty\"; } }",
+            path: "SpeculativeIteratorSignature.cs"
+        )
+        let compilation = CSharpCompilation.Create(
+            "SpeculativeIteratorSignature5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        let normal = compilation.GetSemanticModel(tree)
+        let original = tree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax]()
+            .Single(
+            (method Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax) -> method
+                .Identifier
+                .ValueText == "Items"
+        )
+        let replacement = Assert.IsAssignableFrom[Microsoft.CodeAnalysis.CSharp.Syntax.BaseMethodDeclarationSyntax](
+            SyntaxFactory.ParseMemberDeclaration(
+                "public static IEnumerable<string> Items() { " +
+                    (
+                    if replacementYields {
+                        iterator
+                    } else {
+                        ordinary
+                    }
+                ) +
+                    " }"
+            )
+        )
+        Assert.True(
+            Microsoft
+                .CodeAnalysis
+                .CSharp
+                .CSharpExtensions
+                .TryGetSpeculativeSemanticModelForMethodBody(
+                normal,
+                original.Body!!.SpanStart,
+                replacement,
+                out var speculativeModel
+            )
+        )
+        let supplied = speculativeModel ?? throw InvalidOperationException("Speculative model missing.")
+        let context = TranslationContext(compilation, supplied, tree.FilePath)
+        let printed = GSharpPrinter.Print(
+            CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, normal), context)
+        )
+        Assert.Contains(
+            if replacementYields {
+                "func Items() sequence[string?]"
+            } else {
+                "func Items() IEnumerable[string]"
+            },
+            printed
+        )
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(
+                (
+                    if replacementYields {
+                        "nil:other"
+                    } else {
+                        "safe:other"
+                    }
+                ) +
+                    Environment.NewLine
+            ),
+            Encoding.UTF8.GetBytes(CompileAndRun(printed, Array.Empty[byte](), strictIl: true))
+        )
+    }
+
+    @Theory
+    @InlineData(false, false, false)
+    @InlineData(false, true, false)
+    @InlineData(true, false, false)
+    @InlineData(true, true, false)
+    @InlineData(false, false, true)
+    @InlineData(false, true, true)
+    @InlineData(true, false, true)
+    @InlineData(true, true, true)
+    func RefParameter_SpeculativeMemberScopesUseEffectiveFieldAndPropertyComparisons(
+        replacementCompares bool,
+        specialFirst bool,
+        partialOwner bool
+    ) {
+        let comparison = "if (field != null) {} if (Property != null) {}"
+        let members = "private static Box field = new Box(); private static Box Property {get;set;} = new Box(); private static Box Other = new Box(); public static void Keep() { if (Other != null) {} } public static string Run() { Change(); Keep(); return \"ok\"; }"
+        let tree = CSharpSyntaxTree.ParseText(
+            "#nullable enable\n" +
+                (
+                if partialOwner {
+                    "public static partial class Demo { "
+                } else {
+                    "public class Box {} public static class Demo { " + members
+                }
+            ) +
+                " public static void Change() { " +
+                (
+                if replacementCompares {
+                    ""
+                } else {
+                    comparison
+                }
+            ) +
+                " } }",
+            path: "SpeculativeMemberScope.cs"
+        )
+        let trees = if partialOwner {
+            []SyntaxTree{
+                CSharpSyntaxTree.ParseText(
+                    "#nullable enable\npublic class Box {} public static partial class Demo { " + members + " }",
+                    path: "SpeculativeMemberDefinitions.cs"
+                ),
+                tree
+            }
+        } else {
+            []SyntaxTree{tree}
+        }
+        let compilation = CSharpCompilation.Create(
+            "SpeculativeMemberScope5326",
+            trees,
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        let normal = compilation.GetSemanticModel(tree)
+        let original = tree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax]()
+            .Single(
+            (method Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax) -> method
+                .Identifier
+                .ValueText == "Change"
+        )
+        let replacement = Assert.IsAssignableFrom[Microsoft.CodeAnalysis.CSharp.Syntax.BaseMethodDeclarationSyntax](
+            SyntaxFactory.ParseMemberDeclaration(
+                "public static void Change() { " +
+                    (
+                    if replacementCompares {
+                        comparison
+                    } else {
+                        ""
+                    }
+                ) +
+                    " }"
+            )
+        )
+        Assert.True(
+            Microsoft
+                .CodeAnalysis
+                .CSharp
+                .CSharpExtensions
+                .TryGetSpeculativeSemanticModelForMethodBody(
+                normal,
+                original.Body!!.SpanStart,
+                replacement,
+                out var speculativeModel
+            )
+        )
+        let supplied = speculativeModel ?? throw InvalidOperationException("Speculative model missing.")
+        for isSpecial in[]bool{specialFirst, !specialFirst, specialFirst} {
+            let model = if isSpecial {
+                supplied
+            } else {
+                normal
+            }
+            let translator = CSharpToGSharpTranslator()
+            let printed = string.Join(
+                "\n",
+                trees.Select(
+                    (current SyntaxTree) ->
+                    GSharpPrinter.Print(
+                        translator.TranslateDocument(
+                            LoadedDocument(current.FilePath, current, compilation.GetSemanticModel(current)),
+                            TranslationContext(compilation, model, current.FilePath)
+                        )
+                    )
+                )
+            )
+            let expected = if isSpecial {
+                replacementCompares
+            } else {
+                !replacementCompares
+            }
+            Assert.Equal(expected, printed.Contains("field Box?", StringComparison.Ordinal))
+            Assert.Equal(expected, printed.Contains("Property Box?", StringComparison.Ordinal))
+            Assert.Contains("Other Box?", printed)
+            Assert.Equal(
+                Encoding.UTF8.GetBytes("ok" + Environment.NewLine),
+                Encoding.UTF8.GetBytes(CompileAndRun(printed, Array.Empty[byte](), strictIl: true))
+            )
+        }
+    }
+
+    @Theory
     @InlineData(false, false)
     @InlineData(false, true)
     @InlineData(true, false)
