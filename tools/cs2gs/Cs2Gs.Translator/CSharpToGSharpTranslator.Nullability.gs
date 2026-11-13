@@ -997,9 +997,22 @@ partial class CSharpToGSharpTranslator {
         /// without a bridge. G# types a local by the storage that its declaration emitted, so a local
         /// that holds a `T?` value (`LocalHoldsPromotedValue`) has `T?` storage. A user-defined
         /// conversion still bridges the input of its operator.
-        private func LocalStoreAcceptsNil(target ISymbol?) bool -> this.IsObliviousCompilation() &&
-            target is ILocalSymbol local &&
-            this.LocalHoldsPromotedValue(local)
+        /// A pattern's physical storage decides writes independently of its matched-value read proof.
+        private func LocalStoreAcceptsNil(target ISymbol?) bool {
+            if target is not ILocalSymbol local {
+                return false
+            }
+            // Pattern materializers record exact storage. Ordinary inferred-local records can be conservative.
+            if local.DeclaringSyntaxReferences.Any(
+                (reference SyntaxReference) -> reference.GetSyntax() is SingleVariableDesignationSyntax{
+                    Parent: PatternSyntax
+                }
+            ) {
+                // Unknown pattern storage stays unbridged, as in BridgeDeconstructedElementStore.
+                return !this.state.EmittedLocalStorageAcceptsNil.TryGetValue(local, out var acceptsNil) || acceptsNil
+            }
+            return this.IsObliviousCompilation() && this.LocalHoldsPromotedValue(local)
+        }
 
         // Issue #3676: whether <paramref name="expression"/> reads a
         // generated-code declaration that direct null evidence promoted to

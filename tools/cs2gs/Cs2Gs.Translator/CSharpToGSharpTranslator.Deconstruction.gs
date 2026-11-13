@@ -4033,7 +4033,7 @@ partial class CSharpToGSharpTranslator {
                     let assignTarget GExpression? = if captured.TryGetValue(targetExpr, out var safeTarget) {
                         safeTarget
                     } else {
-                        this.TranslateExpression(targetExpr)
+                        this.TranslateAssignmentTarget(targetExpr)
                     }
                     assignedValue = this.ConvertDeconstructionAssignmentValue(
                         targetExpr,
