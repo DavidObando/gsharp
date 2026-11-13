@@ -197,6 +197,37 @@ public class Holder {
         Assert.False(ObliviousNullabilityAnalyzer.IsNullGuardDominatedRead(argument.Expression, model))
     }
 
+    @Theory
+    @InlineData("Explicit", false)
+    @InlineData("Sequential", true)
+    @InlineData("Auto", true)
+    func ReadonlyGuard_RequiresNonOverlappingStorage(layout string, expected bool) {
+        let source = `
+#nullable enable
+using System.Runtime.InteropServices;
+[StructLayout(LayoutKind.LAYOUT)]
+public class Holder {
+    OFFSET private readonly string? stored;
+    OFFSET private string? alias;
+    private void Clear() { alias = null; }
+    public void Read() { if (stored != null) { Clear(); Consume(stored); } }
+    private static void Consume(string value) { }
+}
+`.Replace("LAYOUT", layout).Replace(
+            "OFFSET",
+            if layout == "Explicit" {
+                "[FieldOffset(0)]"
+            } else {
+                ""
+            }
+        )
+        let compilation = Compile(source)
+        let tree = Assert.Single(compilation.SyntaxTrees)
+        let model = compilation.GetSemanticModel(tree)
+        let argument = Assert.Single(tree.GetRoot().DescendantNodes().OfType[ArgumentSyntax]())
+        Assert.Equal(expected, ObliviousNullabilityAnalyzer.IsNullGuardDominatedRead(argument.Expression, model))
+    }
+
     @Fact
     func DynamicallyBoundComparison_DoesNotProveAReadonlyFieldNonNull() {
         let compilation = Compile(`

@@ -10665,6 +10665,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             field
             .DeclaringSyntaxReferences
             .Any((reference SyntaxReference) -> model.Compilation.ContainsSyntaxTree(reference.SyntaxTree)) &&
+            !MayHaveOverlappingFields(field.ContainingType) &&
             CSharpToGSharpTranslator.IsUnqualifiedOrThisQualifiedFieldRead(stripped)
         if !readonlyField &&
             (!(stripped is IdentifierNameSyntax) || (!(symbol is ILocalSymbol) && !(symbol is IParameterSymbol))) {
@@ -10730,6 +10731,19 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         return nil
     }
+
+    // Explicit layout can alias readonly fields with mutable storage.
+    private func MayHaveOverlappingFields(type INamedTypeSymbol?) bool -> type == nil || type.GetAttributes().Any(
+        (attribute AttributeData) -> attribute.AttributeClass?.ToDisplayString() ==
+        "System.Runtime.InteropServices.StructLayoutAttribute" &&
+            attribute
+            .ConstructorArguments
+            .Length > 0 &&
+            attribute
+            .ConstructorArguments[0]
+            .Value is int32 layout &&
+            layout == int32(System.Runtime.InteropServices.LayoutKind.Explicit)
+    )
 
     private func IsNullGuardDominatedExpression(value ExpressionSyntax, model SemanticModel) bool {
         var stripped = value
