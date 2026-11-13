@@ -230,9 +230,12 @@ internal partial class StatementBinder {
                     touchesInitializingType = TypeInitializationRunsUserCode(propertyOwner, true)
                     return true
                 }
-                if !forWrite && ExpressionBinder.HasNonVariadicMethod(
-                    TypeMemberModel.GetMethods(match, name, MemberQuery.InheritedStatic(MemberKinds.Method))
-                ) {
+                if !forWrite && !TypeMemberModel.GetMethods(
+                    match,
+                    name,
+                    MemberQuery.InheritedStatic(MemberKinds.Method)
+                )
+                    .IsDefaultOrEmpty {
                     return false
                 }
                 if TypeMemberModel.GetNearestImportedBase(match)
