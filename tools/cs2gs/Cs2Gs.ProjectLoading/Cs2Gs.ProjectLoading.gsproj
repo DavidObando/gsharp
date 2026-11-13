@@ -13,6 +13,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="GSharp.Cs2Gs.Tests" />
     <ProjectReference Include="../Cs2Gs.Translator/Cs2Gs.Translator.gsproj" />
   </ItemGroup>
 

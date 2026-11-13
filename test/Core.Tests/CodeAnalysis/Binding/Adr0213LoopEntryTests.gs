@@ -5,10 +5,16 @@
 package GSharp.Core.Tests.CodeAnalysis.Binding
 
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Compilation
+import GSharp.Core.CodeAnalysis.Symbols
+import GSharp.Core.CodeAnalysis.Syntax
+import GSharp.Core.CodeAnalysis.Text
 import GSharp.Tests
 import System
 import System.Collections.Generic
+import System.Collections.Immutable
+import System.IO
 import System.Linq
 import Xunit
 
@@ -21,9 +27,20 @@ open class Adr0213LoopEntryTests {
     @Theory
     @MemberData("Rows")
     func EveryRow_GivesItsDiagnostics(name string, source string, expectedErrors string) {
+        // Precision controls reference the framework. Host-effect regressions below use actual host resolvers.
+        let references = ReferenceResolver.ResolveDriverReferencePaths(
+            Directory.GetFiles(Path.GetDirectoryName(typeof(object).Assembly.Location) ?? ".", "*.dll")
+        )
         let result = EmittedOracle.Evaluate(
             []string{source},
-            EmittedOracleOptions{IsLibrary: !source.Contains("func Main")}
+            EmittedOracleOptions{
+                IsLibrary: !source.Contains("func Main"),
+                References: references,
+                ResolverFactory: () -> ReferenceResolver.WithRuntimeReferences(
+                    references,
+                    ImmutableArray[System.Reflection.Assembly].Empty
+                )
+            }
         )
         // A rejection names each diagnostic and its source location (line:column), as CONTRIBUTING.md requires.
         let errors = result
@@ -60,6 +77,170 @@ func Run(n int32) int32 {
 }`}, EmittedOracleOptions{IsLibrary: true})
         Assert.Equal(1L, measurements.GetCounter("narrowing.region-walks"))
         Assert.Equal(1L, measurements.GetCounter("narrowing.region-facts-killed"))
+    }
+
+    @Theory
+    @InlineData(false, "keys.ContainsKey(1)")
+    @InlineData(true, "keys.ContainsKey(1)")
+    @InlineData(false, "ReadCount(counter)")
+    @InlineData(true, "ReadCount(counter)")
+    func ImportedPrivateComparerOrGetter_InvalidatesRefStorage(runtimeReferences bool, call string) {
+        using let fixture = CSharpFixture(`namespace CallEffectsImportedComparer;
+public static class Factory {
+    public static System.Collections.Generic.IEqualityComparer<int> Make(System.Action onHash) => new Hidden(onHash);
+    private sealed class Hidden(System.Action onHash) : System.Collections.Generic.IEqualityComparer<int> {
+        public bool Equals(int x, int y) => x == y;
+        public int GetHashCode(int value) { onHash(); return value; }
+    }
+}
+public sealed class Counter(System.Action onRead) {
+    public int Count { get { onRead(); return 0; } }
+}`)
+        using let references = if runtimeReferences {
+            fixture.RuntimeReferences()
+        } else {
+            ReferenceResolver.WithReferences([]string{fixture.AssemblyPath})
+        }
+        let source = `package T
+import System.Collections.Generic
+import CallEffectsImportedComparer
+class C { var Value int32 = 1 }
+var globalC C? = C{}
+func Run(ref a C?, keys Dictionary[int32, int32], counter Counter) int32 {
+    if a == nil { return 0 }
+    let _ = ` + call + `
+    return a.Value
+}
+func ReadCount(counter Counter) int32 -> counter.Count
+let comparer = Factory.Make(() -> { globalC = nil })
+let keys = Dictionary[int32, int32](comparer)
+let counter = Counter(() -> { globalC = nil })
+let _ = Run(ref globalC, keys, counter)`
+        let tree = SyntaxTree.Parse(SourceText.From(source))
+        let globalScope = Binder.BindGlobalScope(previous: nil, ImmutableArray.Create(tree), references)
+        let program = Binder.BindProgram(globalScope, references)
+        let errors = globalScope
+            .Diagnostics
+            .AddRange(program.Diagnostics)
+            .Where((d Diagnostic) -> d.IsError)
+            .Select((d Diagnostic) -> "${d.Id}@${d.Location.StartLine + 1}:${d.Location.StartCharacter + 1}")
+            .ToArray()
+        Assert.Equal("GS0158@9:14", string.Join(" ", errors))
+    }
+
+    @Theory
+    @InlineData(false, "keys.ContainsKey(1)")
+    @InlineData(true, "keys.ContainsKey(1)")
+    @InlineData(false, "table.ContainsKey(1)")
+    @InlineData(true, "table.ContainsKey(1)")
+    @InlineData(false, "AmbientComparerStore.Clear()")
+    @InlineData(true, "AmbientComparerStore.Clear()")
+    func VisibleUnregisteredHostEffects_InvalidateRefStorage(runtimeReferences bool, call string) {
+        using let references = if runtimeReferences {
+            ReferenceResolver.WithRuntimeReferences(Array.Empty[string](), ReferenceResolver.CaptureHostAssemblies())
+        } else {
+            ReferenceResolver.Default()
+        }
+        let source = `package T
+import System.Collections.Generic
+import GSharp.Core.Tests.CodeAnalysis.Binding
+func Run(ref text string?, keys Dictionary[int32, int32], table System.Collections.Hashtable) int32 {
+    if text == nil { return 0 }
+    ` + call + `
+    return text.Length
+}`
+        let tree = SyntaxTree.Parse(SourceText.From(source))
+        let globalScope = Binder.BindGlobalScope(previous: nil, ImmutableArray.Create(tree), references)
+        let program = Binder.BindProgram(globalScope, references)
+        let errors = globalScope
+            .Diagnostics
+            .AddRange(program.Diagnostics)
+            .Where((d Diagnostic) -> d.IsError)
+            .Select((d Diagnostic) -> "${d.Id}@${d.Location.StartLine + 1}:${d.Location.StartCharacter + 1}")
+            .ToArray()
+        Assert.Equal("GS0158@7:17", string.Join(" ", errors))
+    }
+
+    @Theory
+    @InlineData("Box")
+    @InlineData("Baz.Box")
+    func CalleeLocalType_DoesNotSelectAnotherPackagesStorage(typeName string) {
+        let result = EmittedOracle.Evaluate([]string{`package Foo
+class Box { var Field int32 = 0 }`, `package Foo.Baz
+class Box { var Field int32 = 0 }`, `package Baz
+class C { var Value int32 = 1 }
+class Box { var Field C? = C{} }
+var globalBox = Box{}
+func Clear() {
+    let local ` + typeName + ` = globalBox
+    local.Field = nil
+}
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    Clear()
+    return a.Value
+}
+func Main() { let _ = Run(ref globalBox.Field) }`}, EmittedOracleOptions{IsLibrary: false})
+        let errors = result
+            .Diagnostics
+            .Where((d Diagnostic) -> d.IsError)
+            .Select((d Diagnostic) -> "${d.Id}@${d.Location.StartLine + 1}:${d.Location.StartCharacter + 1}")
+            .ToArray()
+        Assert.Equal("GS0158@12:14", string.Join(" ", errors))
+    }
+
+    @Fact
+    func CallEffectsAndComparerFactories_AreNotRescannedForEachNarrowedRoot() {
+        using let measurements = CompilationMeasurements.Start("test")
+        let result = EmittedOracle.Evaluate([]string{`package T
+import System.Collections.Generic
+class C { var Value int32 = 1 }
+func Run(ref a C?, ref b C?, ref c C?, keys List[int32]) int32 {
+    if a == nil || b == nil || c == nil { return 0 }
+    let _ = keys.Contains(1)
+    let _ = keys.Contains(2)
+    return a.Value + b.Value + c.Value
+}`}, EmittedOracleOptions{IsLibrary: true})
+        Assert.Empty(result.Diagnostics.Where((d Diagnostic) -> d.IsError))
+        Assert.Equal(2L, measurements.GetCounter("narrowing.bound-call-effect-summaries"))
+        Assert.Equal(1L, measurements.GetCounter("narrowing.comparer-factory-indexes"))
+    }
+
+    @Theory
+    @InlineData("1", "byte")
+    @InlineData("cast[int64](1)", "long")
+    func ImportedOverloadSelection_PreservesInstancePrecedenceAndConstantNarrowing(argument string, expected string) {
+        using let fixture = CSharpFixture(`namespace SelectionLib;
+public class Result { public string Run() => "instance-chain"; }
+public class S {
+    public string Use(string value) => "instance";
+    public Result Create(string value) => new Result();
+    public string Take(byte value) => "byte";
+    public string Take(long value) => "long";
+}
+public static class Extensions {
+    public static string Use(this S value, object argument) => "extension";
+    public static Result Create(this S value, object argument) => throw new System.Exception("wrong overload");
+}`)
+        let result = EmittedOracle.Evaluate([]string{`package T
+import System
+import SelectionLib
+func Main() {
+    let s = S()
+    Console.WriteLine(s.Use("ab"))
+    Console.WriteLine(s.Create("ab").Run())
+    Console.WriteLine(s.Take(` + argument + `))
+}`}, EmittedOracleOptions{References: []string{fixture.AssemblyPath}})
+        Assert.Empty(result.Diagnostics.Where((d Diagnostic) -> d.IsError))
+        Assert.Equal(0, result.ExitCode)
+        Assert.Equal(
+            System
+                .Text
+                .Encoding
+                .UTF8
+                .GetBytes(string.Join(Environment.NewLine, []string{"instance", "instance-chain", expected, ""})),
+            System.Text.Encoding.UTF8.GetBytes(result.Output)
+        )
     }
 
     @Fact
@@ -1287,7 +1468,7 @@ func Run(ref text string?, values []int32) int32 {
     return n
 }
 func Main() { }`, "")
-            Add("interface-method-member-call-keeps-a-by-reference-fact (A3)", `package T
+            Add("open-interface-dispatch-invalidates-a-by-reference-fact", `package T
 import System
 interface IWork {
     func Do();
@@ -1304,8 +1485,8 @@ func Run(ref text string?, work IWork) int32 {
     }
     return n
 }
-func Main() { }`, "")
-            Add("inherited-interface-method-member-call-keeps-a-by-reference-fact (A3)", `package T
+func Main() { }`, "GS0158@12:16")
+            Add("inherited-open-interface-dispatch-invalidates-a-by-reference-fact", `package T
 import System
 interface IWork {
     func Do();
@@ -1320,8 +1501,8 @@ func Run(ref text string?, work IChild) int32 {
     }
     return n
 }
-func Main() { }`, "")
-            Add("imported-interface-method-member-call-keeps-a-by-reference-fact (A3)", `package T
+func Main() { }`, "GS0158@10:16")
+            Add("unmodeled-imported-interface-dispatch-invalidates-a-by-reference-fact", `package T
 import System
 import System.Collections.Generic
 func Run(ref text string?, values IList[int32]) int32 {
@@ -1333,8 +1514,8 @@ func Run(ref text string?, values IList[int32]) int32 {
     }
     return n
 }
-func Main() { }`, "")
-            Add("object-method-on-an-interface-keeps-a-by-reference-fact (A3)", `package T
+func Main() { }`, "GS0158@7:16")
+            Add("open-object-method-on-interface-invalidates-a-by-reference-fact", `package T
 import System
 interface IWork {
     func Do();
@@ -1348,8 +1529,8 @@ func Run(ref text string?, work IWork) int32 {
     }
     return n
 }
-func Main() { }`, "")
-            Add("constraint-method-member-call-keeps-a-by-reference-fact (A3)", `package T
+func Main() { }`, "GS0158@9:16")
+            Add("open-constraint-dispatch-invalidates-a-by-reference-fact", `package T
 import System
 interface IWork {
     func Do();
@@ -1363,7 +1544,7 @@ func Run[W IWork](ref text string?, work W) int32 {
     }
     return n
 }
-func Main() { }`, "")
+func Main() { }`, "GS0158@9:16")
             Add("extension-method-member-call-keeps-a-by-reference-fact (A3)", `package T
 import System
 import System.Collections.Generic
@@ -1964,7 +2145,7 @@ func Run(ref a string?, ref b string?) int32 {
     return n
 }
 func Main() { }`, "GS0158@7:13")
-            Add("member-of-a-source-interface-with-an-imported-base-resolves (A3)", `package T
+            Add("open-source-interface-with-imported-base-invalidates-a-by-reference-fact", `package T
 import System
 class Holder {
     func Do() { }
@@ -1981,7 +2162,7 @@ func Run(ref s string?, box IBox) int32 {
     }
     return n
 }
-func Main() { }`, "")
+func Main() { }`, "GS0158@12:13")
             Add("imported-getter-with-user-code-removes-a-by-reference-fact (R16)", `package T
 import System
 import System.Collections.Generic
@@ -2428,7 +2609,7 @@ func Run(ref text string?, dt DateTime, tok Token, dict Dictionary[Token, DateTi
     return n
 }
 func Main() { }`, "GS0158@15:16")
-            Add("inferred-and-substituted-type-arguments-keep-a-by-reference-fact (A3, #5662)", `package T
+            Add("open-stored-comparer-invalidates-a-by-reference-fact (A3)", `package T
 import System
 import System.Collections.Generic
 struct Token { var Raw int32 }
@@ -2443,7 +2624,7 @@ func Run(ref text string?, dt DateTime, tok Token, dict Dictionary[Token, DateTi
     }
     return n
 }
-func Main() { }`, "")
+func Main() { }`, "GS0158@9:16")
             Add("from-end-index-constructs-a-system-index (A3)", `package T
 import System
 import System.Text
@@ -4198,6 +4379,41 @@ func Run(ref text string?) int32 {
 }
 func Main() { }`, "GS0158@10:16")
             return rows
+        }
+    }
+}
+
+class AmbientComparerStore {
+    shared {
+        private var value string? = "safe"
+        func Slot() ref string? {
+            return ref value
+        }
+
+        func Clear() {
+            value = nil
+        }
+
+        func Create() IEqualityComparer[int32] -> AmbientIntComparer()
+
+        func CreateUntyped() System.Collections.IEqualityComparer -> AmbientObjectComparer()
+    }
+}
+
+internal class AmbientIntComparer : IEqualityComparer[int32] {
+    func Equals(left int32, right int32) bool -> left == right
+
+    func GetHashCode(value int32) int32 {
+        AmbientComparerStore.Clear()
+        return value
+    }
+
+    internal class AmbientObjectComparer : System.Collections.IEqualityComparer {
+        func Equals(left object?, right object?) bool -> object.ReferenceEquals(left, right)
+
+        func GetHashCode(value object) int32 {
+            AmbientComparerStore.Clear()
+            return 0
         }
     }
 }

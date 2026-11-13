@@ -14,6 +14,7 @@ import System.Collections.Immutable
 import System.Globalization
 import System.Linq
 import System.Runtime.CompilerServices
+import System.Threading
 
 /// Issue #2113: a whole-program, symbol-keyed null-TAINT analysis for a
 /// nullable-<em>oblivious</em> compilation (one whose
@@ -48,6 +49,248 @@ import System.Runtime.CompilerServices
 /// annotation and writable contract, including oblivious islands in enabled
 /// projects; explicitly non-null leaves and frozen metadata stay unchanged.
 internal shared class ObliviousNullabilityAnalyzer {
+    // Flow the captured domain through existing recursive readers without duplicating nullability rules.
+    private let CurrentAnalysis AsyncLocal[AnalysisScope?] = AsyncLocal[AnalysisScope?]()
+    private let AnalysisScopes ConditionalWeakTable[object, AnalysisScope] = ConditionalWeakTable[
+        object,
+        AnalysisScope
+    ]()
+    private let DirectAnalysisScopes ConditionalWeakTable[
+        Compilation,
+        ConditionalWeakTable[object, AnalysisPublication]
+    ] =
+    ConditionalWeakTable[Compilation, ConditionalWeakTable[object, AnalysisPublication]]()
+    private let UnboundAnalysisScopes ConditionalWeakTable[object, AnalysisPublication] =
+    ConditionalWeakTable[object, AnalysisPublication]()
+    private let DefaultAnalysisIdentity object = System.Object()
+    private let AnalysisDomains ConditionalWeakTable[Compilation, List[WeakReference[AnalysisDomain]]] =
+    ConditionalWeakTable[Compilation, List[WeakReference[AnalysisDomain]]]()
+
+    private class AnalysisScope {
+        init(
+            identity object,
+            sources IEnumerable[CSharpCompilation],
+            first object?,
+            second object?,
+            special object? = nil,
+            suppliedModel SemanticModel? = nil
+        ) {
+            this.Identity = identity
+            this.SourceNames = sources
+                .Select((source CSharpCompilation) -> source.Assembly.Identity.GetDisplayName())
+                .Distinct(StringComparer.Ordinal)
+                .ToImmutableArray()
+            this.FirstCatalog = first
+            this.SecondCatalog = second
+            this.Special = special
+            this.SuppliedModel = suppliedModel
+        }
+        let Identity object
+        let SourceNames IReadOnlyList[string]
+        let FirstCatalog object?
+        let SecondCatalog object?
+        let Special object?
+        let SuppliedModel SemanticModel?
+        private let domains ConditionalWeakTable[Compilation, AnalysisDomain] =
+        ConditionalWeakTable[Compilation, AnalysisDomain]()
+
+        func CacheIdentity(compilation Compilation) object -> this.domains.GetValue(
+            compilation,
+            (current Compilation) -> SharedAnalysisDomain(current, this)
+        )
+    }
+
+    private class AnalysisDomain {
+        init(sources SourceAssemblySet, special object?) {
+            this.Sources = sources
+            this.Special = special
+        }
+        let Sources SourceAssemblySet
+        let Special object?
+    }
+
+    private func SharedAnalysisDomain(compilation Compilation, catalogScope AnalysisScope) AnalysisDomain {
+        // Only source classifications reachable through this compilation affect its cached analysis.
+        let sources = SourceAssemblySet(compilation, catalogScope.SourceNames)
+        let domains = AnalysisDomains.GetOrCreateValue(compilation)
+        lock domains {
+            for var index = domains.Count - 1; index >= 0; index-- {
+                if !domains[index].TryGetTarget(out var existing) {
+                    domains.RemoveAt(index)
+                } else if object.ReferenceEquals(existing.Special, catalogScope.Special) &&
+                    existing
+                    .Sources
+                    .Names
+                    .SetEquals(sources.Names) {
+                    return existing
+                }
+            }
+            let domain = AnalysisDomain(sources, catalogScope.Special)
+            domains.Add(WeakReference[AnalysisDomain](domain))
+            return domain
+        }
+    }
+
+    private class RestoreAnalysis : IDisposable {
+        private let previous AnalysisScope?
+        init(previous AnalysisScope?) {
+            this.previous = previous
+        }
+
+        func Dispose() {
+            CurrentAnalysis.Value = this.previous
+        }
+    }
+
+    private class NoOpAnalysis : IDisposable {
+        func Dispose() { }
+        shared {
+            let Instance NoOpAnalysis = NoOpAnalysis()
+        }
+    }
+
+    private class AnalysisPublication {
+        var Catalog IReadOnlyList[CSharpCompilation]?
+        var Analysis AnalysisScope?
+        let Models ConditionalWeakTable[object, AnalysisPublication] =
+        ConditionalWeakTable[object, AnalysisPublication]()
+    }
+
+    internal class ScopedCompilationCache[T class] {
+        private let scopes ConditionalWeakTable[object, ConditionalWeakTable[Compilation, T]] =
+        ConditionalWeakTable[object, ConditionalWeakTable[Compilation, T]]()
+        private func Table(compilation Compilation) ConditionalWeakTable[Compilation, T] ->
+        this.scopes.GetOrCreateValue(
+            (CurrentAnalysis.Value ?? DefaultAnalysisScope(compilation)).CacheIdentity(compilation)
+        )
+
+        func GetValue(compilation Compilation, factory Func[Compilation, T]) T ->
+        this.Table(compilation).GetValue(compilation, (current Compilation) -> factory(current))
+
+        func TryGetValue(compilation Compilation, out result T?) bool -> this.Table(compilation).TryGetValue(
+            compilation,
+            out result
+        )
+
+        func Remove(compilation Compilation) bool -> this.Table(compilation).Remove(compilation)
+    }
+
+    internal prop ScopedSemanticModel SemanticModel? -> CurrentAnalysis.Value?.SuppliedModel
+
+    private func DefaultAnalysisScope(compilation Compilation) AnalysisScope -> AnalysisScopes.GetValue(
+        compilation,
+        (key object) -> AnalysisScope(
+            key,
+            if compilation is CSharpCompilation source {
+                []CSharpCompilation{source}
+            } else {
+                Array.Empty[CSharpCompilation]()
+            },
+            nil,
+            nil
+        )
+    )
+
+    internal func UseCatalogScope(context TranslationContext) IDisposable {
+        let prior = CurrentAnalysis.Value
+        let identity = context.CatalogIdentity
+        if prior != nil && object.ReferenceEquals(prior.Identity, identity) {
+            return NoOpAnalysis.Instance
+        }
+        let selected = AnalysisScopes.GetValue(
+            identity,
+            (key object) -> AnalysisScope(
+                key,
+                []CSharpCompilation{context.RootCompilation}.Concat(
+                    context.RepositoryCompilations ?? Array.Empty[CSharpCompilation]()
+                )
+                    .Concat(context.SiblingCompilations ?? Array.Empty[CSharpCompilation]()),
+                context.RepositoryCompilations,
+                context.SiblingCompilations,
+                if context.HasNonstandardSemanticModel {
+                    identity
+                } else {
+                    nil
+                },
+                context.SuppliedNonstandardModel
+            )
+        )
+        CurrentAnalysis.Value = selected
+        return RestoreAnalysis(prior)
+    }
+
+    private func UseCatalogScope(compilation Compilation?, catalog IReadOnlyList[CSharpCompilation]?) IDisposable {
+        let prior = CurrentAnalysis.Value
+        if prior != nil &&
+            (
+            catalog == nil || object.ReferenceEquals(prior.FirstCatalog, catalog) || object.ReferenceEquals(
+                prior.SecondCatalog,
+                catalog
+            )
+        ) {
+            return NoOpAnalysis.Instance
+        }
+        if catalog == nil && compilation is CSharpCompilation own {
+            CurrentAnalysis.Value = DefaultAnalysisScope(own)
+            return RestoreAnalysis(prior)
+        }
+        let scopes = if compilation == nil {
+            UnboundAnalysisScopes
+        } else {
+            DirectAnalysisScopes.GetOrCreateValue(compilation)
+        }
+        let identity = if catalog == nil {
+            DefaultAnalysisIdentity
+        } else {
+            cast[object](catalog)
+        }
+        var publication = scopes.GetOrCreateValue(identity)
+        if prior?.Special is {} special {
+            publication = publication.Models.GetOrCreateValue(special)
+        }
+        var selected AnalysisScope
+        lock publication {
+            if publication.Analysis == nil || !SameCatalog(publication.Catalog, catalog) {
+                let snapshot IReadOnlyList[CSharpCompilation]? = if catalog == nil {
+                    nil
+                } else {
+                    catalog.ToImmutableArray()
+                }
+                let analysis = AnalysisScope(
+                    System.Object(),
+                    (
+                        if compilation is CSharpCompilation source {
+                            []CSharpCompilation{source}
+                        } else {
+                            Array.Empty[CSharpCompilation]()
+                        }
+                    ).Concat(snapshot ?? Array.Empty[CSharpCompilation]()),
+                    catalog,
+                    nil,
+                    prior?.Special,
+                    prior?.SuppliedModel
+                )
+                publication.Catalog = snapshot
+                publication.Analysis = analysis
+            }
+            selected = publication.Analysis ?? throw InvalidOperationException("analysis catalog was not captured")
+        }
+        CurrentAnalysis.Value = selected
+        return RestoreAnalysis(prior)
+    }
+
+    private func SameCatalog(left IReadOnlyList[CSharpCompilation]?, right IReadOnlyList[CSharpCompilation]?) bool {
+        if (left?.Count ?? 0) != (right?.Count ?? 0) {
+            return false
+        }
+        for var index = 0; index < (left?.Count ?? 0); index++ {
+            if !object.ReferenceEquals(left!![index], right!![index]) {
+                return false
+            }
+        }
+        return true
+    }
+
     // Which source expressions a transitive return/forwarding edge follows.
     private enum SourceScope {
         AllSources,
@@ -449,7 +692,7 @@ internal shared class ObliviousNullabilityAnalyzer {
     }
 
     private class SourceAssemblySet {
-        init(current Compilation) {
+        init(current Compilation, sources IEnumerable[string]? = nil) {
             let currentAssembly = current.Assembly.Identity.GetDisplayName()
             this.Names = HashSet[string](StringComparer.Ordinal){currentAssembly}
             let referenced = HashSet[string](StringComparer.Ordinal){currentAssembly}
@@ -457,6 +700,11 @@ internal shared class ObliviousNullabilityAnalyzer {
                 referenced.Add(assembly.Identity.GetDisplayName())
             }
             this.ReferencedNames = referenced
+            for name in sources ?? CurrentAnalysis.Value?.SourceNames ?? Array.Empty[string]() {
+                if referenced.Contains(name) {
+                    this.Names.Add(name)
+                }
+            }
         }
 
         prop Names HashSet[string] {
@@ -485,9 +733,8 @@ internal shared class ObliviousNullabilityAnalyzer {
     // Keyed by Compilation identity so an edited/new compilation naturally gets
     // a fresh entry and stale ones are collectible — same pattern as the
     // subclassed-base-types / partial-type-parts caches in the translator.
-    private let Cache ConditionalWeakTable[Compilation, TaintResult] = ConditionalWeakTable[Compilation, TaintResult]()
-    private let RefArraySources ConditionalWeakTable[Compilation, RefArraySourceIndex] = ConditionalWeakTable[
-        Compilation,
+    private let Cache ScopedCompilationCache[TaintResult] = ScopedCompilationCache[TaintResult]()
+    private let RefArraySources ScopedCompilationCache[RefArraySourceIndex] = ScopedCompilationCache[
         RefArraySourceIndex
     ]()
 
@@ -527,10 +774,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         StrongBox[int32]
     ]()
 
-    private let SourceAssemblies ConditionalWeakTable[Compilation, SourceAssemblySet] = ConditionalWeakTable[
-        Compilation,
-        SourceAssemblySet
-    ]()
+    private let SourceAssemblies ScopedCompilationCache[SourceAssemblySet] = ScopedCompilationCache[SourceAssemblySet]()
     private let SourceTrees ConditionalWeakTable[Compilation, Dictionary[string, []SyntaxTree]] = ConditionalWeakTable[
         Compilation,
         Dictionary[string, []SyntaxTree]
@@ -547,17 +791,11 @@ internal shared class ObliviousNullabilityAnalyzer {
 
     // Issue #3676: per-compilation set of members some source directly writes
     // `null` into, keyed like `Cache` above so it is computed at most once.
-    private let NullTargets ConditionalWeakTable[Compilation, HashSet[string]] = ConditionalWeakTable[
-        Compilation,
-        HashSet[string]
-    ]()
+    private let NullTargets ScopedCompilationCache[HashSet[string]] = ScopedCompilationCache[HashSet[string]]()
 
     // Issue #3848: per-compilation set of declarations a PURE FORWARDING chain
     // from a promoted generated declaration reaches. Cached like `NullTargets`.
-    private let ForwardedTargets ConditionalWeakTable[Compilation, HashSet[string]] = ConditionalWeakTable[
-        Compilation,
-        HashSet[string]
-    ]()
+    private let ForwardedTargets ScopedCompilationCache[HashSet[string]] = ScopedCompilationCache[HashSet[string]]()
 
     // Issue #5508: the file paths each compilation compiles, for linked-source aliases.
     private let SourcePaths ConditionalWeakTable[Compilation, HashSet[string]] = ConditionalWeakTable[
@@ -569,21 +807,14 @@ internal shared class ObliviousNullabilityAnalyzer {
     // `NullTargets`. The seeds are cheap (a syntactic scan for `null` / `null!`
     // arguments); the forwarding edges are built lazily, only once some
     // compilation of the run actually has a seed.
-    private let NullArguments ConditionalWeakTable[Compilation, NullArgumentGraph] = ConditionalWeakTable[
-        Compilation,
-        NullArgumentGraph
-    ]()
+    private let NullArguments ScopedCompilationCache[NullArgumentGraph] = ScopedCompilationCache[NullArgumentGraph]()
 
     // Issue #3848 (family B): per-compilation set of generated ARRAY-typed
     // declarations some source writes a maybe-null ELEMENT into. Cached like
     // `NullTargets`.
-    private let NullElementTargets ConditionalWeakTable[Compilation, HashSet[string]] = ConditionalWeakTable[
-        Compilation,
-        HashSet[string]
-    ]()
+    private let NullElementTargets ScopedCompilationCache[HashSet[string]] = ScopedCompilationCache[HashSet[string]]()
 
-    private let EfEntities ConditionalWeakTable[Compilation, HashSet[INamedTypeSymbol]] = ConditionalWeakTable[
-        Compilation,
+    private let EfEntities ScopedCompilationCache[HashSet[INamedTypeSymbol]] = ScopedCompilationCache[
         HashSet[INamedTypeSymbol]
     ]()
 
@@ -603,7 +834,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             .NullableContextOptions != NullableContextOptions.Disable {
             return false
         }
-        RegisterSourceAssemblies(compilation, nil)
+        using let catalogScope = UseCatalogScope(compilation, nil)
         return Cache.GetValue(compilation, Compute).Tainted.Contains(Canonical(symbol)!!)
     }
 
@@ -1211,7 +1442,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         if symbol == nil || compilation == nil || !anyObliviousCompilation {
             return false
         }
-        RegisterSourceAssemblies(compilation, siblingCompilations)
+        using let catalogScope = UseCatalogScope(compilation, siblingCompilations)
         return IsTaintedCore(
             compilation,
             Canonical(symbol),
@@ -1298,7 +1529,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         if parameterId == nil {
             return false
         }
-        RegisterSourceAssemblies(compilation, siblingCompilations)
+        using let catalogScope = UseCatalogScope(compilation, siblingCompilations)
         let candidates = []CSharpCompilation{compilation}.Concat(
             siblingCompilations ?? Enumerable.Empty[CSharpCompilation]()
         )
@@ -1338,7 +1569,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         if symbol == nil || elementPath == nil || elementPath.Count == 0 || compilation == nil {
             return false
         }
-        RegisterSourceAssemblies(compilation, siblingCompilations)
+        using let catalogScope = UseCatalogScope(compilation, siblingCompilations)
         return IsTupleElementTaintedCore(
             compilation,
             symbol,
@@ -1397,7 +1628,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         } else if !TryResolveTupleElementSource(expression, model, out source) {
             return false
         }
-        RegisterSourceAssemblies(compilation, siblingCompilations)
+        using let catalogScope = UseCatalogScope(compilation, siblingCompilations)
         return IsTupleElementTaintedCore(
             compilation,
             source.ContractSymbol,
@@ -1437,7 +1668,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             !TryResolveForEachDeconstructionSource(expression, model, out var source) {
             return false
         }
-        RegisterSourceAssemblies(compilation, siblingCompilations)
+        using let catalogScope = UseCatalogScope(compilation, siblingCompilations)
         return IsTupleElementTaintedCore(
             compilation,
             source.ContractSymbol,
@@ -1455,9 +1686,11 @@ internal shared class ObliviousNullabilityAnalyzer {
 
     private func ComputeEfEntityTypes(compilation Compilation) HashSet[INamedTypeSymbol] {
         let entities = HashSet[INamedTypeSymbol](SymbolEqualityComparer.Default)
-        for tree in compilation.SyntaxTrees {
-            let model = TranslationContext.GetSemanticModel(compilation, tree)
-            for property in tree.GetRoot().DescendantNodes().OfType[PropertyDeclarationSyntax]() {
+        for root in TranslationContext.GetEffectiveSyntaxRoots(compilation) {
+            let tree = root.SyntaxTree
+            let model = TranslationContext.GetEffectiveSemanticModel(compilation, tree)
+            for property in TranslationContext.GetEffectiveNodes(root, compilation)
+                .OfType[PropertyDeclarationSyntax]() {
                 let dbSet INamedTypeSymbol? = model.GetDeclaredSymbol(property)?.Type as INamedTypeSymbol
                 if dbSet?.Name != "DbSet" ||
                     dbSet!!.Arity != 1 ||
@@ -2067,6 +2300,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         path string,
         siblingCompilations IReadOnlyList[CSharpCompilation]? = nil
     ) bool {
+        using let catalogScope = UseCatalogScope(compilation, siblingCompilations)
         if compilation == nil || symbol == nil || IsSubstitutableMethodPosition(symbol, path) {
             return false
         }
@@ -2293,7 +2527,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 if node.Span != declaration.Span || node.RawKind != sourceNode.RawKind {
                     continue
                 }
-                let remapped ISymbol? = TranslationContext.GetSemanticModel(targetCompilation!!, targetTree)
+                let remapped ISymbol? = TranslationContext.GetEffectiveSemanticModel(targetCompilation!!, targetTree)
                     .GetDeclaredSymbol(node)
                 if remapped != nil {
                     return remapped
@@ -2380,13 +2614,14 @@ internal shared class ObliviousNullabilityAnalyzer {
 
     private func ComputeNullAssignmentTargets(compilation Compilation) HashSet[string] {
         let targets = HashSet[string](StringComparer.Ordinal)
-        for tree in compilation.SyntaxTrees {
+        for root in TranslationContext.GetEffectiveSyntaxRoots(compilation) {
+            let tree = root.SyntaxTree
             var model SemanticModel? = nil
-            for node in tree.GetRoot().DescendantNodes() {
+            for node in TranslationContext.GetEffectiveNodes(root, compilation) {
                 let Model = func () SemanticModel {
                     return (
                         if model == nil {
-                            (model = TranslationContext.GetSemanticModel(compilation, tree))
+                            (model = TranslationContext.GetEffectiveSemanticModel(compilation, tree))
                         } else {
                             model
                         }
@@ -2641,7 +2876,16 @@ internal shared class ObliviousNullabilityAnalyzer {
                 }
                 for partOwner in owners {
                     for reference in partOwner.DeclaringSyntaxReferences {
-                        let body = reference.GetSyntax()
+                        let declaringOwner = run
+                            .Members
+                            .FirstOrDefault(
+                            (graph NullArgumentGraph) -> SymbolEqualityComparer.Default.Equals(
+                                graph.Owner.Assembly,
+                                partOwner.ContainingAssembly
+                            )
+                        )
+                            ?.Owner
+                        let body = TranslationContext.GetEffectiveDeclaration(reference.GetSyntax(), declaringOwner)
                         if scopes.Add(body) {
                             scopeList.Add(body)
                         }
@@ -2673,7 +2917,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                     continue
                 }
                 if indexers && node is ElementAccessExpressionSyntax element {
-                    model = model ?? TranslationContext.GetSemanticModel(owner, element.SyntaxTree)
+                    model = model ?? TranslationContext.GetEffectiveSemanticModel(owner, element.SyntaxTree)
                     CollectNullArgumentRead(element, model, run, candidates, reads)
                     continue
                 }
@@ -2683,7 +2927,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                     name.Parent is NameEqualsSyntax {
                     continue
                 }
-                model = model ?? TranslationContext.GetSemanticModel(owner, name.SyntaxTree)
+                model = model ?? TranslationContext.GetEffectiveSemanticModel(owner, name.SyntaxTree)
                 CollectNullArgumentRead(name, model, run, candidates, reads)
             }
         }
@@ -2709,8 +2953,13 @@ internal shared class ObliviousNullabilityAnalyzer {
                 }
             }
             if memberNames.Count != 0 || readsIndexers || readsPositional {
-                for tree in graph.Owner.SyntaxTrees {
-                    Visit(graph.Owner, tree.GetRoot().DescendantNodes(), memberNames, readsIndexers)
+                for root in TranslationContext.GetEffectiveSyntaxRoots(graph.Owner) {
+                    Visit(
+                        graph.Owner,
+                        TranslationContext.GetEffectiveNodes(root, graph.Owner),
+                        memberNames,
+                        readsIndexers
+                    )
                 }
             }
         }
@@ -2865,7 +3114,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         if !isDeconstruction {
             return methods
         }
-        let current = model ?? TranslationContext.GetSemanticModel(owner, node.SyntaxTree)
+        let current = model ?? TranslationContext.GetEffectiveSemanticModel(owner, node.SyntaxTree)
         model = current
         switch node {
             case assignment is AssignmentExpressionSyntax {
@@ -4261,9 +4510,10 @@ internal shared class ObliviousNullabilityAnalyzer {
     private func ComputeNullArgumentSeeds(compilation Compilation) NullArgumentGraph {
         let seeds = HashSet[string](StringComparer.Ordinal)
         let symbols = Dictionary[string, ISymbol](StringComparer.Ordinal)
-        for tree in compilation.SyntaxTrees {
-            let model = TranslationContext.GetSemanticModel(compilation, tree)
-            for node in tree.GetRoot().DescendantNodes() {
+        for root in TranslationContext.GetEffectiveSyntaxRoots(compilation) {
+            let tree = root.SyntaxTree
+            let model = TranslationContext.GetEffectiveSemanticModel(compilation, tree)
+            for node in TranslationContext.GetEffectiveNodes(root, compilation) {
                 let list = CallArgumentList(node)
                 if list == nil || !list.Arguments.Any(
                     (a ArgumentSyntax) -> a.RefKindKeyword.IsKind(SyntaxKind.None) && ArgumentWritesNull(a.Expression)
@@ -4346,9 +4596,10 @@ internal shared class ObliviousNullabilityAnalyzer {
                 }
             }
         }
-        for tree in owner.SyntaxTrees {
-            let model = TranslationContext.GetSemanticModel(owner, tree)
-            for node in tree.GetRoot().DescendantNodes() {
+        for root in TranslationContext.GetEffectiveSyntaxRoots(owner) {
+            let tree = root.SyntaxTree
+            let model = TranslationContext.GetEffectiveSemanticModel(owner, tree)
+            for node in TranslationContext.GetEffectiveNodes(root, owner) {
                 if node is AssignmentExpressionSyntax assignment && assignment.IsKind(
                     SyntaxKind.SimpleAssignmentExpression
                 ) &&
@@ -4509,13 +4760,14 @@ internal shared class ObliviousNullabilityAnalyzer {
 
     private func ComputeNullArrayElementTargets(compilation Compilation) HashSet[string] {
         let targets = HashSet[string](StringComparer.Ordinal)
-        for tree in compilation.SyntaxTrees {
+        for root in TranslationContext.GetEffectiveSyntaxRoots(compilation) {
+            let tree = root.SyntaxTree
             var model SemanticModel? = nil
-            for node in tree.GetRoot().DescendantNodes() {
+            for node in TranslationContext.GetEffectiveNodes(root, compilation) {
                 let Model = func () SemanticModel {
                     return (
                         if model == nil {
-                            (model = TranslationContext.GetSemanticModel(compilation, tree))
+                            (model = TranslationContext.GetEffectiveSemanticModel(compilation, tree))
                         } else {
                             model
                         }
@@ -4639,13 +4891,14 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         let forwarders = List[(Model SemanticModel, Id string, Exits IReadOnlyList[ExpressionSyntax])]()
         let sinks = List[(Model SemanticModel, Id string, Value ExpressionSyntax?)]()
-        for tree in csharp.SyntaxTrees {
+        for root in TranslationContext.GetEffectiveSyntaxRoots(csharp) {
+            let tree = root.SyntaxTree
             var model SemanticModel? = nil
-            for node in tree.GetRoot().DescendantNodes() {
+            for node in TranslationContext.GetEffectiveNodes(root, csharp) {
                 let Model = func () SemanticModel {
                     return (
                         if model == nil {
-                            (model = TranslationContext.GetSemanticModel(csharp, tree))
+                            (model = TranslationContext.GetEffectiveSemanticModel(csharp, tree))
                         } else {
                             model
                         }
@@ -5099,10 +5352,10 @@ internal shared class ObliviousNullabilityAnalyzer {
         let paramsElementTainted = HashSet[string](StringComparer.Ordinal)
         let paramsElementEdges = List[(Target string, Source ISymbol)]()
         let constructedTypes = HashSet[INamedTypeSymbol](SymbolEqualityComparer.Default)
-        for tree in compilation.SyntaxTrees {
-            let model = TranslationContext.GetSemanticModel(compilation, tree)
-            let root = tree.GetRoot()
-            for node in root.DescendantNodes() {
+        for root in TranslationContext.GetEffectiveSyntaxRoots(compilation) {
+            let tree = root.SyntaxTree
+            let model = TranslationContext.GetEffectiveSemanticModel(compilation, tree)
+            for node in TranslationContext.GetEffectiveNodes(root, compilation) {
                 if node is GenericNameSyntax generic && model.GetTypeInfo(generic)
                     .Type is INamedTypeSymbol constructed {
                     constructedTypes.Add(constructed)
@@ -5260,9 +5513,11 @@ internal shared class ObliviousNullabilityAnalyzer {
                 edges.Add((source, sources[0]))
             }
         }
-        for tree in compilation.SyntaxTrees {
-            let model = TranslationContext.GetSemanticModel(compilation, tree)
-            for assignment in tree.GetRoot().DescendantNodes().OfType[AssignmentExpressionSyntax]() {
+        for root in TranslationContext.GetEffectiveSyntaxRoots(compilation) {
+            let tree = root.SyntaxTree
+            let model = TranslationContext.GetEffectiveSemanticModel(compilation, tree)
+            for assignment in TranslationContext.GetEffectiveNodes(root, compilation)
+                .OfType[AssignmentExpressionSyntax]() {
                 if !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) {
                     continue
                 }
@@ -5278,9 +5533,10 @@ internal shared class ObliviousNullabilityAnalyzer {
 
     private func BuildRefArraySources(compilation Compilation) RefArraySourceIndex {
         let slots = Dictionary[ISymbol, Dictionary[int32, RefArraySourceSlot]](SymbolEqualityComparer.Default)
-        for tree in compilation.SyntaxTrees {
-            let model = TranslationContext.GetSemanticModel(compilation, tree)
-            for reference in tree.GetRoot().DescendantNodes().OfType[RefExpressionSyntax]() {
+        for root in TranslationContext.GetEffectiveSyntaxRoots(compilation) {
+            let tree = root.SyntaxTree
+            let model = TranslationContext.GetEffectiveSemanticModel(compilation, tree)
+            for reference in TranslationContext.GetEffectiveNodes(root, compilation).OfType[RefExpressionSyntax]() {
                 let target = RefStorageDestination(reference, model)
                 if target == nil {
                     continue
@@ -5291,7 +5547,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 }
                 ConnectRefArraySources(slots, target, reference.Expression, model)
             }
-            for argument in tree.GetRoot().DescendantNodes().OfType[ArgumentSyntax]() {
+            for argument in TranslationContext.GetEffectiveNodes(root, compilation).OfType[ArgumentSyntax]() {
                 if argument.RefKindKeyword.IsKind(SyntaxKind.OutKeyword) && model.GetOperation(
                     argument
                 ) is IArgumentOperation{Parameter: {} output} {
@@ -5311,9 +5567,11 @@ internal shared class ObliviousNullabilityAnalyzer {
                 }
             }
         }
-        for tree in compilation.SyntaxTrees {
-            let model = TranslationContext.GetSemanticModel(compilation, tree)
-            for assignment in tree.GetRoot().DescendantNodes().OfType[AssignmentExpressionSyntax]() {
+        for root in TranslationContext.GetEffectiveSyntaxRoots(compilation) {
+            let tree = root.SyntaxTree
+            let model = TranslationContext.GetEffectiveSemanticModel(compilation, tree)
+            for assignment in TranslationContext.GetEffectiveNodes(root, compilation)
+                .OfType[AssignmentExpressionSyntax]() {
                 let (owner, depth) = RefArrayStorage(assignment.Left, model)
                 if assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) && owner != nil && slots.TryGetValue(
                     owner,
@@ -5547,7 +5805,10 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         for reference in local.DeclaringSyntaxReferences {
             let declaration = reference.GetSyntax()
-            let declarationModel = TranslationContext.GetSemanticModel(model.Compilation, declaration.SyntaxTree)
+            let declarationModel = TranslationContext.GetEffectiveSemanticModel(
+                model.Compilation,
+                declaration.SyntaxTree
+            )
             if declaration is SingleVariableDesignationSyntax designation &&
                 GetDeconstructionAliasValue(designation) is {} value &&
                 declarationModel
@@ -6008,7 +6269,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         scalarTupleEdges List[(Target ISymbol, Source TupleElementKey)],
         tupleContractEdges List[(Target TupleElementKey, Source TupleElementKey)]
     ) {
-        for node in root.DescendantNodes() {
+        for node in TranslationContext.GetEffectiveNodes(root, model.Compilation) {
             switch node {
                 case reference is RefExpressionSyntax when RefStorageDestination(reference, model) is {} target {
                     CollectRefTupleStorage(
@@ -6023,11 +6284,20 @@ internal shared class ObliviousNullabilityAnalyzer {
                     )
                 }
                 case method is MethodDeclarationSyntax {
+                    let effective = TranslationContext.GetEffectiveDeclaration(
+                        method,
+                        model.Compilation
+                    ) as MethodDeclarationSyntax ??
+                        method
+                    let effectiveModel = TranslationContext.GetEffectiveSemanticModel(
+                        model.Compilation,
+                        effective.SyntaxTree
+                    )
                     CollectTupleReturnFlows(
-                        model.GetDeclaredSymbol(method),
-                        method.ExpressionBody?.Expression,
-                        method.Body,
-                        model,
+                        TranslationContext.GetEffectiveDeclaredSymbol(effectiveModel, effective),
+                        effective.ExpressionBody?.Expression,
+                        effective.Body,
+                        effectiveModel,
                         tupleTainted,
                         tupleEdges,
                         tupleScalarEdges,
@@ -6654,7 +6924,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         if compilation == nil || createdPath.Count == 0 {
             return false
         }
-        RegisterSourceAssemblies(compilation, siblingCompilations)
+        using let catalogScope = UseCatalogScope(compilation, siblingCompilations)
         let targets = MapCreationTupleTargets(sink, createdType, EncodeTuplePath(createdPath), creation)
         for (targetSymbol, targetPath) in targets {
             if !IsTupleElementTaintedCore(
@@ -8124,7 +8394,10 @@ internal shared class ObliviousNullabilityAnalyzer {
         if symbol is ILocalSymbol{RefKind: not RefKind.None} refLocal && visited.Add(refLocal) {
             for reference in refLocal.DeclaringSyntaxReferences {
                 if reference.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} initializer}} {
-                    let declarationModel = TranslationContext.GetSemanticModel(model.Compilation, reference.SyntaxTree)
+                    let declarationModel = TranslationContext.GetEffectiveSemanticModel(
+                        model.Compilation,
+                        reference.SyntaxTree
+                    )
                     for target in EnumerateTupleContainerSources(
                         initializer,
                         declarationModel,
@@ -8141,7 +8414,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             .DeclaringSyntaxReferences
             .FirstOrDefault()
             ?.GetSyntax() is ForEachStatementSyntax forEach {
-            let forEachModel = TranslationContext.GetSemanticModel(model.Compilation, forEach.SyntaxTree)
+            let forEachModel = TranslationContext.GetEffectiveSemanticModel(model.Compilation, forEach.SyntaxTree)
             if forEachModel.GetForEachStatementInfo(forEach)
                 .ElementType is INamedTypeSymbol{IsTupleType: true} elementTuple &&
                 TryResolveTupleContainerSource(
@@ -8315,10 +8588,11 @@ internal shared class ObliviousNullabilityAnalyzer {
 
     private func HasRefImplementation(method IMethodSymbol, compilation Compilation) bool {
         for reference in method.DeclaringSyntaxReferences {
-            let syntax = reference.GetSyntax()
-            if !compilation.ContainsSyntaxTree(syntax.SyntaxTree) {
+            let original = reference.GetSyntax()
+            if !compilation.ContainsSyntaxTree(original.SyntaxTree) {
                 continue
             }
+            let syntax = TranslationContext.GetEffectiveDeclaration(original, compilation)
             if syntax is MethodDeclarationSyntax methodDecl &&
                 (methodDecl.ExpressionBody != nil || methodDecl.Body != nil) {
                 return true
@@ -8335,11 +8609,12 @@ internal shared class ObliviousNullabilityAnalyzer {
         (Expression ExpressionSyntax, Model SemanticModel)
     ] {
         for reference in method.DeclaringSyntaxReferences {
-            let syntax = reference.GetSyntax()
-            if !compilation.ContainsSyntaxTree(syntax.SyntaxTree) {
+            let original = reference.GetSyntax()
+            if !compilation.ContainsSyntaxTree(original.SyntaxTree) {
                 continue
             }
-            let declarationModel = TranslationContext.GetSemanticModel(compilation, syntax.SyntaxTree)
+            let syntax = TranslationContext.GetEffectiveDeclaration(original, compilation)
+            let declarationModel = TranslationContext.GetEffectiveSemanticModel(compilation, syntax.SyntaxTree)
             let arrow ExpressionSyntax? = switch syntax {
                 case methodDecl is MethodDeclarationSyntax: methodDecl.ExpressionBody?.Expression
                 case localFunc is LocalFunctionStatementSyntax: localFunc.ExpressionBody?.Expression
@@ -8956,7 +9231,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                     if reference.GetSyntax() is AnonymousFunctionExpressionSyntax lambda &&
                         compilation!!.ContainsSyntaxTree(lambda.SyntaxTree) &&
                         TranslationContext
-                        .GetSemanticModel(compilation!!, lambda.SyntaxTree)
+                        .GetEffectiveSemanticModel(compilation!!, lambda.SyntaxTree)
                         .GetTypeInfo(lambda)
                         .ConvertedType is INamedTypeSymbol{DelegateInvokeMethod: {} invoke} {
                         yield invoke
@@ -9072,14 +9347,23 @@ internal shared class ObliviousNullabilityAnalyzer {
         edges List[(Target ISymbol, Source ISymbol)],
         scalarTupleEdges List[(Target ISymbol, Source TupleElementKey)]
     ) {
-        for node in root.DescendantNodes() {
+        for node in TranslationContext.GetEffectiveNodes(root, model.Compilation) {
             switch node {
                 case method is MethodDeclarationSyntax {
+                    let effective = TranslationContext.GetEffectiveDeclaration(
+                        method,
+                        model.Compilation
+                    ) as MethodDeclarationSyntax ??
+                        method
+                    let effectiveModel = TranslationContext.GetEffectiveSemanticModel(
+                        model.Compilation,
+                        effective.SyntaxTree
+                    )
                     SeedMethodLikeReturnTaint(
-                        model.GetDeclaredSymbol(method),
-                        method.ExpressionBody?.Expression,
-                        method.Body,
-                        model,
+                        TranslationContext.GetEffectiveDeclaredSymbol(effectiveModel, effective),
+                        effective.ExpressionBody?.Expression,
+                        effective.Body,
+                        effectiveModel,
                         tainted,
                         edges,
                         scalarTupleEdges
@@ -10273,7 +10557,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         tupleTainted HashSet[TupleElementKey],
         tupleEdges List[(Target TupleElementKey, Source TupleElementKey)]
     ) {
-        for expression in root.DescendantNodes().OfType[ExpressionSyntax]() {
+        for expression in TranslationContext.GetEffectiveNodes(root, compilation).OfType[ExpressionSyntax]() {
             let isLambda = expression is AnonymousFunctionExpressionSyntax
             if !isLambda && model.GetMemberGroup(expression).IsDefaultOrEmpty {
                 continue
@@ -10342,37 +10626,6 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
     }
 
-    internal func RegisterSourceAssemblies(
-        compilation CSharpCompilation?,
-        siblingCompilations IReadOnlyList[CSharpCompilation]?
-    ) {
-        if compilation == nil {
-            return
-        }
-        let compilations = List[CSharpCompilation]{compilation}
-        if siblingCompilations != nil {
-            compilations.AddRange(siblingCompilations.Where((candidate CSharpCompilation) -> candidate != nil))
-        }
-        let names = compilations
-            .Select((candidate CSharpCompilation) -> candidate.Assembly.Identity.GetDisplayName())
-            .Distinct(StringComparer.Ordinal)
-            .ToArray()
-        for candidate in compilations {
-            let assemblies = SourceAssemblies.GetValue(candidate, (current Compilation) -> SourceAssemblySet(current))
-            var changed = false
-            lock assemblies.Names {
-                for name in names {
-                    if assemblies.ReferencedNames.Contains(name) {
-                        changed |= assemblies.Names.Add(name)
-                    }
-                }
-            }
-            if changed {
-                Cache.Remove(candidate)
-            }
-        }
-    }
-
     // Unwraps a (non-generic-parameter) `System.Threading.Tasks.Task<T>` or
     // `System.Threading.Tasks.ValueTask<T>` return type to its awaited result
     // `T`, mirroring `CSharpToGSharpTranslator.PromoteAwaitedReturnIfTainted`'s
@@ -10404,7 +10657,7 @@ internal shared class ObliviousNullabilityAnalyzer {
     private func FindPositionalRecordParameter(compilation Compilation, property IPropertySymbol) IParameterSymbol? {
         for reference in property.DeclaringSyntaxReferences {
             if reference.GetSyntax() is ParameterSyntax parameterSyntax {
-                let model = TranslationContext.GetSemanticModel(compilation, parameterSyntax.SyntaxTree)
+                let model = TranslationContext.GetEffectiveSemanticModel(compilation, parameterSyntax.SyntaxTree)
                 if model.GetDeclaredSymbol(parameterSyntax) is IParameterSymbol parameterSymbol {
                     return parameterSymbol
                 }
@@ -10749,7 +11002,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                         CollectScalarValueFlow(
                             target,
                             written,
-                            TranslationContext.GetSemanticModel(model.Compilation, written.SyntaxTree),
+                            TranslationContext.GetEffectiveSemanticModel(model.Compilation, written.SyntaxTree),
                             tainted,
                             edges,
                             scalarTupleEdges,

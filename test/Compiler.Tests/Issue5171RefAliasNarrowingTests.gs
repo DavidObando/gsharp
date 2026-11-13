@@ -5,12 +5,15 @@
 package GSharp.Compiler.Tests
 
 import GSharp.Compiler
+import GSharp.Core.Tests
 import System
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.Diagnostics
 import System.IO
 import System.Linq
 import System.Text
+import System.Text.RegularExpressions
 import Xunit
 
 /// Issue #5171 (ADR-0208 row R12): a `ref` local and the variable it aliases
@@ -24,6 +27,452 @@ import Xunit
 /// code, the diagnostic and its location. Every accepted case compiles,
 /// IL-verifies, runs and asserts the output.
 open class Issue5171RefAliasNarrowingTests {
+    @Theory
+    @InlineData("left + right", "ref")
+    @InlineData("-left", "ref")
+    @InlineData("left + right", "alias")
+    @InlineData("-left", "alias")
+    @InlineData("left + right", "value")
+    @InlineData("-left", "value")
+    func ImportedOperatorRootReplacementInvalidatesReadonlyDescendants(expression string, rootKind string) {
+        using let library = CSharpFixture(`
+#nullable enable
+namespace RootReplacement;
+public sealed class Box {
+    public readonly string? Name;
+    public Box(string? name) { Name = name; }
+}
+public static class Store { public static Box Value = new Box("safe"); }
+public readonly struct Token {
+    public static Token operator +(Token x, Token y) { Store.Value = new Box(null); return x; }
+    public static Token operator -(Token x) { Store.Value = new Box(null); return x; }
+}`)
+        let directory = Path.Combine(
+            AppContext.BaseDirectory,
+            "external-member-root-effects",
+            Guid.NewGuid().ToString("N")
+        )
+        Directory.CreateDirectory(directory)
+        try {
+            let header = if rootKind == "alias" {
+                "func Guard(left Token, right Token) int32 {\n    let ref box Box = Store.Value\n"
+            } else {
+                "func Guard(" +
+                    (
+                    if rootKind == "ref" {
+                        "ref "
+                    } else {
+                        ""
+                    }
+                ) +
+                    "box Box, left Token, right Token) int32 {\n"
+            }
+            let call = if rootKind == "alias" {
+                "Guard(default(Token), default(Token))"
+            } else {
+                "Guard(" +
+                    (
+                    if rootKind == "ref" {
+                        "ref "
+                    } else {
+                        ""
+                    }
+                ) +
+                    "Store.Value, default(Token), default(Token))"
+            }
+            let source = "import System\nimport RootReplacement\n" +
+                header +
+                "    if box.Name == nil { return 0 }\n    let _ = " +
+                expression +
+                "\n    return box.Name.Length\n}\nfunc Main() { Store.Value = Box(\"safe\")\n    try { Console.WriteLine(" +
+                call +
+                ") } catch (error NullReferenceException) { Console.WriteLine(\"cleared\") }\n}"
+            let output = Path.Combine(directory, "RootReplacement.dll")
+            let (exit, log) = Compile(directory, source, output, []string{library.AssemblyPath})
+            if rootKind == "value" {
+                Assert.True(exit == 0, log)
+                IlVerifier.Verify(output, []string{library.AssemblyPath})
+                File.Copy(
+                    library.AssemblyPath,
+                    Path.Combine(directory, Path.GetFileName(library.AssemblyPath)),
+                    overwrite: true
+                )
+                let (runExit, stdout) = RunDotnet(output)
+                Assert.Equal(0, runExit)
+                Assert.Equal(Encoding.UTF8.GetBytes("4" + Environment.NewLine), Encoding.UTF8.GetBytes(stdout))
+            } else {
+                let read = source.IndexOf("return box.Name.Length", StringComparison.Ordinal)
+                let line = source.Substring(0, read).Count((value char) -> value == '\n') + 1
+                Assert.NotEqual(0, exit)
+                Assert.False(File.Exists(output))
+                Assert.True(
+                    log.Contains(Path.Combine(directory, "RootReplacement.gs") + "($line,21,$line,27): error GS0158"),
+                    log
+                )
+                let asserted = source.Replace("return box.Name.Length", "return box.Name!!.Length")
+                let (checkedExit, checkedLog) = Compile(directory, asserted, output, []string{library.AssemblyPath})
+                Assert.True(checkedExit == 0, checkedLog)
+                IlVerifier.Verify(output, []string{library.AssemblyPath})
+                File.Copy(
+                    library.AssemblyPath,
+                    Path.Combine(directory, Path.GetFileName(library.AssemblyPath)),
+                    overwrite: true
+                )
+                let (runExit, stdout) = RunDotnet(output)
+                Assert.Equal(0, runExit)
+                Assert.Equal(Encoding.UTF8.GetBytes("cleared" + Environment.NewLine), Encoding.UTF8.GetBytes(stdout))
+            }
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    @Theory
+    @InlineData("construct", "bare")
+    @InlineData("source-add", "bare")
+    @InlineData("source-remove", "bare")
+    @InlineData("clr-add", "bare")
+    @InlineData("clr-remove", "bare")
+    @InlineData("fieldlike", "bare")
+    @InlineData("construct", "member")
+    @InlineData("source-add", "member")
+    @InlineData("source-remove", "member")
+    @InlineData("clr-add", "member")
+    @InlineData("clr-remove", "member")
+    @InlineData("fieldlike", "member")
+    @InlineData("source-add", "value")
+    @InlineData("source-remove", "value")
+    @InlineData("clr-add", "value")
+    @InlineData("clr-remove", "value")
+    @InlineData("fieldlike", "value")
+    func CalleeExecutingConstructionAndEventInventoryInvalidatesExternalStorage(kind string, rootKind string) {
+        using let library = CSharpFixture(`
+#nullable enable
+using System;
+namespace MissingCalleeEffects;
+public sealed class Box { public readonly string? Name; public Box(string? name) { Name = name; } }
+public static class Store { public static string? Value = "safe"; public static Box Box = new Box("safe"); }
+public sealed class Writer { public Writer() { Store.Value = null; Store.Box = new Box(null); } }
+public sealed class Events {
+    public event Action Changed {
+        add { Store.Value = null; Store.Box = new Box(null); }
+        remove { Store.Value = null; Store.Box = new Box(null); }
+    }
+}`)
+        let directory = Path.Combine(AppContext.BaseDirectory, "callee-inventory-effects", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let action = switch kind {
+                case "construct": "let _ = T()"
+                case "source-add": "source.Changed += () -> {}"
+                case "source-remove": "source.Changed -= () -> {}"
+                case "clr-add": "external.Changed += () -> {}"
+                case "clr-remove": "external.Changed -= () -> {}"
+                default: "plain.Changed += () -> {}"
+            }
+            let root = switch rootKind {
+                case "member": "box.Name"
+                case "value": "owned.Name"
+                default: "text"
+            }
+            let source = `import System
+import MissingCalleeEffects
+class SourceEvents {
+    event Changed Action {
+        add {
+            Store.Value = nil
+            Store.Box = Box(nil)
+        }
+        remove {
+            Store.Value = nil
+            Store.Box = Box(nil)
+        }
+    }
+}
+class PlainEvents { event Changed Action }
+func Guard[T init()](ref text string?, ref box Box, source SourceEvents, external Events, plain PlainEvents) int32 {
+` + (
+                if rootKind == "value" {
+                    "    let owned = box\n"
+                } else {
+                    ""
+                }
+            ) + "    if " + root + " == nil { return 0 }\n    " + action + "\n    return " + root + `.Length
+}
+func Main() {
+    Store.Value = "safe"
+    Store.Box = Box("safe")
+    try { Console.WriteLine(Guard[Writer](ref Store.Value, ref Store.Box, SourceEvents(), Events(), PlainEvents())) }
+    catch (error NullReferenceException) { Console.WriteLine("cleared") }
+}`
+            let output = Path.Combine(directory, "Inventory.dll")
+            let (exit, log) = Compile(directory, source, output, []string{library.AssemblyPath})
+            if kind == "fieldlike" || rootKind == "value" {
+                Assert.True(exit == 0, log)
+                IlVerifier.Verify(output, []string{library.AssemblyPath})
+                File.Copy(
+                    library.AssemblyPath,
+                    Path.Combine(directory, Path.GetFileName(library.AssemblyPath)),
+                    overwrite: true
+                )
+                let (runExit, stdout) = RunDotnet(output)
+                Assert.Equal(0, runExit)
+                Assert.Equal(Encoding.UTF8.GetBytes("4" + Environment.NewLine), Encoding.UTF8.GetBytes(stdout))
+            } else {
+                Assert.NotEqual(0, exit)
+                Assert.False(File.Exists(output))
+                let read = source.IndexOf("return " + root + ".Length", StringComparison.Ordinal)
+                let line = source.Substring(0, read).Count((value char) -> value == '\n') + 1
+                let column = 13 + root.Length
+                Assert.True(
+                    log.Contains(
+                        Path.Combine(directory, "Inventory.gs") + "($line,$column,$line,${column + 6}): error GS0158"
+                    ),
+                    log
+                )
+                let asserted = source.Replace("return " + root + ".Length", "return " + root + "!!.Length")
+                let (checkedExit, checkedLog) = Compile(directory, asserted, output, []string{library.AssemblyPath})
+                Assert.True(checkedExit == 0, checkedLog)
+                IlVerifier.Verify(output, []string{library.AssemblyPath})
+                File.Copy(
+                    library.AssemblyPath,
+                    Path.Combine(directory, Path.GetFileName(library.AssemblyPath)),
+                    overwrite: true
+                )
+                let (runExit, stdout) = RunDotnet(output)
+                Assert.Equal(0, runExit)
+                Assert.Equal(Encoding.UTF8.GetBytes("cleared" + Environment.NewLine), Encoding.UTF8.GetBytes(stdout))
+            }
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func EnumerableReturningAggregateExecutesItsCallbackImmediately(inHelper bool) {
+        let directory = Path.Combine(
+            AppContext.BaseDirectory,
+            "immediate-aggregate-effects",
+            Guid.NewGuid().ToString("N")
+        )
+        Directory.CreateDirectory(directory)
+        try {
+            let callback = "(left IEnumerable[int32], right IEnumerable[int32]) -> {\n globalText = nil\n return left\n}"
+            let call = "let _ = Enumerable.Aggregate[IEnumerable[int32]](values, $callback)"
+            let source = `import System
+import System.Collections.Generic
+import System.Linq
+var globalText string? = "safe"
+func Probe(values List[IEnumerable[int32]], callback Func[IEnumerable[int32], IEnumerable[int32], IEnumerable[int32]]) {
+    let _ = Enumerable.Aggregate[IEnumerable[int32]](values, callback)
+}
+func Guard(ref text string?, values List[IEnumerable[int32]]) int32 {
+    if text == nil { return 0 }
+    ` + if inHelper {
+                "Probe(values, $callback)"
+            } else {
+                call
+            } + `
+    return text.Length
+}
+func Main() {
+    globalText = "safe"
+    let values = List[IEnumerable[int32]](){[]int32{1}, []int32{2}}
+    try { Console.WriteLine(Guard(ref globalText, values)) }
+    catch (error NullReferenceException) { Console.WriteLine("cleared") }
+}
+Main()`
+            let output = Path.Combine(directory, "ImmediateAggregate.dll")
+            let (exit, log) = Compile(directory, source, output)
+            Assert.NotEqual(0, exit)
+            Assert.False(File.Exists(output))
+            let line = source.Substring(0, source.LastIndexOf("return text.Length", StringComparison.Ordinal)).Count(
+                (value char) -> value == '\n'
+            ) +
+                1
+            Assert.True(
+                log.Contains(Path.Combine(directory, "ImmediateAggregate.gs") + "($line,17,$line,23): error GS0158"),
+                log
+            )
+            let asserted = source.Replace("return text.Length", "return text!!.Length")
+            let (assertedExit, assertedLog) = Compile(directory, asserted, output)
+            Assert.True(assertedExit == 0, assertedLog)
+            IlVerifier.Verify(output)
+            let (runExit, stdout) = RunDotnet(output)
+            Assert.Equal(0, runExit)
+            Assert.Equal(Encoding.UTF8.GetBytes("cleared" + Environment.NewLine), Encoding.UTF8.GetBytes(stdout))
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    @Theory
+    @InlineData("int32", "1")
+    @InlineData("TimeSpan", "TimeSpan.FromSeconds(1)")
+    @InlineData("TimeSpan?", "TimeSpan.FromSeconds(1)")
+    func ClosedIntrinsicAndLiftedOperatorsKeepTheirGuardedRead(type string, value string) {
+        let directory = Path.Combine(AppContext.BaseDirectory, "pure-operator-effects", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let source = `import System
+func Guard(ref text string?, left ` + type + `, right ` + type + `) int32 {
+    if text == nil { return 0 }
+    let _ = left + right
+    return text.Length
+}
+func Main() {
+    var text string? = "safe"
+    Console.WriteLine(Guard(ref text, ` + value + `, ` + value + `))
+}`
+            let output = Path.Combine(directory, "PureOperator.dll")
+            let (exit, log) = Compile(directory, source, output)
+            Assert.True(exit == 0, log)
+            IlVerifier.Verify(output)
+            let (runExit, stdout) = RunDotnet(output)
+            Assert.Equal(0, runExit)
+            Assert.Equal(Encoding.UTF8.GetBytes("4" + Environment.NewLine), Encoding.UTF8.GetBytes(stdout))
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    @Theory
+    @InlineData("left + right")
+    @InlineData("-left")
+    func ImportedSelectedOperatorsInvalidateTheirAliasedStaticStorage(expression string) {
+        using let library = CSharpFixture(`
+namespace ExternalOperator;
+public static class Store { public static string? Value; }
+public readonly struct Token {
+    public static Token operator +(Token left, Token right) { Store.Value = null; return left; }
+    public static Token operator -(Token value) { Store.Value = null; return value; }
+}
+`)
+        let directory = Path.Combine(AppContext.BaseDirectory, "operator-effects", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let source = `import ExternalOperator
+func Guard(ref text string?, left Token, right Token) int32 {
+    if text == nil { return 0 }
+    let _ = ` + expression + `
+    return text.Length
+}
+func Main() { Store.Value = "safe"
+    let _ = Guard(ref Store.Value, default(Token), default(Token))
+}`
+            let output = Path.Combine(directory, "Operator.dll")
+            let (exit, log) = Compile(directory, source, output, []string{library.AssemblyPath})
+            Assert.NotEqual(0, exit)
+            Assert.False(File.Exists(output))
+            Assert.True(
+                log.Contains(
+                    Path.Combine(directory, "Operator.gs") + "(5,17,5,23): error GS0158",
+                    StringComparison.Ordinal
+                ),
+                log
+            )
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    @Fact
+    func ExternallySuppliedStoredComparersRemainUnknownWithoutAVisibleImplementation() {
+        let directory = Path.Combine(AppContext.BaseDirectory, "external-comparer", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let source = `import System.Collections.Generic
+func Guard(ref text string?, dictionary Dictionary[int32, int32]) int32 {
+    if text == nil { return 0 }
+    let _ = dictionary.ContainsKey(1)
+    return text.Length
+}
+func Main() { }`
+            let output = Path.Combine(directory, "ExternalComparer.dll")
+            let (exit, log) = Compile(directory, source, output)
+            Assert.NotEqual(0, exit)
+            Assert.False(File.Exists(output))
+            Assert.Contains(Path.Combine(directory, "ExternalComparer.gs") + "(5,17,5,23): error GS0158", log)
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    @Theory
+    @InlineData("object")
+    @InlineData("(object, int32)")
+    func OpenFormattingDispatchInvalidatesAliasedStorage(type string) {
+        using let library = CSharpFixture(`
+namespace ExternalFormatting;
+public static class Store { public static string? Value; }
+public sealed class Formatted { public override string ToString() { Store.Value = null; return "formatted"; } }
+`)
+        let directory = Path.Combine(AppContext.BaseDirectory, "format-effects", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let source = `import ExternalFormatting
+func Guard(ref text string?, item ` + type + `) int32 {
+    if text == nil { return 0 }
+    let _ = "$item"
+    return text.Length
+}
+func Main() { let _ = Guard(ref Store.Value, ` + (
+                if type == "object" {
+                    "Formatted()"
+                } else {
+                    "(Formatted(), 1)"
+                }
+            ) + `) }`
+            let output = Path.Combine(directory, "Formatting.dll")
+            let (exit, log) = Compile(directory, source, output, []string{library.AssemblyPath})
+            Assert.NotEqual(0, exit)
+            Assert.False(File.Exists(output))
+            Assert.True(
+                log.Contains(
+                    Path.Combine(directory, "Formatting.gs") + "(5,17,5,23): error GS0158",
+                    StringComparison.Ordinal
+                ),
+                log
+            )
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    @Fact
+    func SameIdentityFrameworkReplacement_RemainsAnUnknownWriterInTheDriver() {
+        let host = typeof(Console).Assembly.GetName()
+        using let replacement = CSharpFixture(
+            "#nullable enable\n[assembly: System.Reflection.AssemblyVersion(\"" +
+                (host.Version ?? throw InvalidOperationException("host assembly must have a version")).ToString() +
+                "\")]\nnamespace System.Custom { public static class Store { " +
+                "private static string? value = \"safe\"; public static ref string? Slot() => ref value; " +
+                "public static void Clear() => value = null; } }",
+            assemblyName: host.Name,
+            publicKey: host.GetPublicKey().ToImmutableArray()
+        )
+        let directory = Path.Combine(AppContext.BaseDirectory, "identity-effects", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let source = `import System.Custom
+func Run(ref text string?) int32 {
+    if text == nil { return 0 }
+    Store.Clear()
+    return text.Length
+}
+func Main() { let _ = Run(ref Store.Slot()) }`
+            let output = Path.Combine(directory, "Replacement.dll")
+            let (exit, log) = Compile(directory, source, output, []string{replacement.AssemblyPath})
+            Assert.NotEqual(0, exit)
+            Assert.False(File.Exists(output))
+            Assert.Contains(Path.Combine(directory, "Replacement.gs") + "(5,17,5,23): error GS0158", log)
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
     @Theory
     @InlineData("let")
     @InlineData("var")
@@ -141,15 +590,54 @@ Run()
         }
     }
 
+    @Fact
+    func UnmodeledVirtualDispatchInvalidatesItsAliasedOutReceiver() {
+        let directory = Path.Combine(AppContext.BaseDirectory, "open-dispatch-effects", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let (exit, log) = Compile(directory, OpenDispatchSource, Path.Combine(directory, "OpenDispatch.dll"))
+            Assert.Equal(1, exit)
+            Assert.Contains("(12,19,12,29): error GS0159", log)
+            Assert.Equal(1, Regex.Matches(log, ": error GS").Count)
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
     shared {
-        /// Builds the driver line prefix of the `GS0158` that the unique `.Value` read of
-        /// [`source`](paramref) must report: file, 1-based line and column of `Value`, and its end.
+        private let OpenDispatchSource string = `
+import System
+
+func Describe(items []IDisposable?, out symbol IDisposable?, out name string?) bool {
+    symbol = nil
+    name = nil
+    symbol = items[0]
+    if symbol == nil {
+        return false
+    }
+    name = symbol.ToString()
+    return symbol.ToString() == name
+}
+func Main() { }
+`
+        /// Builds the diagnostic location of the unique `.Value` read, or the read after `/* expect GS0158 */`.
         private func ExpectedDiagnostic(path string, source string) string {
-            let dot = source.IndexOf(".Value", StringComparison.Ordinal)
+            let marker = "/* expect GS0158 */"
+            let marked = source.IndexOf(marker, StringComparison.Ordinal)
+            let start = if marked < 0 {
+                0
+            } else {
+                marked + marker.Length
+            }
+            let dot = source.IndexOf(".Value", start, StringComparison.Ordinal)
             Assert.True(dot >= 0, "the case must read `.Value` once")
             Assert.True(
                 source.IndexOf(".Value", dot + 1, StringComparison.Ordinal) < 0,
-                "the case must read `.Value` once"
+                "the case must have one target `.Value` read"
+            )
+            Assert.True(
+                marked < 0 || source.IndexOf(marker, start, StringComparison.Ordinal) < 0,
+                "the case must have one diagnostic marker"
             )
             var line = 1
             var lineStart = 0
@@ -813,6 +1301,1217 @@ func Run(ref a C?, box Box) int32 {
 let box = Box{}
 Console.WriteLine(Run(ref box.Field, box))
 `}
+            yield []object{"issue-5326-class1-call-writes-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var g C? = C{}
+func Clear() { g = nil }
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    Clear()
+    return a.Value
+}
+Console.WriteLine(Run(ref g))
+`}
+            yield []object{"issue-5326-class1-call-writes-static-field", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    shared {
+        var Shared C? = C{}
+        func Clear() { Shared = nil }
+    }
+}
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    Holder.Clear()
+    return a.Value
+}
+Console.WriteLine(Run(ref Holder.Shared))
+`}
+            yield []object{"issue-5326-class2-call-clears-container-operand", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+func Clear(xs []C?) { xs[0] = nil }
+func Run(ref a C?, xs []C?) int32 {
+    if a == nil { return 0 }
+    Clear(xs)
+    return a.Value
+}
+let xs = []C?{C{}}
+Console.WriteLine(Run(ref xs[0], xs))
+`}
+            yield []object{"issue-5326-class2-cyclic-object-self-detach", `
+import System
+
+class C {
+    var Value int32 = 1
+    var Link C?
+    func Detach() { Link = nil }
+}
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    a.Detach()
+    return a.Value
+}
+let c = C{}
+c.Link = c
+Console.WriteLine(Run(ref c.Link))
+`}
+            yield []object{"issue-5326-class2-loop-call-clears-container-operand", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+func Clear(xs []C?) { xs[0] = nil }
+func Run(ref a C?, xs []C?) int32 {
+    if a == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        total += a.Value
+        Clear(xs)
+    }
+    return total
+}
+let xs = []C?{C{}}
+Console.WriteLine(Run(ref xs[0], xs))
+`}
+            yield []object{"issue-5326-class3-interface-dispose-clears-field", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder : IDisposable {
+    var Field C? = C{}
+    func Dispose() { Field = nil }
+}
+func Run(ref a C?, d IDisposable) int32 {
+    if a == nil { return 0 }
+    d.Dispose()
+    return a.Value
+}
+let h = Holder{}
+Console.WriteLine(Run(ref h.Field, h))
+`}
+            yield []object{"issue-5326-class3-open-base-override-clears-field", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+open class Base {
+    open func Step() { }
+}
+class Derived : Base {
+    var Field C? = C{}
+    override func Step() { Field = nil }
+}
+func Run(ref a C?, b Base) int32 {
+    if a == nil { return 0 }
+    b.Step()
+    return a.Value
+}
+let d = Derived{}
+Console.WriteLine(Run(ref d.Field, d))
+`}
+            yield []object{"issue-5326-class4-collections-marshal-as-span-clear", `
+import System
+import System.Collections.Generic
+import System.Runtime.InteropServices
+
+class C {
+    var Value int32 = 1
+}
+func ClearList(xs List[C?]) {
+    CollectionsMarshal.AsSpan(xs).Clear()
+}
+func Run(ref a C?, xs List[C?]) int32 {
+    if a == nil { return 0 }
+    ClearList(xs)
+    return a.Value
+}
+let xs = List[C?](){C{}}
+Console.WriteLine(Run(ref CollectionsMarshal.AsSpan(xs)[0], xs))
+`}
+            yield []object{"issue-5326-class4-queue-copy-to-array", `
+import System
+import System.Collections.Generic
+
+class C {
+    var Value int32 = 1
+}
+func OverwriteFromQueue(q Queue[C?], arr []C?) {
+    q.CopyTo(arr, 0)
+}
+func Run(ref a C?, q Queue[C?], arr []C?) int32 {
+    if a == nil { return 0 }
+    OverwriteFromQueue(q, arr)
+    return a.Value
+}
+let q = Queue[C?]()
+q.Enqueue(nil)
+let arr = []C?{C{}}
+Console.WriteLine(Run(ref arr[0], q, arr))
+`}
+            yield []object{"issue-5326-class5-constructed-generic-holder-clear", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder[T] {
+    var Item T
+    init(item T) { Item = item }
+    func Reset() { Item = default(T) }
+}
+func Run(ref a C?, h Holder[C?]) int32 {
+    if a == nil { return 0 }
+    h.Reset()
+    return a.Value
+}
+let h = Holder[C?](C{})
+Console.WriteLine(Run(ref h.Item, h))
+`}
+            yield []object{"issue-5326-class5-covariant-array-clear", `
+import System
+
+open class Base {
+    var Value int32 = 1
+}
+class C : Base { }
+func ClearBase(items []Base?) {
+    items[0] = nil
+}
+func Run(ref a C?, items []Base?) int32 {
+    if a == nil { return 0 }
+    ClearBase(items)
+    return a.Value
+}
+let xs = []C?{C{}}
+Console.WriteLine(Run(ref xs[0], xs))
+`}
+            yield []object{"issue-5326-class6-dictionary-contains-key-equality-callback", `
+import System
+import System.Collections.Generic
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+class Key {
+    override func GetHashCode() int32 {
+        globalC = nil
+        return 0
+    }
+    override func Equals(obj object?) bool -> true
+}
+func Probe(d Dictionary[Key, int32], k Key) bool -> d.ContainsKey(k)
+func Run(ref a C?, d Dictionary[Key, int32], k Key) int32 {
+    if a == nil { return 0 }
+    let _ = Probe(d, k)
+    return a.Value
+}
+let d = Dictionary[Key, int32]()
+d[Key{}] = 1
+globalC = C{}
+Console.WriteLine(Run(ref globalC, d, Key{}))
+`}
+            yield []object{"issue-5326-class6-string-builder-append-tostring-callback", `
+import System
+import System.Text
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+class Evil {
+    override func ToString() string {
+        globalC = nil
+        return ""
+    }
+}
+func FormatItem(sb StringBuilder, item object) {
+    let _ = sb.Append(item)
+}
+func Run(ref a C?, sb StringBuilder, item object) int32 {
+    if a == nil { return 0 }
+    FormatItem(sb, item)
+    return a.Value
+}
+Console.WriteLine(Run(ref globalC, StringBuilder(), Evil{}))
+`}
+            yield []object{"issue-5326-class7-interlocked-exchange-clears-field", `
+import System
+import System.Threading
+
+class C {
+    var Value int32 = 1
+}
+class Box {
+    var Field C? = C{}
+    func ClearAtomically() {
+        let _ = Interlocked.Exchange(&Field, nil)
+    }
+}
+func Run(ref a C?, box Box) int32 {
+    if a == nil { return 0 }
+    box.ClearAtomically()
+    return a.Value
+}
+let box = Box{}
+Console.WriteLine(Run(ref box.Field, box))
+`}
+            yield []object{"issue-5326-tuple-element-ref-alias-cleared-by-slot-write", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalPair (C?, int32) = (C{}, 1)
+func ClearSlot() {
+    globalPair.Item1 = nil
+}
+func Run(ref row (C?, int32)) int32 {
+    let ref a = row.Item1
+    if a == nil { return 0 }
+    ClearSlot()
+    return a.Value
+}
+Console.WriteLine(Run(ref globalPair))
+`}
+            yield []object{"issue-5326-structural-equality-callback-clears-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+class Trigger {
+    override func Equals(obj object?) bool {
+        globalC = nil
+        return true
+    }
+    override func GetHashCode() int32 -> 0
+}
+data struct Pair(Item Trigger)
+func Run(ref a C?, x Pair, y Pair) int32 {
+    if a == nil { return 0 }
+    let same = x == y
+    if same {
+        return a.Value
+    }
+    return 0
+}
+let t = Pair(Trigger{})
+Console.WriteLine(Run(ref globalC, t, t))
+`}
+            yield []object{"issue-5326-nested-equality-callback-clears-global", `
+import System
+import System.Collections.Generic
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+class InnerKey {
+    override func GetHashCode() int32 {
+        globalC = nil
+        return 0
+    }
+    override func Equals(obj object?) bool -> true
+}
+class OuterKey {
+    var Inner Dictionary[InnerKey, int32] = Dictionary[InnerKey, int32]()
+    override func GetHashCode() int32 {
+        let _ = Inner.ContainsKey(InnerKey{})
+        return 0
+    }
+    override func Equals(obj object?) bool -> true
+}
+func ProbeOuter(d Dictionary[OuterKey, int32], k OuterKey) bool -> d.ContainsKey(k)
+func Run(ref a C?, d Dictionary[OuterKey, int32], k OuterKey) int32 {
+    if a == nil { return 0 }
+    let _ = ProbeOuter(d, k)
+    return a.Value
+}
+let outer = OuterKey{}
+outer.Inner[InnerKey{}] = 1
+let d = Dictionary[OuterKey, int32]()
+d[outer] = 1
+globalC = C{}
+Console.WriteLine(Run(ref globalC, d, outer))
+`}
+            yield []object{"issue-5326-interpolated-string-tostring-clears-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+class Noisy {
+    override func ToString() string {
+        globalC = nil
+        return "n"
+    }
+}
+func Run(ref a C?, noisy Noisy) int32 {
+    if a == nil { return 0 }
+    let _ = "item=${noisy}"
+    return a.Value
+}
+Console.WriteLine(Run(ref globalC, Noisy{}))
+`}
+            yield []object{"issue-5326-list-foreach-callback-clears-global", `
+import System
+import System.Collections.Generic
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+var globalAction Action[int32] = (x int32) -> { globalC = nil }
+func RunAll(xs List[int32]) {
+    xs.ForEach(globalAction)
+}
+func Run(ref a C?, xs List[int32]) int32 {
+    if a == nil { return 0 }
+    RunAll(xs)
+    return a.Value
+}
+let xs = List[int32](){1}
+Console.WriteLine(Run(ref globalC, xs))
+`}
+            yield []object{"issue-5326-parameter-callback-wrapper-clears-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+func InvokeCallback(cb () -> void) {
+    cb()
+}
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    InvokeCallback(() -> { globalC = nil })
+    return a.Value
+}
+Console.WriteLine(Run(ref globalC))
+`}
+            yield []object{"issue-5326-struct-literal-field-initializer-clears-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+func ClearGlobal() int32 {
+    globalC = nil
+    return 1
+}
+class Reset {
+    var N int32 = ClearGlobal()
+}
+func MakeReset() {
+    let _ = Reset{}
+}
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    MakeReset()
+    return a.Value
+}
+Console.WriteLine(Run(ref globalC))
+`}
+            yield []object{"issue-5326-user-toarray-returns-shared-buffer", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+class BufferHolder {
+    var Items []C? = []C?{C{}}
+    func ToArray() []C? -> Items
+}
+func ClearViaToArray(h BufferHolder) {
+    let xs = h.ToArray()
+    xs[0] = nil
+}
+func Run(ref a C?, h BufferHolder) int32 {
+    if a == nil { return 0 }
+    ClearViaToArray(h)
+    return a.Value
+}
+let h = BufferHolder{}
+Console.WriteLine(Run(ref h.Items[0], h))
+`}
+            yield []object{"issue-5326-nested-named-callback-wrapper-clears-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+func InvokeCallback(cb () -> void) {
+    cb()
+}
+func WrapCallback() {
+    InvokeCallback(() -> { globalC = nil })
+}
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    WrapCallback()
+    return a.Value
+}
+Console.WriteLine(Run(ref globalC))
+`}
+            yield []object{"issue-5326-enumerable-any-callback-clears-global", `
+import System
+import System.Collections.Generic
+import System.Linq
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+func CheckAny(xs List[int32]) bool {
+    return xs.Any((x int32) -> {
+        globalC = nil
+        return x > 0
+    })
+}
+func Run(ref a C?, xs List[int32]) int32 {
+    if a == nil { return 0 }
+    let _ = CheckAny(xs)
+    return a.Value
+}
+let xs = List[int32](){1}
+Console.WriteLine(Run(ref globalC, xs))
+`}
+            yield []object{"issue-5326-callee-interpolation-tostring-clears-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+class Noisy {
+    override func ToString() string {
+        globalC = nil
+        return "n"
+    }
+}
+func FormatNoisy(noisy Noisy) string {
+    return "item=${noisy}"
+}
+func Run(ref a C?, noisy Noisy) int32 {
+    if a == nil { return 0 }
+    let _ = FormatNoisy(noisy)
+    return a.Value
+}
+Console.WriteLine(Run(ref globalC, Noisy{}))
+`}
+            yield []object{"issue-5326-constant-pattern-equals-clears-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+class E {
+    override func Equals(o object?) bool {
+        globalC = nil
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run(ref a C?, o object) int32 {
+    if a == nil { return 0 }
+    let matched = o is 1
+    return a.Value
+}
+Console.WriteLine(Run(ref globalC, E{}))
+`}
+            yield []object{"issue-5326-loop-structural-equality-clears-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+class Trigger {
+    override func Equals(obj object?) bool {
+        globalC = nil
+        return true
+    }
+    override func GetHashCode() int32 -> 0
+}
+data struct Pair(Item Trigger)
+func Run(ref a C?, x Pair, y Pair) int32 {
+    if a == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        total += a.Value
+        let _ = x == y
+    }
+    return total
+}
+let t = Pair(Trigger{})
+Console.WriteLine(Run(ref globalC, t, t))
+`}
+            yield []object{"issue-5326-loop-source-operator-interpolation-clears-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+class Noisy {
+    override func ToString() string {
+        globalC = nil
+        return "n"
+    }
+}
+struct Token {
+    var Id int32
+}
+func (a Token) operator +(b Token) Noisy -> Noisy{}
+func Run(ref a C?, token Token) int32 {
+    if a == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        total += a.Value
+        let _ = "${token + token}"
+    }
+    return total
+}
+Console.WriteLine(Run(ref globalC, Token{Id: 1}))
+`}
+            yield []object{"issue-5326-base-call-callback-clears-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+open class BaseRunner {
+    open func Invoke(cb () -> void) {
+        cb()
+    }
+}
+class DerivedRunner : BaseRunner {
+    func Wrap() {
+        base.Invoke(() -> { globalC = nil })
+    }
+}
+func Run(ref a C?, d DerivedRunner) int32 {
+    if a == nil { return 0 }
+    d.Wrap()
+    return a.Value
+}
+Console.WriteLine(Run(ref globalC, DerivedRunner{}))
+`}
+            yield []object{"issue-5326-equality-comparer-create-clears-global", `
+import System
+import System.Collections.Generic
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+func Run(ref a C?, d Dictionary[int32, int32]) int32 {
+    if a == nil { return 0 }
+    let _ = d.ContainsKey(1)
+    return a.Value
+}
+let cmp = EqualityComparer[int32].Create(
+    (x int32, y int32) -> x == y,
+    (x int32) -> {
+        globalC = nil
+        return x
+    }
+)
+let d = Dictionary[int32, int32](cmp)
+d[1] = 1
+globalC = C{}
+Console.WriteLine(Run(ref globalC, d))
+`}
+            yield []object{"issue-5326-enumerable-count-deferred-where-callback-clears-global", `
+import System
+import System.Collections.Generic
+import System.Linq
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+func Run(ref a C?, seq IEnumerable[int32]) int32 {
+    if a == nil { return 0 }
+    let n = Enumerable.Count(seq)
+    return a.Value + n
+}
+let xs = List[int32](){1}
+let seq = xs.Where((x int32) -> {
+    globalC = nil
+    return true
+})
+Console.WriteLine(Run(ref globalC, seq))
+`}
+            yield []object{"issue-5326-local-function-callback-clears-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+func Wrap() {
+    func Invoke(cb () -> void) {
+        cb()
+    }
+    Invoke(() -> { globalC = nil })
+}
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    Wrap()
+    return a.Value
+}
+Console.WriteLine(Run(ref globalC))
+`}
+            yield []object{"issue-5326-priority-queue-enqueue-comparer-clears-global", `
+import System
+import System.Collections.Generic
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+class PrioComparer : IComparer[int32] {
+    func Compare(x int32, y int32) int32 {
+        globalC = nil
+        return 0
+    }
+}
+func Run(ref a C?, pq PriorityQueue[string, int32]) int32 {
+    if a == nil { return 0 }
+    pq.Enqueue("b", 2)
+    return a.Value
+}
+let pq = PriorityQueue[string, int32](PrioComparer{})
+pq.Enqueue("a", 1)
+globalC = C{}
+Console.WriteLine(Run(ref globalC, pq))
+`}
+            yield []object{"issue-5326-string-create-format-provider-clears-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+class ClearingProvider : IFormatProvider {
+    func GetFormat(formatType Type?) object? {
+        globalC = nil
+        return nil
+    }
+}
+func Run(ref a C?, provider IFormatProvider) int32 {
+    if a == nil { return 0 }
+    let _ = string.Create(provider, "${1}")
+    return a.Value
+}
+Console.WriteLine(Run(ref globalC, ClearingProvider{}))
+`}
+            yield []object{"issue-5326-callee-operator-interpolation-clears-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+class Noisy {
+    override func ToString() string {
+        globalC = nil
+        return "n"
+    }
+}
+struct Token {
+    var Id int32
+}
+func (a Token) operator +(b Token) Noisy -> Noisy{}
+func FormatToken(token Token) string {
+    return "${token + token}"
+}
+func Run(ref a C?, token Token) int32 {
+    if a == nil { return 0 }
+    let _ = FormatToken(token)
+    return a.Value
+}
+Console.WriteLine(Run(ref globalC, Token{Id: 1}))
+`}
+            yield []object{"issue-5326-cancellation-token-source-cancel-clears-global", `
+import System
+import System.Threading
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+func Run(ref a C?, cts CancellationTokenSource) int32 {
+    if a == nil { return 0 }
+    cts.Cancel()
+    return a.Value
+}
+using let cts = CancellationTokenSource()
+let _ = cts.Token.Register(() -> { globalC = nil })
+Console.WriteLine(Run(ref globalC, cts))
+`}
+            yield []object{"issue-5326-callee-binary-operator-clears-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+struct Token {
+    var Id int32
+}
+func (a Token) operator +(b Token) int32 {
+    globalC = nil
+    return a.Id + b.Id
+}
+func AddTokens(t Token) int32 {
+    return t + t
+}
+func Run(ref a C?, t Token) int32 {
+    if a == nil { return 0 }
+    let _ = AddTokens(t)
+    return a.Value
+}
+Console.WriteLine(Run(ref globalC, Token{Id: 1}))
+`}
+            yield []object{"issue-5326-distinctby-deferred-callback-clears-global", `
+import System
+import System.Collections.Generic
+import System.Linq
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+func Run(ref a C?, seq IEnumerable[int32]) int32 {
+    if a == nil { return 0 }
+    let n = Enumerable.Count(seq)
+    return a.Value + n
+}
+let xs = List[int32](){1}
+let seq = xs.DistinctBy((x int32) -> {
+    globalC = nil
+    return x
+})
+Console.WriteLine(Run(ref globalC, seq))
+`}
+            yield []object{"issue-5326-where-method-group-callback-clears-global", `
+import System
+import System.Collections.Generic
+import System.Linq
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+func ClearPredicate(x int32) bool {
+    globalC = nil
+    return true
+}
+func Run(ref a C?, seq IEnumerable[int32]) int32 {
+    if a == nil { return 0 }
+    let n = Enumerable.Count(seq)
+    return a.Value + n
+}
+let xs = List[int32](){1}
+let seq = xs.Where(ClearPredicate)
+Console.WriteLine(Run(ref globalC, seq))
+`}
+            yield []object{"issue-5326-count-global-helper-deferred-where-clears-global", `
+import System
+import System.Collections.Generic
+import System.Linq
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+let xs = List[int32](){1}
+var globalSeq IEnumerable[int32] = xs.Where((x int32) -> {
+    globalC = nil
+    return true
+})
+func CountGlobal() int32 {
+    return Enumerable.Count(globalSeq)
+}
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    let n = CountGlobal()
+    return a.Value + n
+}
+Console.WriteLine(Run(ref globalC))
+`}
+            yield []object{"issue-5326-yield-iterator-deferred-count-clears-global", `
+import System
+import System.Collections.Generic
+import System.Linq
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+func Items() sequence[int32] {
+    globalC = nil
+    yield 1
+}
+func Run(ref a C?, seq IEnumerable[int32]) int32 {
+    if a == nil { return 0 }
+    let n = Enumerable.Count(seq)
+    return a.Value + n
+}
+let seq = Items()
+Console.WriteLine(Run(ref globalC, seq))
+`}
+            yield []object{"issue-5326-loop-enumerable-toarray-deferred-where-clears-global", `
+import System
+import System.Collections.Generic
+import System.Linq
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+func Run(ref a C?, seq IEnumerable[int32]) int32 {
+    if a == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        total += a.Value
+        let _ = seq.ToArray()
+    }
+    return total
+}
+let xs = List[int32](){1}
+let seq = xs.Where((x int32) -> {
+    globalC = nil
+    return true
+})
+Console.WriteLine(Run(ref globalC, seq))
+`}
+            yield []object{"issue-5326-concurrent-dictionary-getoradd-callback-clears-global", `
+import System
+import System.Collections.Concurrent
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+func Populate(d ConcurrentDictionary[int32, int32]) int32 {
+    return d.GetOrAdd(1, (k int32) -> {
+        globalC = nil
+        return k
+    })
+}
+func Run(ref a C?, d ConcurrentDictionary[int32, int32]) int32 {
+    if a == nil { return 0 }
+    let n = Populate(d)
+    return a.Value + n
+}
+let d = ConcurrentDictionary[int32, int32]()
+Console.WriteLine(Run(ref globalC, d))
+`}
+            yield []object{"issue-5326-count-global-via-local-copy-clears-global", `
+import System
+import System.Collections.Generic
+import System.Linq
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+let xs = List[int32](){1}
+var globalSeq IEnumerable[int32] = xs.Where((x int32) -> {
+    globalC = nil
+    return true
+})
+func CountGlobalViaLocal() int32 {
+    let local = globalSeq
+    return Enumerable.Count(local)
+}
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    let n = CountGlobalViaLocal()
+    return a.Value + n
+}
+Console.WriteLine(Run(ref globalC))
+`}
+            yield []object{"issue-5326-equality-comparer-create-method-group-clears-global", `
+import System
+import System.Collections.Generic
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+func SameInt(x int32, y int32) bool -> x == y
+func HashAndClear(x int32) int32 {
+    globalC = nil
+    return x
+}
+func Run(ref a C?, d Dictionary[int32, int32]) int32 {
+    if a == nil { return 0 }
+    let _ = d.ContainsKey(1)
+    return a.Value
+}
+let cmp = EqualityComparer[int32].Create(SameInt, HashAndClear)
+let d = Dictionary[int32, int32](cmp)
+d[1] = 1
+globalC = C{}
+Console.WriteLine(Run(ref globalC, d))
+`}
+            yield []object{"issue-5326-fresh-receiver-property-setter-clears-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+class Scratch {
+    prop Tag int32 {
+        get -> 0
+        set {
+            globalC = nil
+        }
+    }
+}
+func TouchScratch() {
+    let s = Scratch{}
+    s.Tag = 1
+}
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    TouchScratch()
+    return a.Value
+}
+Console.WriteLine(Run(ref globalC))
+`}
+            yield []object{"issue-5326-loop-interpolated-handler-primitive-hole-clears-global", `
+import System
+import System.Runtime.CompilerServices
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+@InterpolatedStringHandler
+struct ClearHandler {
+    init(literalLength int32, formattedCount int32) { }
+    func AppendLiteral(s string) { }
+    func AppendFormatted(v bool) {
+        globalC = nil
+    }
+}
+func Sink(h ClearHandler) { }
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        total += a.Value
+        Sink("${true}")
+    }
+    return total
+}
+Console.WriteLine(Run(ref globalC))
+`}
+            yield []object{"issue-5326-callee-reads-lazy-value-clears-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+func ReadLazy(l Lazy[int32]) int32 -> l.Value
+func Run(ref a C?, l Lazy[int32]) int32 {
+    if a == nil { return 0 }
+    let _ = ReadLazy(l)
+    return a/* expect GS0158 */.Value
+}
+let lazyVal = Lazy[int32](() -> {
+    globalC = nil
+    return 7
+})
+Console.WriteLine(Run(ref globalC, lazyVal))
+`}
+            yield []object{"issue-5326-deferred-enumerable-distinct-clears-global", `
+import System
+import System.Collections.Generic
+import System.Linq
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+class Key {
+    override func GetHashCode() int32 {
+        globalC = nil
+        return 0
+    }
+    override func Equals(other object?) bool -> true
+}
+func Run(ref a C?, seq IEnumerable[Key]) int32 {
+    if a == nil { return 0 }
+    let _ = seq.ToArray()
+    return a.Value
+}
+let keys = List[Key](){Key{}}
+let distinctSeq = keys.Distinct()
+globalC = C{}
+Console.WriteLine(Run(ref globalC, distinctSeq))
+`}
+            yield []object{"issue-5326-deferred-unmodeled-countby-clears-global", `
+import System
+import System.Collections.Generic
+import System.Linq
+
+class C { var Value int32 = 1 }
+var globalC C? = C{}
+class Key {
+    override func GetHashCode() int32 {
+        globalC = nil
+        return 0
+    }
+    override func Equals(other object?) bool -> true
+}
+func Run(ref a C?, seq IEnumerable[KeyValuePair[Key, int32]]) int32 {
+    if a == nil { return 0 }
+    let _ = seq.ToArray()
+    return a.Value
+}
+let keys = List[Key](){Key{}}
+let counted = keys.CountBy((key Key) -> key)
+globalC = C{}
+Console.WriteLine(Run(ref globalC, counted))
+`}
+            yield []object{"issue-5326-tuple-interpolation-element-tostring-clears-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+class Noisy {
+    override func ToString() string {
+        globalC = nil
+        return "noisy"
+    }
+}
+func Run(ref a C?, row (Noisy, int32)) int32 {
+    if a == nil { return 0 }
+    let _ = "${row}"
+    return a.Value
+}
+Console.WriteLine(Run(ref globalC, (Noisy{}, 1)))
+`}
+            yield []object{"issue-5326-hashset-setequals-clears-global", `
+import System
+import System.Collections.Generic
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+class Key {
+    override func GetHashCode() int32 {
+        globalC = nil
+        return 0
+    }
+    override func Equals(other object?) bool -> true
+}
+func Run(ref a C?, set HashSet[Key], other []Key) int32 {
+    if a == nil { return 0 }
+    let _ = set.SetEquals(other)
+    return a.Value
+}
+let set = HashSet[Key]()
+globalC = C{}
+Console.WriteLine(Run(ref globalC, set, []Key{Key{}}))
+`}
+            yield []object{"issue-5326-enumerable-max-compareto-clears-global", `
+import System
+import System.Collections.Generic
+import System.Linq
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+class Item : IComparable[Item] {
+    func CompareTo(other Item?) int32 {
+        globalC = nil
+        return 0
+    }
+}
+func Run(ref a C?, items List[Item]) int32 {
+    if a == nil { return 0 }
+    let _ = items.Max()
+    return a.Value
+}
+let items = List[Item](){Item{}, Item{}}
+globalC = C{}
+Console.WriteLine(Run(ref globalC, items))
+`}
+            yield []object{"issue-5326-transitive-nullable-tuple-formatting-clears-global", `
+import System
+
+class C { var Value int32 = 1 }
+var globalC C? = C{}
+class Noisy {
+    override func ToString() string {
+        globalC = nil
+        return "noisy"
+    }
+}
+func Render(row ((Noisy, int32)?, int32)) string -> "${row}"
+func Run(ref a C?, row ((Noisy, int32)?, int32)) int32 {
+    if a == nil { return 0 }
+    let _ = Render(row)
+    return a.Value
+}
+Console.WriteLine(Run(ref globalC, ((Noisy{}, 1), 2)))
+`}
+            yield []object{"issue-5326-transitive-clr-tuple-formatting-clears-global", `
+import System
+
+class C { var Value int32 = 1 }
+var globalC C? = C{}
+class Noisy {
+    override func ToString() string {
+        globalC = nil
+        return "noisy"
+    }
+}
+func Render(row Tuple[Noisy, int32]) string -> "${row}"
+func Run(ref a C?, row Tuple[Noisy, int32]) int32 {
+    if a == nil { return 0 }
+    let _ = Render(row)
+    return a.Value
+}
+Console.WriteLine(Run(ref globalC, Tuple[Noisy, int32](Noisy{}, 1)))
+`}
         }
 
         /// Gets the accepted programs: each is (name, source, expected stdout lines).
@@ -915,16 +2614,17 @@ func Describe(items []IDisposable?, out symbol IDisposable?, out name string?) b
     if symbol == nil {
         return false
     }
-    name = symbol.ToString()
-    return symbol.ToString() == name
+    name = "known"
+    return HasValue(symbol)
 }
+func HasValue(symbol IDisposable) bool { return true }
 func Main() {
     var symbol IDisposable? = nil
     var name string? = nil
-    let items = []IDisposable?{nil}
-    Console.WriteLine(Describe(items, out symbol, out name))
+    Console.WriteLine(Describe([]IDisposable?{nil}, out symbol, out name))
+    Console.WriteLine(Describe([]IDisposable?{System.IO.MemoryStream()}, out symbol, out name))
 }
-`, []string{"False"}}
+`, []string{"False", "True"}}
             yield []object{"ref-argument-to-another-variable-keeps-fact", `
 import System
 
@@ -982,7 +2682,7 @@ func Main() {
     Console.WriteLine(Run(out x))
 }
 `, []string{"6"}}
-            yield []object{"out-parameters-of-different-types-do-not-overlap", `
+            yield []object{"out-parameters-of-different-types-reprove-after-an-open-comparer", `
 import System
 import System.Collections.Generic
 
@@ -997,7 +2697,11 @@ func Find(d Dictionary[C, string], c C?, out path C?, out text string?) bool {
         return false
     }
     for var i = 0; i < 2; i++ {
-        if Lookup(d, path, out text) {
+        if path == nil {
+            text = nil
+            return false
+        }
+        if Lookup(d, path, out text) && path != nil {
             return path.Value > 0
         }
     }
@@ -1108,12 +2812,189 @@ func Run() int32 {
 }
 func Main() { Console.WriteLine(Run()) }
 `, []string{"1"}}
+            yield []object{"issue-5326-safe-call-writes-unrelated-field-type", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+class Box {
+    var Field C? = C{}
+    var Count int32 = 0
+    func BumpCount() { Count = Count + 1 }
+}
+func Run(ref a C?, box Box) int32 {
+    if a == nil { return 0 }
+    box.BumpCount()
+    return a.Value + box.Count
+}
+func Main() {
+    let box = Box{}
+    Console.WriteLine(Run(ref box.Field, box))
+}
+`, []string{"2"}}
+            yield []object{"issue-5326-safe-call-mutates-fresh-local-container", `
+import System
+import System.Collections.Generic
+
+class C {
+    var Value int32 = 1
+}
+func BuildScratchCount(seed C) int32 {
+    let scratch = List[C?]()
+    scratch.Add(seed)
+    scratch.Add(nil)
+    return scratch.Count
+}
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    let n = BuildScratchCount(a)
+    return a.Value + n
+}
+func Main() {
+    var x C? = C{}
+    Console.WriteLine(Run(ref x))
+}
+`, []string{"3"}}
+            yield []object{"issue-5326-safe-generic-call-writes-unrelated-instantiation", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder[T] {
+    var Item T
+    init(item T) { Item = item }
+    func Reset() { Item = default(T) }
+}
+func Run(ref a C?, other Holder[string?]) int32 {
+    if a == nil { return 0 }
+    other.Reset()
+    return a.Value
+}
+func Main() {
+    var x C? = C{}
+    let other = Holder[string?]("hi")
+    Console.WriteLine(Run(ref x, other))
+}
+`, []string{"1"}}
+            yield []object{"issue-5326-safe-base-method-call-preserves-narrowing", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+open class BaseWorker {
+    open func Noop() int32 -> 4
+}
+class DerivedWorker : BaseWorker {
+    func Run(ref a C?) int32 {
+        if a == nil { return 0 }
+        let n = base.Noop()
+        return a.Value + n
+    }
+}
+func Main() {
+    var x C? = C{}
+    let w = DerivedWorker{}
+    Console.WriteLine(w.Run(ref x))
+}
+`, []string{"5"}}
+            yield []object{"issue-5326-safe-loop-primitive-interpolation-preserves-narrowing", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        total += a.Value
+        let _ = "${i + 1}"
+    }
+    return total
+}
+func Main() {
+    var x C? = C{}
+    Console.WriteLine(Run(ref x))
+}
+`, []string{"2"}}
+            yield []object{"issue-5326-safe-ignore-enumerable-preserves-narrowing", `
+import System
+import System.Collections.Generic
+import System.Linq
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+func Ignore(seq IEnumerable[int32]) { }
+func Run(ref a C?, seq IEnumerable[int32]) int32 {
+    if a == nil { return 0 }
+    Ignore(seq)
+    return a.Value
+}
+let xs = List[int32](){1}
+let seq = xs.Where((x int32) -> {
+    globalC = nil
+    return true
+})
+Console.WriteLine(Run(ref globalC, seq))
+`, []string{"1"}}
+            yield []object{"issue-5326-safe-deferred-factory-value-arguments-are-not-callbacks", `
+import System
+import System.Collections.Generic
+import System.Linq
+import System.Text
+
+class C { var Value int32 = 1 }
+func Run(ref a C?, seq IEnumerable[int32]) int32 {
+    if a == nil { return 0 }
+    let _ = seq.Count()
+    return a.Value
+}
+func Main() {
+    let builder = StringBuilder()
+    let text = "value"
+    builder.Append(text)
+    var value C? = C{}
+    Console.WriteLine(Run(ref value, Enumerable.Range(1, 2)))
+}
+`, []string{"1"}}
+            yield []object{"issue-5326-safe-elided-conditional-call-preserves-narrowing", `
+import System
+import System.Diagnostics
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+@Conditional("NEVER_DEFINED_SYMBOL_5326")
+func ElidedClear() {
+    globalC = nil
+}
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    ElidedClear()
+    return a.Value
+}
+Console.WriteLine(Run(ref globalC))
+`, []string{"1"}}
         }
 
-        private func Compile(dir string, source string, outPath string)(Exit int32, Log string) {
+        private func Compile(dir string, source string, outPath string, references IEnumerable[string]? = nil)(
+            Exit int32,
+            Log string
+        ) {
             let srcPath = Path.Combine(dir, Path.GetFileNameWithoutExtension(outPath) + ".gs")
             File.WriteAllText(srcPath, source)
             let args = List[string]{"/out:" + outPath, "/target:exe", "/targetframework:net10.0"}
+            if references != nil {
+                for reference in references {
+                    args.Add("/reference:" + reference)
+                }
+            }
             for reference in TrustedPlatformAssemblies() {
                 args.Add("/reference:" + reference)
             }
@@ -1154,7 +3035,10 @@ func Main() { Console.WriteLine(Run()) }
             if string.IsNullOrEmpty(tpa) {
                 return Enumerable.Empty[string]()
             }
-            return tpa.Split(Path.PathSeparator).Where(File.Exists)
+            let framework = Path.GetDirectoryName(typeof(object).Assembly.Location)
+            return tpa.Split(Path.PathSeparator).Where(
+                (path string) -> File.Exists(path) && Path.GetDirectoryName(path) == framework
+            )
         }
     }
 }

@@ -52,6 +52,24 @@ partial class CSharpToGSharpTranslator {
             var ReconciledRepository object? = nil
         }
 
+        private class RefStorageCatalogCache {
+            let Published ConditionalWeakTable[CSharpCompilation, RefStorageCompilationCache] =
+            ConditionalWeakTable[CSharpCompilation, RefStorageCompilationCache]()
+            var Building Dictionary[CSharpCompilation, RefStorageCompilationCache]?
+        }
+
+        private func RefStorageCacheFor(compilation CSharpCompilation) RefStorageCompilationCache {
+            let catalog = RefStorageCaches.GetOrCreateValue(this.context.CatalogIdentity)
+            if catalog.Building is {} building {
+                if !building.TryGetValue(compilation, out var entry) {
+                    entry = RefStorageCompilationCache()
+                    building.Add(compilation, entry)
+                }
+                return entry
+            }
+            return catalog.Published.GetOrCreateValue(compilation)
+        }
+
         private class RefStorageSlot {
             let Symbol ISymbol
             let Depth int32
@@ -106,6 +124,10 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func ComputeIsUsedAsNullable(symbol ISymbol?, $scope SyntaxNode?) bool {
+            if symbol != nil {
+                using let ownerScope = this.context.UseSemanticModelForSymbol($scope!!.SyntaxTree, symbol)
+                return ownerScope != nil && ScopeUsesAsNullable(this.context.SemanticModel, symbol, $scope)
+            }
             // A source-backed ProjectReference can expose declaration syntax
             // owned by the referenced project's separate compilation. Its
             // whole-program taint result was already checked by the caller;
@@ -236,12 +258,12 @@ partial class CSharpToGSharpTranslator {
             // members from thousands of sites.
             return DeclaringUsageScans.GetValue(
                 owner!!,
-                (_ CSharpCompilation) -> ConcurrentDictionary[ISymbol, bool](SymbolEqualityComparer.Default)
+                (_ Compilation) -> ConcurrentDictionary[ISymbol, bool](SymbolEqualityComparer.Default)
             )
                 .GetOrAdd(
                 source!!,
                 (member ISymbol) -> ScopeUsesAsNullable(
-                    TranslationContext.GetSemanticModel(owner!!, scope_.SyntaxTree),
+                    TranslationContext.GetEffectiveSemanticModel(owner!!, scope_.SyntaxTree),
                     member,
                     scope_
                 )
@@ -528,7 +550,7 @@ partial class CSharpToGSharpTranslator {
             let bodySource = method.PartialImplementationPart ?? method
             let isIterator = bodySource.DeclaringSyntaxReferences.Any(
                 (reference SyntaxReference) -> reference.GetSyntax() is MethodDeclarationSyntax methodDeclaration &&
-                    IsIteratorBody(methodDeclaration)
+                    IsIteratorBody(methodDeclaration, this.context.SourceCompilation(bodySource))
             )
             return isIterator && this.AwaitedReturnIsTainted(enumerable.TypeArguments[0], method)
         }
@@ -1115,7 +1137,7 @@ partial class CSharpToGSharpTranslator {
             }
             let delegateMetadataName = GetMetadataTypeName(delegateType.OriginalDefinition)
             for tree in this.context.Compilation.SyntaxTrees {
-                let model = TranslationContext.GetSemanticModel(this.context.Compilation, tree)
+                let model = TranslationContext.GetEffectiveSemanticModel(this.context.Compilation, tree)
                 for declaration in tree.GetRoot().DescendantNodes().OfType[DelegateDeclarationSyntax]() {
                     if model.GetDeclaredSymbol(declaration) is not INamedTypeSymbol declarationSymbol ||
                         GetMetadataTypeName(declarationSymbol) != delegateMetadataName {
@@ -2674,6 +2696,7 @@ partial class CSharpToGSharpTranslator {
                     source
             }
             this.JoinRefStorageSlots(target, this.GetRefStorageSlot(source!!, depth))
+            this.context.AfterRefStorageConnection?.Invoke(target.Symbol, source!!)
             var type = this.RefStorageSlotType(target)
             var nestedDepth = 0
             while type is IArrayTypeSymbol array {
@@ -2711,8 +2734,45 @@ partial class CSharpToGSharpTranslator {
             if this.refStorageSlots != nil {
                 return
             }
+            let catalog = RefStorageCaches.GetOrCreateValue(this.context.CatalogIdentity)
+            lock catalog {
+                if catalog.Building != nil {
+                    this.BuildRefStorageSlots()
+                    return
+                }
+                if catalog.Published.TryGetValue(this.context.Compilation, out var complete) && complete.Slots != nil {
+                    this.refStorageSlots = complete.Slots
+                    this.frozenRefStorageContracts = complete.FrozenContracts
+                    this.linkedRefStoragePromotions = complete.LinkedPromotions
+                    return
+                }
+                let building = Dictionary[CSharpCompilation, RefStorageCompilationCache](
+                    ReferenceEqualityComparer.Instance
+                )
+                catalog.Building = building
+                try {
+                    this.BuildRefStorageSlots()
+                    this.context.BeforeRefStoragePublication?.Invoke()
+                    this.context.CancellationToken.ThrowIfCancellationRequested()
+                    for entry in building {
+                        catalog.Published.GetValue(entry.Key, (key CSharpCompilation) -> entry.Value)
+                    }
+                } catch (error Exception) {
+                    this.refStorageSlots = nil
+                    this.frozenRefStorageContracts = nil
+                    this.linkedRefStoragePromotions = Dictionary[ISymbol, HashSet[int32]](
+                        SymbolEqualityComparer.Default
+                    )
+                    throw error
+                } finally {
+                    catalog.Building = nil
+                }
+            }
+        }
+
+        private func BuildRefStorageSlots() {
             let compilation = this.context.Compilation
-            let cache = RefStorageCaches.GetOrCreateValue(compilation)
+            let cache = this.RefStorageCacheFor(compilation)
             if cache.Slots != nil {
                 this.refStorageSlots = cache.Slots
                 this.frozenRefStorageContracts = cache.FrozenContracts
@@ -2726,15 +2786,17 @@ partial class CSharpToGSharpTranslator {
             // Constructed slots retain nullable arguments. Declaration constraints use the original symbol.
             this.frozenRefStorageContracts = Dictionary[ISymbol, HashSet[int32]](SymbolEqualityComparer.Default)
             this.linkedRefStoragePromotions = cache.LinkedPromotions
-            for tree in compilation.SyntaxTrees {
-                let model = TranslationContext.GetSemanticModel(compilation, tree)
-                using let modelScope = this.context.UseSemanticModelFor(tree)
-                for reference in tree.GetRoot().DescendantNodes().OfType[RefExpressionSyntax]() {
+            for root in TranslationContext.GetEffectiveSyntaxRoots(compilation) {
+                let tree = root.SyntaxTree
+                this.context.CancellationToken.ThrowIfCancellationRequested()
+                using let modelScope = this.context.UseSemanticModelFor(tree, compilation)
+                let model = this.context.SemanticModel
+                for reference in TranslationContext.GetEffectiveNodes(root, compilation).OfType[RefExpressionSyntax]() {
                     if this.RefStorageDestination(reference, model) is {} destination {
                         this.ConnectRefStorage(this.GetRefStorageSlot(destination, 0), reference.Expression, model)
                     }
                 }
-                for argument in tree.GetRoot().DescendantNodes().OfType[ArgumentSyntax]() {
+                for argument in TranslationContext.GetEffectiveNodes(root, compilation).OfType[ArgumentSyntax]() {
                     if (argument.RefKindKeyword.IsKind(SyntaxKind.RefKeyword)) && model.GetOperation(
                         argument
                     ) is IArgumentOperation{Parameter: {RefKind: RefKind.Ref} parameter} {
@@ -2772,7 +2834,7 @@ partial class CSharpToGSharpTranslator {
         private func ReconcileLinkedRefStorageContracts(cache RefStorageCompilationCache) {
             if this.context.RepositoryCompilations is not{Count: > 1} repository || object.ReferenceEquals(
                 cache.ReconciledRepository,
-                repository
+                this.context.CatalogIdentity
             ) {
                 return
             }
@@ -2783,10 +2845,10 @@ partial class CSharpToGSharpTranslator {
                 .Compilation
                 .SyntaxTrees
                 .Any((candidate SyntaxTree) -> this.repositorySharedDocumentPaths!!.Contains(candidate.FilePath)) {
-                cache.ReconciledRepository = repository
+                cache.ReconciledRepository = this.context.CatalogIdentity
                 return
             }
-            cache.ReconciledRepository = repository
+            cache.ReconciledRepository = this.context.CatalogIdentity
             let visitors = List[DeclarationVisitor](){this}
             for owner in repository {
                 if owner == this.context.Compilation {
@@ -2798,12 +2860,12 @@ partial class CSharpToGSharpTranslator {
                 if tree == nil {
                     continue
                 }
-                let ownerCache = RefStorageCaches.GetOrCreateValue(owner)
-                ownerCache.ReconciledRepository = repository
+                let ownerCache = this.RefStorageCacheFor(owner)
+                ownerCache.ReconciledRepository = this.context.CatalogIdentity
                 // Foreign visitors compute local constraints without repository recursion.
-                let ownerContext = TranslationContext(
+                let ownerContext = this.context.CreateRelatedContext(
                     owner,
-                    TranslationContext.GetSemanticModel(owner, tree),
+                    TranslationContext.GetEffectiveSemanticModel(owner, tree),
                     tree.FilePath
                 )
                 let ownerVisitor = DeclarationVisitor(
@@ -2823,6 +2885,7 @@ partial class CSharpToGSharpTranslator {
             }
             var changed bool
             do {
+                this.context.CancellationToken.ThrowIfCancellationRequested()
                 changed = false
                 for source in visitors {
                     let promotions = Dictionary[ISymbol, HashSet[int32]](SymbolEqualityComparer.Default)
@@ -2836,7 +2899,10 @@ partial class CSharpToGSharpTranslator {
                             if tree == nil || !source.context.Compilation.ContainsSyntaxTree(tree) {
                                 continue
                             }
-                            using let modelScope = source.context.UseSemanticModelFor(tree)
+                            using let modelScope = source.context.UseSemanticModelForSymbol(tree, slot.Symbol)
+                            if modelScope == nil {
+                                continue
+                            }
                             if source.RefStorageIsNullable(slot, includeArrays: true) {
                                 if !promotions.TryGetValue(slot.Symbol.OriginalDefinition, out var positions) {
                                     positions = HashSet[int32]()
@@ -2893,7 +2959,7 @@ partial class CSharpToGSharpTranslator {
                                     continue
                                 }
                                 let symbol = TranslationContext
-                                    .GetSemanticModel(target.context.Compilation, tree)
+                                    .GetEffectiveSemanticModel(target.context.Compilation, tree)
                                     .GetDeclaredSymbol(node)
                                     ?.OriginalDefinition
                                 if symbol == nil {
@@ -3035,12 +3101,15 @@ partial class CSharpToGSharpTranslator {
                 .FirstOrDefault()
                 ?.GetSyntax() is VariableDeclaratorSyntax{
                 Parent: VariableDeclarationSyntax{Type: {IsVar: true}}
-            } declaration &&
-                !TranslationContext
-                .GetSemanticModel(this.context.Compilation, declaration.SyntaxTree)
-                .GetNullableContext(declaration.SpanStart)
-                .HasFlag(NullableContext.AnnotationsEnabled) {
-                return false
+            } declaration {
+                let owner = this.context.SourceCompilation(local)
+                if owner == nil ||
+                    !TranslationContext
+                    .GetEffectiveSemanticModel(owner, declaration.SyntaxTree)
+                    .GetNullableContext(declaration.SpanStart)
+                    .HasFlag(NullableContext.AnnotationsEnabled) {
+                    return false
+                }
             }
             return !(slot.Depth == 1 && this.IsGeneratedArrayElementPromotedSink(slot.Symbol)) &&
                 !this
@@ -3581,7 +3650,10 @@ partial class CSharpToGSharpTranslator {
                         reference.GetSyntax() is not PropertyDeclarationSyntax declaration {
                         continue
                     }
-                    using let modelScope = this.context.UseSemanticModelFor(reference.SyntaxTree)
+                    using let modelScope = this.context.UseSemanticModelForSymbol(reference.SyntaxTree, property)
+                    if modelScope == nil {
+                        continue
+                    }
                     if declaration
                         .DescendantNodes()
                         .OfType[IdentifierNameSyntax]()
@@ -3603,7 +3675,12 @@ partial class CSharpToGSharpTranslator {
                         case property is IPropertySymbol: property.PartialImplementationPart ?? property
                         default: parameter.ContainingSymbol
                     }
-                    return owner?.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                    let syntax = owner?.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                    return if syntax == nil {
+                        nil
+                    } else {
+                        TranslationContext.GetEffectiveDeclaration(syntax, this.context.SourceCompilation(owner!!))
+                    }
                 }
                 case field is IFieldSymbol {
                     return field.ContainingType?.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
@@ -3639,15 +3716,14 @@ partial class CSharpToGSharpTranslator {
         shared {
             // Issue #4356 follow-up: DeclaringCompilationPromotes' usage-scan
             // results, per declaring compilation (see there).
-            private let DeclaringUsageScans ConditionalWeakTable[
-                CSharpCompilation,
+            private let DeclaringUsageScans ObliviousNullabilityAnalyzer.ScopedCompilationCache[
                 ConcurrentDictionary[ISymbol, bool]
-            ] = ConditionalWeakTable[CSharpCompilation, ConcurrentDictionary[ISymbol, bool]]()
+            ] = ObliviousNullabilityAnalyzer.ScopedCompilationCache[ConcurrentDictionary[ISymbol, bool]]()
 
-            private let RefStorageCaches ConditionalWeakTable[
-                CSharpCompilation,
-                RefStorageCompilationCache
-            ] = ConditionalWeakTable[CSharpCompilation, RefStorageCompilationCache]()
+            private let RefStorageCaches ConditionalWeakTable[object, RefStorageCatalogCache] = ConditionalWeakTable[
+                object,
+                RefStorageCatalogCache
+            ]()
 
             private let RepositorySharedDocumentPathsCache ConditionalWeakTable[
                 object,
@@ -3697,54 +3773,78 @@ partial class CSharpToGSharpTranslator {
             // compilation's own model, or (for a member another project of the run
             // declares, see DeclaringCompilationPromotes) the declaring
             // compilation's, so the consumer asks exactly what the producer asked.
-            private func ScopeUsesAsNullable(model SemanticModel, symbol ISymbol?, $scope SyntaxNode?) bool {
+            private func ScopeUsesAsNullable(declaringModel SemanticModel, symbol ISymbol?, $scope SyntaxNode?) bool {
                 let counterpart ISymbol? = PartialCounterpart(symbol)
-                let BindsTo = func (expression ExpressionSyntax) bool {
-                    return model.GetSymbolInfo(Unparenthesize(expression)!!)
-                        .Symbol is {} bound &&
-                        (
-                        SymbolEqualityComparer.Default.Equals(bound, symbol) ||
-                            (counterpart != nil && SymbolEqualityComparer.Default.Equals(bound, counterpart))
+                let scopes IEnumerable[SyntaxNode] = if $scope is TypeDeclarationSyntax &&
+                    symbol?.ContainingType is {} containing {
+                    containing
+                        .DeclaringSyntaxReferences
+                        .Where(
+                        (reference SyntaxReference) -> declaringModel.Compilation.ContainsSyntaxTree(
+                            reference.SyntaxTree
+                        )
                     )
+                        .Select((reference SyntaxReference) -> reference.GetSyntax())
+                } else {
+                    []SyntaxNode{$scope!!}
                 }
-                for node in $scope!!.DescendantNodes() {
-                    switch node {
-                        case binary is BinaryExpressionSyntax when binary.IsKind(SyntaxKind.EqualsExpression) ||
-                            binary
-                            .IsKind(SyntaxKind.NotEqualsExpression) {
-                            if (IsNullLiteral(binary.Right) && BindsTo(binary.Left)) ||
-                                (IsNullLiteral(binary.Left) && BindsTo(binary.Right)) {
+                for root in scopes.SelectMany(
+                    (source SyntaxNode) ->
+                    TranslationContext.GetEffectiveScopeRoots(source, declaringModel.Compilation)
+                ) {
+                    let model = TranslationContext.GetEffectiveSemanticModel(
+                        declaringModel.Compilation,
+                        root.SyntaxTree
+                    )
+                    let BindsTo = func (expression ExpressionSyntax) bool {
+                        return model.GetSymbolInfo(Unparenthesize(expression)!!)
+                            .Symbol is {} bound &&
+                            (
+                            SymbolEqualityComparer.Default.Equals(bound, symbol) ||
+                                (counterpart != nil && SymbolEqualityComparer.Default.Equals(bound, counterpart))
+                        )
+                    }
+                    for node in TranslationContext.GetEffectiveNodes(root, declaringModel.Compilation) {
+                        switch node {
+                            case binary is BinaryExpressionSyntax when binary.IsKind(SyntaxKind.EqualsExpression) ||
+                                binary
+                                .IsKind(SyntaxKind.NotEqualsExpression) {
+                                if (IsNullLiteral(binary.Right) && BindsTo(binary.Left)) ||
+                                    (IsNullLiteral(binary.Left) && BindsTo(binary.Right)) {
+                                    return true
+                                }
+                            }
+                            case assignment is AssignmentExpressionSyntax when assignment.IsKind(
+                                SyntaxKind.SimpleAssignmentExpression
+                            ) &&
+                                BindsTo(assignment.Left) &&
+                                IsNullOrSuppressedNull(assignment.Right) {
                                 return true
                             }
-                        }
-                        case assignment is AssignmentExpressionSyntax when assignment.IsKind(
-                            SyntaxKind.SimpleAssignmentExpression
-                        ) &&
-                            BindsTo(assignment.Left) &&
-                            IsNullOrSuppressedNull(assignment.Right) {
-                            return true
-                        }
-                        case coalesceAssignment is AssignmentExpressionSyntax when coalesceAssignment.IsKind(
-                            SyntaxKind.CoalesceAssignmentExpression
-                        ) &&
-                            BindsTo(coalesceAssignment.Left) {
-                            return true
-                        }
-                        case coalesce is BinaryExpressionSyntax when coalesce.IsKind(SyntaxKind.CoalesceExpression) &&
-                            symbol is ILocalSymbol &&
-                            BindsTo(coalesce.Left) {
-                            return true
-                        }
-                        case isPattern is IsPatternExpressionSyntax when BindsTo(isPattern.Expression) &&
-                            IsNullConstantPattern(isPattern.Pattern) {
-                            return true
-                        }
-                        case declarator is VariableDeclaratorSyntax when declarator.Initializer != nil &&
-                            IsNullOrSuppressedNull(declarator.Initializer!!.Value) &&
-                            SymbolEqualityComparer
-                            .Default
-                            .Equals(model.GetDeclaredSymbol(declarator), symbol) {
-                            return true
+                            case coalesceAssignment is AssignmentExpressionSyntax when coalesceAssignment.IsKind(
+                                SyntaxKind.CoalesceAssignmentExpression
+                            ) &&
+                                BindsTo(coalesceAssignment.Left) {
+                                return true
+                            }
+                            case coalesce is BinaryExpressionSyntax when coalesce.IsKind(
+                                SyntaxKind.CoalesceExpression
+                            ) &&
+                                symbol is ILocalSymbol &&
+                                BindsTo(coalesce.Left) {
+                                return true
+                            }
+                            case isPattern is IsPatternExpressionSyntax when BindsTo(isPattern.Expression) &&
+                                IsNullConstantPattern(isPattern.Pattern) {
+                                return true
+                            }
+                            case declarator is VariableDeclaratorSyntax when declarator.Initializer != nil &&
+                                IsNullOrSuppressedNull(declarator.Initializer!!.Value) &&
+                                SymbolEqualityComparer
+                                .Default
+                                .Equals(model.GetDeclaredSymbol(declarator), symbol) {
+                                return true
+                            }
                         }
                     }
                 }

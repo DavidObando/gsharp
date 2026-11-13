@@ -57,6 +57,136 @@ internal class BindingServices {
     /// Gets or sets the incremental body-binding options (body cache and dirty syntax trees)
     /// for a (cref:Binder.BindProgram) pass (ADR-0212 slice S8, issue #5312).
     var BodyBindingOptions BodyBindingOptions
+
+    /// Issue #5326: cached direct call-effect summaries by original function symbol.
+    var CachedCallEffectSummaries Dictionary[FunctionSymbol, CallEffectSummary]?
+
+    /// Issue #5326: cached virtual/interface-inclusive call-effect summaries by original function symbol.
+    var CachedCallEffectSummariesWithOverrides Dictionary[FunctionSymbol, CallEffectSummary]?
+
+    /// Issue #5326: per-compilation index of declared methods by name in declaration order.
+    var CachedMethodsByName Dictionary[string, ImmutableArray[FunctionSymbol]]?
+
+    var HasCachedMethodsByName bool
+    var CachedMethodsByNameStructs ImmutableArray[StructSymbol]
+    var CachedMethodsByNameInterfaces ImmutableArray[InterfaceSymbol]
+    var CachedImportedComparerTargets List[(Target Type?, NonGeneric bool)]?
+    let CachedComparerStorage Dictionary[Type, int32] = Dictionary[Type, int32]()
+    let CachedTrustedFrameworkAssemblies Dictionary[Assembly, bool] = Dictionary[Assembly, bool]()
+    let CachedIntrinsicFrameworkLayouts Dictionary[Type, bool] = Dictionary[Type, bool]()
+    let CachedBoundCallEffectSummaries Dictionary[BoundExpression, CallEffectSummary] = Dictionary[
+        BoundExpression,
+        CallEffectSummary
+    ](ReferenceEqualityComparer.Instance)
+    var CachedComparerCreateCalls List[(ElemType TypeSymbol?, Call CallExpressionSyntax)]?
+    var CachedDeferredLinqCalls List[CallExpressionSyntax]?
+    var CachedDeferredLinqOperatorNames HashSet[string]?
+    var CachedDeferredLinqCallbackPositions Dictionary[string, HashSet[int32]]?
+    var CachedYieldFunctionDecls List[FunctionDeclarationSyntax]?
+}
+
+/// Issue #5326: summarizes the storage locations (fields/globals and elements) that a callee may transitively write.
+internal sealed class CallEffectSummary {
+    init() {
+        WrittenFieldTypes = List[TypeSymbol]()
+        WrittenElementTypes = List[TypeSymbol]()
+        WritesAnyStorage = false
+        InvokesCallbackParameter = false
+    }
+
+    prop WrittenFieldTypes List[TypeSymbol] {
+        get;
+    }
+
+    prop WrittenElementTypes List[TypeSymbol] {
+        get;
+    }
+
+    prop WritesAnyStorage bool {
+        get;
+        set;
+    }
+
+    prop InvokesCallbackParameter bool {
+        get;
+        set;
+    }
+
+    prop IsEmpty bool -> !WritesAnyStorage &&
+        !InvokesCallbackParameter &&
+        WrittenFieldTypes.Count == 0 &&
+        WrittenElementTypes.Count == 0
+
+    func AddFieldType(type TypeSymbol?) {
+        if WritesAnyStorage || type == nil {
+            return
+        }
+        var stripped = type
+        while true {
+            if stripped is NullableTypeSymbol nullable {
+                stripped = nullable.UnderlyingType
+            } else if stripped is PlatformTypeSymbol platform {
+                stripped = platform.UnderlyingType
+            } else {
+                break
+            }
+        }
+        if stripped == TypeSymbol.Error || stripped == TypeSymbol.Void {
+            WritesAnyStorage = true
+            return
+        }
+        for existing in WrittenFieldTypes {
+            if object.Equals(existing, stripped) {
+                return
+            }
+        }
+        WrittenFieldTypes.Add(stripped)
+    }
+
+    func AddElementType(type TypeSymbol?) {
+        if WritesAnyStorage || type == nil {
+            return
+        }
+        var stripped = type
+        while true {
+            if stripped is NullableTypeSymbol nullable {
+                stripped = nullable.UnderlyingType
+            } else if stripped is PlatformTypeSymbol platform {
+                stripped = platform.UnderlyingType
+            } else {
+                break
+            }
+        }
+        if stripped == TypeSymbol.Error || stripped == TypeSymbol.Void {
+            WritesAnyStorage = true
+            return
+        }
+        for existing in WrittenElementTypes {
+            if object.Equals(existing, stripped) {
+                return
+            }
+        }
+        WrittenElementTypes.Add(stripped)
+    }
+
+    func MergeFrom(other CallEffectSummary?) {
+        if other == nil || WritesAnyStorage {
+            return
+        }
+        if other.WritesAnyStorage {
+            WritesAnyStorage = true
+            return
+        }
+        if other.InvokesCallbackParameter {
+            InvokesCallbackParameter = true
+        }
+        for fieldType in other.WrittenFieldTypes {
+            AddFieldType(fieldType)
+        }
+        for elementType in other.WrittenElementTypes {
+            AddElementType(elementType)
+        }
+    }
 }
 
 /// Options for incremental member-body binding in (cref:Binder.BindProgram) (ADR-0212 slice S8, issue #5312).

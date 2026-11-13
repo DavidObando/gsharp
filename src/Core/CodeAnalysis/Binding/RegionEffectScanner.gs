@@ -951,6 +951,43 @@ internal sealed class RegionEffectScanner {
                 RecordConstruction(node)
                 VisitChildren(node)
             }
+            case SyntaxKind.InterpolatedStringExpression {
+                let interp = cast[InterpolatedStringExpressionSyntax](node)
+                if Active() {
+                    current.ContainsCall = true
+                    for segment in interp.Segments {
+                        if segment.IsExpression && segment.Expression is {} holeExpr {
+                            if IsPureStringForm(holeExpr) || IsPureBooleanForm(holeExpr) || IsNilLiteral(holeExpr) {
+                                continue
+                            }
+                            var holePath = BuildPath(holeExpr)
+                            if holePath == nil && (IsStringForm(holeExpr) || IsOperatorForm(holeExpr)) {
+                                holePath = RegionReceiverPath(
+                                    nil,
+                                    false,
+                                    nil,
+                                    "<operator>",
+                                    ImmutableArray[RegionReceiverStep].Empty
+                                )
+                            }
+                            current.Calls.Add(
+                                RegionCall(
+                                    RegionCallKind.MemberInvocation,
+                                    "ToString",
+                                    List[string](),
+                                    List[string](),
+                                    false,
+                                    node.Span.Start,
+                                    nil,
+                                    holePath,
+                                    nil
+                                )
+                            )
+                        }
+                    }
+                }
+                VisitChildren(node)
+            }
             default {
                 // Every other listed kind has the class Structural, Call or Declaration. A Call kind
                 // without a case above runs code the walker cannot see (rule W4).
@@ -1347,7 +1384,14 @@ internal sealed class RegionEffectScanner {
                 SetOrigin(name, nil)
                 current.TypeTests.RemoveAt(i)
             } else if !test.DeclaredInRegion && CandidateUnlessDeclared(test) == nil {
-                current.TypeTests[i] = RegionTypeTest(test.Name, test.TypeName, test.Arity, test.MayBeConstant, true)
+                current.TypeTests[i] = RegionTypeTest(
+                    test.Name,
+                    test.TypeName,
+                    test.Arity,
+                    test.MayBeConstant,
+                    true,
+                    test.TypeClause
+                )
             }
         }
         // A nested named call whose callee the enclosing region declares calls a function value. A nested member
@@ -3125,14 +3169,14 @@ internal sealed class RegionEffectScanner {
         declaredInRegion bool = false
     ) RegionTypeTest {
         if type.Identifier == nil || type.IsArray || type.IsTuple || type.IsFunction || type.IsFunctionPointer {
-            return RegionTypeTest(name, nil, 0, mayBeConstant, declaredInRegion)
+            return RegionTypeTest(name, nil, 0, mayBeConstant, declaredInRegion, type)
         }
         let arity = if type.TypeArguments is {} arguments {
             arguments.Count
         } else {
             0
         }
-        return RegionTypeTest(name, type.DottedName, arity, mayBeConstant, declaredInRegion)
+        return RegionTypeTest(name, type.DottedName, arity, mayBeConstant, declaredInRegion, type)
     }
 
     private func NameOf(expression ExpressionSyntax?) string? {

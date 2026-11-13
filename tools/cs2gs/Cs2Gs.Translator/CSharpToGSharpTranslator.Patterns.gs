@@ -3778,7 +3778,12 @@ partial class CSharpToGSharpTranslator {
             var declaringPosition = pattern!!.SpanStart
             let declaringSyntax SyntaxReference? = deconstruct.DeclaringSyntaxReferences.FirstOrDefault()
             if declaringSyntax != nil {
-                declaringModel = this.context.SemanticModel.Compilation.GetSemanticModel(declaringSyntax.SyntaxTree)
+                let owner = this.context.SourceCompilation(deconstruct)
+                if owner == nil {
+                    failureReason = "the Deconstruct declaration's compilation owner is unknown"
+                    return nil
+                }
+                declaringModel = TranslationContext.GetEffectiveSemanticModel(owner, declaringSyntax.SyntaxTree)
                 declaringPosition = declaringSyntax.Span.Start
             }
             var match ISymbol? = nil

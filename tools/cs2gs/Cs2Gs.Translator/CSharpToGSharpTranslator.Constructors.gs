@@ -580,11 +580,21 @@ partial class CSharpToGSharpTranslator {
                 }
                 // Issue #1910: a merged-in static constructor from another
                 // partial part/file lives in a different `SyntaxTree`.
-                using let modelScope = this.context.UseSemanticModelFor(ctor.SyntaxTree)
-                if !this.IsFoldableStaticConstructor(ctor, typeSymbol) {
+                using let modelScope = if typeSymbol == nil {
+                    this.context.UseSemanticModelFor(ctor.SyntaxTree)
+                } else {
+                    this.context.UseSemanticModelForSymbol(ctor.SyntaxTree, typeSymbol)
+                }
+                if modelScope == nil {
                     continue
                 }
-                for statement in ctor.Body!!.Statements {
+                let effective = TranslationContext.GetEffectiveDeclaration(ctor, this.context.Compilation) as
+                ConstructorDeclarationSyntax ?? ctor
+                using let bodyModel = this.context.UseSemanticModelFor(effective.SyntaxTree, this.context.Compilation)
+                if !this.IsFoldableStaticConstructor(effective, typeSymbol) {
+                    continue
+                }
+                for statement in effective.Body!!.Statements {
                     if statement is Microsoft
                         .CodeAnalysis
                         .CSharp
@@ -616,9 +626,12 @@ partial class CSharpToGSharpTranslator {
         /// C#'s field-initializers-then-cctor evaluation order. Anything else is
         /// reported as unsupported instead of silently folded.
         private func IsFoldableStaticConstructor(
-            node Microsoft.CodeAnalysis.CSharp.Syntax.ConstructorDeclarationSyntax,
+            source Microsoft.CodeAnalysis.CSharp.Syntax.ConstructorDeclarationSyntax,
             typeSymbol INamedTypeSymbol?
         ) bool {
+            let node = TranslationContext.GetEffectiveDeclaration(source, this.context.Compilation) as
+            ConstructorDeclarationSyntax ?? source
+            using let bodyModel = this.context.UseSemanticModelFor(node.SyntaxTree, this.context.Compilation)
             if node.Body == nil {
                 return node.ExpressionBody == nil
             }
@@ -1112,6 +1125,14 @@ partial class CSharpToGSharpTranslator {
             iteratorBodySource MethodDeclarationSyntax? = nil,
             preserveEnvelope bool = false
         ) GTypeReference? {
+            using let ownerScope = if symbol != nil && !symbol.DeclaringSyntaxReferences.IsDefaultOrEmpty {
+                this.context.UseSemanticModelForSymbol(node.SyntaxTree, symbol)
+            } else {
+                default(IDisposable?)
+            }
+            if symbol != nil && !symbol.DeclaringSyntaxReferences.IsDefaultOrEmpty && ownerScope == nil {
+                return this.typeMapper.Map(symbol.ReturnType, this.context, node.ReturnType.GetLocation())
+            }
             var iteratorBodySource = iteratorBodySource
             // ADR-0192: a partial method's declaring part spells its return
             // type at the definition (`node`) but takes the iterator fact from
@@ -1140,7 +1161,7 @@ partial class CSharpToGSharpTranslator {
                 // `func GetEnumerator() IEnumerator` (issue #985). A G# generator may
                 // return `IEnumerator[T]`, so the `yield` body is unaffected — only
                 // `IEnumerable[T]` returns are rewritten to `sequence[T]`.
-                if IsIteratorBody(iteratorBodySource) &&
+                if IsIteratorBody(iteratorBodySource, this.context.Compilation) &&
                     returnType is INamedTypeSymbol{IsGenericType: true} enumerable &&
                     enumerable.Name == "IEnumerable" {
                     if preserveEnvelope {
@@ -1771,7 +1792,10 @@ partial class CSharpToGSharpTranslator {
                     )
                 }
             }
-            using let fallbackScope = this.context.UseSemanticModelFor(current.SyntaxTree)
+            using let fallbackScope = this.context.UseSemanticModelFor(
+                current.SyntaxTree,
+                cast[CSharpCompilation](attributeModel.Compilation)
+            )
             return this.TranslateExpression(current)
         }
 
@@ -2094,11 +2118,16 @@ partial class CSharpToGSharpTranslator {
         /// @param description A human-readable label for the body.
         /// @returns The translated block.
         private func TranslateBody(bodyOwner Microsoft.CodeAnalysis.SyntaxNode, description string) BlockStatement {
+            let effectiveBodyOwner = TranslationContext.GetEffectiveDeclaration(bodyOwner, this.context.Compilation)
+            using let bodyModel = this.context.UseSemanticModelFor(
+                effectiveBodyOwner.SyntaxTree,
+                this.context.Compilation
+            )
             let previousScope Microsoft.CodeAnalysis.SyntaxNode? = this.state.CurrentBodyScope
-            this.state.CurrentBodyScope = bodyOwner
+            this.state.CurrentBodyScope = effectiveBodyOwner
             try {
-                var body = this.TranslateBodyCore(bodyOwner, description)
-                body = this.WithParameterShadows(bodyOwner, body)
+                var body = this.TranslateBodyCore(effectiveBodyOwner, description)
+                body = this.WithParameterShadows(effectiveBodyOwner, body)
                 return body
             } finally {
                 this.state.CurrentBodyScope = previousScope
@@ -2191,15 +2220,15 @@ partial class CSharpToGSharpTranslator {
 
         private func AllocateLiftedLocalFunctionName(localFunction IMethodSymbol, localName string?) string? {
             let allocator = LiftedLocalFunctionNameAllocator.For(this.context.Compilation)
-            if allocator.TryGetAllocated(localFunction, out var existing) {
+            let aggregate INamedTypeSymbol? = this.state.CurrentEmittedAggregate ?? localFunction.ContainingType
+            if allocator.TryGetAllocated(localFunction, aggregate, out var existing) {
                 if !this.isPreallocatingLiftedHelpers {
                     this.typeMapper.ReserveSiblingMemberName(existing)
                 }
                 return existing
             }
-            let aggregate INamedTypeSymbol? = this.state.CurrentEmittedAggregate ?? localFunction.ContainingType
             this.EnsurePartialAggregateLiftedLocalFunctionsAllocated(aggregate)
-            if allocator.TryGetAllocated(localFunction, out existing) {
+            if allocator.TryGetAllocated(localFunction, aggregate, out existing) {
                 if !this.isPreallocatingLiftedHelpers {
                     this.typeMapper.ReserveSiblingMemberName(existing)
                 }
@@ -2238,7 +2267,10 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func GetOrBuildSingleTreeScopeMapper(tree Microsoft.CodeAnalysis.SyntaxTree) CSharpTypeMapper {
-            let cache = ScopeReservationMapperCaches.GetOrCreateValue(this.context.Compilation)
+            let cache = ScopeReservationMapperCaches.GetValue(
+                this.context.Compilation,
+                (_ Compilation) -> ScopeReservationMapperCache()
+            )
             let key = (tree, this.typeMapper.AnalyzerApiMode)
             lock cache {
                 if cache.SingleTree.TryGetValue(key, out var cached) {
@@ -2294,7 +2326,10 @@ partial class CSharpToGSharpTranslator {
                 "\u0000",
                 trees.Select((tree Microsoft.CodeAnalysis.SyntaxTree) -> tree.FilePath)
             )
-            let cache = ScopeReservationMapperCaches.GetOrCreateValue(this.context.Compilation)
+            let cache = ScopeReservationMapperCaches.GetValue(
+                this.context.Compilation,
+                (_ Compilation) -> ScopeReservationMapperCache()
+            )
             let setKey = (treeSetKey, this.typeMapper.AnalyzerApiMode)
             var built CSharpTypeMapper? = nil
             lock cache {
@@ -2321,9 +2356,8 @@ partial class CSharpToGSharpTranslator {
             return ownedMethods
                 .Where(
                 (m MethodDeclarationSyntax) -> this.CanLowerOwnedExtension(m) && !this.IsPreservedOwnedExtension(
-                    TranslationContext.GetSemanticModel(this.context.Compilation, m.SyntaxTree).GetDeclaredSymbol(
-                        m
-                    ) as IMethodSymbol
+                    TranslationContext.GetEffectiveSemanticModel(this.context.Compilation, m.SyntaxTree)
+                        .GetDeclaredSymbol(m) as IMethodSymbol
                 )
             )
                 .OrderBy((m MethodDeclarationSyntax) -> m.SyntaxTree.FilePath, StringComparer.Ordinal)
@@ -2385,7 +2419,10 @@ partial class CSharpToGSharpTranslator {
                     nil
                 )
                 for part in parts {
-                    using let loweredModelScope = this.context.UseSemanticModelFor(part.SyntaxTree)
+                    using let loweredModelScope = this.context.UseSemanticModelForSymbol(part.SyntaxTree, partialSymbol)
+                    if loweredModelScope == nil {
+                        continue
+                    }
                     for loweredCandidate in part
                         .Members
                         .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.PropertyDeclarationSyntax]() {
@@ -2401,12 +2438,20 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
-        private func ContainerHasLocalFunction(container Microsoft.CodeAnalysis.SyntaxNode) bool -> container
-            .DescendantNodes(
-            (child Microsoft.CodeAnalysis.SyntaxNode) -> child == container || child is not TypeDeclarationSyntax
+        private func ContainerHasLocalFunction(container Microsoft.CodeAnalysis.SyntaxNode) bool -> TranslationContext
+            .GetEffectiveScopeRoots(container, this.context.Compilation, this.IsHelperTraversalChild)
+            .SelectMany(
+            (root Microsoft.CodeAnalysis.SyntaxNode) -> TranslationContext.GetEffectiveNodes(
+                root,
+                this.context.Compilation,
+                this.IsHelperTraversalChild
+            )
         )
             .OfType[LocalFunctionStatementSyntax]()
             .Any()
+
+        private func IsHelperTraversalChild(child Microsoft.CodeAnalysis.SyntaxNode) bool ->
+        child is not TypeDeclarationSyntax
 
         private func CollectPrimaryConstructorParameterNames(
             symbol INamedTypeSymbol?,
@@ -2419,7 +2464,14 @@ partial class CSharpToGSharpTranslator {
             )
             let paramList = GetPrimaryConstructorParameterList(symbol) ?? node?.ParameterList
             if paramList != nil {
-                using let primaryModelScope = this.context.UseSemanticModelFor(paramList.SyntaxTree)
+                using let primaryModelScope = if symbol == nil {
+                    this.context.UseSemanticModelFor(paramList.SyntaxTree)
+                } else {
+                    this.context.UseSemanticModelForSymbol(paramList.SyntaxTree, symbol)
+                }
+                if primaryModelScope == nil {
+                    return names
+                }
                 for parameter in paramList.Parameters {
                     if this.context.GetDeclaredSymbol(parameter) is IParameterSymbol paramSymbol {
                         names.Add(this.EmittedName(paramSymbol, parameter.Identifier.ValueText)!!)
@@ -2487,7 +2539,10 @@ partial class CSharpToGSharpTranslator {
             this.state.UnsupportedSuspendingRefCaptureLocalFunctions.Clear()
             try {
                 for part in parts {
-                    using let modelScope = this.context.UseSemanticModelFor(part.SyntaxTree)
+                    using let modelScope = this.context.UseSemanticModelForSymbol(part.SyntaxTree, aggregate)
+                    if modelScope == nil {
+                        continue
+                    }
                     this.PreallocateLiftedLocalFunctionsInContainer(part)
                 }
                 for ownedMethod in this.GetAbsorbedOwnedExtensions(aggregate.OriginalDefinition) {
@@ -2519,28 +2574,32 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func PreallocateLiftedLocalFunctionsInContainer(container Microsoft.CodeAnalysis.SyntaxNode) {
-            for node in container.DescendantNodes(
-                (child Microsoft.CodeAnalysis.SyntaxNode) -> child == container || child is not TypeDeclarationSyntax
-            ) {
-                switch node {
-                    case switchNode is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchStatementSyntax {
-                        if switchNode.Sections.Any(
-                            (section SwitchSectionSyntax) -> section
-                                .Statements
-                                .OfType[LocalFunctionStatementSyntax]()
-                                .Any()
-                        ) {
-                            let _ = this.RegisterSwitchLocalFunctionLifts(switchNode, preallocateOnly: true)
+            let owner = this.context.Compilation
+            for root in TranslationContext.GetEffectiveScopeRoots(container, owner, this.IsHelperTraversalChild) {
+                using let modelScope = this.context.UseSemanticModelFor(root.SyntaxTree, owner)
+                for node in TranslationContext.GetEffectiveNodes(root, owner, this.IsHelperTraversalChild).Prepend(
+                    root
+                ) {
+                    switch node {
+                        case switchNode is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchStatementSyntax {
+                            if switchNode.Sections.Any(
+                                (section SwitchSectionSyntax) -> section
+                                    .Statements
+                                    .OfType[LocalFunctionStatementSyntax]()
+                                    .Any()
+                            ) {
+                                let _ = this.RegisterSwitchLocalFunctionLifts(switchNode, preallocateOnly: true)
+                            }
                         }
-                    }
-                    case blockNode is BlockSyntax {
-                        if blockNode.Statements.OfType[LocalFunctionStatementSyntax]().Any() {
-                            let ordered = this.HoistCallBeforeDeclLocalFunctions(blockNode)
-                            this.RegisterCapturingRecursiveLocalFunctions(ordered, preallocateOnly: true)
-                            this.RegisterRecursiveLocalFunctionLifts(ordered)
+                        case blockNode is BlockSyntax {
+                            if blockNode.Statements.OfType[LocalFunctionStatementSyntax]().Any() {
+                                let ordered = this.HoistCallBeforeDeclLocalFunctions(blockNode)
+                                this.RegisterCapturingRecursiveLocalFunctions(ordered, preallocateOnly: true)
+                                this.RegisterRecursiveLocalFunctionLifts(ordered)
+                            }
                         }
+                        default { }
                     }
-                    default { }
                 }
             }
         }
@@ -2616,11 +2675,15 @@ partial class CSharpToGSharpTranslator {
             if !LiftedLocalFunctionNameAllocator.For(this.context.Compilation).TryClaimLocalName(owner, name) {
                 return false
             }
-            let body Microsoft.CodeAnalysis.SyntaxNode? = this.state.CurrentBodyScope ?? site?.SyntaxTree.GetRoot()
-            if body != nil && this.state.SynthesizedLocalOccupiedNamesByBody.TryGetValue(body, out var occupied) {
-                occupied.Add(name!!)
-            }
+            this.RecordSynthesizedLocalOccupancy(name!!, site)
             return true
+        }
+
+        private func RecordSynthesizedLocalOccupancy(name string, site Microsoft.CodeAnalysis.SyntaxNode?) {
+            let body = this.state.CurrentBodyScope ?? site?.SyntaxTree.GetRoot()
+            if body != nil {
+                this.CollectOccupiedSynthesizedLocalNames(body).Add(name)
+            }
         }
 
         private func SourceIdentifierClaimsSynthesizedLocalName(
@@ -2663,7 +2726,11 @@ partial class CSharpToGSharpTranslator {
                 .SemanticModel
                 .GetEnclosingSymbol(site?.SpanStart ?? this.state.CurrentBodyScope?.SpanStart ?? 0)
                 ?.ContainingType
-            return LiftedLocalFunctionNameAllocator.For(this.context.Compilation).ReserveLocalName(owner, name)
+            let reserved = LiftedLocalFunctionNameAllocator.For(this.context.Compilation).ReserveLocalName(owner, name)
+            if reserved {
+                this.RecordSynthesizedLocalOccupancy(name, site)
+            }
+            return reserved
         }
 
         private func AllocateSynthesizedLocalName(stem string, site Microsoft.CodeAnalysis.SyntaxNode) string {
@@ -2695,7 +2762,24 @@ partial class CSharpToGSharpTranslator {
         private func AllocateScopedSynthesizedLocalName(
             stem string,
             site Microsoft.CodeAnalysis.SyntaxNode,
-            extraCollision((string) -> bool)? = nil
+            extraCollision((string) -> bool)? = nil,
+            allocationPath string = ""
+        ) string {
+            let name = LiftedLocalFunctionNameAllocator.For(this.context.Compilation).GetOrAllocateScopedLocalName(
+                site,
+                0,
+                stem,
+                allocationPath,
+                () -> this.AllocateScopedSynthesizedLocalNameCore(stem, site, extraCollision)
+            )
+            this.RecordSynthesizedLocalOccupancy(name, site)
+            return name
+        }
+
+        private func AllocateScopedSynthesizedLocalNameCore(
+            stem string,
+            site Microsoft.CodeAnalysis.SyntaxNode,
+            extraCollision((string) -> bool)?
         ) string {
             let owner INamedTypeSymbol? = this
                 .state
@@ -2868,7 +2952,10 @@ partial class CSharpToGSharpTranslator {
                 $scope!!.DeclaringSyntaxReferences.AsEnumerable()
             }
             for reference in references {
-                using let scopeModel = this.context.UseSemanticModelFor(reference.SyntaxTree)
+                using let scopeModel = this.context.UseSemanticModelForSymbol(reference.SyntaxTree, $scope)
+                if scopeModel == nil {
+                    continue
+                }
                 symbols.AddRange(
                     reference
                         .GetSyntax()
@@ -3472,7 +3559,13 @@ partial class CSharpToGSharpTranslator {
                         enclosingTypeParameters.UnionWith(type.TypeParameters)
                     }
                 }
-                using let modelScope = this.context.UseSemanticModelFor(candidate.Syntax.SyntaxTree)
+                using let modelScope = this.context.UseSemanticModelForSymbol(
+                    candidate.Syntax.SyntaxTree,
+                    candidate.Symbol
+                )
+                if modelScope == nil {
+                    return true
+                }
                 if this
                     .context
                     .SemanticModel
@@ -3573,7 +3666,10 @@ partial class CSharpToGSharpTranslator {
             )
             let edges = Dictionary[IMethodSymbol, HashSet[IMethodSymbol]](SymbolEqualityComparer.Default)
             for pair in localFunctions {
-                using let modelScope = this.context.UseSemanticModelFor(pair.Syntax.SyntaxTree)
+                using let modelScope = this.context.UseSemanticModelForSymbol(pair.Syntax.SyntaxTree, pair.Symbol)
+                if modelScope == nil {
+                    return
+                }
                 let dependencies = HashSet[IMethodSymbol](SymbolEqualityComparer.Default)
                 for node in pair.Syntax.DescendantNodes() {
                     if this.context.GetSymbolInfo(node).Symbol is IMethodSymbol dependency && symbols.Contains(
@@ -3735,7 +3831,13 @@ partial class CSharpToGSharpTranslator {
                 )
             }
             let CapturesOuterValue = func (candidate(Syntax LocalFunctionStatementSyntax, Symbol IMethodSymbol)) bool {
-                using let modelScope = this.context.UseSemanticModelFor(candidate.Syntax.SyntaxTree)
+                using let modelScope = this.context.UseSemanticModelForSymbol(
+                    candidate.Syntax.SyntaxTree,
+                    candidate.Symbol
+                )
+                if modelScope == nil {
+                    return true
+                }
                 if !candidate
                     .Symbol
                     .IsStatic &&
@@ -4093,7 +4195,10 @@ partial class CSharpToGSharpTranslator {
             )
             let edges = Dictionary[IMethodSymbol, HashSet[IMethodSymbol]](SymbolEqualityComparer.Default)
             for (syntax, symbol) in functions {
-                using let modelScope = this.context.UseSemanticModelFor(syntax.SyntaxTree)
+                using let modelScope = this.context.UseSemanticModelForSymbol(syntax.SyntaxTree, symbol)
+                if modelScope == nil {
+                    continue
+                }
                 let dependencies = HashSet[IMethodSymbol](SymbolEqualityComparer.Default)
                 for node in syntax.DescendantNodes() {
                     if this
@@ -4182,7 +4287,10 @@ partial class CSharpToGSharpTranslator {
             )
             let callers = Dictionary[IMethodSymbol, HashSet[IMethodSymbol]](SymbolEqualityComparer.Default)
             for (syntax, symbol) in allFunctionPairs {
-                using let modelScope = this.context.UseSemanticModelFor(syntax.SyntaxTree)
+                using let modelScope = this.context.UseSemanticModelForSymbol(syntax.SyntaxTree, symbol)
+                if modelScope == nil {
+                    continue
+                }
                 for node in syntax.DescendantNodes() {
                     var dependency IMethodSymbol? = this.context.GetSymbolInfo(node).Symbol as IMethodSymbol
                     if dependency != nil && allSymbols.Contains(dependency.OriginalDefinition) &&
@@ -4210,7 +4318,10 @@ partial class CSharpToGSharpTranslator {
                     names.Add(syntax.Identifier.ValueText)
                     return
                 }
-                using let modelScope = this.context.UseSemanticModelFor(syntax.SyntaxTree)
+                using let modelScope = this.context.UseSemanticModelForSymbol(syntax.SyntaxTree, symbol)
+                if modelScope == nil {
+                    return
+                }
                 let parameterTypes = List[GTypeReference]()
                 for parameter in syntax.ParameterList.Parameters {
                     parameterTypes.Add(this.MapLambdaParameter(parameter).Type)
@@ -5411,7 +5522,8 @@ partial class CSharpToGSharpTranslator {
                     .LiteralExpressionSyntax
             }
 
-            private func IsIteratorBody(node MethodDeclarationSyntax?) bool {
+            private func IsIteratorBody(source MethodDeclarationSyntax?, owner Compilation?) bool {
+                let node = TranslationContext.GetEffectiveDeclaration(source!!, owner) as MethodDeclarationSyntax
                 let body Microsoft
                     .CodeAnalysis
                     .SyntaxNode? = cast[Microsoft.CodeAnalysis.SyntaxNode](node!!.Body) ??
@@ -5544,10 +5656,9 @@ partial class CSharpToGSharpTranslator {
 
             // Identifier spelling -> matching tokens, built once per compilation
             // so lifted-helper candidates never rescan syntax trees.
-            private let ScopeReservationMapperCaches ConditionalWeakTable[
-                Compilation,
+            private let ScopeReservationMapperCaches ObliviousNullabilityAnalyzer.ScopedCompilationCache[
                 ScopeReservationMapperCache
-            ] = ConditionalWeakTable[Compilation, ScopeReservationMapperCache]()
+            ] = ObliviousNullabilityAnalyzer.ScopedCompilationCache[ScopeReservationMapperCache]()
 
             private func GetIdentifierTokens(compilation Compilation, name string) IReadOnlyList[
                 Microsoft.CodeAnalysis.SyntaxToken
@@ -5556,8 +5667,10 @@ partial class CSharpToGSharpTranslator {
                     compilation,
                     (target Compilation) -> {
                         let built = Dictionary[string, List[Microsoft.CodeAnalysis.SyntaxToken]](StringComparer.Ordinal)
-                        for tree in target.SyntaxTrees {
-                            for token in tree.GetRoot().DescendantTokens() {
+                        for root in TranslationContext.GetEffectiveSyntaxRoots(target) {
+                            for token in TranslationContext.GetEffectiveNodes(root, target).SelectMany(
+                                (node Microsoft.CodeAnalysis.SyntaxNode) -> node.ChildTokens()
+                            ) {
                                 if token.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.IdentifierToken) {
                                     if !built.TryGetValue(token.ValueText, out var tokens) {
                                         tokens = List[Microsoft.CodeAnalysis.SyntaxToken]()

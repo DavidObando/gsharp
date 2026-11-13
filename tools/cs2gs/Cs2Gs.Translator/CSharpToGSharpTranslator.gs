@@ -152,10 +152,8 @@ partial class CSharpToGSharpTranslator {
     // documents (#2292). Synthetic names themselves are derived from the full
     // ordered shape (#2598), so distinct shapes cannot reuse a simple name
     // across imported packages or independently translated projects.
-    private let anonymousTypeRegistriesByPackage Dictionary[string, AnonymousTypeRegistry] = Dictionary[
-        string,
-        AnonymousTypeRegistry
-    ](StringComparer.Ordinal)
+    private let anonymousTypeRegistriesByPackage Dictionary[object, Dictionary[string, AnonymousTypeRegistry]] =
+    Dictionary[object, Dictionary[string, AnonymousTypeRegistry]](ReferenceEqualityComparer.Instance)
 
     /// Initializes a new instance of the (cref:CSharpToGSharpTranslator) class.
     /// @param preservePartialParts When `true` (default), each C# `partial`
@@ -304,7 +302,9 @@ partial class CSharpToGSharpTranslator {
         context TranslationContext,
         suppressedPartialPairKeys IReadOnlyCollection[string]?
     ) CompilationUnit {
+        using let catalogAnalysis = ObliviousNullabilityAnalyzer.UseCatalogScope(context)
         let root = document.GetRoot()
+        using let documentModel = context.UseSemanticModelFor(root.SyntaxTree, context.Compilation)
         // A document split into several package units is translated once per
         // unit; only the first (or only) unit reports its directives.
         if this.packageFilter == nil || this.includeGlobalNamespace {
@@ -400,9 +400,13 @@ partial class CSharpToGSharpTranslator {
         // global-namespace file in this translator's project, exactly
         // mirroring the non-null-package case).
         let registryKey = package_ ?? string.Empty
-        if !this.anonymousTypeRegistriesByPackage.TryGetValue(registryKey, out var anonymousTypeRegistry) {
+        if !this.anonymousTypeRegistriesByPackage.TryGetValue(context.DeclarationIdentity, out var registries) {
+            registries = Dictionary[string, AnonymousTypeRegistry](StringComparer.Ordinal)
+            this.anonymousTypeRegistriesByPackage.Add(context.DeclarationIdentity, registries)
+        }
+        if !registries.TryGetValue(registryKey, out var anonymousTypeRegistry) {
             anonymousTypeRegistry = AnonymousTypeRegistry()
-            this.anonymousTypeRegistriesByPackage[registryKey] = anonymousTypeRegistry
+            registries[registryKey] = anonymousTypeRegistry
         }
         let typeMapper = CSharpTypeMapper(anonymousTypeRegistry, nameAllocator){AnalyzerApiMode = this.analyzerApiMode}
         typeMapper.SetTopLevelStatementsEntryPoint(
@@ -1278,28 +1282,26 @@ partial class CSharpToGSharpTranslator {
         // already rewritten to the receiver form (see `TranslateInvocation`).
         // Computed once per compilation — `typeof` nodes are rare, so the scan is
         // cheap and only resolves symbols for those nodes.
-        private let TypeOfReferencedTypesCache ConditionalWeakTable[
-            Compilation,
+        private let TypeOfReferencedTypesCache ObliviousNullabilityAnalyzer.ScopedCompilationCache[
             Dictionary[INamedTypeSymbol, HashSet[string]]
-        ] = ConditionalWeakTable[Compilation, Dictionary[INamedTypeSymbol, HashSet[string]]]()
+        ] = ObliviousNullabilityAnalyzer.ScopedCompilationCache[Dictionary[INamedTypeSymbol, HashSet[string]]]()
 
         // Lifted helpers from separate partial-type documents share one CLR type;
         // LiftedLocalFunctionNameAllocator.For keeps their readable names unique
         // across the whole compilation.
-        private let IdentifierTokenIndexes ConditionalWeakTable[
-            Compilation,
+        private let IdentifierTokenIndexes ObliviousNullabilityAnalyzer.ScopedCompilationCache[
             Dictionary[string, List[Microsoft.CodeAnalysis.SyntaxToken]]
-        ] = ConditionalWeakTable[Compilation, Dictionary[string, List[Microsoft.CodeAnalysis.SyntaxToken]]]()
+        ] = ObliviousNullabilityAnalyzer.ScopedCompilationCache[
+            Dictionary[string, List[Microsoft.CodeAnalysis.SyntaxToken]]
+        ]()
 
-        private let AllStaticUsingTargetsCache ConditionalWeakTable[
-            Compilation,
+        private let AllStaticUsingTargetsCache ObliviousNullabilityAnalyzer.ScopedCompilationCache[
             HashSet[INamedTypeSymbol]
-        ] = ConditionalWeakTable[Compilation, HashSet[INamedTypeSymbol]]()
+        ] = ObliviousNullabilityAnalyzer.ScopedCompilationCache[HashSet[INamedTypeSymbol]]()
 
-        private let LiftedDelegateReferencedSymbolsCache ConditionalWeakTable[
-            Compilation,
+        private let LiftedDelegateReferencedSymbolsCache ObliviousNullabilityAnalyzer.ScopedCompilationCache[
             HashSet[ISymbol]
-        ] = ConditionalWeakTable[Compilation, HashSet[ISymbol]]()
+        ] = ObliviousNullabilityAnalyzer.ScopedCompilationCache[HashSet[ISymbol]]()
 
         private func IsReferencedByLiftedDelegate(compilation Compilation, symbol ISymbol?) bool {
             if symbol == nil {
@@ -1320,7 +1322,7 @@ partial class CSharpToGSharpTranslator {
                 if delegates.Count == 0 {
                     continue
                 }
-                let model = TranslationContext.GetSemanticModel(compilation, tree)
+                let model = TranslationContext.GetEffectiveSemanticModel(compilation, tree)
                 for declaration in delegates {
                     if model.GetDeclaredSymbol(declaration) is not INamedTypeSymbol delegateSymbol ||
                         !CSharpTypeMapper.IsLiftedNestedDelegate(delegateSymbol) {
@@ -1615,16 +1617,16 @@ partial class CSharpToGSharpTranslator {
             HashSet[string]
         ] {
             let result = Dictionary[INamedTypeSymbol, HashSet[string]](SymbolEqualityComparer.Default)
-            for tree in compilation.SyntaxTrees {
-                let typeOfExpressions = tree
-                    .GetRoot()
-                    .DescendantNodes()
+            for root in TranslationContext.GetEffectiveSyntaxRoots(compilation) {
+                let tree = root.SyntaxTree
+                let typeOfExpressions = TranslationContext
+                    .GetEffectiveNodes(root, compilation)
                     .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.TypeOfExpressionSyntax]()
                     .ToList()
                 if typeOfExpressions.Count == 0 {
                     continue
                 }
-                let model = TranslationContext.GetSemanticModel(compilation, tree)
+                let model = TranslationContext.GetEffectiveSemanticModel(compilation, tree)
                 for typeOf in typeOfExpressions {
                     if model.GetSymbolInfo(typeOf.Type).Symbol is not INamedTypeSymbol referenced {
                         continue
@@ -2229,7 +2231,7 @@ partial class CSharpToGSharpTranslator {
         ) HashSet[Microsoft.CodeAnalysis.SyntaxTree] {
             let trees = HashSet[Microsoft.CodeAnalysis.SyntaxTree]{root.SyntaxTree}
             let pending = Queue[TypeDeclarationSyntax]()
-            let rootModel = TranslationContext.GetSemanticModel(context.Compilation, root.SyntaxTree)
+            let rootModel = TranslationContext.GetEffectiveSemanticModel(context.Compilation, root.SyntaxTree)
             for declaration in EnumerateTopLevelDeclarations(root).OfType[TypeDeclarationSyntax]() {
                 let type INamedTypeSymbol? = rootModel.GetDeclaredSymbol(declaration)
                 if packageFilter != nil &&
@@ -2249,7 +2251,7 @@ partial class CSharpToGSharpTranslator {
                     continue
                 }
                 trees.Add(declaration.SyntaxTree)
-                let model = TranslationContext.GetSemanticModel(context.Compilation, declaration.SyntaxTree)
+                let model = TranslationContext.GetEffectiveSemanticModel(context.Compilation, declaration.SyntaxTree)
                 let type INamedTypeSymbol? = model.GetDeclaredSymbol(declaration)
                 let isFlattenedEntry = type != nil && SymbolEqualityComparer.Default.Equals(
                     type.OriginalDefinition,
@@ -2363,7 +2365,7 @@ partial class CSharpToGSharpTranslator {
                     if tree.GetRoot() is not Microsoft.CodeAnalysis.CSharp.Syntax.CompilationUnitSyntax root {
                         continue
                     }
-                    let model = TranslationContext.GetSemanticModel(current, tree)
+                    let model = TranslationContext.GetEffectiveSemanticModel(current, tree)
                     let usings = root.Usings.Concat(
                         root
                             .DescendantNodes()

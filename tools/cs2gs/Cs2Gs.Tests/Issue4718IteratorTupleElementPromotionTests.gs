@@ -42,6 +42,7 @@ public class Types {
         let cache = Assert.IsAssignableFrom[object](field.GetValue(nil))
         let tryGet = Assert.IsAssignableFrom[MethodInfo](cache.GetType().GetMethod("TryGetValue"))
         Assert.Equal(false, tryGet.Invoke(cache, []object? {loaded.Compilation, nil}))
+        Assert.Equal(0, ObliviousNullabilityAnalyzer.ComputeCount(loaded.Compilation))
         let mapper = CSharpTypeMapper()
         let plain = Assert.IsAssignableFrom[IFieldSymbol](Assert.Single(owner.GetMembers("Plain"))).Type
         let mapped = if explicitType {
@@ -51,6 +52,7 @@ public class Types {
         }
         Assert.Single(Assert.IsType[NamedTypeReference](mapped).TypeArguments)
         Assert.Equal(false, tryGet.Invoke(cache, []object? {loaded.Compilation, nil}))
+        Assert.Equal(0, ObliviousNullabilityAnalyzer.ComputeCount(loaded.Compilation))
         let tuple = Assert.IsAssignableFrom[IFieldSymbol](Assert.Single(owner.GetMembers("Tuple"))).Type
         let _ = if explicitType {
             mapper.MapExplicitType(tuple, context, Microsoft.CodeAnalysis.Location.None)!!
@@ -58,6 +60,7 @@ public class Types {
             mapper.Map(tuple, context, Microsoft.CodeAnalysis.Location.None)!!
         }
         Assert.Equal(true, tryGet.Invoke(cache, []object? {loaded.Compilation, nil}))
+        Assert.Equal(1, ObliviousNullabilityAnalyzer.ComputeCount(loaded.Compilation))
     }
 
     @Theory

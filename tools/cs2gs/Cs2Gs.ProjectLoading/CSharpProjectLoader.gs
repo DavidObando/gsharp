@@ -4,6 +4,7 @@
 
 package Cs2Gs.Translator.Loading
 
+import Cs2Gs.Translator
 import Microsoft.Build.Locator
 import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
@@ -129,9 +130,7 @@ shared class CSharpProjectLoader {
         let loadDiagnostics = List[Diagnostic]()
         using let workspace = CreateWorkspace(configuration)
         workspace.LoadMetadataForReferencedProjects = true
-        let project = await workspace.OpenProjectAsync(fullPath, cancellationToken: cancellationToken).ConfigureAwait(
-            false
-        )
+        let project = await OpenOwnedFileProjectAsync(workspace, fullPath, cancellationToken).ConfigureAwait(false)
         // OD-T? (issue #1742): MSBuildWorkspace can soft-fail a project load (missing
         // SDK/targets, a project reference it had to skip, an unrecognized TFM, ...)
         // without throwing. Those failures land in workspace.Diagnostics and were
@@ -241,13 +240,11 @@ shared class CSharpProjectLoader {
         // silently empties root.ProjectReferences/TransitiveCSharpProjectReferences
         // below and degrades this call to loading only the primary project — do
         // not set it here.
-        let project = await workspace.OpenProjectAsync(fullPath, cancellationToken: cancellationToken).ConfigureAwait(
-            false
-        )
+        let project = await OpenOwnedFileProjectAsync(workspace, fullPath, cancellationToken).ConfigureAwait(false)
         // Issue #2321 / #4767: classify workspace load diagnostics and partition
         // them by owning project so referenced-producer workspace failures attach
         // to the referenced project rather than the root consumer.
-        let referencedProjects = TransitiveCSharpProjectReferences(project).ToList()
+        var referencedProjects = TransitiveCSharpProjectReferences(project).ToList()
         let referencedPaths = CollectExistingReferencedProjectPaths(fullPath, referencedProjects, configuration)
         let diagnosticsByProject = PartitionWorkspaceLoadDiagnostics(
             workspace,
@@ -273,6 +270,7 @@ shared class CSharpProjectLoader {
                 )
             }
         }
+        referencedProjects = TransitiveCSharpProjectReferences(project).ToList()
         let results = List[LoadedCSharpProject]{
             await BuildLoadedProjectAsync(
                 project,
@@ -515,7 +513,7 @@ shared class CSharpProjectLoader {
         return tpa
             .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
             .Where((path string) -> path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) && File.Exists(path))
-            .Select((path string) -> cast[MetadataReference](MetadataReference.CreateFromFile(path)))
+            .Select((path string) -> cast[MetadataReference](TranslationContext.CreateOwnedMetadataReference(path)))
             .ToImmutableArray()
     }
 
@@ -1766,6 +1764,7 @@ shared class CSharpProjectLoader {
                 "Project '${project.FilePath}' did not produce a C# compilation (language: ${project.Language})."
             )
         }
+
         let projectDirectory string? = Path.GetDirectoryName(project.FilePath)
         let documents = BuildDocuments(
             csharpCompilation,
@@ -1792,6 +1791,67 @@ shared class CSharpProjectLoader {
             project.FilePath,
             isTestProject,
             referencedWorkspaceLoadErrors: referencedWorkspaceLoadErrors
+        )
+    }
+
+    internal func SnapshotProjectGraph(
+        root Project,
+        images Dictionary[string, PortableExecutableReference],
+        cancellationToken CancellationToken = default(CancellationToken),
+        fileInputs ISet[MetadataReference]? = nil
+    ) Project {
+        var solution = root.Solution
+        for project in[]Project{root}.Concat(TransitiveCSharpProjectReferences(root)) {
+            cancellationToken.ThrowIfCancellationRequested()
+            let references = List[MetadataReference]()
+            let seen = HashSet[MetadataReference](ReferenceEqualityComparer.Instance)
+            for reference in project.MetadataReferences {
+                cancellationToken.ThrowIfCancellationRequested()
+                var owned = reference
+                if fileInputs != nil && fileInputs.Contains(reference) &&
+                    reference is PortableExecutableReference{FilePath: {} path} {
+                    try {
+                        if TranslationContext.TryCreateOwnedMetadataReference(
+                            path,
+                            reference.Properties,
+                            images,
+                            out var captured
+                        ) {
+                            owned = captured ?? throw InvalidOperationException("The owned reference was not created.")
+                        }
+                    } catch (error IOException) { } catch (error UnauthorizedAccessException) { } catch (
+                        error BadImageFormatException
+                    ) { }
+                }
+                if seen.Add(owned) {
+                    references.Add(owned)
+                }
+            }
+            solution = solution.WithProjectMetadataReferences(project.Id, references)
+        }
+        return solution.GetProject(root.Id) ??
+            throw InvalidOperationException("The root project disappeared from its owned solution.")
+    }
+
+    private async func OpenOwnedFileProjectAsync(
+        workspace MSBuildWorkspace,
+        path string,
+        cancellationToken CancellationToken
+    ) Project {
+        let project = await workspace.OpenProjectAsync(path, cancellationToken: cancellationToken).ConfigureAwait(false)
+        // This private ingestion boundary accepts MSBuild's resolved file inputs,
+        // before any compilation is requested. Arbitrary Project/reference inputs
+        // never acquire file-origin authority merely by supplying FilePath.
+        let fileInputs = HashSet[MetadataReference](ReferenceEqualityComparer.Instance)
+        for source in[]Project{project}.Concat(TransitiveCSharpProjectReferences(project)) {
+            cancellationToken.ThrowIfCancellationRequested()
+            fileInputs.UnionWith(source.MetadataReferences)
+        }
+        return SnapshotProjectGraph(
+            project,
+            Dictionary[string, PortableExecutableReference](StringComparer.Ordinal),
+            cancellationToken,
+            fileInputs
         )
     }
 

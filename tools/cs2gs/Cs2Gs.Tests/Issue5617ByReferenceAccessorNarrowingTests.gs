@@ -11,13 +11,18 @@ import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
 import System
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.Diagnostics
 import System.IO
 import System.Linq
 import System.Reflection
+import System.Reflection.Metadata
+import System.Reflection.PortableExecutable
 import System.Runtime.Loader
 import System.Text
 import System.Text.RegularExpressions
+import System.Threading
+import System.Threading.Tasks
 import Xunit
 
 /// Issue #5617: gsc removes the narrowing fact of a by-reference variable at an accessor that can run user code
@@ -27,6 +32,1663 @@ import Xunit
 /// too. Each test translates the C#, compiles the G# with the repository's `gsc.dll`, runs it, and compares the
 /// output with the output of the C#.
 open class Issue5617ByReferenceAccessorNarrowingTests {
+    @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func RefParameter_CachedBridgeNamesReplayBodyOccupancyBeforeDeconstruction(
+        deconstructionFirst bool,
+        specialFirst bool
+    ) {
+        let bridge = "(string, int) typed = pair;"
+        let deconstruction = "(tuple, other) = new Numbers();"
+        let tree = CSharpSyntaxTree.ParseText(
+            "#nullable enable\npublic class Numbers { public void Deconstruct(out int first, out int second) { first = 3; second = 4; } } public static class Demo { public static string Run() { " +
+                "(string?, int) pair = (\"x\", 1); int tuple = 0; int other = 0; " +
+                (
+                if deconstructionFirst {
+                    deconstruction + bridge
+                } else {
+                    bridge + deconstruction
+                }
+            ) +
+                "return typed.Item1 + \":\" + tuple + \":\" + other; } }",
+            path: "CachedBridgeBodyOccupancy.cs"
+        )
+        let compilation = CSharpCompilation.Create(
+            "CachedBridgeBodyOccupancy5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        let normal = compilation.GetSemanticModel(tree)
+        let special = compilation.GetSemanticModel(tree, ignoreAccessibility: true)
+        var previous string? = nil
+        for isSpecial in[]bool{specialFirst, !specialFirst, specialFirst} {
+            let context = TranslationContext(
+                compilation,
+                if isSpecial {
+                    special
+                } else {
+                    normal
+                },
+                tree.FilePath
+            )
+            for var pass = 0; pass < 3; pass++ {
+                let printed = GSharpPrinter.Print(
+                    CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, normal), context)
+                )
+                Assert.Contains("let tupleValue", printed)
+                Assert.Equal(
+                    Encoding.UTF8.GetBytes("x:3:4" + Environment.NewLine),
+                    Encoding.UTF8.GetBytes(CompileAndRun(printed, Array.Empty[byte](), strictIl: true))
+                )
+                if previous != nil {
+                    Assert.Equal(Encoding.UTF8.GetBytes(previous), Encoding.UTF8.GetBytes(printed))
+                }
+                previous = printed
+            }
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RefParameter_DeepTupleAllocationPathsReplayAcrossModelPopulations(specialFirst bool) {
+        let tree = CSharpSyntaxTree.ParseText(`
+#nullable enable
+using System;
+public static class Demo {
+    private static int calls;
+    private static (((string?, int)?, int)?, (string?, int)?) Next() {
+        calls++;
+        return ((("a", 1), 2), ("b", 3));
+    }
+    private static Func<(((string, int)?, int)?, (string, int)?)> Make(
+        (((string?, int)?, int)?, (string?, int)?) value) => () => value;
+    public static string Run() {
+        calls = 0;
+        var value = Make(Next())();
+        return value.Item1.Value.Item1.Value.Item1 + value.Item2.Value.Item1 + ":" + calls;
+    }
+}`, path: "DeepTupleAllocationPaths.cs")
+        let compilation = CSharpCompilation.Create(
+            "DeepTupleAllocationPaths5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        let normal = compilation.GetSemanticModel(tree)
+        let special = compilation.GetSemanticModel(tree, ignoreAccessibility: true)
+        var previous string? = nil
+        for isSpecial in[]bool{specialFirst, !specialFirst, specialFirst} {
+            let context = TranslationContext(
+                compilation,
+                if isSpecial {
+                    special
+                } else {
+                    normal
+                },
+                tree.FilePath
+            )
+            for var pass = 0; pass < 2; pass++ {
+                let printed = GSharpPrinter.Print(
+                    CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, normal), context)
+                )
+                Assert.Equal(
+                    Encoding.UTF8.GetBytes("ab:1" + Environment.NewLine),
+                    Encoding.UTF8.GetBytes(CompileAndRun(printed, Array.Empty[byte](), strictIl: true))
+                )
+                let names = Regex
+                    .Matches(printed, "let (tupleValue(?:_[0-9]+)?)\\s*=")
+                    .Cast[Match]()
+                    .Select((match Match) -> match.Groups[1].Value)
+                    .ToArray()
+                Assert.True(names.Length >= 4, printed)
+                Assert.Equal(names.Length, names.Distinct(StringComparer.Ordinal).Count())
+                if previous != nil {
+                    Assert.Equal(Encoding.UTF8.GetBytes(previous), Encoding.UTF8.GetBytes(printed))
+                }
+                previous = printed
+            }
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RefParameter_NestedTypeEffectiveHelpersReserveTheirActualOwner(specialFirst bool) {
+        let first = CSharpSyntaxTree.ParseText(
+            "public partial class Outer { public static partial class Inner { public static int First() { return 1; } } }",
+            path: "AOuter.cs"
+        )
+        let second = CSharpSyntaxTree.ParseText(
+            "public partial class Outer { public static partial class Inner { public static int Second() { return item(1); static int item(int n) => n == 0 ? 7 : OtherB<int>(n - 1); static int OtherB<T>(int n) => item(n); } } } " +
+                "public static class Demo { public static string Run() => Outer.Inner.First() + \":\" + Outer.Inner.Second(); }",
+            path: "BInner.cs"
+        )
+        let outputs = Dictionary[bool, string]()
+        for var fresh = 0; fresh < 2; fresh++ {
+            let compilation = CSharpCompilation.Create(
+                "NestedEffectiveHelperOwner5326",
+                []SyntaxTree{first, second},
+                CSharpProjectLoader.RuntimeReferences(),
+                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+            )
+            let normal = compilation.GetSemanticModel(first)
+            let original = first
+                .GetRoot()
+                .DescendantNodes()
+                .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax]()
+                .Single()
+            let special = CreateSpeculativeBodyModel(
+                normal,
+                original,
+                "public static int First() { return item(1); static int item(int n) => n == 0 ? 42 : OtherA<int>(n - 1); static int OtherA<T>(int n) => item(n); }"
+            )
+            let firstMode = if fresh == 0 {
+                specialFirst
+            } else {
+                !specialFirst
+            }
+            for isSpecial in[]bool{firstMode, !firstMode, firstMode} {
+                for reverse in(
+                    if fresh == 0 {
+                        []bool{false, true}
+                    } else {
+                        []bool{true, false}
+                    }
+                ) {
+                    let translator = CSharpToGSharpTranslator()
+                    let printed = Dictionary[string, string](StringComparer.Ordinal)
+                    for current in(
+                        if reverse {
+                            []SyntaxTree{second, first}
+                        } else {
+                            []SyntaxTree{first, second}
+                        }
+                    ) {
+                        printed[current.FilePath] = GSharpPrinter.Print(
+                            translator.TranslateDocument(
+                                LoadedDocument(current.FilePath, current, compilation.GetSemanticModel(current)),
+                                TranslationContext(
+                                    compilation,
+                                    if isSpecial {
+                                        special
+                                    } else {
+                                        normal
+                                    },
+                                    current.FilePath
+                                )
+                            )
+                        )
+                    }
+                    let output = printed[first.FilePath] + "\n" + printed[second.FilePath]
+                    Assert.Contains("func item", output)
+                    Assert.Equal(
+                        Encoding.UTF8.GetBytes(
+                            (
+                                if isSpecial {
+                                    "42:7"
+                                } else {
+                                    "1:7"
+                                }
+                            ) +
+                                Environment.NewLine
+                        ),
+                        Encoding.UTF8.GetBytes(CompileAndRun(output, Array.Empty[byte](), strictIl: true))
+                    )
+                    if outputs.TryGetValue(isSpecial, out var previous) {
+                        Assert.Equal(Encoding.UTF8.GetBytes(previous), Encoding.UTF8.GetBytes(output))
+                    } else {
+                        outputs.Add(isSpecial, output)
+                    }
+                }
+            }
+        }
+    }
+
+    @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func RefParameter_EffectiveConstructorOverwritePreservesFreshArrayIdentity(
+        replacementReads bool,
+        specialFirst bool
+    ) {
+        let observe = "SawShared = System.Object.ReferenceEquals(items, System.Array.Empty<int>()); "
+        let tree = CSharpSyntaxTree.ParseText(
+            "public sealed class Owner { public int[] items; public bool SawShared; public Owner() { " +
+                (
+                if replacementReads {
+                    ""
+                } else {
+                    observe
+                }
+            ) +
+                "items = new int[1]; } public Owner(int control) { items = new int[2]; } } " +
+                "public static class Demo { public static string Run() { var other = new Owner(2); var value = new Owner(); return value.SawShared.ToString() + \":\" + other.items.Length; } }",
+            path: "SpeculativeArrayConstructor.cs"
+        )
+        let compilation = CSharpCompilation.Create(
+            "SpeculativeArrayConstructor5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        let normal = compilation.GetSemanticModel(tree)
+        let original = tree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.ConstructorDeclarationSyntax]()
+            .Single(
+            (ctor Microsoft.CodeAnalysis.CSharp.Syntax.ConstructorDeclarationSyntax) -> ctor
+                .ParameterList
+                .Parameters
+                .Count == 0
+        )
+        let special = CreateSpeculativeBodyModel(
+            normal,
+            original,
+            "public Owner() { " +
+                (
+                if replacementReads {
+                    observe
+                } else {
+                    ""
+                }
+            ) +
+                "items = new int[1]; }"
+        )
+        let normalContext = TranslationContext(compilation, normal, tree.FilePath)
+        let specialContext = TranslationContext(compilation, special, tree.FilePath)
+        using let enclosing = ObliviousNullabilityAnalyzer.UseCatalogScope(specialContext)
+        for isSpecial in[]bool{specialFirst, !specialFirst, specialFirst} {
+            let context = if isSpecial {
+                specialContext
+            } else {
+                normalContext
+            }
+            let printed = GSharpPrinter.Print(
+                CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, normal), context)
+            )
+            Assert.Equal(
+                Encoding.UTF8.GetBytes("False:2" + Environment.NewLine),
+                Encoding.UTF8.GetBytes(CompileAndRun(printed, Array.Empty[byte](), strictIl: true))
+            )
+            let observes = if isSpecial {
+                replacementReads
+            } else {
+                !replacementReads
+            }
+            Assert.Equal(!observes, Regex.IsMatch(printed, "items\\s+\\[\\]int32\\s*=\\s*(?:System\\.)?Array.Empty"))
+        }
+    }
+
+    @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func RefParameter_EffectiveRecordConstructorFeedsLiteralAndPrimaryPlans(replacementSwaps bool, specialFirst bool) {
+        let straight = "First = first; Second = second;"
+        let swapped = "First = second; Second = first;"
+        let tree = CSharpSyntaxTree.ParseText(
+            "public record struct Pair { public int First; public int Second; public Pair(int first, int second) { " +
+                (
+                if replacementSwaps {
+                    straight
+                } else {
+                    swapped
+                }
+            ) +
+                " } } " +
+                "public struct Other { public int Value; public Other(int value) { Value = value; } } " +
+                "public static class SourceProbe { private static int order; private static int Next(int value) { order = order * 10 + value; return value; } " +
+                "public static string Run() { order = 0; var value = new Pair(Next(1), Next(2)); return value.First + \":\" + value.Second + \":\" + order + \":\" + new Other(9).Value; } }",
+            path: "SpeculativeRecordConstructor.cs"
+        )
+        let compilation = CSharpCompilation.Create(
+            "SpeculativeRecordConstructor5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        let normal = compilation.GetSemanticModel(tree)
+        let original = tree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.ConstructorDeclarationSyntax]()
+            .Single(
+            (ctor Microsoft.CodeAnalysis.CSharp.Syntax.ConstructorDeclarationSyntax) -> ctor
+                .Identifier
+                .ValueText == "Pair"
+        )
+        let special = CreateSpeculativeBodyModel(
+            normal,
+            original,
+            "public Pair(int first, int second) { " +
+                (
+                if replacementSwaps {
+                    swapped
+                } else {
+                    straight
+                }
+            ) +
+                " }"
+        )
+        let normalContext = TranslationContext(compilation, normal, tree.FilePath)
+        let specialContext = TranslationContext(compilation, special, tree.FilePath)
+        using let enclosing = ObliviousNullabilityAnalyzer.UseCatalogScope(specialContext)
+        for isSpecial in[]bool{specialFirst, !specialFirst, specialFirst} {
+            let expectedSwaps = if isSpecial {
+                replacementSwaps
+            } else {
+                !replacementSwaps
+            }
+            let context = if isSpecial {
+                specialContext
+            } else {
+                normalContext
+            }
+            let printed = GSharpPrinter.Print(
+                CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, normal), context)
+            )
+            let runtime = printed +
+                "\npublic class Demo { shared { public func Run() string { let value = Pair(1, 2)\n" +
+                "return SourceProbe.Run() + \":\" + value.First.ToString() + \":\" + value.Second.ToString()\n} } }\n"
+            let values = if expectedSwaps {
+                "2:1"
+            } else {
+                "1:2"
+            }
+            Assert.Equal(
+                Encoding.UTF8.GetBytes(values + ":12:9:" + values + Environment.NewLine),
+                Encoding.UTF8.GetBytes(CompileAndRun(runtime, Array.Empty[byte](), strictIl: true))
+            )
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RefParameter_EffectiveHelperPreallocationIsDocumentOrderAndModelStable(specialFirst bool) {
+        let first = CSharpSyntaxTree.ParseText(
+            "public static partial class Demo { public static int Read() { return 1; } }",
+            path: "AHelper.cs"
+        )
+        let second = CSharpSyntaxTree.ParseText(
+            "public static partial class Demo { public static System.Collections.Generic.IEnumerable<int[]> Values() { yield return new int[1]; } " +
+                "public static string Run() { foreach(var value in Values()) return Read() + \":\" + value.Length; return \"empty\"; } }",
+            path: "BIterator.cs"
+        )
+        let results = Dictionary[bool, string]()
+        for var fresh = 0; fresh < 2; fresh++ {
+            let compilation = CSharpCompilation.Create(
+                "SpeculativeHelperNames5326",
+                []SyntaxTree{first, second},
+                CSharpProjectLoader.RuntimeReferences(),
+                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+            )
+            let normal = compilation.GetSemanticModel(first)
+            let original = first
+                .GetRoot()
+                .DescendantNodes()
+                .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax]()
+                .Single()
+            let special = CreateSpeculativeBodyModel(
+                normal,
+                original,
+                "public static int Read() { int item(int n) { return n == 0 ? 42 : item(n - 1); } return item(1); }"
+            )
+            let firstMode = if fresh == 0 {
+                specialFirst
+            } else {
+                !specialFirst
+            }
+            for isSpecial in[]bool{firstMode, !firstMode, firstMode} {
+                let model = if isSpecial {
+                    special
+                } else {
+                    normal
+                }
+                for reverse in(
+                    if fresh == 0 {
+                        []bool{false, true}
+                    } else {
+                        []bool{true, false}
+                    }
+                ) {
+                    let translator = CSharpToGSharpTranslator()
+                    let printed = Dictionary[string, string](StringComparer.Ordinal)
+                    for tree in(
+                        if reverse {
+                            []SyntaxTree{second, first}
+                        } else {
+                            []SyntaxTree{first, second}
+                        }
+                    ) {
+                        printed[tree.FilePath] = GSharpPrinter.Print(
+                            translator.TranslateDocument(
+                                LoadedDocument(tree.FilePath, tree, compilation.GetSemanticModel(tree)),
+                                TranslationContext(compilation, model, tree.FilePath)
+                            )
+                        )
+                    }
+                    let output = printed[first.FilePath] + "\n" + printed[second.FilePath]
+                    if results.TryGetValue(isSpecial, out var previous) {
+                        Assert.Equal(Encoding.UTF8.GetBytes(previous), Encoding.UTF8.GetBytes(output))
+                    } else {
+                        results.Add(isSpecial, output)
+                    }
+                    Assert.Equal(
+                        Encoding.UTF8.GetBytes(
+                            (
+                                if isSpecial {
+                                    "42:1"
+                                } else {
+                                    "1:1"
+                                }
+                            ) +
+                                Environment.NewLine
+                        ),
+                        Encoding.UTF8.GetBytes(CompileAndRun(output, Array.Empty[byte](), strictIl: true))
+                    )
+                    GC.Collect()
+                    GC.WaitForPendingFinalizers()
+                    GC.Collect()
+                }
+            }
+        }
+    }
+
+    private func CreateSpeculativeBodyModel(
+        normal SemanticModel,
+        original Microsoft.CodeAnalysis.CSharp.Syntax.BaseMethodDeclarationSyntax,
+        replacementText string
+    ) SemanticModel {
+        let replacement = Assert.IsAssignableFrom[Microsoft.CodeAnalysis.CSharp.Syntax.BaseMethodDeclarationSyntax](
+            SyntaxFactory.ParseMemberDeclaration(replacementText)
+        )
+        Assert.True(
+            Microsoft
+                .CodeAnalysis
+                .CSharp
+                .CSharpExtensions
+                .TryGetSpeculativeSemanticModelForMethodBody(
+                normal,
+                original.Body!!.SpanStart,
+                replacement,
+                out var speculative
+            )
+        )
+        return speculative ?? throw InvalidOperationException("Speculative model missing.")
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RefParameter_SpeculativeConstructorFactsPrecedeInitializerFolding(replacementFolds bool) {
+        let folded = "Slot = \"from-literal\";"
+        let unfolded = "Slot = Touch();"
+        let tree = CSharpSyntaxTree.ParseText(
+            "public static class Demo { public static string Slot = \"initial\"; static Demo() { " +
+                (
+                if replacementFolds {
+                    unfolded
+                } else {
+                    folded
+                }
+            ) +
+                " } private static string Touch() => \"from-call\"; public static string Run() => Slot; }",
+            path: "SpeculativeConstructorFacts.cs"
+        )
+        let compilation = CSharpCompilation.Create(
+            "SpeculativeConstructorFacts5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        let normal = compilation.GetSemanticModel(tree)
+        let original = tree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.ConstructorDeclarationSyntax]()
+            .Single()
+        let replacement = Assert.IsAssignableFrom[Microsoft.CodeAnalysis.CSharp.Syntax.BaseMethodDeclarationSyntax](
+            SyntaxFactory.ParseMemberDeclaration(
+                "static Demo() { " +
+                    (
+                    if replacementFolds {
+                        folded
+                    } else {
+                        unfolded
+                    }
+                ) +
+                    " }"
+            )
+        )
+        Assert.True(
+            Microsoft
+                .CodeAnalysis
+                .CSharp
+                .CSharpExtensions
+                .TryGetSpeculativeSemanticModelForMethodBody(
+                normal,
+                original.Body!!.SpanStart,
+                replacement,
+                out var speculative
+            )
+        )
+        let supplied = speculative ?? throw InvalidOperationException("Speculative model missing.")
+        let printed = GSharpPrinter.Print(
+            CSharpToGSharpTranslator().TranslateDocument(
+                LoadedDocument(tree.FilePath, tree, normal),
+                TranslationContext(compilation, supplied, tree.FilePath)
+            )
+        )
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(
+                (
+                    if replacementFolds {
+                        "from-literal"
+                    } else {
+                        "from-call"
+                    }
+                ) +
+                    Environment.NewLine
+            ),
+            Encoding.UTF8.GetBytes(CompileAndRun(printed, Array.Empty[byte](), strictIl: true))
+        )
+    }
+
+    @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func RefParameter_SpeculativeIteratorFactsPrecedeSignatureMapping(replacementYields bool, specialFirst bool) {
+        let iterator = "yield return null;"
+        let ordinary = "return new[] { \"safe\" };"
+        let tree = CSharpSyntaxTree.ParseText(
+            "using System.Collections.Generic; public static class Demo { public static IEnumerable<string> Items() { " +
+                (
+                if replacementYields {
+                    ordinary
+                } else {
+                    iterator
+                }
+            ) +
+                " } public static string Keep() => \"other\"; public static string Run() { foreach(var value in Items()) return (value ?? \"nil\") + \":\" + Keep(); return \"empty\"; } }",
+            path: "SpeculativeIteratorSignature.cs"
+        )
+        let compilation = CSharpCompilation.Create(
+            "SpeculativeIteratorSignature5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        let normal = compilation.GetSemanticModel(tree)
+        let original = tree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax]()
+            .Single(
+            (method Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax) -> method
+                .Identifier
+                .ValueText == "Items"
+        )
+        let replacement = Assert.IsAssignableFrom[Microsoft.CodeAnalysis.CSharp.Syntax.BaseMethodDeclarationSyntax](
+            SyntaxFactory.ParseMemberDeclaration(
+                "public static IEnumerable<string> Items() { " +
+                    (
+                    if replacementYields {
+                        iterator
+                    } else {
+                        ordinary
+                    }
+                ) +
+                    " }"
+            )
+        )
+        Assert.True(
+            Microsoft
+                .CodeAnalysis
+                .CSharp
+                .CSharpExtensions
+                .TryGetSpeculativeSemanticModelForMethodBody(
+                normal,
+                original.Body!!.SpanStart,
+                replacement,
+                out var speculativeModel
+            )
+        )
+        let supplied = speculativeModel ?? throw InvalidOperationException("Speculative model missing.")
+        let normalContext = TranslationContext(compilation, normal, tree.FilePath)
+        let specialContext = TranslationContext(compilation, supplied, tree.FilePath)
+        for isSpecial in[]bool{specialFirst, !specialFirst, specialFirst} {
+            let context = if isSpecial {
+                specialContext
+            } else {
+                normalContext
+            }
+            using let active = ObliviousNullabilityAnalyzer.UseCatalogScope(context)
+            let printed = GSharpPrinter.Print(
+                CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, normal), context)
+            )
+            let expectedYields = if isSpecial {
+                replacementYields
+            } else {
+                !replacementYields
+            }
+            Assert.Equal(
+                Encoding.UTF8.GetBytes(
+                    (
+                        if expectedYields {
+                            "nil:other"
+                        } else {
+                            "safe:other"
+                        }
+                    ) +
+                        Environment.NewLine
+                ),
+                Encoding.UTF8.GetBytes(CompileAndRun(printed, Array.Empty[byte](), strictIl: true))
+            )
+            Assert.Contains(
+                if expectedYields {
+                    "func Items() sequence[string?]"
+                } else {
+                    "func Items() IEnumerable[string]"
+                },
+                printed
+            )
+        }
+    }
+
+    @Theory
+    @InlineData(false, false, false)
+    @InlineData(false, true, false)
+    @InlineData(true, false, false)
+    @InlineData(true, true, false)
+    @InlineData(false, false, true)
+    @InlineData(false, true, true)
+    @InlineData(true, false, true)
+    @InlineData(true, true, true)
+    func RefParameter_SpeculativeMemberScopesUseEffectiveFieldAndPropertyComparisons(
+        replacementCompares bool,
+        specialFirst bool,
+        partialOwner bool
+    ) {
+        let comparison = "if (field != null) {} if (Property != null) {}"
+        let members = "private static Box field = new Box(); private static Box Property {get;set;} = new Box(); private static Box Other = new Box(); public static void Keep() { if (Other != null) {} } public static string Run() { Change(); Keep(); return \"ok\"; }"
+        let tree = CSharpSyntaxTree.ParseText(
+            "#nullable enable\n" +
+                (
+                if partialOwner {
+                    "public static partial class Demo { "
+                } else {
+                    "public class Box {} public static class Demo { " + members
+                }
+            ) +
+                " public static void Change() { " +
+                (
+                if replacementCompares {
+                    ""
+                } else {
+                    comparison
+                }
+            ) +
+                " } }",
+            path: "SpeculativeMemberScope.cs"
+        )
+        let trees = if partialOwner {
+            []SyntaxTree{
+                CSharpSyntaxTree.ParseText(
+                    "#nullable enable\npublic class Box {} public static partial class Demo { " + members + " }",
+                    path: "SpeculativeMemberDefinitions.cs"
+                ),
+                tree
+            }
+        } else {
+            []SyntaxTree{tree}
+        }
+        let compilation = CSharpCompilation.Create(
+            "SpeculativeMemberScope5326",
+            trees,
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        let normal = compilation.GetSemanticModel(tree)
+        let original = tree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax]()
+            .Single(
+            (method Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax) -> method
+                .Identifier
+                .ValueText == "Change"
+        )
+        let replacement = Assert.IsAssignableFrom[Microsoft.CodeAnalysis.CSharp.Syntax.BaseMethodDeclarationSyntax](
+            SyntaxFactory.ParseMemberDeclaration(
+                "public static void Change() { " +
+                    (
+                    if replacementCompares {
+                        comparison
+                    } else {
+                        ""
+                    }
+                ) +
+                    " }"
+            )
+        )
+        Assert.True(
+            Microsoft
+                .CodeAnalysis
+                .CSharp
+                .CSharpExtensions
+                .TryGetSpeculativeSemanticModelForMethodBody(
+                normal,
+                original.Body!!.SpanStart,
+                replacement,
+                out var speculativeModel
+            )
+        )
+        let supplied = speculativeModel ?? throw InvalidOperationException("Speculative model missing.")
+        for isSpecial in[]bool{specialFirst, !specialFirst, specialFirst} {
+            let model = if isSpecial {
+                supplied
+            } else {
+                normal
+            }
+            let translator = CSharpToGSharpTranslator()
+            let printed = string.Join(
+                "\n",
+                trees.Select(
+                    (current SyntaxTree) ->
+                    GSharpPrinter.Print(
+                        translator.TranslateDocument(
+                            LoadedDocument(current.FilePath, current, compilation.GetSemanticModel(current)),
+                            TranslationContext(compilation, model, current.FilePath)
+                        )
+                    )
+                )
+            )
+            let expected = if isSpecial {
+                replacementCompares
+            } else {
+                !replacementCompares
+            }
+            Assert.Equal(expected, printed.Contains("field Box?", StringComparison.Ordinal))
+            Assert.Equal(expected, printed.Contains("Property Box?", StringComparison.Ordinal))
+            Assert.Contains("Other Box?", printed)
+            Assert.Equal(
+                Encoding.UTF8.GetBytes("ok" + Environment.NewLine),
+                Encoding.UTF8.GetBytes(CompileAndRun(printed, Array.Empty[byte](), strictIl: true))
+            )
+        }
+    }
+
+    @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func RefParameter_SpeculativeInventoriesReplaceNullSeedsRefEdgesAndAnonymousShapes(
+        replacementWritesNull bool,
+        specialFirst bool
+    ) {
+        let changed = "Use(null); Ref(ref Slot); var shape = new { Item = (string)null };"
+        let unchanged = "Use(\"safe\"); var shape = new { Item = \"safe\" };"
+        let tree = CSharpSyntaxTree.ParseText(
+            "public static class Demo { public static string Slot = \"safe\"; private static void Use(string text) {} private static void Ref(ref string value) {} public static object Stable() => new { Item = \"safe\" }; public static void Change() { " +
+                (
+                if replacementWritesNull {
+                    unchanged
+                } else {
+                    changed
+                }
+            ) +
+                " } public static string Run() { Change(); return \"ok\"; } }",
+            path: "SpeculativeAllInventories.cs"
+        )
+        let compilation = CSharpCompilation.Create(
+            "SpeculativeAllInventories5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        let normal = compilation.GetSemanticModel(tree)
+        let original = tree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax]()
+            .Single(
+            (method Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax) -> method
+                .Identifier
+                .ValueText == "Change"
+        )
+        let replacement = Assert.IsAssignableFrom[Microsoft.CodeAnalysis.CSharp.Syntax.BaseMethodDeclarationSyntax](
+            SyntaxFactory.ParseMemberDeclaration(
+                "public static void Change() { " +
+                    (
+                    if replacementWritesNull {
+                        changed
+                    } else {
+                        unchanged
+                    }
+                ) +
+                    " }"
+            )
+        )
+        Assert.True(
+            Microsoft
+                .CodeAnalysis
+                .CSharp
+                .CSharpExtensions
+                .TryGetSpeculativeSemanticModelForMethodBody(
+                normal,
+                original.Body!!.SpanStart,
+                replacement,
+                out var speculativeModel
+            )
+        )
+        let supplied = speculativeModel ?? throw InvalidOperationException("Speculative model missing.")
+        let owner = compilation.GetTypeByMetadataName("Demo") ?? throw InvalidOperationException("Demo missing.")
+        let input = Assert.IsAssignableFrom[IMethodSymbol](Assert.Single(owner.GetMembers("Use"))).Parameters[0]
+        let normalContext = TranslationContext(compilation, normal, tree.FilePath)
+        let specialContext = TranslationContext(compilation, supplied, tree.FilePath)
+        var normalConnected = false
+        var specialConnected = false
+        normalContext.AfterRefStorageConnection = (target ISymbol, source ISymbol) -> {
+            if target is IParameterSymbol{Name: "value"} && source is IFieldSymbol{Name: "Slot"} {
+                normalConnected = true
+            }
+        }
+        specialContext.AfterRefStorageConnection = (target ISymbol, source ISymbol) -> {
+            if target is IParameterSymbol{Name: "value"} && source is IFieldSymbol{Name: "Slot"} {
+                specialConnected = true
+            }
+        }
+        for isSpecial in[]bool{specialFirst, !specialFirst, specialFirst} {
+            let model = if isSpecial {
+                supplied
+            } else {
+                normal
+            }
+            let context = if isSpecial {
+                specialContext
+            } else {
+                normalContext
+            }
+            let expected = if isSpecial {
+                replacementWritesNull
+            } else {
+                !replacementWritesNull
+            }
+            using let analysis = ObliviousNullabilityAnalyzer.UseCatalogScope(context)
+            Assert.Equal(
+                expected,
+                ObliviousNullabilityAnalyzer.IsNullArgumentTarget(compilation, input, context.SiblingCompilations)
+            )
+            let printed = GSharpPrinter.Print(
+                CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, normal), context)
+            )
+            Assert.Equal(
+                expected,
+                if isSpecial {
+                    specialConnected
+                } else {
+                    normalConnected
+                }
+            )
+            Assert.Equal(expected, Regex.IsMatch(printed, "data class [^\\n]+\\(Item string\\?\\)"))
+            Assert.Equal(
+                Encoding.UTF8.GetBytes("ok" + Environment.NewLine),
+                Encoding.UTF8.GetBytes(CompileAndRun(printed, Array.Empty[byte](), strictIl: true))
+            )
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RefParameter_SpeculativeBodyOverlayExecutesReplacementNotOriginal(replacementNull bool) {
+        let originalWrite = if replacementNull {
+            "Value = \"safe\";"
+        } else {
+            "Value = null;"
+        }
+        let replacementWrite = if replacementNull {
+            "Value = null;"
+        } else {
+            "Value = \"safe\";"
+        }
+        let tree = CSharpSyntaxTree.ParseText(
+            "public static class Demo { public static string Value = \"safe\"; public static string Other = \"before\"; public static void Change() { " +
+                originalWrite +
+                " } public static void Keep() { Other = \"other\"; } public static string Run() { Change(); Keep(); return (Value ?? \"nil\") + \":\" + Other; } }",
+            path: "SpeculativeRuntime.cs"
+        )
+        let compilation = CSharpCompilation.Create(
+            "SpeculativeRuntime5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        let normal = compilation.GetSemanticModel(tree)
+        let original = tree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax]()
+            .Single(
+            (method Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax) -> method
+                .Identifier
+                .ValueText == "Change"
+        )
+        let replacement = Assert.IsAssignableFrom[Microsoft.CodeAnalysis.CSharp.Syntax.BaseMethodDeclarationSyntax](
+            SyntaxFactory.ParseMemberDeclaration("public static void Change() { " + replacementWrite + " }")
+        )
+        Assert.True(
+            Microsoft
+                .CodeAnalysis
+                .CSharp
+                .CSharpExtensions
+                .TryGetSpeculativeSemanticModelForMethodBody(
+                normal,
+                original.Body!!.SpanStart,
+                replacement,
+                out var speculativeModel
+            )
+        )
+        let supplied = speculativeModel ?? throw InvalidOperationException("Speculative model missing.")
+        let context = TranslationContext(compilation, supplied, tree.FilePath)
+        let printed = GSharpPrinter.Print(
+            CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, normal), context)
+        )
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(
+                (
+                    if replacementNull {
+                        "nil:other"
+                    } else {
+                        "safe:other"
+                    }
+                ) +
+                    Environment.NewLine
+            ),
+            Encoding.UTF8.GetBytes(CompileAndRun(printed, Array.Empty[byte](), strictIl: true))
+        )
+        let peer = TranslationContext(compilation, normal, tree.FilePath)
+        let originalOutput = GSharpPrinter.Print(
+            CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, normal), peer)
+        )
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(
+                (
+                    if replacementNull {
+                        "safe:other"
+                    } else {
+                        "nil:other"
+                    }
+                ) +
+                    Environment.NewLine
+            ),
+            Encoding.UTF8.GetBytes(CompileAndRun(originalOutput, Array.Empty[byte](), strictIl: true))
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RefParameter_ProducerOwnedExtensionInheritsCancellationAndSuppliedBindings(special bool) {
+        let producerTree = CSharpSyntaxTree.ParseText(
+            "namespace Lib5617 { public class Box {} public static class Extensions { public static int Size(this Box box) => 7; } }",
+            path: "ProducerOwnedExtension.cs"
+        )
+        let options = CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        let producer = CSharpCompilation.Create(
+            "Lib5617",
+            []SyntaxTree{producerTree},
+            CSharpProjectLoader.RuntimeReferences(),
+            options
+        )
+        let tree = CSharpSyntaxTree.ParseText(
+            "using Lib5617; public class Secret { private static int Value = 1; } public static class Demo { public static int Read() => Secret.Value; public static string Run() => new Box().Size().ToString(); }",
+            path: "OwnedExtensionCaller.cs"
+        )
+        let compilation = CSharpCompilation.Create(
+            "OwnedExtensionCaller5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences().Append(cast[MetadataReference](producer.ToMetadataReference())),
+            options
+        )
+        let model = compilation.GetSemanticModel(tree, ignoreAccessibility: special)
+        let privateRead = tree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax]()
+            .Single(
+            (
+                access Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax
+            ) -> access.ToString() == "Secret.Value"
+        )
+        using let cancellation = CancellationTokenSource()
+        let catalog = List[CSharpCompilation]{compilation, producer}
+        let context = TranslationContext(compilation, model, tree.FilePath, catalog, catalog, cancellation.Token)
+        var entered = false
+        var publishedAfterCancellation = false
+        context.BeforeProducerExtensionAnalysis = (child TranslationContext) -> {
+            entered = true
+            {
+                using let caller = child.UseSemanticModelFor(tree, compilation)
+                Assert.Equal(special, child.GetSymbolInfo(privateRead).Symbol != nil)
+            }
+            child.BeforeRefStoragePublication = () -> {
+                publishedAfterCancellation = true
+            }
+            cancellation.Cancel()
+        }
+        Assert.ThrowsAny[OperationCanceledException](
+            () -> CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, model), context)
+        )
+        Assert.True(entered)
+        Assert.False(publishedAfterCancellation)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RefParameter_PrivateRefStorageConsumesTheSuppliedModel(specialFirst bool) {
+        let tree = CSharpSyntaxTree.ParseText(`
+public static class Secrets { private static string Storage = null; }
+public static class Demo {
+    private static void Set(ref string value) {}
+    public static void Probe() { Set(ref Secrets.Storage); }
+}`, path: "PrivateRefStorage.cs")
+        let compilation = CSharpCompilation.Create(
+            "PrivateRefStorage5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        let normal = compilation.GetSemanticModel(tree)
+        let special = compilation.GetSemanticModel(tree, ignoreAccessibility: true)
+        let member = tree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax]()
+            .Single()
+        Assert.Null(normal.GetSymbolInfo(member).Symbol)
+        Assert.NotNull(special.GetSymbolInfo(member).Symbol)
+        let normalContext = TranslationContext(compilation, normal, tree.FilePath)
+        let specialContext = TranslationContext(compilation, special, tree.FilePath)
+        let normalEdges = List[(Target ISymbol, Source ISymbol)]()
+        let specialEdges = List[(Target ISymbol, Source ISymbol)]()
+        normalContext.AfterRefStorageConnection = (target ISymbol, source ISymbol) -> normalEdges.Add((target, source))
+        specialContext.AfterRefStorageConnection = (target ISymbol, source ISymbol) -> specialEdges.Add(
+            (target, source)
+        )
+        for isSpecial in[]bool{specialFirst, !specialFirst, specialFirst} {
+            let context = if isSpecial {
+                specialContext
+            } else {
+                normalContext
+            }
+            let model = if isSpecial {
+                special
+            } else {
+                normal
+            }
+            let printed = GSharpPrinter.Print(
+                CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, model), context)
+            )
+            Assert.Equal(isSpecial, printed.Contains("func Set(ref value string?)", StringComparison.Ordinal))
+            let edges = if isSpecial {
+                specialEdges
+            } else {
+                normalEdges
+            }
+            Assert.Equal(
+                isSpecial,
+                edges.Any(
+                    (edge(Target ISymbol, Source ISymbol)) ->
+                    edge.Target is IParameterSymbol{Name: "value"} &&
+                        edge.Source is IFieldSymbol{Name: "Storage"} &&
+                        SymbolEqualityComparer
+                        .Default
+                        .Equals(edge.Source, special.GetSymbolInfo(member).Symbol)
+                )
+            )
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RefParameter_PrivateNullFlowUsesScopedSeedsAndTupleBindings(specialFirst bool) {
+        let tree = CSharpSyntaxTree.ParseText(`
+public static class Secrets {
+    private static string Value = "safe";
+    private static (string First, string Second) Pair = ("safe", "safe");
+    private static void Accept(string value) {}
+}
+public static class Demo {
+    public static void Mutate() { Secrets.Value = null; Secrets.Pair = (null, "safe"); Secrets.Accept(null); }
+    public static string Read() => Secrets.Value;
+}`, path: "PrivateNullFlow.cs")
+        let compilation = CSharpCompilation.Create(
+            "PrivateNullFlow5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        let normal = compilation.GetSemanticModel(tree)
+        let special = compilation.GetSemanticModel(tree, ignoreAccessibility: true)
+        let secrets = compilation.GetTypeByMetadataName("Secrets") ??
+            throw InvalidOperationException("Secrets missing.")
+        let value = Assert.IsAssignableFrom[IFieldSymbol](Assert.Single(secrets.GetMembers("Value")))
+        let pair = Assert.IsAssignableFrom[IFieldSymbol](Assert.Single(secrets.GetMembers("Pair")))
+        let parameter = Assert.IsAssignableFrom[IMethodSymbol](Assert.Single(secrets.GetMembers("Accept")))
+            .Parameters[0]
+        let read = Assert.IsAssignableFrom[IMethodSymbol](
+            Assert.Single(
+                (
+                    compilation.GetTypeByMetadataName("Demo") ?? throw InvalidOperationException("Demo missing.")
+                ).GetMembers("Read")
+            )
+        )
+        let access = tree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax]()
+            .First(
+            (
+                member Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax
+            ) -> member.ToString() == "Secrets.Value"
+        )
+        Assert.Null(normal.GetSymbolInfo(access).Symbol)
+        Assert.NotNull(special.GetSymbolInfo(access).Symbol)
+        let normalContext = TranslationContext(compilation, normal, tree.FilePath)
+        let specialContext = TranslationContext(compilation, special, tree.FilePath)
+        for isSpecial in[]bool{specialFirst, !specialFirst, specialFirst} {
+            let context = if isSpecial {
+                specialContext
+            } else {
+                normalContext
+            }
+            let model = if isSpecial {
+                special
+            } else {
+                normal
+            }
+            using let analysis = ObliviousNullabilityAnalyzer.UseCatalogScope(context)
+            Assert.Equal(
+                isSpecial,
+                ObliviousNullabilityAnalyzer.IsNullArgumentTarget(compilation, parameter, context.SiblingCompilations)
+            )
+            Assert.Equal(isSpecial, ObliviousNullabilityAnalyzer.IsTainted(compilation, value))
+            Assert.Equal(isSpecial, ObliviousNullabilityAnalyzer.IsTainted(compilation, read))
+            Assert.Equal(
+                isSpecial,
+                ObliviousNullabilityAnalyzer.IsTupleElementTainted(
+                    compilation,
+                    pair,
+                    []int32{0},
+                    context.SiblingCompilations
+                )
+            )
+            Assert.Equal(
+                isSpecial,
+                ObliviousNullabilityAnalyzer.IsTupleElementTainted(
+                    compilation,
+                    pair,
+                    []int32{0},
+                    List[CSharpCompilation]{compilation}
+                )
+            )
+            let printed = GSharpPrinter.Print(
+                CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, model), context)
+            )
+            Assert.Equal(isSpecial, printed.Contains("func Read() string?", StringComparison.Ordinal))
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RefParameter_PrivateAnonymousInitializerUsesTheScopedShapeEvidence(specialFirst bool) {
+        let tree = CSharpSyntaxTree.ParseText(`
+#nullable enable
+public static class Secrets { private static string? Read() => null; }
+public static class Demo {
+    public static object Make() {
+        var first = new { Item = "safe" };
+        var second = new { Item = Secrets.Read() };
+        return first;
+    }
+}`, path: "PrivateAnonymousShape.cs")
+        let compilation = CSharpCompilation.Create(
+            "PrivateAnonymousShape5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        let normal = compilation.GetSemanticModel(tree)
+        let special = compilation.GetSemanticModel(tree, ignoreAccessibility: true)
+        let call = tree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax]()
+            .Single()
+        Assert.Null(normal.GetSymbolInfo(call).Symbol)
+        Assert.NotNull(special.GetSymbolInfo(call).Symbol)
+        let sharedMapper = CSharpTypeMapper()
+        for isSpecial in[]bool{specialFirst, !specialFirst, specialFirst} {
+            let model = if isSpecial {
+                special
+            } else {
+                normal
+            }
+            let context = TranslationContext(compilation, model, tree.FilePath)
+            let firstCreation = tree
+                .GetRoot()
+                .DescendantNodes()
+                .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.AnonymousObjectCreationExpressionSyntax]()
+                .First()
+            using let analysis = ObliviousNullabilityAnalyzer.UseCatalogScope(context)
+            let shared = sharedMapper.GetOrCreateAnonymousDataClassShape(
+                model.GetTypeInfo(firstCreation).Type as INamedTypeSymbol,
+                context,
+                firstCreation.GetLocation()
+            )
+            let propertyTypes = shared.PropertyTypes ??
+                throw InvalidOperationException("Anonymous property contract missing.")
+            Assert.Equal(isSpecial, Assert.Single(propertyTypes).IsNullable)
+            Assert.Same(
+                propertyTypes,
+                sharedMapper.GetOrCreateAnonymousDataClassShape(
+                    model.GetTypeInfo(firstCreation).Type as INamedTypeSymbol,
+                    context,
+                    firstCreation.GetLocation()
+                )
+                    .PropertyTypes
+            )
+            let directMapper = CSharpTypeMapper()
+            directMapper.Map(model.GetTypeInfo(firstCreation).Type, context, firstCreation.GetLocation())
+            let declaration = Assert.Single(directMapper.PendingAnonymousDataClasses)
+            let parameter = Assert.Single(
+                declaration.PrimaryConstructorParameters ??
+                    throw InvalidOperationException("Anonymous constructor missing.")
+            )
+            Assert.Equal(isSpecial, parameter.Type.IsNullable)
+            let contract = GSharpPrinter.Print(
+                Cs2Gs.CodeModel.Ast.CompilationUnit(members: []Cs2Gs.CodeModel.Ast.GNode{declaration})
+            )
+            let argument = if isSpecial {
+                "nil"
+            } else {
+                "\"safe\""
+            }
+            let result = if isSpecial {
+                "if value.Item == nil { \"nil\" } else { \"wrong\" }"
+            } else {
+                "value.Item"
+            }
+            let runtime = contract +
+                "\npublic class Demo {\nshared {\npublic func Run() string {\nlet value = " +
+                declaration.Name +
+                "(" +
+                argument +
+                ")\nreturn " +
+                result +
+                "\n}\n}\n}\n"
+            Assert.Equal(
+                Encoding.UTF8.GetBytes(
+                    (
+                        if isSpecial {
+                            "nil"
+                        } else {
+                            "safe"
+                        }
+                    ) +
+                        Environment.NewLine
+                ),
+                Encoding.UTF8.GetBytes(CompileAndRun(runtime, Array.Empty[byte](), strictIl: true))
+            )
+            let printed = GSharpPrinter.Print(
+                CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, model), context)
+            )
+            Assert.Equal(isSpecial, Regex.IsMatch(printed, "data class [^\\n]+\\(Item string\\?\\)"))
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RefParameter_AnonymousMergeCacheUsesActualCompilation(nullableFirst bool) {
+        let tree = CSharpSyntaxTree.ParseText(`
+#nullable enable
+public static class Demo {
+    public static object Make() {
+        var first = new { Item = "safe" };
+        var second = new { Item = Provider.Read() };
+        return first;
+    }
+}`, path: "SharedAnonymous.cs")
+        let Build = (nullable bool) -> CSharpCompilation.Create(
+            "SameAnonymousAssembly5326",
+            []SyntaxTree{
+                tree,
+                CSharpSyntaxTree.ParseText(
+                    if nullable {
+                        "#nullable enable\npublic static class Provider { public static string? Read() => null; }"
+                    } else {
+                        "#nullable enable\npublic static class Provider { public static string Read() => \"safe\"; }"
+                    },
+                    path: "Provider.cs"
+                )
+            },
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        let nullableCompilation = Build(true)
+        let nonnullableCompilation = Build(false)
+        Assert.NotSame(nullableCompilation, nonnullableCompilation)
+        Assert.Equal(nullableCompilation.Assembly.Identity, nonnullableCompilation.Assembly.Identity)
+        let mapper = CSharpTypeMapper()
+        var incomingSpelling string? = nil
+        let creation = tree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.AnonymousObjectCreationExpressionSyntax]()
+            .First()
+        for nullable in[]bool{nullableFirst, !nullableFirst, nullableFirst} {
+            let compilation = if nullable {
+                nullableCompilation
+            } else {
+                nonnullableCompilation
+            }
+            let model = compilation.GetSemanticModel(tree)
+            let context = TranslationContext(compilation, model, tree.FilePath)
+            let type = Assert.IsAssignableFrom[INamedTypeSymbol](model.GetTypeInfo(creation).Type)
+            let property = Assert.Single(type.GetMembers().OfType[IPropertySymbol]())
+            let spelling = GSharpPrinter.RenderTypeReference(
+                mapper.Map(property.Type, context, creation.GetLocation()) ??
+                    throw InvalidOperationException("Incoming mapping missing.")
+            )
+            if incomingSpelling != nil {
+                Assert.Equal(incomingSpelling, spelling)
+            }
+            incomingSpelling = spelling
+            let shape = mapper.GetOrCreateAnonymousDataClassShape(type, context, creation.GetLocation())
+            Assert.Equal(
+                nullable,
+                Assert.Single(shape.PropertyTypes ?? throw InvalidOperationException("Property contract missing."))
+                    .IsNullable
+            )
+            Assert.Same(
+                shape.PropertyTypes,
+                mapper.GetOrCreateAnonymousDataClassShape(type, context, creation.GetLocation()).PropertyTypes
+            )
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RefParameter_SpecialSuppliedModelsKeepTheirBoundCallbackAndProjectionInventories(specialFirst bool) {
+        let tree = CSharpSyntaxTree.ParseText(`
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Gsharp.Values;
+public class Bucket<T> : List<ManagedRef<T>> where T : class { public Bucket() {} public void PublicObserve() {} private void Observe() {} }
+public static class Secrets {
+    private static IEqualityComparer<int> Make() => EqualityComparer<int>.Create((x,y) => x == y, x => { Demo.Global = null; return x; });
+}
+public static class Demo {
+    public static string? Global;
+    private static Dictionary<int,int> table = new Dictionary<int,int>(Secrets.Make());
+    private static void Probe() { _ = Enumerable.Count(new[] {1}); _ = table.ContainsKey(1); }
+    private static int Guard(ref string? value) { if(value == null)return 0; Probe(); return value.Length; }
+    public static void Project(Bucket<string> bucket) { bucket.PublicObserve(); bucket.Observe(); }
+    public static string Run() { Global = "safe"; return Guard(ref Global).ToString(); }
+}`, path: "SpecialModelInventory.cs")
+        let compilation = CSharpCompilation.Create(
+            "SpecialModelInventory5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences().Append(
+                cast[MetadataReference](
+                    MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location)
+                )
+            ),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+                NullableContextOptions.Enable
+            )
+        )
+        let normal = compilation.GetSemanticModel(tree)
+        let special = compilation.GetSemanticModel(tree, ignoreAccessibility: true)
+        let factory = tree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax]()
+            .Single(
+            (
+                call Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax
+            ) -> call.ToString() == "Secrets.Make()"
+        )
+        let projected = tree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax]()
+            .Single(
+            (
+                call Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax
+            ) -> call.ToString() == "bucket.Observe()"
+        )
+        Assert.Null(normal.GetSymbolInfo(factory).Symbol)
+        Assert.NotNull(special.GetSymbolInfo(factory).Symbol)
+        Assert.Null(normal.GetSymbolInfo(projected).Symbol)
+        Assert.NotNull(special.GetSymbolInfo(projected).Symbol)
+        for isSpecial in[]bool{specialFirst, !specialFirst} {
+            let model = if isSpecial {
+                special
+            } else {
+                normal
+            }
+            let context = TranslationContext(compilation, model, tree.FilePath)
+            let printed = GSharpPrinter.Print(
+                CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, model), context)
+            )
+            Assert.Contains("return value!!.Length", printed)
+            let callbacks = Assert.IsType[TranslationContext.DeferredCallbackIndex](context.EffectIndexes.DeferredIndex)
+            Assert.NotEmpty(callbacks.Comparers)
+            Assert.Equal(
+                isSpecial,
+                callbacks.Comparers.Any(
+                    (
+                        entry(
+                            Syntax Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax,
+                            Owner CSharpCompilation
+                        )
+                    ) ->
+                    object.ReferenceEquals(entry.Syntax, factory)
+                )
+            )
+            let projection = ProjectedBaseCompilationIndex.For(context.OwnershipIndexIdentity)
+            Assert.True(projection.IsIndexed)
+            Assert.NotEmpty(projection.MemberConsumersByCandidate)
+            Assert.Equal(
+                isSpecial,
+                projection
+                    .MemberConsumersByCandidate
+                    .Values
+                    .Any(
+                    (entries List[(CSharpCompilation, SyntaxNode)]) -> entries.Any(
+                        (entry(CSharpCompilation, SyntaxNode)) -> object.ReferenceEquals(entry.Item2, projected)
+                    )
+                )
+            )
+            if isSpecial {
+                let other = compilation.WithAssemblyName("RelatedNormalModel5326")
+                let otherModel = other.GetSemanticModel(tree)
+                Assert.Null(otherModel.GetSymbolInfo(factory).Symbol)
+                let related = context.CreateRelatedContext(other, otherModel, tree.FilePath)
+                CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, otherModel), related)
+                let relatedCallbacks = Assert.IsType[TranslationContext.DeferredCallbackIndex](
+                    related.EffectIndexes.DeferredIndex
+                )
+                Assert.DoesNotContain(
+                    relatedCallbacks.Comparers,
+                    (
+                        entry(
+                            Syntax Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax,
+                            Owner CSharpCompilation
+                        )
+                    ) ->
+                    object.ReferenceEquals(entry.Syntax, factory)
+                )
+                let relatedProjection = ProjectedBaseCompilationIndex.For(related.OwnershipIndexIdentity)
+                Assert.True(relatedProjection.IsIndexed)
+                Assert.False(
+                    relatedProjection
+                        .MemberConsumersByCandidate
+                        .Values
+                        .Any(
+                        (entries List[(CSharpCompilation, SyntaxNode)]) -> entries.Any(
+                            (entry(CSharpCompilation, SyntaxNode)) -> object.ReferenceEquals(entry.Item2, projected)
+                        )
+                    )
+                )
+                Assert.Contains(
+                    callbacks.Comparers,
+                    (
+                        entry(
+                            Syntax Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax,
+                            Owner CSharpCompilation
+                        )
+                    ) ->
+                    object.ReferenceEquals(entry.Syntax, factory)
+                )
+            }
+        }
+    }
+
+    @Theory
+    @InlineData("values.Aggregate((left, right) => { global = null; return left; });", true)
+    @InlineData("values.Where(value => { global = null; return true; });", false)
+    func RefParameter_DeclaredEnumerableExecutionContractsPreserveClosedControls(statement string, immediate bool) {
+        let printed = AssertRunsLikeCSharp(
+            "using System; using System.Linq; using System.Collections.Generic; public static class Demo { private static string? global; private static int Guard(ref string? text, List<int> values) { if(text == null)return 0; _ = " +
+                statement +
+                " return text.Length; } public static string Run() { global = \"safe\"; try { return Guard(ref global, new List<int>{1,2}).ToString(); } catch(NullReferenceException) { return \"cleared\"; } } }"
+        )
+        Assert.Contains(
+            if immediate {
+                "return text!!.Length"
+            } else {
+                "return text.Length"
+            },
+            printed
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RefParameter_ProjectedArrayHelperRetainsSelectedSharedTreeOwner(consumerSharesTree bool) {
+        let shared = CSharpSyntaxTree.ParseText(
+            "namespace Lib5617 { public class SharedArrayBase { public static string[] Get() { Helper.Touch(); return new[] {\"item\"}; } public static T[] GetGeneric<T>(T value) where T : class { Helper.Touch(); return new[] {value}; } } }",
+            path: "SharedArray.cs"
+        )
+        let producerBody = CSharpSyntaxTree.ParseText(
+            "namespace Lib5617 { internal static class Helper { public static void Touch() { Store.Value = null; } } public static class Store { public static string? Value; } public class ProducerBridge : SharedArrayBase {} }",
+            path: "ProducerArray.cs"
+        )
+        let rootHelper = CSharpSyntaxTree.ParseText(
+            "namespace Lib5617 { internal static class Helper { public static void Touch() {} } }",
+            path: "ConsumerArrayHelper.cs"
+        )
+        let source = CSharpSyntaxTree.ParseText(
+            "using System; using Lib5617; public class SourceLeaf : ProducerBridge {} public static class Demo { private static int Guard(ref string? text) { if(text == null)return 0; var items = SourceLeaf.Get(); var genericItems = SourceLeaf.GetGeneric(\"generic\"); return text.Length + items[0].Length + genericItems[0].Length; } public static string Run() { Store.Value = \"safe\"; try { return Guard(ref Store.Value).ToString(); } catch(NullReferenceException) { return \"cleared\"; } } }",
+            path: "ConsumerArray.cs"
+        )
+        let options = CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+            NullableContextOptions.Enable
+        )
+        let producer = CSharpCompilation.Create(
+            "Lib5617",
+            []SyntaxTree{shared, producerBody},
+            CSharpProjectLoader.RuntimeReferences(),
+            options
+        )
+        let other = CSharpCompilation.Create(
+            "OtherArrayOwner5326",
+            []SyntaxTree{shared, rootHelper},
+            CSharpProjectLoader.RuntimeReferences(),
+            options
+        )
+        let trees = if consumerSharesTree {
+            []SyntaxTree{source, shared, rootHelper}
+        } else {
+            []SyntaxTree{source}
+        }
+        let references = CSharpProjectLoader.RuntimeReferences().Concat(
+            []MetadataReference{
+                producer.ToMetadataReference(),
+                other.ToMetadataReference(aliases: ImmutableArray.Create("Unused"))
+            }
+        )
+        let consumer = CSharpCompilation.Create("ArrayOwnerConsumer5326", trees, references, options)
+        Assert.Empty(
+            consumer.GetDiagnostics().Where((diagnostic Diagnostic) -> diagnostic.Severity == DiagnosticSeverity.Error)
+        )
+        let document = LoadedDocument(source.FilePath, source, consumer.GetSemanticModel(source))
+        let context = TranslationContext(consumer, document.SemanticModel, document.FilePath)
+        let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+        Assert.Contains("return text!!.Length", printed)
+        using let image = MemoryStream()
+        let emitted = producer.Emit(image)
+        Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics))
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("cleared"),
+            Encoding.UTF8.GetBytes(CompileAndRun(printed, image.ToArray()).Trim())
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RefParameter_EnumerableReturningAggregateExecutesItsCallbackImmediately(inHelper bool) {
+        let call = "_ = values.Aggregate((left, right) => { global = null; return left; });"
+        let printed = AssertRunsLikeCSharp(`
+using System;
+using System.Linq;
+using System.Collections.Generic;
+public static class Demo {
+    private static string? global;
+    private static void Probe(List<IEnumerable<int>> values, Func<IEnumerable<int>,IEnumerable<int>,IEnumerable<int>> callback) { _ = values.Aggregate(callback); }
+    private static int Guard(ref string? text, List<IEnumerable<int>> values) {
+        if(text == null) return 0;
+        ` + if inHelper {
+                "Probe(values, (left, right) => { global = null; return left; });"
+            } else {
+                call
+            } + `
+        return text.Length;
+    }
+    public static string Run() {
+        global = "safe";
+        var values = new List<IEnumerable<int>> { new[] {1}, new[] {2} };
+        try { return Guard(ref global, values).ToString(); }
+        catch(NullReferenceException) { return "cleared"; }
+    }
+}`)
+        Assert.Contains("return text!!.Length", printed)
+    }
+
     @Fact
     func RefParameter_AdjacentGotoCase_KeepsThePrecedingSectionEffects() {
         let printed = AssertRunsLikeCSharp(`
@@ -1584,6 +3246,1683 @@ public class Demo
     /// `QualifiedNs.StaticHolder.MakeSeed()`, an instance member call `box.InstanceParts()` or inferred generic
     /// `box.InstanceParts(1)` or chained `box.Self().InstanceParts(1)`, a source extension `word.WordParts()` or
     /// `values.Entries()`, or a pure string concatenation, the fact stays.
+    @Theory
+    @InlineData("SourceClear();", true)
+    @InlineData("values.Clear();", true)
+    @InlineData("cancellation.Cancel();", true)
+    @InlineData("Invoke(callback);", true)
+    @InlineData("Library.NoOp();", true)
+    @InlineData("if (Library.Check() && s.Length > 0) { total++; }", true)
+    @InlineData("for (int i = 0; i < 2; i++) { total += s.Length; SourceClear(); }", true)
+    @InlineData("for (int i = 0; i < 2; i++) { total += s.Length; values.Clear(); }", true)
+    @InlineData("for (int i = 0; i < 2; i++) { total += s.Length; cancellation.Cancel(); }", true)
+    @InlineData("Pure(); integers.Clear();", false)
+    @InlineData("Invoke(() => { });", false)
+    @InlineData("var deferred = new[] { 1 }.Where(_ => { global = null; return true; });", false)
+    func RefParameter_UsesStorageEffectsAcrossCallsAndConditions(statement string, asserted bool) {
+        let printed = AssertRunsLikeCSharp(`
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
+using CallEffectLibrary;
+public static class Demo {
+    private static string? global = "global";
+    private static ref string? Slot() => ref global;
+    private static void SourceClear() { global = null; }
+    private static void Pure() { }
+    private static void Invoke(Action callback) { callback(); }
+    private static int Guard(ref string? s, List<string?> values, List<int> integers, CancellationTokenSource cancellation, Action callback) {
+        if (s == null) return 0;
+        int total = 0;
+        ` + statement + `
+        return s.Length + total + 11;
+    }
+    public static string Run() {
+        string? value = "safe";
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Token.Register(() => { global = null; });
+        return Guard(ref value, new List<string?> { "item" }, new List<int> { 1 }, cancellation, () => { global = null; }).ToString();
+    }
+}`, library: `namespace CallEffectLibrary;
+public static class Library {
+    public static void NoOp() { }
+    public static bool Check() => true;
+}`)
+        Assert.Contains(
+            if asserted {
+                "return s!!.Length + total + 11"
+            } else {
+                "return s.Length + total + 11"
+            },
+            printed
+        )
+    }
+
+    @Theory
+    @InlineData("ClearCells();", "cells[0].Text")
+    @InlineData("ResetBox();", "box.Text")
+    @InlineData("explicitTarget.Touch();", "global")
+    @InlineData("genericTarget.Touch(1);", "global")
+    @InlineData("ReadProperty();", "global")
+    @InlineData("ReadIndexer();", "global")
+    @InlineData("Format(new Formatter());", "global")
+    @InlineData("FormatHandler();", "HandlerStore.Value")
+    @InlineData("Recurse(() => { }, 1);", "global")
+    @InlineData("Construct();", "global")
+    @InlineData("disposable.Dispose();", "global")
+    @InlineData("ReverseBuffer();", "buffer[0]")
+    @InlineData("_ = sequence.Count();", "global")
+    @InlineData("_ = dictionary.ContainsKey(1);", "global")
+    func RefParameter_TransitiveOperationEffects(statement string, root string) {
+        let printed = AssertRunsLikeCSharp(`
+using System;
+using System.Linq;
+using System.Collections.Generic;
+using EffectCells;
+public interface IExplicit { void Touch(); }
+public interface IGenericExplicit<T> { void Touch(T value); }
+public sealed class ExplicitWriter : IExplicit {
+    void IExplicit.Touch() { Demo.ClearGlobal(); }
+}
+public sealed class GenericExplicitWriter<T> : IGenericExplicit<T> {
+    void IGenericExplicit<T>.Touch(T value) { Demo.ClearGlobal(); }
+}
+public sealed class Disposer : IDisposable {
+    public void Dispose() { Demo.ClearGlobal(); }
+}
+public sealed class Formatter {
+    public override string ToString() { Demo.ClearGlobal(); return "formatted"; }
+}
+public class Base {
+    private int initialized = Demo.ClearAndReturn();
+}
+public sealed class Derived : Base { }
+public sealed class Indexer {
+    public int this[int index] { get { Demo.ClearGlobal(); return index; } }
+}
+public sealed class KeyComparer : IEqualityComparer<int> {
+    public bool Equals(int x, int y) => x == y;
+    public int GetHashCode(int value) { Demo.ClearGlobal(); return value; }
+}
+public static class Demo {
+    private static string? global;
+    private static Cell box;
+    private static Cell[] cells = new Cell[1];
+    private static string?[] buffer = new string?[2];
+    public static void ClearGlobal() { global = null; }
+    public static int ClearAndReturn() { ClearGlobal(); return 1; }
+    private static int P { get { ClearGlobal(); return 1; } }
+    private static void ReadProperty() { _ = P; }
+    private static void ReadIndexer() { _ = new Indexer()[0]; }
+    private static void Format(Formatter value) { _ = $"{value}"; }
+    private static void FormatHandler() { HandlerStore.Format($"{1}"); }
+    private static void Clear<T>(T[] items) where T : struct { items[0] = default; }
+    private static void ClearCells() { Clear(cells); }
+    private static void ReverseBuffer() { System.MemoryExtensions.Reverse<string?>(buffer.AsSpan()); }
+    private static void ResetBox() { box = default; }
+    private static void Construct() { _ = new Derived(); }
+    private static void Recurse(Action callback, int remaining) {
+        if (remaining > 0) Recurse(() => ClearGlobal(), remaining - 1);
+        else callback();
+    }
+    private static int Guard(ref string? s, IExplicit explicitTarget, IGenericExplicit<int> genericTarget, IDisposable disposable,
+        IEnumerable<int> sequence, Dictionary<int, int> dictionary) {
+        if (s == null) return 0;
+        ` + statement + `
+        return s.Length + 19;
+    }
+    public static string Run() {
+        var dictionary = new Dictionary<int, int>(new KeyComparer());
+        dictionary.Add(1, 2);
+        global = "safe"; box.Text = "safe"; cells[0].Text = "safe"; HandlerStore.Value = "safe";
+        buffer[0] = "safe"; buffer[1] = null;
+        var sequence = new[] { 1 }.Where(x => { ClearGlobal(); return true; });
+        try { return Guard(ref ` + root + `, new ExplicitWriter(), new GenericExplicitWriter<int>(), new Disposer(), sequence, dictionary).ToString(); }
+        catch (NullReferenceException) { return "cleared"; }
+    }
+}`, library: `
+namespace EffectCells;
+public struct Cell { public string? Text; }
+public static class HandlerStore {
+    public static string? Value;
+    public static void Format(EffectHandler handler) { }
+}
+[System.Runtime.CompilerServices.InterpolatedStringHandler]
+public ref struct EffectHandler {
+    public EffectHandler(int literalLength, int formattedCount) { HandlerStore.Value = null; }
+    public void AppendLiteral(string text) { }
+    public void AppendFormatted(int value) { }
+}`)
+        Assert.Contains("return s!!.Length + 19", printed)
+    }
+
+    @Theory
+    @InlineData(12)
+    @InlineData(35)
+    func RefParameter_SharedCalleeAnalysisIsLinear(depth int32) {
+        let source = StringBuilder("public static class Demo { private static void M0() { }")
+        for var i = 1; i <= depth; i++ {
+            source
+                .Append("private static void M")
+                .Append(i)
+                .Append("() { M")
+                .Append(i - 1)
+                .Append("(); M")
+                .Append(i - 1)
+                .Append("(); }")
+        }
+        source
+            .Append("private static int Guard(ref string? s) { if (s == null) return 0; M")
+            .Append(depth)
+            .Append("(); return s.Length; } public static string Run() => \"analysis\"; }")
+        var visits = 0
+        let printed = AssertRunsLikeCSharp(
+            source.ToString(),
+            inspect: (context TranslationContext) -> {
+                visits = context.StorageEffectBodyVisits
+            }
+        )
+        Assert.Contains("return s.Length", printed)
+        Assert.InRange(visits, depth + 1, (depth + 1) * 3)
+    }
+
+    @Theory
+    @InlineData(
+        "private static event Action Changed { add { global = null; } remove { global = null; } } private static void Handler() {} private static void Probe() { Changed += Handler; }",
+        "global"
+    )
+    @InlineData("private static int count; private static void Probe() { (global, count) = (null, 0); }", "global")
+    @InlineData(
+        "private sealed class Initialized { public int P { get; } = Clear(); public Initialized() {} } private static int Clear() { global = null; return 1; } private static void Probe() { _ = new Initialized(); }",
+        "global"
+    )
+    @InlineData(
+        "private static void Probe() { _ = new List<int>(new[] { 1 }.Where(x => { global = null; return true; })); }",
+        "global"
+    )
+    @InlineData("private static void Probe() { Array.Clear(items, 0, items.Length); }", "items[0]")
+    @InlineData(
+        "private static readonly Dictionary<int,int> dictionary = new Dictionary<int,int>(EqualityComparer<int>.Create((x,y) => x == y, x => { global = null; return x; })); private static void Probe() { _ = dictionary.ContainsKey(1); }",
+        "global"
+    )
+    func RefParameter_ImplicitOperationEdges(members string, root string) {
+        let printed = AssertRunsLikeCSharp(`
+using System;
+using System.Collections.Generic;
+using System.Linq;
+public static class Demo {
+    private static string? global;
+    private static string?[] items = new string?[1];
+    ` + members + `
+    private static int Guard(ref string? value) {
+        if (value == null) return 0;
+        Probe();
+        return value.Length + 31;
+    }
+    public static string Run() {
+        global = "safe"; items[0] = "safe";
+        try { return Guard(ref ` + root + `).ToString(); }
+        catch (NullReferenceException) { return "cleared"; }
+    }
+}`)
+        Assert.Contains("return value!!.Length + 31", printed)
+    }
+
+    @Theory
+    @InlineData(
+        "private static IEnumerable<object> Create() { global = null; yield return 1; }",
+        "_ = pending.Count();"
+    )
+    @InlineData(
+        "private sealed class Key { public override int GetHashCode() { global = null; return 1; } } private static IEnumerable<object> Create() => new[] { new Key() }.Distinct();",
+        "_ = pending.Count();"
+    )
+    @InlineData(
+        "private sealed class Key { public override int GetHashCode() { global = null; return 1; } } private static IEnumerable<object> Create() => new[] { new Key() };",
+        "_ = new Dictionary<object,int>(pending.Select(x => new KeyValuePair<object,int>(x, 1)));"
+    )
+    func RefParameter_StoredSequencesExecuteCallbacksAtEnumeration(members string, consume string) {
+        let printed = AssertRunsLikeCSharp(`
+using System;
+using System.Linq;
+using System.Collections.Generic;
+public static class Demo {
+    private static string? global;
+    ` + members + `
+    private static int Guard(ref string? value, IEnumerable<object> pending) {
+        if (value == null) return 0;
+        ` + consume + `
+        return value.Length + 37;
+    }
+    public static string Run() {
+        var pending = Create();
+        global = "safe";
+        try { return Guard(ref global, pending).ToString(); }
+        catch (NullReferenceException) { return "cleared"; }
+    }
+}`)
+        Assert.Contains("return value!!.Length + 37", printed)
+    }
+
+    @Fact
+    func RefParameter_MoreThan128PureCallbackContextsRemainPure() {
+        let statements = string.Concat(Enumerable.Repeat("Invoke(() => { });", 160))
+        let printed = AssertRunsLikeCSharp(`
+public static class Demo {
+    private static void Invoke(System.Action action) { action(); }
+    private static int Guard(ref string? value) {
+        if (value == null) return 0;
+        ` + statements + `
+        return value.Length;
+    }
+    public static string Run() { string? text = "safe"; return Guard(ref text).ToString(); }
+}`)
+        Assert.Contains("return value.Length", printed)
+        Assert.DoesNotContain("value!!", printed)
+    }
+
+    @Theory
+    @InlineData("disposable.Dispose();")
+    @InlineData("_ = $\"{formatted}\";")
+    @InlineData("_ = $\"{(formatted, 1)}\";")
+    func RefParameter_UntrustedRuntimeImplementationsRemainUnknown(statement string) {
+        let printed = AssertRunsLikeCSharp(`
+using System;
+using ExternalEffects;
+public static class Demo {
+    private static void Probe(IDisposable disposable, Formatted formatted) { ` + statement + ` }
+    private static int Guard(ref string? value, IDisposable disposable, Formatted formatted) {
+        if (value == null) return 0;
+        Probe(disposable, formatted);
+        return value.Length + 41;
+    }
+    public static string Run() {
+        var disposable = new Disposer(); var formatted = new Formatted(); Store.Value = "safe";
+        try { return Guard(ref Store.Value, disposable, formatted).ToString(); }
+        catch (NullReferenceException) { return "cleared"; }
+    }
+}`, library: `
+namespace ExternalEffects;
+public static class Store { public static string? Value; }
+public sealed class Disposer : System.IDisposable { public void Dispose() { Store.Value = null; } }
+public sealed class Formatted { public override string ToString() { Store.Value = null; return "formatted"; } }
+`)
+        Assert.Contains("return value!!.Length + 41", printed)
+    }
+
+    @Theory
+    @InlineData("_ = $\"{formatted}\";")
+    @InlineData("for (var i = 0; i < 1; i++) { _ = $\"{formatted}\"; }")
+    @InlineData("_ = values.Count();")
+    @InlineData("_ = dictionary.ContainsKey(1);")
+    @InlineData("_ = keys.Contains(key);")
+    func RefParameter_CallbackImplementationsAreNotLimitedToSourceMethods(statement string) {
+        let printed = AssertRunsLikeCSharp(`
+using System;
+using System.Linq;
+using System.Collections.Generic;
+using ExternalEffects;
+public static class Demo {
+    private sealed class Formatter { public override string ToString() { Store.Value = null; return "formatted"; } }
+    private static int Guard(ref string? value, Formatter formatted, IEnumerable<int> values,
+        Dictionary<int,int> dictionary, List<Key> keys, Key key) {
+        if (value == null) return 0;
+        ` + statement + `
+        return value.Length + 43;
+    }
+    public static string Run() {
+        var formatted = new Formatter(); var values = Factory.Sequence();
+        var dictionary = Factory.Dictionary(); var key = new Key(); var keys = new List<Key> { key };
+        Store.Value = "safe";
+        try { return Guard(ref Store.Value, formatted, values, dictionary, keys, key).ToString(); }
+        catch (NullReferenceException) { return "cleared"; }
+    }
+}`, library: `
+using System;
+using System.Collections;
+using System.Collections.Generic;
+namespace ExternalEffects;
+public static class Store { public static string? Value; }
+public sealed class Key {
+    public override bool Equals(object? other) { Store.Value = null; return true; }
+    public override int GetHashCode() => 1;
+}
+public static class Factory {
+    private sealed class Comparer<T> : IEqualityComparer<T> {
+        public bool Equals(T? x, T? y) => EqualityComparer<T>.Default.Equals(x, y);
+        public int GetHashCode(T x) { Store.Value = null; return x!.GetHashCode(); }
+    }
+    private sealed class SequenceValue : IEnumerable<int> {
+        public IEnumerator<int> GetEnumerator() { Store.Value = null; return ((IEnumerable<int>)new[] { 1 }).GetEnumerator(); }
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+    public static IEnumerable<int> Sequence() => new SequenceValue();
+    public static Dictionary<int,int> Dictionary() => new Dictionary<int,int>(new Comparer<int>()) { [1] = 1 };
+}
+`)
+        Assert.Contains("return value!!.Length + 43", printed)
+    }
+
+    @Theory
+    @InlineData(
+        "private static void Clear() { System.Collections.Generic.IEnumerable<int> Local() { yield return 1; } global = null; }",
+        "Clear();"
+    )
+    @InlineData("private static void Clear() { global = null; }", "_ = System.Linq.Enumerable.Pretend();")
+    func RefParameter_DeferredProofRequiresOwnYieldAndVerifiedFramework(members string, statement string) {
+        let printed = AssertRunsLikeCSharp(`
+using System;
+using System.Collections.Generic;
+namespace System.Linq {
+    public static class Enumerable {
+        public static IEnumerable<int> Pretend() { Demo.ClearForFactory(); return Array.Empty<int>(); }
+    }
+}
+public static class Demo {
+    private static string? global;
+    public static void ClearForFactory() { global = null; }
+    ` + members + `
+    private static int Guard(ref string? value) {
+        if (value == null) return 0;
+        ` + statement + `
+        return value.Length + 47;
+    }
+    public static string Run() {
+        global = "safe";
+        try { return Guard(ref global).ToString(); }
+        catch (NullReferenceException) { return "cleared"; }
+    }
+}`)
+        Assert.Contains("return value!!.Length + 47", printed)
+    }
+
+    @Theory
+    @InlineData("_ = token + token;", true)
+    @InlineData("for (var i = 0; i < 1; i++) { _ = token + token; }", true)
+    @InlineData("int converted = token;", true)
+    @InlineData("_ = $\"{leaf}\";", true)
+    @InlineData("_ = $\"{wrapped}\";", true)
+    @InlineData("_ = dictionary.ContainsKey(1);", true)
+    @InlineData("_ = values.Count();", true)
+    @InlineData("_ = ownedList.Count();", false)
+    @InlineData("_ = ownedDictionary.ContainsKey(1);", false)
+    @InlineData("_ = $\"{ownedRecord}\";", false)
+    @InlineData("stream.CopyTo(Stream.Null);", true)
+    @InlineData("_ = property.GetValue(getter);", true)
+    func RefParameter_ActualCallbackTargetsAndOperandProvenance(statement string, asserted bool) {
+        let printed = AssertRunsLikeCSharp(`
+using System;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Collections.Generic;
+using ExternalEffects;
+public static class Demo {
+    private struct Token {
+        public static Token operator +(Token x, Token y) { Store.Value = null; return x; }
+        public static implicit operator int(Token x) { Store.Value = null; return 1; }
+    }
+    private sealed class Leaf : Base { }
+    private sealed record Wrapper(Noisy Value);
+    private sealed record CleanWrapper(int Value);
+    private sealed class Noisy { public override string ToString() { Store.Value = null; return "noisy"; } }
+    private static int Guard(ref string? value, Token token, Leaf leaf, Wrapper wrapped,
+        Dictionary<int,int> dictionary, List<int> values, Stream stream, PropertyInfo property, Getter getter) {
+        var ownedList = new List<int> { 1 };
+        var ownedDictionary = new Dictionary<int,int>();
+        var ownedRecord = new CleanWrapper(1);
+        if (value == null) return 0;
+        ` + statement + `
+        return value.Length + 53;
+    }
+    public static string Run() {
+        var leaf = new Leaf(); var wrapped = new Wrapper(new Noisy()); var dictionary = new Dictionary<int,int>();
+        var values = Factory.Values(); var stream = Factory.Stream(); var getter = new Getter();
+        var property = typeof(Getter).GetProperty("Value")!;
+        Store.Value = "safe";
+        try { return Guard(ref Store.Value, default, leaf, wrapped, dictionary, values, stream, property, getter).ToString(); }
+        catch (NullReferenceException) { return "cleared"; }
+    }
+}`, library: `
+using System;
+using System.IO;
+using System.Collections.Generic;
+namespace ExternalEffects;
+public static class Store { public static string? Value; }
+public class Base { public override string ToString() { Store.Value = null; return "base"; } }
+public sealed class Getter { public int Value { get { Store.Value = null; return 1; } } }
+public static class Factory {
+    private sealed class ValuesList : List<int>, ICollection<int> {
+        int ICollection<int>.Count { get { Store.Value = null; return 1; } }
+    }
+    private sealed class ForwardingStream : MemoryStream {
+        public override void CopyTo(Stream destination, int bufferSize) { Store.Value = null; }
+    }
+    public static List<int> Values() => new ValuesList();
+    public static Stream Stream() => new ForwardingStream();
+}
+`)
+        Assert.True(
+            printed.Contains(
+                if asserted {
+                    "return value!!.Length + 53"
+                } else {
+                    "return value.Length + 53"
+                },
+                StringComparison.Ordinal
+            ),
+            printed
+        )
+    }
+
+    @Fact
+    func RefParameter_ComparerFromAnUnreferencedCallerCannotEstablishPurity() {
+        let printed = AssertRunsLikeCSharp(`
+using System;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Collections.Generic;
+public static class Demo {
+    private static string? global;
+    public static int Guard(ref string? value, Dictionary<int,int> dictionary) {
+        if (value == null) return 0;
+        _ = dictionary.ContainsKey(1);
+        return value.Length;
+    }
+    public static string Run() {
+        var caller = AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(x => x.GetName().Name == "HiddenCaller5326")
+            ?? Assembly.LoadFrom(Path.Combine(AppContext.BaseDirectory, "HiddenCaller5326.dll"));
+        var dictionary = (Dictionary<int,int>)caller.GetType("Caller")!.GetMethod("Create")!
+            .Invoke(null, new object[] { (Action)(() => global = null) })!;
+        global = "safe";
+        try { return Guard(ref global, dictionary).ToString(); }
+        catch (NullReferenceException) { return "cleared"; }
+    }
+}`, library: `
+using System;
+using System.Collections.Generic;
+public static class Caller {
+    private sealed class Comparer : IEqualityComparer<int> {
+        private readonly Action clear;
+        public Comparer(Action clear) { this.clear = clear; }
+        public bool Equals(int x, int y) => x == y;
+        public int GetHashCode(int x) { clear(); return x; }
+    }
+    public static Dictionary<int,int> Create(Action clear) => new Dictionary<int,int>(new Comparer(clear)) { [1] = 1 };
+}`, runtimeOnlyLibrary: true, inspect: (
+                context TranslationContext
+            ) -> {
+                Assert
+                    .DoesNotContain(
+                    context.Compilation.References,
+                    (reference MetadataReference) ->
+                    context.Compilation.GetAssemblyOrModuleSymbol(reference)?.Name == "HiddenCaller5326"
+                )
+            })
+        Assert.Contains("return value!!.Length", printed)
+    }
+
+    @Fact
+    func RefParameter_CanceledStorageTraversalDoesNotPublishASummary() {
+        using let cancellation = CancellationTokenSource()
+        cancellation.Cancel()
+        Assert.Throws[OperationCanceledException](() -> AssertRunsLikeCSharp(`
+public static class Demo {
+    private static void Probe() { }
+    private static int Guard(ref string? s) { if (s == null) return 0; Probe(); return s.Length; }
+    public static string Run() => "analysis";
+}`, cancellationToken: cancellation.Token))
+    }
+
+    @Fact
+    func RefParameter_BoundImageDoesNotInheritItsSuppliedPathTrust() {
+        let host = typeof(Console).Assembly.GetName()
+        let source = "[assembly: System.Reflection.AssemblyVersion(\"" + host.Version!!.ToString() +
+            "\")] namespace System { public static class EffectStore { public static string? Value; " +
+            "public static void Clear() { Value = null; } } }"
+        let library = CSharpCompilation.Create(
+            host.Name,
+            []SyntaxTree{CSharpSyntaxTree.ParseText(source)},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+                .WithNullableContextOptions(NullableContextOptions.Enable)
+                .WithCryptoPublicKey(host.GetPublicKey().ToImmutableArray())
+                .WithPublicSign(true)
+        )
+        using let stream = MemoryStream()
+        let emitted = library.Emit(stream)
+        Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics))
+        let reference = MetadataReference.CreateFromImage(stream.ToArray(), filePath: typeof(Console).Assembly.Location)
+        let references = CSharpProjectLoader
+            .RuntimeReferences()
+            .Where((item MetadataReference) -> (item as PortableExecutableReference)?.FilePath != reference.FilePath)
+            .Append(cast[MetadataReference](reference))
+        let tree = CSharpSyntaxTree.ParseText(`
+public static class Demo {
+    private static int Guard(ref string? s) {
+        if (s == null) return 0;
+        System.EffectStore.Clear();
+        return s.Length;
+    }
+}
+`)
+        let compilation = CSharpCompilation.Create(
+            "BoundImage5326",
+            []SyntaxTree{tree},
+            references,
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+                NullableContextOptions.Enable
+            )
+        )
+        Assert.Empty(
+            compilation.GetDiagnostics().Where(
+                (diagnostic Diagnostic) -> diagnostic.Severity == DiagnosticSeverity.Error
+            )
+        )
+        let model = compilation.GetSemanticModel(tree)
+        let document = LoadedDocument("Snippet.cs", tree, model)
+        let printed = GSharpPrinter.Print(
+            CSharpToGSharpTranslator().TranslateDocument(
+                document,
+                TranslationContext(compilation, model, document.FilePath)
+            )
+        )
+        Assert.Contains("return s!!.Length", printed)
+    }
+
+    @Fact
+    func RefParameter_OwnedImageStaysFrozenAfterItsPathChanges() {
+        let directory = Path.Combine(AppContext.BaseDirectory, "FrozenEffect5326", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let path = Path.Combine(directory, "System.Console.dll")
+            File.Copy(typeof(Console).Assembly.Location, path)
+            let reference = TranslationContext.CreateOwnedMetadataReference(path)
+            let references = CSharpProjectLoader
+                .RuntimeReferences()
+                .Where(
+                (item MetadataReference) -> (item as PortableExecutableReference)?.FilePath != typeof(Console)
+                    .Assembly
+                    .Location
+            )
+                .Append(cast[MetadataReference](reference))
+            let tree = CSharpSyntaxTree.ParseText(`
+public static class Demo {
+    private static int Guard(ref string? s) {
+        if (s == null) return 0;
+        System.Console.WriteLine("pure");
+        return s.Length;
+    }
+}`)
+            let compilation = CSharpCompilation.Create(
+                "FrozenImage5326",
+                []SyntaxTree{tree},
+                references,
+                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+                    NullableContextOptions.Enable
+                )
+            )
+            Assert.NotNull(compilation.GetAssemblyOrModuleSymbol(reference))
+            File.WriteAllBytes(path, []byte{0})
+            let model = compilation.GetSemanticModel(tree)
+            let document = LoadedDocument("Snippet.cs", tree, model)
+            let printed = GSharpPrinter.Print(
+                CSharpToGSharpTranslator().TranslateDocument(
+                    document,
+                    TranslationContext(compilation, model, document.FilePath)
+                )
+            )
+            Assert.Contains("return s.Length", printed)
+            Assert.DoesNotContain("s!!", printed)
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    @Fact
+    func RefParameter_CallbackSummaryKeysIncludeActualSyntaxTreeIdentity() {
+        let pure = CSharpSyntaxTree.ParseText(
+            "public static class Pure { public static void Go() { Sink.Invoke(() => Act()); } private static void Act() { } }"
+        )
+        let evil = CSharpSyntaxTree.ParseText(
+            "public static class Evil { public static void Go() { Sink.Invoke(() => Act()); } private static void Act() { Demo.Global = null; } }"
+        )
+        let tree = CSharpSyntaxTree.ParseText(`
+public static class Sink { public static void Invoke(System.Action action) { action(); } }
+public static class Demo {
+    public static string? Global;
+    private static int Safe(ref string? s) { if (s == null) return 0; Pure.Go(); return s.Length + 1; }
+    private static int Write(ref string? s) { if (s == null) return 0; Evil.Go(); return s.Length + 2; }
+}`)
+        let compilation = CSharpCompilation.Create(
+            "TreeIdentity5326",
+            []SyntaxTree{tree, pure, evil},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+                NullableContextOptions.Enable
+            )
+        )
+        Assert.Empty(
+            compilation.GetDiagnostics().Where(
+                (diagnostic Diagnostic) -> diagnostic.Severity == DiagnosticSeverity.Error
+            )
+        )
+        let model = compilation.GetSemanticModel(tree)
+        let document = LoadedDocument("Snippet.cs", tree, model)
+        let printed = GSharpPrinter.Print(
+            CSharpToGSharpTranslator().TranslateDocument(
+                document,
+                TranslationContext(compilation, model, document.FilePath)
+            )
+        )
+        Assert.Contains("return s.Length + 1", printed)
+        Assert.Contains("return s!!.Length + 2", printed)
+    }
+
+    @Fact
+    func RefParameter_ReferencedSourceProjectAndCrossTreeCallbackUseOwningModels() {
+        let producerTrees = []SyntaxTree{
+            CSharpSyntaxTree.ParseText(
+                "using System; using System.Linq; public static partial class Producer { public static string? Value; public static void Probe(Func<int,bool> predicate) { _ = new[] {1}.Where(predicate).Count(); } }",
+                path: "Producer.cs"
+            ),
+            CSharpSyntaxTree.ParseText(
+                "public static partial class Producer { public static void Clear() { Value = null; } }",
+                path: "Producer.Clear.cs"
+            )
+        }
+        let options = CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+            NullableContextOptions.Enable
+        )
+        let producer = CSharpCompilation.Create(
+            "Producer5326",
+            producerTrees,
+            CSharpProjectLoader.RuntimeReferences(),
+            options
+        )
+        let consumerTrees = []SyntaxTree{
+            CSharpSyntaxTree.ParseText(
+                "using System; public static partial class Demo { private static int Guard(ref string? value) { if(value == null) return 0; Producer.Probe(Predicate); return value.Length; } public static string Run() { Producer.Value = \"safe\"; try { return Guard(ref Producer.Value).ToString(); } catch(NullReferenceException) { return \"cleared\"; } } }",
+                path: "Consumer.cs"
+            ),
+            CSharpSyntaxTree.ParseText(
+                "public static partial class Demo { private static bool Predicate(int item) { Producer.Clear(); return true; } }",
+                path: "Consumer.Callback.cs"
+            )
+        }
+        let consumer = CSharpCompilation.Create(
+            "Consumer5326",
+            consumerTrees,
+            CSharpProjectLoader.RuntimeReferences().Append(cast[MetadataReference](producer.ToMetadataReference())),
+            options
+        )
+        Assert.Empty(
+            consumer.GetDiagnostics().Where((diagnostic Diagnostic) -> diagnostic.Severity == DiagnosticSeverity.Error)
+        )
+        var expected string? = nil
+        let native = AssemblyLoadContext("SourceOwner5326", isCollectible: true)
+        try {
+            for compilation in[]CSharpCompilation{producer, consumer} {
+                using let image = MemoryStream()
+                let emitted = compilation.Emit(image)
+                Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics))
+                image.Position = 0
+                let assembly = native.LoadFromStream(image)
+                if object.ReferenceEquals(compilation, consumer) {
+                    expected = cast[string](assembly.GetType("Demo", true)!!.GetMethod("Run")!!.Invoke(nil, nil))
+                }
+            }
+        } finally {
+            native.Unload()
+        }
+        Assert.Equal("cleared", expected)
+        let texts = List[string]()
+        for compilation in[]CSharpCompilation{consumer, producer} {
+            for tree in compilation.SyntaxTrees {
+                let model = compilation.GetSemanticModel(tree)
+                let document = LoadedDocument(tree.FilePath, tree, model)
+                texts.Add(
+                    GSharpPrinter.Print(
+                        CSharpToGSharpTranslator().TranslateDocument(
+                            document,
+                            TranslationContext(compilation, model, document.FilePath)
+                        )
+                    )
+                )
+            }
+        }
+        Assert.Contains("return value!!.Length", texts[0])
+        let lines = texts.SelectMany((text string) -> text.Split('\n')).ToArray()
+        let imports = lines.Where((line string) -> line.StartsWith("import ", StringComparison.Ordinal)).Distinct()
+        let bodies = lines.Where((line string) -> !line.StartsWith("import ", StringComparison.Ordinal))
+        Assert.Equal(expected, CompileAndRun(string.Join("\n", imports.Concat(bodies)), Array.Empty[byte]()).Trim())
+    }
+
+    @Fact
+    func RefParameter_ActualReferenceGraphOwnsProducerDefinedStorageWithSeparateSibling() {
+        let producerTree = CSharpSyntaxTree.ParseText(
+            "public sealed class Payload { public int Value => 1; } public static class Producer { public static Payload? Slot; public static void Clear() { Slot = null; } }",
+            path: "Producer.Payload.cs"
+        )
+        let options = CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+            NullableContextOptions.Enable
+        )
+        let producer = CSharpCompilation.Create(
+            "PayloadProducer5326",
+            []SyntaxTree{producerTree},
+            CSharpProjectLoader.RuntimeReferences(),
+            options
+        )
+        let sibling = CSharpCompilation.Create(
+            "PayloadProducer5326",
+            []SyntaxTree{producerTree},
+            CSharpProjectLoader.RuntimeReferences(),
+            options
+        )
+        let consumerTree = CSharpSyntaxTree.ParseText(
+            "using System; public static class Demo { private static int Guard(ref Payload? value) { if(value == null)return 0; Producer.Clear(); return value.Value; } public static string Run() { Producer.Slot = new Payload(); try { return Guard(ref Producer.Slot).ToString(); } catch(NullReferenceException) { return \"cleared\"; } } }",
+            path: "Consumer.Payload.cs"
+        )
+        let consumer = CSharpCompilation.Create(
+            "PayloadConsumer5326",
+            []SyntaxTree{consumerTree},
+            CSharpProjectLoader.RuntimeReferences().Append(cast[MetadataReference](producer.ToMetadataReference())),
+            options
+        )
+        let model = consumer.GetSemanticModel(consumerTree)
+        let context = TranslationContext(
+            consumer,
+            model,
+            consumerTree.FilePath,
+            siblingCompilations: []CSharpCompilation{sibling}
+        )
+        Assert.Same(producer, context.GetOwnedSemanticModel(producerTree).Compilation)
+        let consumerText = GSharpPrinter.Print(
+            CSharpToGSharpTranslator().TranslateDocument(
+                LoadedDocument(consumerTree.FilePath, consumerTree, model),
+                context
+            )
+        )
+        let producerText = GSharpPrinter.Print(
+            CSharpToGSharpTranslator().TranslateDocument(
+                LoadedDocument(producerTree.FilePath, producerTree, producer.GetSemanticModel(producerTree)),
+                TranslationContext(producer, producer.GetSemanticModel(producerTree), producerTree.FilePath)
+            )
+        )
+        Assert.Contains("return value!!.Value", consumerText)
+        let lines = (consumerText + "\n" + producerText).Split('\n')
+        let imports = lines.Where((line string) -> line.StartsWith("import ", StringComparison.Ordinal)).Distinct()
+        let bodies = lines.Where((line string) -> !line.StartsWith("import ", StringComparison.Ordinal))
+        Assert.Equal("cleared", CompileAndRun(string.Join("\n", imports.Concat(bodies)), Array.Empty[byte]()).Trim())
+    }
+
+    @Fact
+    func RefParameter_SharedSyntaxTreeUsesTheSelectedProducerMethodOwner() {
+        let shared = CSharpSyntaxTree.ParseText(
+            "namespace Lib5617 { public static class SharedBody { public static void Probe() { Helper.Touch(); } } }",
+            path: "Shared.cs"
+        )
+        let producerTree = CSharpSyntaxTree.ParseText(
+            "namespace Lib5617 { internal static class Helper { public static void Touch() { Producer.Value = null; } } public static class Producer { public static string? Value; public static void Probe() { SharedBody.Probe(); } } }",
+            path: "Producer.cs"
+        )
+        let helperTree = CSharpSyntaxTree.ParseText(
+            "namespace Lib5617 { internal static class Helper { public static void Touch() {} } }",
+            path: "ConsumerHelper.cs"
+        )
+        let consumerTree = CSharpSyntaxTree.ParseText(
+            "using System; using Lib5617; public static class Demo { private static int Guard(ref string? value) { if(value == null)return 0; Producer.Probe(); return value.Length; } public static string Run() { Producer.Value = \"safe\"; try { return Guard(ref Producer.Value).ToString(); } catch(NullReferenceException) { return \"cleared\"; } } }",
+            path: "Consumer.cs"
+        )
+        let options = CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+            NullableContextOptions.Enable
+        )
+        let producer = CSharpCompilation.Create(
+            "Lib5617",
+            []SyntaxTree{shared, producerTree},
+            CSharpProjectLoader.RuntimeReferences(),
+            options
+        )
+        let consumer = CSharpCompilation.Create(
+            "ConsumerShared5326",
+            []SyntaxTree{shared, helperTree, consumerTree},
+            CSharpProjectLoader.RuntimeReferences().Append(cast[MetadataReference](producer.ToMetadataReference())),
+            options
+        )
+        Assert.Empty(
+            consumer.GetDiagnostics().Where((diagnostic Diagnostic) -> diagnostic.Severity == DiagnosticSeverity.Error)
+        )
+        let model = consumer.GetSemanticModel(consumerTree)
+        let document = LoadedDocument(consumerTree.FilePath, consumerTree, model)
+        let context = TranslationContext(consumer, model, document.FilePath)
+        let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+        Assert.Contains("return value!!.Length", printed)
+        using let producerImage = MemoryStream()
+        let emitted = producer.Emit(producerImage)
+        Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics))
+        Assert.Equal("cleared", CompileAndRun(printed, producerImage.ToArray()).Trim())
+    }
+
+    @Theory
+    @InlineData(true)
+    @InlineData(false)
+    func RefParameter_SharedTreeCallbackRetainsItsCallerCompilation(callbackClears bool) {
+        let shared = CSharpSyntaxTree.ParseText(
+            "using System; namespace Lib5617 { public static class SharedCallback { public static void Invoke(Action action) { action(); } public static void Callback() { Helper.Touch(); } } }",
+            path: "SharedCallback.cs"
+        )
+        let producerTree = CSharpSyntaxTree.ParseText(
+            "using System; namespace Lib5617 { internal static class Helper { public static void Touch() {} } public static class Producer { public static string? Value; public static void Invoke(Action action) { SharedCallback.Invoke(action); } } }",
+            path: "Producer.cs"
+        )
+        let clear = if callbackClears {
+            "Producer.Value = null;"
+        } else {
+            ""
+        }
+        let helperTree = CSharpSyntaxTree.ParseText(
+            "namespace Lib5617 { internal static class Helper { public static void Touch() { $clear } } }",
+            path: "CallerHelper.cs"
+        )
+        let consumerTree = CSharpSyntaxTree.ParseText(
+            "using System; using Lib5617; public static class Demo { private static int Guard(ref string? value) { if(value == null)return 0; Producer.Invoke(SharedCallback.Callback); return value.Length; } public static string Run() { Producer.Value = \"safe\"; try { return Guard(ref Producer.Value).ToString(); } catch(NullReferenceException) { return \"cleared\"; } } }",
+            path: "Caller.cs"
+        )
+        let options = CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+            NullableContextOptions.Enable
+        )
+        let producer = CSharpCompilation.Create(
+            "Lib5617",
+            []SyntaxTree{shared, producerTree},
+            CSharpProjectLoader.RuntimeReferences(),
+            options
+        )
+        let consumer = CSharpCompilation.Create(
+            "CallbackOwners5326",
+            []SyntaxTree{shared, helperTree, consumerTree},
+            CSharpProjectLoader.RuntimeReferences().Append(cast[MetadataReference](producer.ToMetadataReference())),
+            options
+        )
+        Assert.Empty(
+            consumer.GetDiagnostics().Where((diagnostic Diagnostic) -> diagnostic.Severity == DiagnosticSeverity.Error)
+        )
+        let model = consumer.GetSemanticModel(consumerTree)
+        let document = LoadedDocument(consumerTree.FilePath, consumerTree, model)
+        let context = TranslationContext(consumer, model, document.FilePath)
+        let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+        Assert.Contains(
+            if callbackClears {
+                "return value!!.Length"
+            } else {
+                "return value.Length"
+            },
+            printed
+        )
+    }
+
+    @Fact
+    func RefParameter_CancelledSemanticBatchDoesNotPublishLinkedStorage() {
+        let project = CSharpProjectLoader.LoadInMemory(
+            [](string, string){
+                (
+                    "CancelledSemanticBatch.cs",
+                    "public static class Demo { private static void Clear(ref string value) { value = null; } public static string Run() { var items = new[] {\"safe\"}; Clear(ref items[0]); return items[0] ?? \"-\"; } }"
+                )
+            }
+        )
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        let document = Assert.Single(project.Documents)
+        let catalog = List[CSharpCompilation]{project.Compilation}
+        using let cancellation = CancellationTokenSource()
+        let cancelled = TranslationContext(
+            project.Compilation,
+            document.SemanticModel,
+            document.FilePath,
+            catalog,
+            catalog,
+            cancellation.Token
+        )
+        var reached = false
+        cancelled.BeforeRefStoragePublication = func () {
+            reached = true
+            cancellation.Cancel()
+        }
+        Assert.ThrowsAny[OperationCanceledException](
+            func () {
+                let _ = CSharpToGSharpTranslator().TranslateDocument(document, cancelled)
+            }
+        )
+        Assert.True(reached)
+        var rebuilt = false
+        let retry = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath, catalog, catalog)
+        retry.BeforeRefStoragePublication = func () {
+            rebuilt = true
+        }
+        let output = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, retry))
+        Assert.True(rebuilt)
+        Assert.Contains("[]string?", output)
+        let peer = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath, catalog, catalog)
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(output),
+            Encoding.UTF8.GetBytes(GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, peer)))
+        )
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("-"),
+            Encoding.UTF8.GetBytes(CompileAndRun(output, Array.Empty[byte](), strictIl: true).Trim())
+        )
+    }
+
+    @Fact
+    func RefParameter_CatalogEpochIsolatesLinkedRefArrayPromotionsAcrossExistingContexts() {
+        let shared = CSharpSyntaxTree.ParseText(
+            "public static class Demo { public static string[] Values = new[] {\"safe\"}; internal static void Keep(ref string value) {} public static string Run() { Keep(ref Values[0]); return Values[0] ?? \"-\"; } }",
+            path: "SharedArrayEpoch.cs"
+        )
+        let first = CSharpCompilation.Create(
+            "LinkedEpochFirst5326",
+            []SyntaxTree{shared},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        let caller = CSharpSyntaxTree.ParseText(
+            "internal static class Caller { private static void Clear(ref string value) { value = null; } internal static void Touch() { Clear(ref Demo.Values[0]); } }",
+            path: "NullableEpochCaller.cs"
+        )
+        let second = CSharpCompilation.Create(
+            "LinkedEpochSecond5326",
+            []SyntaxTree{shared, caller},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        let catalog = List[CSharpCompilation]{first}
+        let model = first.GetSemanticModel(shared)
+        let old = TranslationContext(first, model, shared.FilePath, catalog, catalog)
+        let document = LoadedDocument(shared.FilePath, shared, model)
+        let translator = CSharpToGSharpTranslator()
+        let before = GSharpPrinter.Print(translator.TranslateDocument(document, old))
+        Assert.Contains("Values []string", before)
+        Assert.DoesNotContain("Values []string?", before)
+        catalog.Add(second)
+        let added = TranslationContext(first, model, shared.FilePath, catalog, catalog)
+        let widened = GSharpPrinter.Print(translator.TranslateDocument(document, added))
+        Assert.Contains("Values []string?", widened)
+        let oldAfterAdd = GSharpPrinter.Print(translator.TranslateDocument(document, old))
+        Assert.Equal(Encoding.UTF8.GetBytes(before), Encoding.UTF8.GetBytes(oldAfterAdd))
+        catalog.Remove(second)
+        let removed = TranslationContext(first, model, shared.FilePath, catalog, catalog)
+        let afterRemove = GSharpPrinter.Print(translator.TranslateDocument(document, removed))
+        Assert.Equal(Encoding.UTF8.GetBytes(before), Encoding.UTF8.GetBytes(afterRemove))
+        let computations = ObliviousNullabilityAnalyzer.ComputeCount(first)
+        for var index = 0; index < 16; index++ {
+            let peer = TranslationContext(first, model, shared.FilePath, catalog, catalog)
+            Assert.Same(removed.CatalogIdentity, peer.CatalogIdentity)
+            Assert.Equal(
+                Encoding.UTF8.GetBytes(afterRemove),
+                Encoding.UTF8.GetBytes(GSharpPrinter.Print(translator.TranslateDocument(document, peer)))
+            )
+        }
+        Assert.Equal(computations, ObliviousNullabilityAnalyzer.ComputeCount(first))
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(widened),
+            Encoding.UTF8.GetBytes(GSharpPrinter.Print(translator.TranslateDocument(document, added)))
+        )
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("safe"),
+            Encoding.UTF8.GetBytes(CompileAndRun(before, Array.Empty[byte](), strictIl: true).Trim())
+        )
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("safe"),
+            Encoding.UTF8.GetBytes(CompileAndRun(widened, Array.Empty[byte](), strictIl: true).Trim())
+        )
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("safe"),
+            Encoding.UTF8.GetBytes(CompileAndRun(afterRemove, Array.Empty[byte](), strictIl: true).Trim())
+        )
+    }
+
+    @Fact
+    func RefParameter_CatalogEpochIsolatesReferencedObliviousTupleContracts() {
+        let options = CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        let producer = CSharpCompilation.Create(
+            "Lib5617",
+            []SyntaxTree{
+                CSharpSyntaxTree.ParseText(
+                    "namespace Lib5617 { public static class Contract { public static void Keep(ref (string First, string Second) pair) { pair = (null, \"safe\"); } } }",
+                    path: "TupleEpochProducer.cs"
+                )
+            },
+            CSharpProjectLoader.RuntimeReferences(),
+            options
+        )
+        using let image = MemoryStream()
+        let emitted = producer.Emit(image)
+        Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics))
+        let tree = CSharpSyntaxTree.ParseText(
+            "using Lib5617; public static class Demo { private static void Forward(ref (string First, string Second) pair) { Contract.Keep(ref pair); } public static string Run() { var pair = (First: \"safe\", Second: \"safe\"); Forward(ref pair); return pair.First ?? \"-\"; } }",
+            path: "TupleEpochConsumer.cs"
+        )
+        let root = CSharpCompilation.Create(
+            "TupleEpochConsumer5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences().Append(
+                cast[MetadataReference](MetadataReference.CreateFromImage(image.ToArray()))
+            ),
+            options
+        )
+        let method = root.GetTypeByMetadataName("Demo")!!
+            .GetMembers("Forward")
+            .OfType[IMethodSymbol]()
+            .Single()
+            .Parameters[0]
+        let catalog = List[CSharpCompilation]{root}
+        let model = root.GetSemanticModel(tree)
+        let old = TranslationContext(root, model, tree.FilePath, catalog, catalog)
+        let beforeTainted = ObliviousNullabilityAnalyzer.IsTupleElementTainted(
+            root,
+            method,
+            []int32{0},
+            old.RepositoryCompilations
+        )
+        let document = LoadedDocument(tree.FilePath, tree, model)
+        let translator = CSharpToGSharpTranslator()
+        let before = GSharpPrinter.Print(translator.TranslateDocument(document, old))
+        catalog.Add(producer)
+        let added = TranslationContext(root, model, tree.FilePath, catalog, catalog)
+        let addedTainted = ObliviousNullabilityAnalyzer.IsTupleElementTainted(
+            root,
+            method,
+            []int32{0},
+            added.RepositoryCompilations
+        )
+        let addedOutput = GSharpPrinter.Print(translator.TranslateDocument(document, added))
+        Assert.False(beforeTainted)
+        Assert.True(addedTainted)
+        Assert.False(
+            ObliviousNullabilityAnalyzer.IsTupleElementTainted(root, method, []int32{0}, old.RepositoryCompilations)
+        )
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(before),
+            Encoding.UTF8.GetBytes(GSharpPrinter.Print(translator.TranslateDocument(document, old)))
+        )
+        catalog.Remove(producer)
+        let removed = TranslationContext(root, model, tree.FilePath, catalog, catalog)
+        Assert.False(
+            ObliviousNullabilityAnalyzer.IsTupleElementTainted(root, method, []int32{0}, removed.RepositoryCompilations)
+        )
+        let removedOutput = GSharpPrinter.Print(translator.TranslateDocument(document, removed))
+        Assert.Equal(Encoding.UTF8.GetBytes(before), Encoding.UTF8.GetBytes(removedOutput))
+        let independent = root.WithAssemblyName("IndependentTupleEpoch5326")
+        let otherModel = independent.GetSemanticModel(tree)
+        let other = TranslationContext(independent, otherModel, tree.FilePath)
+        let otherMethod = independent.GetTypeByMetadataName("Demo")!!
+            .GetMembers("Forward")
+            .OfType[IMethodSymbol]()
+            .Single()
+            .Parameters[0]
+        Assert.False(
+            ObliviousNullabilityAnalyzer.IsTupleElementTainted(
+                independent,
+                otherMethod,
+                []int32{0},
+                other.RepositoryCompilations
+            )
+        )
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(before),
+            Encoding.UTF8.GetBytes(
+                GSharpPrinter.Print(
+                    translator.TranslateDocument(LoadedDocument(tree.FilePath, tree, otherModel), other)
+                )
+            )
+        )
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("-"),
+            Encoding.UTF8.GetBytes(CompileAndRun(before, image.ToArray(), strictIl: true).Trim())
+        )
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("-"),
+            Encoding.UTF8.GetBytes(CompileAndRun(addedOutput, image.ToArray(), strictIl: true).Trim())
+        )
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("-"),
+            Encoding.UTF8.GetBytes(CompileAndRun(removedOutput, image.ToArray(), strictIl: true).Trim())
+        )
+    }
+
+    @Theory
+    @InlineData("add")
+    @InlineData("remove")
+    @InlineData("replace")
+    func RefParameter_ContextCatalogSnapshotRemainsCoherentAcrossCallerMutation(change string) {
+        let tree = CSharpSyntaxTree.ParseText(
+            "using System; public static class Demo { private static string? slot; private static void Clear() { slot = null; } private static int Guard(ref string? text) { if(text == null)return 0; Clear(); var items = Parts<string>(\"item\"); return text.Length + items[0].Length; } private static T[] Parts<T>(T value) => new[] {value}; public static string Run() { slot = \"safe\"; try { return Guard(ref slot).ToString(); } catch(NullReferenceException) { return \"cleared\"; } } }",
+            path: "CatalogRoot.cs"
+        )
+        let options = CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+            NullableContextOptions.Enable
+        )
+        let root = CSharpCompilation.Create(
+            "CatalogRoot5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences(),
+            options
+        )
+        let first = CSharpCompilation.Create(
+            "CatalogFirst5326",
+            []SyntaxTree{CSharpSyntaxTree.ParseText("public class First {}", path: "First.cs")},
+            CSharpProjectLoader.RuntimeReferences(),
+            options
+        )
+        let second = CSharpCompilation.Create(
+            "CatalogSecond5326",
+            []SyntaxTree{CSharpSyntaxTree.ParseText("public class Second {}", path: "Second.cs")},
+            CSharpProjectLoader.RuntimeReferences(),
+            options
+        )
+        let catalog = List[CSharpCompilation]{first}
+        let context = TranslationContext(
+            root,
+            root.GetSemanticModel(tree),
+            tree.FilePath,
+            siblingCompilations: catalog,
+            repositoryCompilations: catalog
+        )
+        let document = LoadedDocument(tree.FilePath, tree, context.SemanticModel)
+        let ownerIndex = context.OwnershipIndexIdentity
+        let effects = context.EffectIndexes
+        Assert.Same(first, context.SourceCompilation(first.Assembly))
+        let before = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+        if change == "add" {
+            catalog.Add(second)
+        } else if change == "remove" {
+            catalog.Clear()
+        } else {
+            catalog[0] = second
+        }
+        Assert.Same(first, Assert.Single(context.RepositoryCompilations!!))
+        Assert.Same(first, Assert.Single(context.SiblingCompilations!!))
+        Assert.Same(first, context.SourceCompilation(first.Assembly))
+        Assert.Null(context.SourceCompilation(second.Assembly))
+        Assert.Same(ownerIndex, context.OwnershipIndexIdentity)
+        Assert.Same(effects, context.EffectIndexes)
+        let after = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+        Assert.Equal(Encoding.UTF8.GetBytes(before), Encoding.UTF8.GetBytes(after))
+        let fresh = TranslationContext(
+            root,
+            root.GetSemanticModel(tree),
+            tree.FilePath,
+            siblingCompilations: catalog,
+            repositoryCompilations: catalog
+        )
+        Assert.Equal(catalog.Count, fresh.RepositoryCompilations!!.Count)
+        Assert.NotSame(ownerIndex, fresh.OwnershipIndexIdentity)
+        Assert.Equal(change == "add", fresh.SourceCompilation(first.Assembly) != nil)
+        Assert.Equal(change != "remove", fresh.SourceCompilation(second.Assembly) != nil)
+        for var index = 0; index < 48; index++ {
+            let peer = TranslationContext(
+                root,
+                root.GetSemanticModel(tree),
+                tree.FilePath,
+                siblingCompilations: catalog,
+                repositoryCompilations: catalog
+            )
+            Assert.Same(fresh.RepositoryCompilations, peer.RepositoryCompilations)
+            Assert.Same(fresh.SiblingCompilations, peer.SiblingCompilations)
+            Assert.Same(fresh.OwnershipIndexIdentity, peer.OwnershipIndexIdentity)
+            Assert.Same(fresh.EffectIndexes, peer.EffectIndexes)
+        }
+        let freshOutput = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, fresh))
+        let oldAgain = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+        Assert.Contains("return text!!.Length", after)
+        Assert.Equal(Encoding.UTF8.GetBytes(after), Encoding.UTF8.GetBytes(freshOutput))
+        Assert.Equal(Encoding.UTF8.GetBytes(after), Encoding.UTF8.GetBytes(oldAgain))
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("cleared"),
+            Encoding.UTF8.GetBytes(CompileAndRun(after, Array.Empty[byte]()).Trim())
+        )
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("cleared"),
+            Encoding.UTF8.GetBytes(CompileAndRun(freshOutput, Array.Empty[byte]()).Trim())
+        )
+    }
+
+    @Fact
+    func RefParameter_DocumentOwnershipIsLazySharedAndCatalogVersioned() {
+        let trees = Enumerable
+            .Range(0, 48)
+            .Select(
+            (index int32) ->
+            cast[SyntaxTree](CSharpSyntaxTree.ParseText("public class C$index {}", path: "C$index.cs"))
+        )
+            .ToArray()
+        let compilation = CSharpCompilation.Create("Owners5326", trees, CSharpProjectLoader.RuntimeReferences())
+        let contexts = List[TranslationContext]()
+        var visits = 0
+        for tree in trees {
+            let model = compilation.GetSemanticModel(tree)
+            let context = TranslationContext(compilation, model, tree.FilePath)
+            context.BeforeOwnershipTree = func () {
+                visits++
+            }
+            Assert.Same(model, context.GetOwnedSemanticModel(tree))
+            Assert.False(context.HasOwnershipIndex)
+            contexts.Add(context)
+        }
+        Assert.Equal(0, visits)
+        for context in contexts {
+            Assert.Same(contexts[0].OwnershipIndexIdentity, context.OwnershipIndexIdentity)
+            Assert.Equal(trees.Length, context.OwnershipTreeEntries)
+            Assert.Same(compilation, context.GetOwnedSemanticModel(trees[1]).Compilation)
+        }
+        Assert.Equal(trees.Length, visits)
+        let other = CSharpCompilation.Create(
+            "OtherOwners5326",
+            []SyntaxTree{CSharpSyntaxTree.ParseText("public class Other {}", path: "Other.cs")},
+            CSharpProjectLoader.RuntimeReferences()
+        )
+        let catalog = List[CSharpCompilation]{other}
+        let withCatalog = TranslationContext(
+            compilation,
+            compilation.GetSemanticModel(trees[0]),
+            trees[0].FilePath,
+            repositoryCompilations: catalog
+        )
+        let sameCatalog = TranslationContext(
+            compilation,
+            compilation.GetSemanticModel(trees[1]),
+            trees[1].FilePath,
+            repositoryCompilations: catalog
+        )
+        Assert.Same(withCatalog.OwnershipIndexIdentity, sameCatalog.OwnershipIndexIdentity)
+        Assert.NotSame(contexts[0].OwnershipIndexIdentity, withCatalog.OwnershipIndexIdentity)
+        Assert.Equal(trees.Length + 1, withCatalog.OwnershipTreeEntries)
+        catalog.Clear()
+        let changedCatalog = TranslationContext(
+            compilation,
+            compilation.GetSemanticModel(trees[0]),
+            trees[0].FilePath,
+            repositoryCompilations: catalog
+        )
+        Assert.NotSame(withCatalog.OwnershipIndexIdentity, changedCatalog.OwnershipIndexIdentity)
+        Assert.Equal(trees.Length, changedCatalog.OwnershipTreeEntries)
+        let otherRoot = TranslationContext(other, other.GetSemanticModel(other.SyntaxTrees.Single()), "Other.cs")
+        Assert.NotSame(contexts[0].OwnershipIndexIdentity, otherRoot.OwnershipIndexIdentity)
+    }
+
+    @Fact
+    async func RefParameter_CancelledOwnershipWalkDoesNotPublishAndRetriesCleanly() {
+        let trees = Enumerable
+            .Range(0, 8)
+            .Select(
+            (index int32) ->
+            cast[SyntaxTree](CSharpSyntaxTree.ParseText("public class Cancel$index {}", path: "Cancel$index.cs"))
+        )
+            .ToArray()
+        let compilation = CSharpCompilation.Create(
+            "CancelledOwners5326",
+            trees,
+            CSharpProjectLoader.RuntimeReferences()
+        )
+        using let cancellation = CancellationTokenSource()
+        using let entered = ManualResetEventSlim()
+        using let release = ManualResetEventSlim()
+        let context = TranslationContext(
+            compilation,
+            compilation.GetSemanticModel(trees[0]),
+            trees[0].FilePath,
+            cancellationToken: cancellation.Token
+        )
+        context.BeforeOwnershipTree = func () {
+            entered.Set()
+            if !release.Wait(TimeSpan.FromSeconds(10)) {
+                throw TimeoutException("ownership test barrier not released")
+            }
+        }
+        let worker = Task.Run(
+            func () {
+                let _ = context.OwnershipIndexIdentity
+            }
+        )
+        try {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(10)), "ownership walk did not enter barrier")
+            cancellation.Cancel()
+        } finally {
+            cancellation.Cancel()
+            release.Set()
+            try {
+                await worker.WaitAsync(TimeSpan.FromSeconds(10))
+            } catch (error OperationCanceledException) { }
+        }
+        await Assert.ThrowsAnyAsync[OperationCanceledException](
+            async func () {
+                await worker.WaitAsync(TimeSpan.FromSeconds(10))
+            }
+        )
+        Assert.False(context.HasOwnershipIndex)
+        var visits = 0
+        let retry = TranslationContext(compilation, compilation.GetSemanticModel(trees[0]), trees[0].FilePath)
+        retry.BeforeOwnershipTree = func () {
+            visits++
+        }
+        Assert.Equal(trees.Length, retry.OwnershipTreeEntries)
+        Assert.Equal(trees.Length, visits)
+        let reuse = TranslationContext(compilation, compilation.GetSemanticModel(trees[1]), trees[1].FilePath)
+        Assert.Same(retry.OwnershipIndexIdentity, reuse.OwnershipIndexIdentity)
+    }
+
+    @Fact
+    func RefParameter_CompilationIndexesAreSharedAcrossDocumentVisitors() {
+        let trees = Enumerable
+            .Range(0, 8)
+            .Select(
+            (index int32) -> cast[SyntaxTree](
+                CSharpSyntaxTree.ParseText(
+                    "using System.Linq; public static class Part" + index.ToString() +
+                        " { private static string? text; private static ref string? Slot() => ref text; private static void Clear() { text = null; } " +
+                        "private static int Guard(ref string? value) { if(value == null) return 0; Clear(); _ = new[] {1}.Where(x => true).Count(); return value.Length; } }",
+                    path: "Part" + index.ToString() + ".cs"
+                )
+            )
+        )
+            .ToArray()
+        let compilation = CSharpCompilation.Create(
+            "IndexSharing5326",
+            trees,
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+                NullableContextOptions.Enable
+            )
+        )
+        var first TranslationContext? = nil
+        for tree in trees {
+            let model = compilation.GetSemanticModel(tree)
+            let context = TranslationContext(compilation, model, tree.FilePath)
+            let initial = first ?? context
+            first = initial
+            Assert.Same(initial.EffectIndexes, context.EffectIndexes)
+            let printed = GSharpPrinter.Print(
+                CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, model), context)
+            )
+            Assert.Contains("return value!!.Length", printed)
+        }
+        Assert.InRange(first!!.EffectIndexes.TreeVisits, trees.Length, trees.Length * 3)
+    }
+
+    @Fact
+    func RefParameter_LoadOwnedImagesShareMetadataAndPreserveReferenceProperties() {
+        let directory = Path.Combine(AppContext.BaseDirectory, "SharedImages5326", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let path = Path.Combine(directory, "System.Console.dll")
+            File.Copy(typeof(Console).Assembly.Location, path)
+            let snapshots = Dictionary[string, PortableExecutableReference](StringComparer.Ordinal)
+            let first = TranslationContext.CreateOwnedMetadataReference(path, snapshots: snapshots)
+            File.WriteAllBytes(path, []byte{0})
+            for var index = 0; index < 16; index++ {
+                let properties = MetadataReferenceProperties
+                    .Assembly
+                    .WithAliases(ImmutableArray.Create("framework"))
+                    .WithEmbedInteropTypes(index % 2 == 0)
+                let reference = TranslationContext.CreateOwnedMetadataReference(path, properties, snapshots)
+                Assert.Equal(properties, reference.Properties)
+                Assert.Same(first.GetMetadata().Id, reference.GetMetadata().Id)
+                let compilation = CSharpCompilation.Create(
+                    "ImageProject" + index.ToString(),
+                    references: []MetadataReference{reference}
+                )
+                Assert.NotNull(compilation.GetAssemblyOrModuleSymbol(reference))
+                Assert.True(TranslationContext.HasTrustedEffectImage(reference, typeof(Console).Assembly.FullName!!))
+            }
+            Assert.Single(snapshots)
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    @Fact
+    func RefParameter_InvalidHostMetadataDoesNotPoisonDefaultReferences() {
+        let directory = Path.Combine(AppContext.BaseDirectory, "InvalidHostMetadata5326", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let invalid = Path.Combine(directory, "InvalidDependency.dll")
+            let image = CorruptMetadataImage()
+            File.WriteAllBytes(invalid, image)
+            using let invalidReader = PEReader(MemoryStream(image))
+            Assert.True(invalidReader.HasMetadata)
+            Assert.NotNull(invalidReader.PEHeaders.CorHeader)
+            Assert.Throws[BadImageFormatException](
+                () -> {
+                    let _ = invalidReader.GetMetadataReader()
+                }
+            )
+            let source = `
+using System;
+using System.IO;
+using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Runtime.Loader;
+using Microsoft.CodeAnalysis;
+using Cs2Gs.Translator.Loading;
+public static class Probe {
+    public static int Main(string[] args) {
+        AssemblyLoadContext.Default.Resolving += (context, name) => {
+            var path = Path.Combine(args[0], name.Name + ".dll");
+            return File.Exists(path) ? context.LoadFromAssemblyPath(path) : null;
+        };
+        return Run(args[1]);
+    }
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static int Run(string invalid) {
+        var original = (string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES");
+        if (!original.Split(Path.PathSeparator).Contains(invalid))
+            throw new Exception("Invalid dependency is not a real host TPA input.");
+        object cached = null;
+        for (int pass = 0; pass < 2; pass++) {
+            var loaded = CSharpProjectLoader.LoadInMemory(new[] { ("Use.cs", "public class Use {}") });
+            if (!loaded.Compilation.GetDiagnostics().Any(d => d.Id == "CS0009"))
+                throw new Exception("Missing original bad-reference diagnostic.");
+            var reference = loaded.Compilation.References.OfType<PortableExecutableReference>()
+                .Single(r => r.FilePath == invalid);
+            if (!reference.Properties.Equals(MetadataReferenceProperties.Assembly))
+                throw new Exception("Reference properties changed.");
+            var current = CSharpProjectLoader.RuntimeReferences();
+            if (cached != null && !ReferenceEquals(cached, current))
+                throw new Exception("Default reference publication changed.");
+            cached = current;
+        }
+        Console.WriteLine("CS0009|CS0009|retained|same-defaults");
+        return 0;
+    }
+}`
+            let compilation = CSharpCompilation.Create(
+                "InvalidMetadataHost5326",
+                []SyntaxTree{CSharpSyntaxTree.ParseText(source)},
+                CSharpProjectLoader.RuntimeReferences(),
+                CSharpCompilationOptions(OutputKind.ConsoleApplication)
+            )
+            let path = Path.Combine(directory, "Probe.dll")
+            let emitted = compilation.Emit(path)
+            Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics))
+            File.WriteAllText(
+                Path.ChangeExtension(path, ".runtimeconfig.json"),
+                "{\"runtimeOptions\":{\"tfm\":\"net10.0\",\"framework\":{\"name\":\"Microsoft.NETCore.App\",\"version\":\"10.0.0\"}}}"
+            )
+            let (exit, output) = RunDotnet(
+                path,
+                Path.GetDirectoryName(typeof(CSharpProjectLoader).Assembly.Location)!!,
+                invalid
+            )
+            Assert.True(exit == 0, output)
+            Assert.Equal(
+                Encoding.UTF8.GetBytes("CS0009|CS0009|retained|same-defaults" + Environment.NewLine),
+                Encoding.UTF8.GetBytes(output)
+            )
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    @Theory
+    @InlineData("metadata")
+    @InlineData("headers")
+    @InlineData("valid")
+    func RefParameter_MetadataSnapshotFallbackPreservesProperties(kind string) {
+        let directory = Path.Combine(AppContext.BaseDirectory, "MetadataFallback5326", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let path = Path.Combine(directory, "System.Console.dll")
+            File.WriteAllBytes(
+                path,
+                if kind == "metadata" {
+                    CorruptMetadataImage()
+                } else if kind == "headers" {
+                    []byte{0}
+                } else {
+                    File.ReadAllBytes(typeof(Console).Assembly.Location)
+                }
+            )
+            let properties = MetadataReferenceProperties
+                .Assembly
+                .WithAliases(ImmutableArray.Create("framework", "secondary"))
+                .WithEmbedInteropTypes(true)
+            let snapshots = Dictionary[string, PortableExecutableReference](StringComparer.Ordinal)
+            let reference = TranslationContext.CreateOwnedMetadataReference(path, properties, snapshots)
+            Assert.Equal(properties, reference.Properties)
+            Assert.Equal(path, reference.FilePath)
+            if kind == "valid" {
+                Assert.Single(snapshots)
+                Assert.True(TranslationContext.HasTrustedEffectImage(reference, typeof(Console).Assembly.FullName!!))
+                File.Delete(path)
+                Assert.Same(reference, TranslationContext.CreateOwnedMetadataReference(path, properties, snapshots))
+            } else {
+                Assert.Empty(snapshots)
+                Assert.False(TranslationContext.HasTrustedEffectImage(reference, typeof(Console).Assembly.FullName!!))
+                let compilation = CSharpCompilation.Create(
+                    "InvalidReference5326",
+                    references: []MetadataReference{reference}
+                )
+                Assert.Contains(compilation.GetDiagnostics(), (diagnostic Diagnostic) -> diagnostic.Id == "CS0009")
+            }
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    @Fact
+    func RefParameter_CanceledComparerIndexPublishesNothingAndRetriesOnce() {
+        let tree = CSharpSyntaxTree.ParseText(`
+using System;
+using System.Linq;
+using System.Collections.Generic;
+public static class Demo {
+    private static string? global;
+    private static IEqualityComparer<int> Make() => EqualityComparer<int>.Create((x,y) => x == y, x => { global = null; return x; });
+    private static void Probe() { _ = Enumerable.Count(new[] { 1 }); }
+    private static int Guard(ref string? value) { if(value == null)return 0; Probe(); return value.Length; }
+    public static string Run() { global = "safe"; return Guard(ref global).ToString(); }
+}`, path: "IndexCancellation.cs")
+        let compilation = CSharpCompilation.Create(
+            "IndexCancellation5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+                NullableContextOptions.Enable
+            )
+        )
+        let model = compilation.GetSemanticModel(tree)
+        let document = LoadedDocument(tree.FilePath, tree, model)
+        using let cancellation = CancellationTokenSource()
+        using let entered = ManualResetEventSlim()
+        using let release = ManualResetEventSlim()
+        let context = TranslationContext(compilation, model, tree.FilePath, cancellationToken: cancellation.Token)
+        context.AfterStorageComparerFactory = () -> {
+            entered.Set()
+            if !release.Wait(TimeSpan.FromSeconds(15)) {
+                throw TimeoutException("Comparer index barrier was not released.")
+            }
+        }
+        let translation = Task.Run(() -> CSharpToGSharpTranslator().TranslateDocument(document, context))
+        try {
+            Assert.True(
+                entered.Wait(TimeSpan.FromSeconds(15)),
+                "The actual comparer index scan must reach its barrier."
+            )
+            cancellation.Cancel()
+        } finally {
+            release.Set()
+            Assert.Same(
+                translation,
+                Task.WhenAny(translation, Task.Delay(TimeSpan.FromSeconds(15))).GetAwaiter().GetResult()
+            )
+            context.AfterStorageComparerFactory = nil
+        }
+        Assert.ThrowsAny[OperationCanceledException](() -> translation.GetAwaiter().GetResult())
+        Assert.Null(context.EffectIndexes.DeferredIndex)
+        let retry = TranslationContext(compilation, model, tree.FilePath)
+        let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, retry))
+        let completed = Assert.IsType[TranslationContext.DeferredCallbackIndex](retry.EffectIndexes.DeferredIndex)
+        Assert.Single(completed.Comparers)
+        Assert.Empty(completed.Factories)
+        let again = TranslationContext(compilation, model, tree.FilePath)
+        let repeated = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, again))
+        Assert.Same(completed, again.EffectIndexes.DeferredIndex)
+        Assert.Equal(printed, repeated)
+        Assert.Contains("return value.Length", printed)
+        Assert.Equal("4", CompileAndRun(printed, Array.Empty[byte]()).Trim())
+    }
+
+    @Fact
+    func RefParameter_CancellationInterruptsAnActiveCalleeWalk() {
+        let source = StringBuilder(
+            "public static class Demo { private static void Leaf() { } private static void Work() {"
+        )
+        for var i = 0; i < 12000; i++ {
+            source.Append("Leaf();")
+        }
+        source.Append(
+            "} private static int Guard(ref string? s) { if (s == null) return 0; Work(); return s.Length; } }"
+        )
+        let tree = CSharpSyntaxTree.ParseText(source.ToString())
+        let compilation = CSharpCompilation.Create(
+            "CancelEffects5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+                NullableContextOptions.Enable
+            )
+        )
+        let model = compilation.GetSemanticModel(tree)
+        let document = LoadedDocument("Snippet.cs", tree, model)
+        using let cancellation = CancellationTokenSource()
+        let context = TranslationContext(compilation, model, document.FilePath, cancellationToken: cancellation.Token)
+        using let entered = ManualResetEventSlim()
+        using let release = ManualResetEventSlim()
+        var visits = 0
+        context.BeforeStorageEffectBody = () -> {
+            if Interlocked.Increment(ref visits) == 1 {
+                entered.Set()
+                if !release.Wait(TimeSpan.FromSeconds(15)) {
+                    throw TimeoutException("Callee barrier was not released.")
+                }
+            }
+        }
+        let translation = Task.Run(() -> CSharpToGSharpTranslator().TranslateDocument(document, context))
+        try {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(15)), "The product callee walk must reach its barrier.")
+            cancellation.Cancel()
+        } finally {
+            release.Set()
+            Assert.Same(
+                translation,
+                Task.WhenAny(translation, Task.Delay(TimeSpan.FromSeconds(15))).GetAwaiter().GetResult()
+            )
+            context.BeforeStorageEffectBody = nil
+        }
+        Assert.ThrowsAny[OperationCanceledException](() -> translation.GetAwaiter().GetResult())
+    }
+
     @Fact
     func RefParameter_ReadAroundAForEachOverACallWhoseLoopVariableIsRead_IsAsserted() {
         let printed = AssertRunsLikeCSharp(`
@@ -2048,13 +5387,13 @@ namespace OtherNs
         Assert.Contains("return s!!.Length + 17", printed)
         Assert.Contains("return s!!.Length + 18", printed)
         Assert.Contains("return s.Length + 19", printed)
-        Assert.Contains("return s.Length + 15", printed)
-        Assert.Contains("return s.Length + total + 16", printed)
+        Assert.Contains("return s!!.Length + 15", printed)
+        Assert.Contains("return s!!.Length + total + 16", printed)
         Assert.Contains("return s.Length + total + 1", printed)
-        Assert.Contains("return s.Length + total + 2", printed)
+        Assert.Contains("return s!!.Length + total + 2", printed)
         Assert.Contains("return s.Length + total + 4", printed)
         Assert.Contains("return s!!.Length + total + 23", printed)
-        Assert.Equal(12, Regex.Matches(printed, `s!!`).Count)
+        Assert.Equal(15, Regex.Matches(printed, `s!!`).Count)
     }
 
     /// Issue #5697: gsc narrows after a `do ... while`, `while`, or `for` loop whose exit condition proves non-null
@@ -2494,10 +5833,10 @@ public partial class Demo
         Assert.Contains("return s!!.Length + 24", printed)
         Assert.Contains("return s!!.Length + 25", printed)
         Assert.Contains("return s!!.Length + 26", printed)
-        Assert.Contains("return s.Length + 29", printed)
+        Assert.Contains("return s!!.Length + 29", printed)
         Assert.Contains("return s!!.Length + 27", printed)
         Assert.Contains("obj!!.GetHashCode()", printed)
-        Assert.Equal(19, Regex.Matches(printed, `s!!`).Count)
+        Assert.Equal(20, Regex.Matches(printed, `s!!`).Count)
     }
 
     /// Issues #5637 and #5238: an accessor in an earlier operand of the same expression removes a by-reference fact
@@ -2827,14 +6166,27 @@ public class Demo
     shared {
         /// Runs `Demo.Run()` of the C# and of its translation and compares the output. [`library`](paramref) is C#
         /// that both reference as a prebuilt assembly (`Lib5617`), so its types are imported in the G#.
-        private func AssertRunsLikeCSharp(source string, library string? = nil) string {
+        private func AssertRunsLikeCSharp(
+            source string,
+            library string? = nil,
+            inspect Action[TranslationContext]? = nil,
+            cancellationToken CancellationToken = default(CancellationToken),
+            runtimeOnlyLibrary bool = false
+        ) string {
             let libraryImage = if library == nil {
                 Array.Empty[byte]()
             } else {
-                EmitCSharp("Lib5617", library)
+                EmitCSharp(
+                    if runtimeOnlyLibrary {
+                        "HiddenCaller5326"
+                    } else {
+                        "Lib5617"
+                    },
+                    library
+                )
             }
             let references = List[MetadataReference](CSharpProjectLoader.RuntimeReferences())
-            if libraryImage.Length > 0 {
+            if libraryImage.Length > 0 && !runtimeOnlyLibrary {
                 references.Add(MetadataReference.CreateFromImage(libraryImage))
             }
             let tree = CSharpSyntaxTree.ParseText(
@@ -2867,13 +6219,36 @@ public class Demo
                 )
                 let model = compilation.GetSemanticModel(tree)
                 let document = LoadedDocument("Snippet.cs", tree, model)
-                let context = TranslationContext(compilation, model, document.FilePath)
+                let context = TranslationContext(
+                    compilation,
+                    model,
+                    document.FilePath,
+                    cancellationToken: cancellationToken
+                )
                 let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
-                Assert.Equal(expected, CompileAndRun(printed, libraryImage).Trim())
+                inspect?.Invoke(context)
+                Assert.Equal(expected, CompileAndRun(printed, libraryImage, runtimeOnlyLibrary).Trim())
                 return printed
             } finally {
                 loadContext.Unload()
             }
+        }
+
+        private func CorruptMetadataImage()[]byte {
+            let image = File.ReadAllBytes(typeof(Console).Assembly.Location)
+            using let reader = PEReader(MemoryStream(image))
+            let headers = reader.PEHeaders
+            let metadata = (
+                headers.CorHeader ?? throw InvalidOperationException("CLI header missing.")
+            ).MetadataDirectory
+            let section = headers.SectionHeaders.First(
+                (value SectionHeader) -> metadata.RelativeVirtualAddress >= value.VirtualAddress &&
+                    metadata.RelativeVirtualAddress < value.VirtualAddress +
+                    value.SizeOfRawData
+            )
+            let offset = section.PointerToRawData + metadata.RelativeVirtualAddress - section.VirtualAddress
+            Array.Clear(image, offset, 4)
+            return image
         }
 
         private func EmitCSharp(name string, source string)[]byte {
@@ -2891,7 +6266,12 @@ public class Demo
             return stream.ToArray()
         }
 
-        private func CompileAndRun(printed string, libraryImage[]byte) string {
+        private func CompileAndRun(
+            printed string,
+            libraryImage[]byte,
+            runtimeOnlyLibrary bool = false,
+            strictIl bool = false
+        ) string {
             let compiler string? = FindCompiler()
             Assert.True(
                 compiler != nil,
@@ -2913,10 +6293,21 @@ public class Demo
                     "import System${Environment.NewLine}Console.WriteLine(Demo.Run())${Environment.NewLine}"
                 )
                 let arguments = List[string]{compiler!!, "/target:exe", "/out:$dllPath", gsPath, mainPath}
+                let verifyReferences = List[string]()
                 if libraryImage.Length > 0 {
-                    let libraryPath = Path.Combine(workDir, "Lib5617.dll")
+                    let libraryPath = Path.Combine(
+                        workDir,
+                        if runtimeOnlyLibrary {
+                            "HiddenCaller5326.dll"
+                        } else {
+                            "Lib5617.dll"
+                        }
+                    )
                     File.WriteAllBytes(libraryPath, libraryImage)
-                    arguments.Add("/r:" + libraryPath)
+                    verifyReferences.Add(libraryPath)
+                    if !runtimeOnlyLibrary {
+                        arguments.Add("/r:" + libraryPath)
+                    }
                 }
                 let (compileExit, compileOutput) = RunDotnet(arguments.ToArray())
                 Assert.True(
@@ -2926,6 +6317,19 @@ public class Demo
                         "\n\nTranslated G#:\n" +
                         printed
                 )
+                if strictIl {
+                    let verify = List[string]{"tool", "run", "ilverify", dllPath, "-s", "System.Private.CoreLib"}
+                    for reference in Directory.EnumerateFiles(
+                        Path.GetDirectoryName(typeof(object).Assembly.Location)!!,
+                        "*.dll"
+                    )
+                        .Concat(verifyReferences) {
+                        verify.Add("-r")
+                        verify.Add(reference)
+                    }
+                    let (verifyExit, verifyOutput) = RunDotnet(verify.ToArray())
+                    Assert.True(verifyExit == 0, verifyOutput)
+                }
                 // A `!!` on the by-reference read where gsc keeps the fact is GS0536.
                 let lines = printed.Replace("\r\n", "\n").Split('\n')
                 for diagnostic in Regex.Matches(compileOutput, `Snippet\.gs\((\d+),\d+,\d+,\d+\): warning GS0536`) {

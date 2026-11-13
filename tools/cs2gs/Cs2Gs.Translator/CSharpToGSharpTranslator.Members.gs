@@ -2013,13 +2013,7 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
-        private func KnownCompilations() IEnumerable[CSharpCompilation] -> []CSharpCompilation{
-            this.context.RootCompilation,
-            this.context.Compilation
-        }
-            .Concat(this.context.SiblingCompilations ?? Array.Empty[CSharpCompilation]())
-            .Concat(this.context.RepositoryCompilations ?? Array.Empty[CSharpCompilation]())
-            .Distinct()
+        private func KnownCompilations() IEnumerable[CSharpCompilation] -> this.context.SourceCompilations()
 
         private func CanonicalExtensionSignature(method IMethodSymbol?) string -> this.CanonicalEmittedType(
             method!!.Parameters[0].Type,
@@ -2054,12 +2048,10 @@ partial class CSharpToGSharpTranslator {
         private func CanonicalEmittedType(type ITypeSymbol, method IMethodSymbol?) string {
             // Collision probing must not add imports or unsupported diagnostics
             // to the real translation (e.g. an Index-typed unrelated overload).
-            let signatureContext = TranslationContext(
+            let signatureContext = this.context.CreateRelatedContext(
                 this.context.Compilation,
                 this.context.SemanticModel,
-                this.context.FilePath,
-                this.context.SiblingCompilations,
-                this.context.RepositoryCompilations
+                this.context.FilePath
             )
             let signatureMapper = CSharpTypeMapper(AnonymousTypeRegistry(), this.nameAllocator)
             let mapped GTypeReference? = signatureMapper.Map(type, signatureContext, Location.None)
@@ -2085,37 +2077,17 @@ partial class CSharpToGSharpTranslator {
                 original!!.ContainingAssembly,
                 this.context.Compilation.Assembly
             ) {
-                let owner CSharpCompilation? = this
-                    .KnownCompilations()
-                    .Concat(
-                    this
-                        .context
-                        .Compilation
-                        .References
-                        .OfType[CompilationReference]()
-                        .Select((reference CompilationReference) -> reference.Compilation)
-                        .OfType[CSharpCompilation]()
-                )
-                    .FirstOrDefault(
-                    (compilation CSharpCompilation) -> SameAssembly(compilation.Assembly, original!!.ContainingAssembly)
-                )
-                let id string? = original!!.OriginalDefinition.GetDocumentationCommentId()
-                if owner != nil && id != nil && DocumentationCommentId.GetFirstSymbolForDeclarationId(
-                    id,
-                    owner
-                ) is IMethodSymbol declared &&
-                    declared
-                    .DeclaringSyntaxReferences
-                    .FirstOrDefault() is SyntaxReference reference {
+                let owner = this.context.SourceCompilation(original!!)
+                let declared = original!!.OriginalDefinition
+                if owner != nil && declared.DeclaringSyntaxReferences.FirstOrDefault() is SyntaxReference reference {
                     // Ask the declaring project's registry and eligibility reader,
                     // including its body-based suspension/nullability context.
-                    let ownerContext = TranslationContext(
+                    let ownerContext = this.context.CreateRelatedContext(
                         owner,
-                        owner.GetSemanticModel(reference.SyntaxTree),
-                        reference.SyntaxTree.FilePath,
-                        this.context.SiblingCompilations,
-                        this.context.RepositoryCompilations
+                        TranslationContext.GetEffectiveSemanticModel(owner, reference.SyntaxTree),
+                        reference.SyntaxTree.FilePath
                     )
+                    this.context.BeforeProducerExtensionAnalysis?.Invoke(ownerContext)
                     let ownerVisitor = DeclarationVisitor(
                         ownerContext,
                         this.typeMapper,

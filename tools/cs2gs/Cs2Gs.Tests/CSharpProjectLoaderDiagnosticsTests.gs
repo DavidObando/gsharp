@@ -8,12 +8,15 @@ import Cs2Gs.CodeModel.Printing
 import Cs2Gs.Translator
 import Cs2Gs.Translator.Loading
 import Microsoft.CodeAnalysis
+import Microsoft.CodeAnalysis.CSharp
 import Microsoft.CodeAnalysis.CSharp.Syntax
 import System
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.Diagnostics
 import System.IO
 import System.Linq
+import System.Runtime.Loader
 import System.Threading.Tasks
 import Xunit
 
@@ -22,6 +25,870 @@ import Xunit
 /// hand-written source file merely because its name matches a generated-file
 /// pattern (it must check for an actual generated marker instead).
 open class CSharpProjectLoaderDiagnosticsTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func SpeculativeBodyInventory_SupersedesOriginalBody(boolAddNull bool) {
+        let originalWrite = if boolAddNull {
+            "Value = \"safe\";"
+        } else {
+            "Value = null;"
+        }
+        let replacementWrite = if boolAddNull {
+            "Value = null;"
+        } else {
+            "Value = \"safe\";"
+        }
+        let tree = CSharpSyntaxTree.ParseText(
+            "public static class Store { public static string Value = \"safe\"; public static string Other = \"safe\"; public static void Change() { " +
+                originalWrite +
+                " } public static void Keep() { Other = null; } }",
+            path: "SpeculativeInventory.cs"
+        )
+        let compilation = CSharpCompilation.Create(
+            "SpeculativeInventory5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        let normal = compilation.GetSemanticModel(tree)
+        let original = tree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[MethodDeclarationSyntax]()
+            .Single((method MethodDeclarationSyntax) -> method.Identifier.ValueText == "Change")
+        let replacement = Assert.IsAssignableFrom[BaseMethodDeclarationSyntax](
+            SyntaxFactory.ParseMemberDeclaration("public static void Change() { " + replacementWrite + " }")
+        )
+        Assert.True(
+            Microsoft
+                .CodeAnalysis
+                .CSharp
+                .CSharpExtensions
+                .TryGetSpeculativeSemanticModelForMethodBody(
+                normal,
+                original.Body!!.SpanStart,
+                replacement,
+                out var speculativeModel
+            )
+        )
+        let supplied = speculativeModel ?? throw InvalidOperationException("Speculative model missing.")
+        let context = TranslationContext(compilation, supplied, supplied.SyntaxTree.FilePath)
+        let owner = compilation.GetTypeByMetadataName("Store") ?? throw InvalidOperationException("Store missing.")
+        let value = Assert.IsAssignableFrom[IFieldSymbol](Assert.Single(owner.GetMembers("Value")))
+        let other = Assert.IsAssignableFrom[IFieldSymbol](Assert.Single(owner.GetMembers("Other")))
+        Assert.True(
+            SymbolEqualityComparer.Default.Equals(
+                normal.GetDeclaredSymbol(original),
+                supplied.GetEnclosingSymbol(replacement.Body!!.SpanStart)
+            )
+        )
+        using let analysis = ObliviousNullabilityAnalyzer.UseCatalogScope(context)
+        Assert.Equal(boolAddNull, ObliviousNullabilityAnalyzer.IsTainted(compilation, value))
+        Assert.True(ObliviousNullabilityAnalyzer.IsTainted(compilation, other))
+        let foreign = compilation.WithAssemblyName("SharedTreeForeignInventory5326")
+        let foreignOwner = foreign.GetTypeByMetadataName("Store") ??
+            throw InvalidOperationException("Foreign Store missing.")
+        let foreignValue = Assert.IsAssignableFrom[IFieldSymbol](Assert.Single(foreignOwner.GetMembers("Value")))
+        Assert.Equal(!boolAddNull, ObliviousNullabilityAnalyzer.IsTainted(foreign, foreignValue))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ScopedEffectiveModelReader_PreservesBindingsAndRestoresNormalPeers(speculative bool) {
+        let first = CSharpSyntaxTree.ParseText(
+            "public class Hidden { private static int Value = 1; } public class Reader { public static int Read() { return Hidden.Value; } }",
+            path: "ScopedModelA.cs"
+        )
+        let second = CSharpSyntaxTree.ParseText("public class Other {}", path: "ScopedModelB.cs")
+        let compilation = CSharpCompilation.Create(
+            "ScopedModel5326",
+            []SyntaxTree{first, second},
+            CSharpProjectLoader.RuntimeReferences()
+        )
+        var supplied = compilation.GetSemanticModel(first, ignoreAccessibility: true)
+        var member = first.GetRoot().DescendantNodes().OfType[MemberAccessExpressionSyntax]().Single()
+        if speculative {
+            let original = first.GetRoot().DescendantNodes().OfType[MethodDeclarationSyntax]().Single()
+            let replacement = Assert.IsAssignableFrom[BaseMethodDeclarationSyntax](
+                SyntaxFactory.ParseMemberDeclaration("public static int Read() { return Hidden.Value + 1; }")
+            )
+            Assert.True(
+                Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .CSharpExtensions
+                    .TryGetSpeculativeSemanticModelForMethodBody(
+                    supplied,
+                    original.Body!!.SpanStart,
+                    replacement,
+                    out var speculativeModel
+                )
+            )
+            supplied = speculativeModel ?? throw InvalidOperationException("Speculative model missing.")
+            member = replacement.DescendantNodes().OfType[MemberAccessExpressionSyntax]().Single()
+            Assert.True(supplied.IsSpeculativeSemanticModel)
+        }
+        Assert.NotNull(supplied.GetSymbolInfo(member).Symbol)
+        let context = TranslationContext(compilation, supplied, supplied.SyntaxTree.FilePath)
+        let normalMember = first.GetRoot().DescendantNodes().OfType[MemberAccessExpressionSyntax]().Single()
+        let peer = TranslationContext(compilation, compilation.GetSemanticModel(second), second.FilePath)
+        {
+            using let analysis = ObliviousNullabilityAnalyzer.UseCatalogScope(context)
+            Assert.NotNull(
+                TranslationContext
+                    .GetEffectiveSemanticModel(compilation, supplied.SyntaxTree)
+                    .GetSymbolInfo(member)
+                    .Symbol
+            )
+            {
+                using let treeScope = context.UseSemanticModelFor(second, compilation)
+                Assert.NotNull(
+                    TranslationContext
+                        .GetEffectiveSemanticModel(compilation, supplied.SyntaxTree)
+                        .GetSymbolInfo(member)
+                        .Symbol
+                )
+                Assert.False(TranslationContext.GetEffectiveSemanticModel(compilation, second).IgnoresAccessibility)
+            }
+            {
+                using let peerScope = ObliviousNullabilityAnalyzer.UseCatalogScope(peer)
+                Assert.Null(
+                    TranslationContext.GetEffectiveSemanticModel(compilation, first).GetSymbolInfo(normalMember).Symbol
+                )
+            }
+            Assert.NotNull(
+                TranslationContext
+                    .GetEffectiveSemanticModel(compilation, supplied.SyntaxTree)
+                    .GetSymbolInfo(member)
+                    .Symbol
+            )
+            let other = compilation.WithAssemblyName("OtherScopedModelOwner5326")
+            Assert.Null(TranslationContext.GetEffectiveSemanticModel(other, first).GetSymbolInfo(normalMember).Symbol)
+        }
+        Assert.Null(TranslationContext.GetSemanticModel(compilation, first).GetSymbolInfo(normalMember).Symbol)
+    }
+
+    @Fact
+    func ImplicitSharedTreeScope_RetainsRootFallbackFromThirdCompilation() {
+        let shared = CSharpSyntaxTree.ParseText(
+            "public static class Shared { public static object Read() => Helper.Value; }",
+            path: "SharedFallback.cs"
+        )
+        let rootHelper = CSharpSyntaxTree.ParseText(
+            "internal static class Helper { public static string Value = \"root\"; }"
+        )
+        let producerHelper = CSharpSyntaxTree.ParseText("internal static class Helper { public static int Value = 7; }")
+        let thirdTree = CSharpSyntaxTree.ParseText("public class Third {}")
+        let references = CSharpProjectLoader.RuntimeReferences()
+        let producer = CSharpCompilation.Create(
+            "FallbackProducer5326",
+            []SyntaxTree{shared, producerHelper},
+            references
+        )
+        let root = CSharpCompilation.Create(
+            "FallbackRoot5326",
+            []SyntaxTree{shared, rootHelper},
+            references.Append(cast[MetadataReference](producer.ToMetadataReference()))
+        )
+        let third = CSharpCompilation.Create("FallbackThird5326", []SyntaxTree{thirdTree}, references)
+        let member = shared.GetRoot().DescendantNodes().OfType[MemberAccessExpressionSyntax]().Single()
+        let supplied = root.GetSemanticModel(shared, ignoreAccessibility: true)
+        let context = TranslationContext(root, supplied, shared.FilePath)
+        {
+            using let outer = context.UseSemanticModelFor(thirdTree, third)
+            {
+                using let implicitRoot = context.UseSemanticModelFor(shared)
+                Assert.Equal(SpecialType.System_String, context.GetTypeInfo(member).Type!!.SpecialType)
+                Assert.True(context.SemanticModel.IgnoresAccessibility)
+                {
+                    using let explicitProducer = context.UseSemanticModelFor(shared, producer)
+                    Assert.Equal(SpecialType.System_Int32, context.GetTypeInfo(member).Type!!.SpecialType)
+                }
+                Assert.Equal(SpecialType.System_String, context.GetTypeInfo(member).Type!!.SpecialType)
+            }
+            Assert.Same(third, context.SemanticModel.Compilation)
+        }
+        Assert.Same(supplied, context.SemanticModel)
+        let unknown = CSharpSyntaxTree.ParseText("public class Unknown {}")
+        Assert.Throws[InvalidOperationException](() -> context.UseSemanticModelFor(unknown))
+    }
+
+    @Theory
+    @InlineData("valid")
+    @InlineData("missing")
+    @InlineData("corrupt")
+    async func OwnedSnapshots_PreserveLinkedModuleBindingAndDiagnostics(moduleState string) {
+        let directory = Path.Combine(AppContext.BaseDirectory, "linked-modules5326", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let modulePath = Path.Combine(directory, "Linked5326.netmodule")
+            let manifestPath = Path.Combine(directory, "Manifest5326.dll")
+            let references = CSharpProjectLoader.RuntimeReferences()
+            let module = CSharpCompilation.Create(
+                "Linked5326",
+                []SyntaxTree{
+                    CSharpSyntaxTree.ParseText("public class OnlyLinked5326 { public static int Value() => 7; }")
+                },
+                references,
+                CSharpCompilationOptions(OutputKind.NetModule)
+            )
+            let moduleResult = module.Emit(modulePath)
+            Assert.True(moduleResult.Success, string.Join(Environment.NewLine, moduleResult.Diagnostics))
+            let manifest = CSharpCompilation.Create(
+                "Manifest5326",
+                []SyntaxTree{CSharpSyntaxTree.ParseText("public class ManifestMarker5326 {}")},
+                references.Append(
+                    cast[MetadataReference](
+                        MetadataReference.CreateFromFile(modulePath, properties: MetadataReferenceProperties.Module)
+                    )
+                ),
+                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+            )
+            let manifestResult = manifest.Emit(manifestPath)
+            Assert.True(manifestResult.Success, string.Join(Environment.NewLine, manifestResult.Diagnostics))
+            if moduleState == "missing" {
+                File.Delete(modulePath)
+            } else if moduleState == "corrupt" {
+                File.WriteAllBytes(modulePath, []byte{0, 1, 2})
+            }
+            let properties = MetadataReferenceProperties.Assembly.WithAliases(ImmutableArray.Create("global", "Linked"))
+            let original = MetadataReference.CreateFromFile(manifestPath, properties: properties)
+            let tree = CSharpSyntaxTree.ParseText(
+                "public static class Reader { public static int Read() => OnlyLinked5326.Value(); }",
+                path: "ReadLinked.cs"
+            )
+            using let workspace = AdhocWorkspace()
+            let id = ProjectId.CreateNewId()
+            let solution = workspace
+                .CurrentSolution
+                .AddProject(
+                ProjectInfo.Create(
+                    id,
+                    VersionStamp.Create(),
+                    "ModuleConsumer",
+                    "ModuleConsumer",
+                    LanguageNames.CSharp,
+                    compilationOptions: CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary),
+                    metadataReferences: references.Append(cast[MetadataReference](original))
+                )
+            )
+                .AddDocument(DocumentId.CreateNewId(id), "ReadLinked.cs", tree.GetText())
+            let project = solution.GetProject(id)!!
+            let before = Assert.IsType[CSharpCompilation](await project.GetCompilationAsync())
+            let beforeErrors = before
+                .GetDiagnostics()
+                .Where((diagnostic Diagnostic) -> diagnostic.Severity == DiagnosticSeverity.Error)
+                .Select((diagnostic Diagnostic) -> diagnostic.ToString())
+                .ToArray()
+            let images = Dictionary[string, PortableExecutableReference](StringComparer.Ordinal)
+            let frozen = CSharpProjectLoader.SnapshotProjectGraph(
+                project,
+                images,
+                fileInputs: HashSet[MetadataReference](ReferenceEqualityComparer.Instance){original}
+            )
+            let after = Assert.IsType[CSharpCompilation](await frozen.GetCompilationAsync())
+            Assert.Equal(
+                beforeErrors,
+                after
+                    .GetDiagnostics()
+                    .Where((diagnostic Diagnostic) -> diagnostic.Severity == DiagnosticSeverity.Error)
+                    .Select((diagnostic Diagnostic) -> diagnostic.ToString())
+                    .ToArray()
+            )
+            if moduleState == "valid" {
+                Assert.Empty(beforeErrors)
+                let beforeType = before.GetTypeByMetadataName("OnlyLinked5326") ??
+                    throw InvalidOperationException("The original reference lost its linked type.")
+                let afterType = after.GetTypeByMetadataName("OnlyLinked5326") ??
+                    throw InvalidOperationException("The snapshot lost its linked type.")
+                Assert.Equal("Linked5326.netmodule", afterType.ContainingModule.Name)
+                Assert.Equal(beforeType.ContainingAssembly.Identity, afterType.ContainingAssembly.Identity)
+                Assert.Equal(
+                    SpecialType.System_Int32,
+                    Assert
+                        .IsAssignableFrom[IMethodSymbol](Assert.Single(afterType.GetMembers("Value")))
+                        .ReturnType
+                        .SpecialType
+                )
+                let boundTree = Assert.Single(after.SyntaxTrees)
+                let call = Assert.Single(boundTree.GetRoot().DescendantNodes().OfType[InvocationExpressionSyntax]())
+                let selected = Assert.IsAssignableFrom[IMethodSymbol](
+                    after.GetSemanticModel(boundTree).GetSymbolInfo(call).Symbol
+                )
+                Assert.True(SymbolEqualityComparer.Default.Equals(afterType, selected.ContainingType))
+                Assert.Equal("Linked5326.netmodule", selected.ContainingModule.Name)
+            } else {
+                Assert.NotEmpty(beforeErrors)
+                let errors = after
+                    .GetDiagnostics()
+                    .Where((diagnostic Diagnostic) -> diagnostic.Severity == DiagnosticSeverity.Error)
+                    .ToArray()
+                Assert.Contains(
+                    errors,
+                    (diagnostic Diagnostic) -> diagnostic.Id == if moduleState == "missing" {
+                        "CS0006"
+                    } else {
+                        "CS0009"
+                    }
+                )
+                Assert.Contains(
+                    errors,
+                    (diagnostic Diagnostic) -> diagnostic.Id == "CS0103" &&
+                        diagnostic
+                        .Location
+                        .GetLineSpan()
+                        .StartLinePosition
+                        .Line == 0 &&
+                        diagnostic
+                        .Location
+                        .GetLineSpan()
+                        .StartLinePosition
+                        .Character == 57
+                )
+            }
+            Assert.Same(
+                original,
+                Assert.Single(
+                    frozen
+                        .MetadataReferences
+                        .OfType[PortableExecutableReference]()
+                        .Where((reference PortableExecutableReference) -> reference.FilePath == manifestPath)
+                )
+            )
+            Assert.False(images.ContainsKey(Path.GetFullPath(manifestPath)))
+            Assert.False(
+                TranslationContext.HasTrustedEffectImage(original, manifest.Assembly.Identity.GetDisplayName())
+            )
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    @Fact
+    func SuppliedAccessibilityModel_SurvivesNestedTreeScopesWithoutLeakingToPeers() {
+        let first = CSharpSyntaxTree.ParseText(
+            "public class Hidden { private static int Value = 1; } public class Reader { public static int Read() => Hidden.Value; }",
+            path: "AccessibilityA.cs"
+        )
+        let second = CSharpSyntaxTree.ParseText("public class Other {}", path: "AccessibilityB.cs")
+        let compilation = CSharpCompilation.Create(
+            "AccessibilityScope5326",
+            []SyntaxTree{first, second},
+            CSharpProjectLoader.RuntimeReferences()
+        )
+        let member = first
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax]()
+            .Single()
+        let supplied = compilation.GetSemanticModel(first, ignoreAccessibility: true)
+        Assert.NotNull(supplied.GetSymbolInfo(member).Symbol)
+        Assert.Null(compilation.GetSemanticModel(first).GetSymbolInfo(member).Symbol)
+        let context = TranslationContext(compilation, supplied, first.FilePath)
+        {
+            using let outer = context.UseSemanticModelFor(second)
+            Assert.Same(second, context.SemanticModel.SyntaxTree)
+            {
+                using let inner = context.UseSemanticModelFor(first, compilation)
+                Assert.NotNull(context.GetSymbolInfo(member).Symbol)
+                Assert.True(context.SemanticModel.IgnoresAccessibility)
+            }
+            Assert.Same(second, context.SemanticModel.SyntaxTree)
+        }
+        Assert.Same(supplied, context.SemanticModel)
+        let producer = CSharpCompilation.Create(
+            "DifferentAccessibilityOwner5326",
+            []SyntaxTree{first},
+            CSharpProjectLoader.RuntimeReferences()
+        )
+        {
+            using let producerScope = context.UseSemanticModelFor(first, producer)
+            Assert.Null(context.GetSymbolInfo(member).Symbol)
+            Assert.Same(producer, context.SemanticModel.Compilation)
+        }
+        Assert.NotNull(context.GetSymbolInfo(member).Symbol)
+        let related = context.CreateRelatedContext(producer, producer.GetSemanticModel(first), first.FilePath)
+        {
+            using let originalOwner = related.UseSemanticModelFor(first, compilation)
+            Assert.NotNull(related.GetSymbolInfo(member).Symbol)
+            Assert.True(related.SemanticModel.IgnoresAccessibility)
+        }
+        let peer = TranslationContext(compilation, compilation.GetSemanticModel(second), second.FilePath)
+        using let normal = peer.UseSemanticModelFor(first)
+        Assert.Null(peer.GetSymbolInfo(member).Symbol)
+        Assert.False(peer.SemanticModel.IgnoresAccessibility)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func CompiledFiveArgumentContextConsumer_RetainsItsConstructorAbi(useScope bool) {
+        let nativeAssembly = typeof(TranslationContext).Assembly
+        let name = nativeAssembly.GetName()
+        let references = CSharpProjectLoader
+            .RuntimeReferences()
+            .Where(
+            (reference MetadataReference) ->
+            (reference as PortableExecutableReference)?.FilePath != nativeAssembly.Location
+        )
+            .ToList()
+        for assembly in[]System.Reflection.Assembly{typeof(CSharpCompilation).Assembly, typeof(Compilation).Assembly} {
+            if !references.OfType[PortableExecutableReference]().Any(
+                (reference PortableExecutableReference) ->
+                reference.FilePath == assembly.Location
+            ) {
+                references.Add(MetadataReference.CreateFromFile(assembly.Location))
+            }
+        }
+        let Emit = func (assemblyName string, source string, metadata IEnumerable[MetadataReference])[]byte {
+            let compilation = CSharpCompilation.Create(
+                assemblyName,
+                []SyntaxTree{CSharpSyntaxTree.ParseText(source)},
+                metadata,
+                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+            )
+            using let image = MemoryStream()
+            let result = compilation.Emit(image)
+            Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics))
+            return image.ToArray()
+        }
+        let contract = Emit(
+            name.Name!!,
+            "[assembly:System.Reflection.AssemblyVersion(\"${name.Version}\")] namespace Cs2Gs.Translator { public class TranslationContext { public TranslationContext(Microsoft.CodeAnalysis.CSharp.CSharpCompilation c, Microsoft.CodeAnalysis.SemanticModel m, string p, System.Collections.Generic.IReadOnlyList<Microsoft.CodeAnalysis.CSharp.CSharpCompilation> siblings, System.Collections.Generic.IReadOnlyList<Microsoft.CodeAnalysis.CSharp.CSharpCompilation> repository) {} public System.IDisposable UseSemanticModelFor(Microsoft.CodeAnalysis.SyntaxTree tree) => null; } }",
+            references
+        )
+        let body = if useScope {
+            "var context = new Cs2Gs.Translator.TranslationContext(c, m, \"Consumer.cs\", null, null); using(context.UseSemanticModelFor(m.SyntaxTree)) { return context; }"
+        } else {
+            "return new Cs2Gs.Translator.TranslationContext(c, m, \"Consumer.cs\", null, null);"
+        }
+        let consumer = Emit(
+            "FiveArgumentContextConsumer5326",
+            "public static class Consumer { public static object Create(Microsoft.CodeAnalysis.CSharp.CSharpCompilation c, Microsoft.CodeAnalysis.SemanticModel m) { $body } }",
+            references.Append(cast[MetadataReference](MetadataReference.CreateFromImage(contract)))
+        )
+        let tree = CSharpSyntaxTree.ParseText("public class C {}", path: "Consumer.cs")
+        let compilation = CSharpCompilation.Create(
+            "OriginalContext5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences()
+        )
+        let model = compilation.GetSemanticModel(tree)
+        let load = AssemblyLoadContext("FiveArgumentContextConsumer5326", isCollectible: true)
+        try {
+            let assembly = load.LoadFromStream(MemoryStream(consumer))
+            let context = Assert.IsType[TranslationContext](
+                assembly.GetType("Consumer", throwOnError: true)!!.GetMethod("Create")!!.Invoke(
+                    nil,
+                    []object{compilation, model}
+                )
+            )
+            Assert.Same(compilation, context.RootCompilation)
+            Assert.Same(model, context.GetOwnedSemanticModel(tree))
+        } finally {
+            load.Unload()
+        }
+    }
+
+    @Fact
+    async func SnapshotGraph_DoesNotRebindMemoryImageToItsSuppliedDiskPath() {
+        let source = CSharpCompilation.Create(
+            "MemoryOnly5326",
+            []SyntaxTree{
+                CSharpSyntaxTree.ParseText(
+                    "public static class MemoryOnly { public static string? Value; public static void Clear() { Value = null; } public static int Selected(int value) => value; }"
+                )
+            },
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+                NullableContextOptions.Enable
+            )
+        )
+        using let image = MemoryStream()
+        let emitted = source.Emit(image)
+        Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics))
+        let properties = MetadataReferenceProperties.Assembly.WithAliases(
+            ImmutableArray.Create("global", "MemoryAlias")
+        )
+        let reference = MetadataReference.CreateFromImage(
+            image.ToArray(),
+            properties,
+            filePath: typeof(Console).Assembly.Location
+        )
+        using let workspace = AdhocWorkspace()
+        let id = ProjectId.CreateNewId()
+        let references = CSharpProjectLoader
+            .RuntimeReferences()
+            .Where((item MetadataReference) -> (item as PortableExecutableReference)?.FilePath != reference.FilePath)
+            .Append(cast[MetadataReference](reference))
+        let solution = workspace
+            .CurrentSolution
+            .AddProject(
+            ProjectInfo.Create(
+                id,
+                VersionStamp.Create(),
+                "Consumer",
+                "Consumer",
+                LanguageNames.CSharp,
+                compilationOptions: CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary),
+                metadataReferences: references
+            )
+        )
+            .AddDocument(
+            DocumentId.CreateNewId(id),
+            "Consumer.cs",
+            Microsoft
+                .CodeAnalysis
+                .Text
+                .SourceText
+                .From(
+                "using System; public static class Consumer { public static int Call() => MemoryOnly.Selected(1); public static int Guard(ref string? value) { if(value == null)return 0; MemoryOnly.Clear(); return value.Length; } public static string Run() { MemoryOnly.Value = \"safe\"; try { return Guard(ref MemoryOnly.Value).ToString(); } catch(NullReferenceException) { return \"cleared\"; } } }"
+            )
+        )
+        let project = solution.GetProject(id) ?? throw InvalidOperationException("project missing")
+        let frozen = CSharpProjectLoader.SnapshotProjectGraph(
+            project,
+            Dictionary[string, PortableExecutableReference](StringComparer.Ordinal)
+        )
+        Assert.Contains(frozen.MetadataReferences, (item MetadataReference) -> object.ReferenceEquals(item, reference))
+        Assert.Equal(properties, reference.Properties)
+        Assert.False(TranslationContext.HasTrustedEffectImage(reference, typeof(Console).Assembly.FullName!!))
+        let compilation = Assert.IsType[CSharpCompilation](await frozen.GetCompilationAsync())
+        Assert.Empty(
+            compilation.GetDiagnostics().Where(
+                (diagnostic Diagnostic) -> diagnostic.Severity == DiagnosticSeverity.Error
+            )
+        )
+        let memory = compilation.GetTypeByMetadataName("MemoryOnly") ??
+            throw InvalidOperationException("original image type missing")
+        Assert.Equal("MemoryOnly5326", memory.ContainingAssembly.Name)
+        Assert.Equal(
+            SpecialType.System_Int32,
+            Assert.Single(memory.GetMembers("Selected").OfType[IMethodSymbol]()).Parameters[0].Type.SpecialType
+        )
+        let tree = compilation.SyntaxTrees.Single()
+        let model = compilation.GetSemanticModel(tree)
+        let document = LoadedDocument(tree.FilePath, tree, model)
+        let context = TranslationContext(compilation, model, document.FilePath)
+        Assert.Contains(
+            "return value!!.Length",
+            GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+        )
+        using let consumerImage = MemoryStream()
+        let consumerEmitted = compilation.Emit(consumerImage)
+        Assert.True(consumerEmitted.Success, string.Join(Environment.NewLine, consumerEmitted.Diagnostics))
+        let load = AssemblyLoadContext("OriginalMemoryImage5326", isCollectible: true)
+        try {
+            image.Position = 0
+            load.LoadFromStream(image)
+            consumerImage.Position = 0
+            let assembly = load.LoadFromStream(consumerImage)
+            Assert.Equal(
+                "cleared",
+                cast[string](assembly.GetType("Consumer", throwOnError: true)!!.GetMethod("Run")!!.Invoke(nil, nil))
+            )
+        } finally {
+            load.Unload()
+        }
+    }
+
+    @Fact
+    async func FileProjectIngestion_PreservesTrustedFrameworkPrecision() {
+        let directory = Path.Combine(AppContext.BaseDirectory, "owned-file-inputs", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            File.WriteAllText(Path.Combine(directory, "Directory.Build.props"), "<Project />")
+            let path = Path.Combine(directory, "Precision.csproj")
+            File.WriteAllText(
+                path,
+                `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable></PropertyGroup></Project>`
+            )
+            File.WriteAllText(
+                Path.Combine(directory, "Precision.cs"),
+                "using System; public static class Precision { public static int Guard(ref string? value) { if(value == null)return 0; var same = object.ReferenceEquals(value, value); return value.Length; } }"
+            )
+            let loaded = await CSharpProjectLoader.LoadProjectAsync(path)
+            Assert.Empty(loaded.ErrorDiagnostics)
+            let document = loaded.Documents.Single()
+            let context = TranslationContext(loaded.Compilation, document.SemanticModel, document.FilePath)
+            let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+            Assert.Contains("return value.Length", printed)
+            Assert.DoesNotContain("value!!.Length", printed)
+            let core = loaded.Compilation.GetSpecialType(SpecialType.System_Object).ContainingAssembly
+            let reference = loaded
+                .Compilation
+                .References
+                .OfType[PortableExecutableReference]()
+                .Single(
+                (item PortableExecutableReference) -> SymbolEqualityComparer.Default.Equals(
+                    loaded.Compilation.GetAssemblyOrModuleSymbol(item),
+                    core
+                )
+            )
+            Assert.True(TranslationContext.HasTrustedEffectImage(reference, core.Identity.GetDisplayName()))
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    @Fact
+    async func OwnedSnapshots_ReachTheActualCompilationReferenceGraph() {
+        let directory = Path.Combine(AppContext.BaseDirectory, "owned-reference-graph", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let path = Path.Combine(directory, "System.Console.dll")
+            File.Copy(typeof(Console).Assembly.Location, path)
+            let original = MetadataReference.CreateFromFile(path)
+            let references = CSharpProjectLoader
+                .RuntimeReferences()
+                .Where(
+                (reference MetadataReference) -> (reference as PortableExecutableReference)?.FilePath != typeof(Console)
+                    .Assembly
+                    .Location
+            )
+                .Append(cast[MetadataReference](original))
+                .ToArray()
+            let producerProperties = original
+                .Properties
+                .WithAliases(ImmutableArray.Create("global", "ProducerAlias"))
+                .WithEmbedInteropTypes(true)
+            let producerReferences = references.Select(
+                (reference MetadataReference) ->
+                if object.ReferenceEquals(reference, original) {
+                    cast[MetadataReference](original.WithProperties(producerProperties))
+                } else {
+                    reference
+                }
+            )
+            using let workspace = AdhocWorkspace()
+            let producerId = ProjectId.CreateNewId()
+            let consumerId = ProjectId.CreateNewId()
+            let options = CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+            let solution = workspace
+                .CurrentSolution
+                .AddProject(
+                ProjectInfo.Create(
+                    producerId,
+                    VersionStamp.Create(),
+                    "Producer",
+                    "Producer",
+                    LanguageNames.CSharp,
+                    compilationOptions: options,
+                    metadataReferences: producerReferences
+                )
+            )
+                .AddProject(
+                ProjectInfo.Create(
+                    consumerId,
+                    VersionStamp.Create(),
+                    "Consumer",
+                    "Consumer",
+                    LanguageNames.CSharp,
+                    compilationOptions: options,
+                    metadataReferences: references
+                )
+            )
+                .AddProjectReference(consumerId, ProjectReference(producerId))
+            let root = solution.GetProject(consumerId) ?? throw InvalidOperationException("consumer missing")
+            let images = Dictionary[string, PortableExecutableReference](StringComparer.Ordinal)
+            let fileInputs = HashSet[MetadataReference](ReferenceEqualityComparer.Instance)
+            for inputProject in[]Project{root, root.Solution.GetProject(producerId)!!} {
+                fileInputs.UnionWith(
+                    inputProject
+                        .MetadataReferences
+                        .OfType[PortableExecutableReference]()
+                        .Where((reference PortableExecutableReference) -> reference.FilePath == path)
+                )
+            }
+            Assert.Equal(2, fileInputs.Count)
+            let frozen = CSharpProjectLoader.SnapshotProjectGraph(root, images, fileInputs: fileInputs)
+            Assert.True(images.ContainsKey(Path.GetFullPath(path)))
+            let snapshot = images[Path.GetFullPath(path)]
+            Assert.NotSame(original, snapshot)
+            Assert.Contains(
+                frozen.MetadataReferences,
+                (reference MetadataReference) -> object.ReferenceEquals(reference, snapshot)
+            )
+            let producerSnapshot = Assert.Single(
+                frozen.Solution.GetProject(producerId)!!
+                    .MetadataReferences
+                    .OfType[PortableExecutableReference]()
+                    .Where((reference PortableExecutableReference) -> reference.FilePath == path)
+            )
+            Assert.NotSame(
+                Assert.Single(
+                    fileInputs.Where(
+                        (reference MetadataReference) ->
+                        reference.Properties.EmbedInteropTypes
+                    )
+                ),
+                producerSnapshot
+            )
+            Assert.Same(snapshot.GetMetadata().Id, producerSnapshot.GetMetadata().Id)
+            File.WriteAllBytes(path, []byte{0})
+            let consumer = Assert.IsType[CSharpCompilation](await frozen.GetCompilationAsync())
+            let producer = Assert.IsType[CSharpCompilation](
+                await frozen.Solution.GetProject(producerId)!!.GetCompilationAsync()
+            )
+            let actual = Assert.Single(consumer.References.OfType[CompilationReference]())
+            Assert.Same(producer, actual.Compilation)
+            let ownedRoot = Assert.Single(
+                consumer
+                    .References
+                    .OfType[PortableExecutableReference]()
+                    .Where((reference PortableExecutableReference) -> reference.FilePath == path)
+            )
+            let ownedProducer = Assert.Single(
+                actual
+                    .Compilation
+                    .References
+                    .OfType[PortableExecutableReference]()
+                    .Where((reference PortableExecutableReference) -> reference.FilePath == path)
+            )
+            Assert.NotSame(original, ownedRoot)
+            Assert.Same(ownedRoot.GetMetadata().Id, ownedProducer.GetMetadata().Id)
+            Assert.Equal(original.Properties, ownedRoot.Properties)
+            Assert.Equal(producerProperties, ownedProducer.Properties)
+            Assert.True(TranslationContext.HasTrustedEffectImage(ownedProducer, typeof(Console).Assembly.FullName!!))
+            Assert.True(TranslationContext.HasTrustedEffectImage(ownedRoot, typeof(Console).Assembly.FullName!!))
+            Assert.Empty(
+                consumer.GetDiagnostics().Where(
+                    (diagnostic Diagnostic) -> diagnostic.Severity == DiagnosticSeverity.Error
+                )
+            )
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    @Fact
+    async func SnapshotIoFailure_PreservesUntrustedReferenceDiagnosticsAndHealthyImages() {
+        using let workspace = AdhocWorkspace()
+        let id = ProjectId.CreateNewId()
+        let missing = Path.Combine(
+            AppContext.BaseDirectory,
+            "missing-reference-" + Guid.NewGuid().ToString("N") + ".dll"
+        )
+        let broken = FileInputReference(missing)
+        let healthy = MetadataReference.CreateFromFile(typeof(Console).Assembly.Location)
+        let references = CSharpProjectLoader
+            .RuntimeReferences()
+            .Where(
+            (reference MetadataReference) -> (reference as PortableExecutableReference)?.FilePath != healthy.FilePath
+        )
+            .Append(cast[MetadataReference](broken))
+            .Append(cast[MetadataReference](healthy))
+        let solution = workspace.CurrentSolution.AddProject(
+            ProjectInfo.Create(
+                id,
+                VersionStamp.Create(),
+                "Broken",
+                "Broken",
+                LanguageNames.CSharp,
+                compilationOptions: CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary),
+                metadataReferences: references
+            )
+        )
+        let project = solution.GetProject(id) ?? throw InvalidOperationException("project missing")
+        let images = Dictionary[string, PortableExecutableReference](StringComparer.Ordinal)
+        let frozen = CSharpProjectLoader.SnapshotProjectGraph(
+            project,
+            images,
+            fileInputs: HashSet[MetadataReference](ReferenceEqualityComparer.Instance){broken, healthy}
+        )
+        Assert.Contains(
+            frozen.MetadataReferences,
+            (reference MetadataReference) -> object.ReferenceEquals(reference, broken)
+        )
+        Assert.False(images.ContainsKey(missing))
+        Assert.True(images.ContainsKey(Path.GetFullPath(healthy.FilePath!!)))
+        Assert.False(TranslationContext.HasTrustedEffectImage(broken, typeof(Console).Assembly.FullName!!))
+        let ownedHealthy = Assert.Single(
+            frozen
+                .MetadataReferences
+                .OfType[PortableExecutableReference]()
+                .Where((reference PortableExecutableReference) -> reference.FilePath == healthy.FilePath)
+        )
+        Assert.True(TranslationContext.HasTrustedEffectImage(ownedHealthy, typeof(Console).Assembly.FullName!!))
+        let compilation = await frozen.GetCompilationAsync()
+        Assert.NotNull(compilation)
+        Assert.Contains(
+            compilation!!.GetDiagnostics(),
+            (diagnostic Diagnostic) -> diagnostic.Id == "CS0006" && diagnostic.Severity == DiagnosticSeverity.Error
+        )
+    }
+
+    @Fact
+    async func CorruptFileInput_PreservesRoslynDiagnosticAndContinuesHealthySnapshots() {
+        let directory = Path.Combine(AppContext.BaseDirectory, "corrupt-file-input", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let path = Path.Combine(directory, "Corrupt.dll")
+            File.WriteAllBytes(path, []byte{0, 1, 2, 3})
+            let broken = FileInputReference(path)
+            let healthy = MetadataReference.CreateFromFile(typeof(Console).Assembly.Location)
+            using let workspace = AdhocWorkspace()
+            let id = ProjectId.CreateNewId()
+            let project = workspace
+                .CurrentSolution
+                .AddProject(
+                ProjectInfo.Create(
+                    id,
+                    VersionStamp.Create(),
+                    "CorruptInput",
+                    "CorruptInput",
+                    LanguageNames.CSharp,
+                    compilationOptions: CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary),
+                    metadataReferences: CSharpProjectLoader
+                        .RuntimeReferences()
+                        .Where(
+                        (reference MetadataReference) ->
+                        (reference as PortableExecutableReference)?.FilePath != healthy.FilePath
+                    )
+                        .Concat([]MetadataReference{broken, healthy})
+                )
+            )
+                .GetProject(id)!!
+            let images = Dictionary[string, PortableExecutableReference](StringComparer.Ordinal)
+            let frozen = CSharpProjectLoader.SnapshotProjectGraph(
+                project,
+                images,
+                fileInputs: HashSet[MetadataReference](ReferenceEqualityComparer.Instance){broken, healthy}
+            )
+            Assert.Contains(
+                frozen.MetadataReferences,
+                (reference MetadataReference) -> object.ReferenceEquals(reference, broken)
+            )
+            Assert.False(images.ContainsKey(path))
+            Assert.True(images.ContainsKey(Path.GetFullPath(healthy.FilePath!!)))
+            Assert.False(TranslationContext.HasTrustedEffectImage(broken, typeof(Console).Assembly.FullName!!))
+            let compilation = await frozen.GetCompilationAsync()
+            Assert.Contains(
+                compilation!!.GetDiagnostics(),
+                (diagnostic Diagnostic) ->
+                diagnostic.Id == "CS0009" && diagnostic.Severity == DiagnosticSeverity.Error
+            )
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    private class FileInputReference : PortableExecutableReference {
+        init(path string, properties MetadataReferenceProperties = default(MetadataReferenceProperties))
+        : base(properties, path) { }
+
+        protected override func GetMetadataImpl() Metadata -> AssemblyMetadata.CreateFromFile(this.FilePath!!)
+
+        protected override func CreateDocumentationProvider() DocumentationProvider -> DocumentationProvider.Default
+
+        protected override func WithPropertiesImpl(
+            properties MetadataReferenceProperties
+        ) PortableExecutableReference ->
+        FileInputReference(this.FilePath!!, properties)
+    }
+
     /// A project whose `ProjectReference` points at a file that does not
     /// exist is a classic MSBuild "soft fail": `OpenProjectAsync` does not
     /// throw, but the workspace records a (cref:WorkspaceDiagnosticKind.Failure)

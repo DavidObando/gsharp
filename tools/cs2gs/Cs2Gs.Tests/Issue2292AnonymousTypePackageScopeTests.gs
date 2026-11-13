@@ -9,11 +9,14 @@ import Cs2Gs.CodeModel.Printing
 import Cs2Gs.CodeModel.RoundTrip
 import Cs2Gs.Translator
 import Cs2Gs.Translator.Loading
+import Microsoft.CodeAnalysis
+import Microsoft.CodeAnalysis.CSharp
 import System
 import System.Collections.Generic
 import System.Diagnostics
 import System.IO
 import System.Linq
+import System.Runtime.CompilerServices
 import System.Text
 import System.Text.RegularExpressions
 import Xunit
@@ -27,6 +30,999 @@ import Xunit
 /// through every mapper the translator creates, so an identical shape is
 /// emitted once and reused by later documents.
 open class Issue2292AnonymousTypePackageScopeTests {
+    @Theory
+    @InlineData("plain", false)
+    @InlineData("plain", true)
+    @InlineData("array", false)
+    @InlineData("array", true)
+    @InlineData("generic", false)
+    @InlineData("generic", true)
+    @InlineData("tuple", false)
+    @InlineData("tuple", true)
+    @InlineData("arrow", false)
+    @InlineData("arrow", true)
+    @InlineData("containing", false)
+    @InlineData("containing", true)
+    func AnonymousIncomingContractsRetainScopedOrdinaryAliases(kind string, shadowedFirst bool) {
+        let value = switch kind {
+            case "array": "new Alias[]{element}"
+            case "generic": "new List<Alias>{element}"
+            case "tuple": "(element, 7)"
+            case "arrow": "new Func<Alias>(() => element)"
+            case "containing": "dictionary.Values"
+            default: "element"
+        }
+        let read = switch kind {
+            case "array", "generic": "second.Value[0]"
+            case "tuple": "second.Value.Item1"
+            case "arrow": "second.Value()"
+            case "containing": "second.Value.Count"
+            default: "second.Value"
+        }
+        let body = if shadowedFirst {
+            "object previous = value; { int Alias = 0; int StringBuilder = 0; var shadowed = new { Value = value }; previous = shadowed; " +
+                "if (Alias != 0 || StringBuilder != 0) return \"bad\"; } var second = new { Value = value }; " +
+                "return second.Equals(previous).ToString() + \":\" + " +
+                read +
+                ".ToString() + \":0\";"
+        } else {
+            "var first = new { Value = value }; { int Alias = 0; int StringBuilder = 0; var second = new { Value = value }; " +
+                "return first.Equals(second).ToString() + \":\" + " +
+                read +
+                ".ToString() + \":\" + (Alias + StringBuilder); }"
+        }
+        let preparation = if kind == "containing" {
+            "var dictionary = new Dictionary<Alias, int>(); dictionary.Add(element, 7); "
+        } else {
+            ""
+        }
+        let source = "#nullable enable\nusing System; using System.Collections.Generic; using System.Linq; " +
+            "using Alias = System.Text.StringBuilder; public static class First { public static string Run() { " +
+            "var element = new System.Text.StringBuilder(\"same\"); " +
+            preparation +
+            "var value = " +
+            value +
+            "; " +
+            body +
+            " } } public static class Second { public static string Run() => \"\"; }"
+        let project = CSharpProjectLoader.LoadInMemory([](string, string){("ScopedOrdinaryAlias.cs", source)})
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        let document = Assert.Single(project.Documents)
+        let expectedOutput = if kind == "containing" {
+            "True:1:0"
+        } else {
+            "True:same:0"
+        }
+        CompileAndRunNative(project.Compilation, expectedOutput)
+        let translator = CSharpToGSharpTranslator()
+        var previous string? = nil
+        for special in[]bool{shadowedFirst, !shadowedFirst, shadowedFirst} {
+            let context = TranslationContext(
+                project.Compilation,
+                project.Compilation.GetSemanticModel(document.SyntaxTree, ignoreAccessibility: special),
+                document.FilePath
+            )
+            for var pass = 0; pass < 2; pass++ {
+                let printed = GSharpPrinter.Print(translator.TranslateDocument(document, context))
+                if previous == nil {
+                    CompileAndRunOutput(printed, expectedOutput)
+                } else {
+                    Assert.Equal(Encoding.UTF8.GetBytes(previous), Encoding.UTF8.GetBytes(printed))
+                }
+                previous = printed
+                Assert.Single(AnonymousTypeNames(printed))
+                using let analysis = ObliviousNullabilityAnalyzer.UseCatalogScope(context)
+                let Mapper = () -> {
+                    let result = CSharpTypeMapper()
+                    result.ReserveImportNames(
+                        []ImportDirective{ImportDirective("System.Text.StringBuilder", "Alias")},
+                        []Microsoft.CodeAnalysis.SyntaxTree{document.SyntaxTree},
+                        context
+                    )
+                    return result
+                }
+                let creations = document
+                    .GetRoot()
+                    .DescendantNodes()
+                    .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.AnonymousObjectCreationExpressionSyntax]()
+                    .ToArray()
+                Assert.Equal(2, creations.Length)
+                for reverse in[]bool{false, true} {
+                    let mapper = Mapper()
+                    let spellings = HashSet[string](StringComparer.Ordinal)
+                    for var replay = 0; replay < 2; replay++ {
+                        for index in(
+                            if reverse {
+                                []int32{1, 0}
+                            } else {
+                                []int32{0, 1}
+                            }
+                        ) {
+                            let creation = creations[index]
+                            let type = Assert.IsAssignableFrom[Microsoft.CodeAnalysis.INamedTypeSymbol](
+                                context.SemanticModel.GetTypeInfo(creation).Type
+                            )
+                            let property = Assert.Single(type.GetMembers().OfType[IPropertySymbol]())
+                            let incoming = []GTypeReference{
+                                mapper.Map(property.Type, context, creation.GetLocation()) ??
+                                    throw InvalidOperationException("Mapping missing.")
+                            }
+                            let fresh = Mapper().GetOrCreateAnonymousDataClassShape(
+                                type,
+                                context,
+                                creation.GetLocation(),
+                                incoming
+                            )
+                            let expected = GSharpPrinter.RenderTypeReference(
+                                Assert.Single(
+                                    fresh.PropertyTypes ?? throw InvalidOperationException("Fresh storage missing.")
+                                )
+                            )
+                            spellings.Add(expected)
+                            let shape = mapper.GetOrCreateAnonymousDataClassShape(
+                                type,
+                                context,
+                                creation.GetLocation(),
+                                incoming
+                            )
+                            let actual = GSharpPrinter.RenderTypeReference(
+                                Assert.Single(
+                                    shape.PropertyTypes ?? throw InvalidOperationException("Storage missing.")
+                                )
+                            )
+                            Assert.True(expected == actual, "Expected ${expected}, actual ${actual}.\n" + printed)
+                        }
+                    }
+                    Assert.Equal(2, spellings.Count)
+                }
+            }
+        }
+    }
+
+    @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func OrdinaryAliasesAcrossDocumentsSharePhysicalOutput(generic bool, reversedFirst bool) {
+        let carrier = if generic {
+            "List[ALIAS]"
+        } else {
+            "ALIAS"
+        }
+        let csCarrier = carrier.Replace("[", "<").Replace("]", ">")
+        let value = if generic {
+            "new List<A>{element}"
+        } else {
+            "element"
+        }
+        let project = CSharpProjectLoader.LoadInMemory(
+            [](string, string){
+                (
+                    "First.cs",
+                    "#nullable enable\nusing System.Collections.Generic; using A = System.Text.StringBuilder; " +
+                        "public static class First { public static object Make(" +
+                        csCarrier.Replace("ALIAS", "A") +
+                        " value) => new { Value = value }; public static string Run() { " +
+                        "var element = new System.Text.StringBuilder(\"same\"); var value = " +
+                        value +
+                        "; return Make(value).Equals(Second.Make(value)).ToString(); } }"
+                ),
+                (
+                    "Second.cs",
+                    "#nullable enable\nusing System.Collections.Generic; using B = System.Text.StringBuilder; " +
+                        "public static class Second { public static object Make(" +
+                        csCarrier.Replace("ALIAS", "B") +
+                        " value) => new { Value = value }; public static string Run() => \"\"; }"
+                )
+            }
+        )
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        CompileAndRunNative(project.Compilation, "True")
+        let translator = CSharpToGSharpTranslator()
+        var previous string? = nil
+        for special in[]bool{reversedFirst, !reversedFirst, reversedFirst} {
+            for reverse in[]bool{reversedFirst, !reversedFirst} {
+                let printed = [2]string
+                for index in(
+                    if reverse {
+                        []int32{1, 0}
+                    } else {
+                        []int32{0, 1}
+                    }
+                ) {
+                    let document = project.Documents[index]
+                    printed[index] = GSharpPrinter.Print(
+                        translator.TranslateDocument(
+                            document,
+                            TranslationContext(
+                                project.Compilation,
+                                project.Compilation.GetSemanticModel(document.SyntaxTree, ignoreAccessibility: special),
+                                document.FilePath
+                            )
+                        )
+                    )
+                }
+                Assert.Single(AnonymousTypeNames(printed[0]).Concat(AnonymousTypeNames(printed[1])))
+                if previous == nil {
+                    CompileAndRunOutput(
+                        [](Name string, Text string){("First.gs", printed[0]), ("Second.gs", printed[1])},
+                        "True"
+                    )
+                } else {
+                    Assert.Equal(Encoding.UTF8.GetBytes(previous), Encoding.UTF8.GetBytes(printed[0] + printed[1]))
+                }
+                previous = printed[0] + printed[1]
+            }
+        }
+    }
+
+    @Theory
+    @InlineData("ManagedRef")
+    @InlineData("ReadOnlyManagedRef")
+    @InlineData("Slice")
+    @InlineData("ReadOnlySlice")
+    func SourceRuntimeLookalikesKeepTheirNominalContract(family string) {
+        let tree = CSharpSyntaxTree.ParseText(
+            "#nullable enable\nnamespace Gsharp.Values { public class " +
+                family +
+                "<T> {} " +
+                "public static class Probe { public static object Make(" +
+                family +
+                "<string?> value) => new { Reference = value }; } }",
+            path: "SourceRuntimeLookalike.cs"
+        )
+        let compilation = CSharpCompilation.Create(
+            "Gsharp.Runtime.Values",
+            []Microsoft.CodeAnalysis.SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(Microsoft.CodeAnalysis.OutputKind.DynamicallyLinkedLibrary)
+        )
+        let model = compilation.GetSemanticModel(tree)
+        let creation = tree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.AnonymousObjectCreationExpressionSyntax]()
+            .Single()
+        let type = Assert.IsAssignableFrom[Microsoft.CodeAnalysis.INamedTypeSymbol](model.GetTypeInfo(creation).Type)
+        let context = TranslationContext(compilation, model, tree.FilePath)
+        let shape = CSharpTypeMapper().GetOrCreateAnonymousDataClassShape(type, context, creation.GetLocation())
+        let storage = Assert.IsType[NamedTypeReference](
+            Assert.Single(shape.PropertyTypes ?? throw InvalidOperationException("Storage missing."))
+        )
+        Assert.EndsWith(family, storage.Name, StringComparison.Ordinal)
+        Assert.True(Assert.Single(storage.TypeArguments).IsNullable)
+        Assert.False(
+            CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(
+                Assert.Single(type.GetMembers().OfType[Microsoft.CodeAnalysis.IPropertySymbol]()).Type,
+                compilation
+            )
+        )
+    }
+
+    @Theory
+    @InlineData("ManagedRef", false)
+    @InlineData("ManagedRef", true)
+    @InlineData("ReadOnlyManagedRef", false)
+    @InlineData("ReadOnlyManagedRef", true)
+    @InlineData("Slice", false)
+    @InlineData("Slice", true)
+    @InlineData("ReadOnlySlice", false)
+    @InlineData("ReadOnlySlice", true)
+    func EquivalentRuntimeSpellingsAcrossDocumentsRetainOneDeclaration(family string, shadowedFirst bool) {
+        let shadow = if family.Contains("ManagedRef", StringComparison.Ordinal) {
+            "managed"
+        } else {
+            "slice"
+        }
+        let arguments = if shadow == "managed" {
+            "Store.Values, 0"
+        } else {
+            "Store.Values"
+        }
+        let references = List[Microsoft.CodeAnalysis.MetadataReference](CSharpProjectLoader.RuntimeReferences())
+        {
+            Microsoft
+                .CodeAnalysis
+                .MetadataReference
+                .CreateFromFile(typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location)
+        }
+        let project = CSharpProjectLoader.LoadInMemory(
+            [](string, string){
+                (
+                    "First.cs",
+                    "#nullable enable\nusing Gsharp.Values; public static class Store { public static string?[] Values = new string?[]{\"same\"}; } " +
+                        "public static class First { public static object Make() => new { Reference = " +
+                        family +
+                        "<string?>.FromArray(" +
+                        arguments +
+                        ") }; public static string Run() => Make().Equals(Second.Make()).ToString(); }"
+                ),
+                (
+                    "Second.cs",
+                    "#nullable enable\nusing Gsharp.Values; public static class Second { public static object Make() { int " +
+                        shadow +
+                        " = 0; return new { Reference = " +
+                        family +
+                        "<string?>.FromArray(" +
+                        arguments +
+                        ") }; } public static string Run() => \"\"; }"
+                )
+            },
+            references
+        )
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        let translator = CSharpToGSharpTranslator()
+        var previous string? = nil
+        for special in[]bool{shadowedFirst, !shadowedFirst, shadowedFirst} {
+            for reverse in[]bool{shadowedFirst, !shadowedFirst} {
+                let printed = [2]string
+                for index in(
+                    if reverse {
+                        []int32{1, 0}
+                    } else {
+                        []int32{0, 1}
+                    }
+                ) {
+                    let document = project.Documents[index]
+                    printed[index] = GSharpPrinter.Print(
+                        translator.TranslateDocument(
+                            document,
+                            TranslationContext(
+                                project.Compilation,
+                                project.Compilation.GetSemanticModel(document.SyntaxTree, ignoreAccessibility: special),
+                                document.FilePath
+                            )
+                        )
+                    )
+                }
+                Assert.Single(AnonymousTypeNames(printed[0]).Concat(AnonymousTypeNames(printed[1])))
+                CompileAndRunOutput(
+                    [](Name string, Text string){("First.gs", printed[0]), ("Second.gs", printed[1])},
+                    "True",
+                    []string{typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location}
+                )
+                let names = string.Join("|", AnonymousTypeNames(printed[0]).Concat(AnonymousTypeNames(printed[1])))
+                if previous != nil {
+                    Assert.Equal(previous, names)
+                }
+                previous = names
+            }
+        }
+    }
+
+    @Theory
+    @InlineData("ManagedRef", false, false)
+    @InlineData("ManagedRef", true, false)
+    @InlineData("ReadOnlyManagedRef", false, false)
+    @InlineData("ReadOnlyManagedRef", true, false)
+    @InlineData("Slice", false, false)
+    @InlineData("Slice", true, false)
+    @InlineData("ReadOnlySlice", false, false)
+    @InlineData("ReadOnlySlice", true, false)
+    @InlineData("ManagedRef", false, true)
+    @InlineData("ManagedRef", true, true)
+    @InlineData("ReadOnlyManagedRef", false, true)
+    @InlineData("ReadOnlyManagedRef", true, true)
+    func EquivalentRuntimeSpellingsShareAnonymousOutputIdentity(family string, assignToShadowed bool, deep bool) {
+        let shadow = if family.Contains("ManagedRef", StringComparison.Ordinal) {
+            "managed"
+        } else {
+            "slice"
+        }
+        let read = (
+            if shadow == "managed" {
+                ".Borrow()"
+            } else {
+                "[0]"
+            }
+        ) +
+            (
+            if deep {
+                ".Borrow()"
+            } else {
+                ""
+            }
+        )
+        let element = if deep {
+            "ManagedRef<string?>"
+        } else {
+            "string?"
+        }
+        let array = if deep {
+            "var values = new string?[]{\"same\"}; var array = new ManagedRef<string?>[]{ManagedRef<string?>.FromArray(values, 0)}; "
+        } else {
+            "var array = new string?[]{\"same\"}; "
+        }
+        let arguments = if shadow == "managed" {
+            "array, 0"
+        } else {
+            "array"
+        }
+        let source = "#nullable enable\nusing Gsharp.Values; public static class First { public static string Run() { " +
+            array +
+            "var first = new { Reference = " +
+            family +
+            "<" +
+            element +
+            ">.FromArray(" +
+            arguments +
+            ") }; " +
+            "{ int " +
+            shadow +
+            " = 0; var second = new { Reference = " +
+            family +
+            "<" +
+            element +
+            ">.FromArray(" +
+            arguments +
+            ") }; var equal = first.Equals(second); " +
+            (
+            if assignToShadowed {
+                "second = first;"
+            } else {
+                "first = second;"
+            }
+        ) +
+            "return equal.ToString() + \":\" + (first.Reference" +
+            read +
+            " ?? \"nil\") + \":\" + (second.Reference" +
+            read +
+            " ?? \"nil\") + \":\" + " +
+            shadow +
+            "; } } } public static class Second { public static string Run() => \"\"; }"
+        let references = List[Microsoft.CodeAnalysis.MetadataReference](CSharpProjectLoader.RuntimeReferences())
+        {
+            Microsoft
+                .CodeAnalysis
+                .MetadataReference
+                .CreateFromFile(typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location)
+        }
+        let project = CSharpProjectLoader.LoadInMemory(
+            [](string, string){("EquivalentRuntimeSpellings.cs", source)},
+            references
+        )
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        let document = Assert.Single(project.Documents)
+        let translator = CSharpToGSharpTranslator()
+        var previous string? = nil
+        for special in[]bool{assignToShadowed, !assignToShadowed, assignToShadowed} {
+            let context = TranslationContext(
+                project.Compilation,
+                project.Compilation.GetSemanticModel(document.SyntaxTree, ignoreAccessibility: special),
+                document.FilePath
+            )
+            for var pass = 0; pass < 2; pass++ {
+                using let analysis = ObliviousNullabilityAnalyzer.UseCatalogScope(context)
+                let mapper = CSharpTypeMapper()
+                let creations = document
+                    .GetRoot()
+                    .DescendantNodes()
+                    .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.AnonymousObjectCreationExpressionSyntax]()
+                    .ToArray()
+                Assert.Equal(2, creations.Length)
+                for var index = 0; index < creations.Length; index++ {
+                    let creation = creations[index]
+                    let shape = mapper.GetOrCreateAnonymousDataClassShape(
+                        context.SemanticModel.GetTypeInfo(creation).Type as Microsoft.CodeAnalysis.INamedTypeSymbol,
+                        context,
+                        creation.GetLocation()
+                    )
+                    let storage = Assert.Single(
+                        shape.PropertyTypes ?? throw InvalidOperationException("Property storage missing.")
+                    )
+                    if index == 0 {
+                        if shadow == "managed" {
+                            Assert.IsType[ManagedReferenceTypeReference](storage)
+                        } else {
+                            Assert.IsType[NativeSliceTypeReference](storage)
+                        }
+                    } else {
+                        Assert.Equal("Gsharp.Values." + family, Assert.IsType[NamedTypeReference](storage).Name)
+                    }
+                }
+                let printed = GSharpPrinter.Print(translator.TranslateDocument(document, context))
+                CompileAndRunOutput(
+                    printed,
+                    "True:same:same:0",
+                    []string{typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location}
+                )
+                Assert.Single(AnonymousTypeNames(printed))
+                if previous != nil {
+                    Assert.Equal(Encoding.UTF8.GetBytes(previous), Encoding.UTF8.GetBytes(printed))
+                }
+                previous = printed
+            }
+        }
+    }
+
+    @Theory
+    @InlineData(false, false, false)
+    @InlineData(true, false, false)
+    @InlineData(false, true, false)
+    @InlineData(true, true, false)
+    @InlineData(false, false, true)
+    @InlineData(true, false, true)
+    @InlineData(false, true, true)
+    @InlineData(true, true, true)
+    func SameDocumentAnonymousMergesRespectIncomingManagedContracts(nullableFirst bool, deep bool, identical bool) {
+        let safeType = if deep {
+            "ManagedRef<ManagedRef<string>>"
+        } else {
+            "ManagedRef<string>"
+        }
+        let otherType = if identical {
+            safeType
+        } else {
+            if deep {
+                "ManagedRef<ManagedRef<string?>>"
+            } else {
+                "ManagedRef<string?>"
+            }
+        }
+        let safe = "ManagedRef<string>.FromArray(new string[]{\"safe\"}, 0)"
+        let other = if identical {
+            "ManagedRef<string>.FromArray(new string[]{\"next\"}, 0)"
+        } else {
+            "ManagedRef<string?>.FromArray(new string?[]{null}, 0)"
+        }
+        let safeCreation = if deep {
+            safeType + ".FromArray(new ManagedRef<string>[] {" + safe + "}, 0)"
+        } else {
+            safe
+        }
+        let otherCreation = if deep {
+            otherType +
+                ".FromArray(new " +
+                (
+                if identical {
+                    "ManagedRef<string>"
+                } else {
+                    "ManagedRef<string?>"
+                }
+            ) +
+                "[] {" +
+                other +
+                "}, 0)"
+        } else {
+            other
+        }
+        let first = "var first = new { Reference = " + safeCreation + " };"
+        let second = "var second = new { Reference = " + otherCreation + " };"
+        let borrow = if deep {
+            ".Borrow().Borrow()"
+        } else {
+            ".Borrow()"
+        }
+        let source = "#nullable enable\nusing Gsharp.Values; public static class First { public static string Run() { " +
+            (
+            if nullableFirst {
+                second + first
+            } else {
+                first + second
+            }
+        ) +
+            "return first.Reference" +
+            borrow +
+            " + \":\" + (second.Reference" +
+            borrow +
+            " ?? \"nil\"); } } public static class Second { public static string Run() => \"\"; }"
+        let references = List[Microsoft.CodeAnalysis.MetadataReference](CSharpProjectLoader.RuntimeReferences())
+        {
+            Microsoft
+                .CodeAnalysis
+                .MetadataReference
+                .CreateFromFile(typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location)
+        }
+        let project = CSharpProjectLoader.LoadInMemory(
+            [](string, string){("SameDocumentContracts.cs", source)},
+            references
+        )
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        let document = Assert.Single(project.Documents)
+        let translator = CSharpToGSharpTranslator()
+        var previous string? = nil
+        for special in[]bool{nullableFirst, !nullableFirst, nullableFirst} {
+            let context = TranslationContext(
+                project.Compilation,
+                project.Compilation.GetSemanticModel(document.SyntaxTree, ignoreAccessibility: special),
+                document.FilePath
+            )
+            for var pass = 0; pass < 2; pass++ {
+                let printed = GSharpPrinter.Print(translator.TranslateDocument(document, context))
+                CompileAndRunOutput(
+                    printed,
+                    if identical {
+                        "safe:next"
+                    } else {
+                        "safe:nil"
+                    },
+                    []string{typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location}
+                )
+                Assert.Equal(
+                    if identical {
+                        1
+                    } else {
+                        2
+                    },
+                    AnonymousTypeNames(printed).Count()
+                )
+                if previous != nil {
+                    Assert.Equal(Encoding.UTF8.GetBytes(previous), Encoding.UTF8.GetBytes(printed))
+                }
+                previous = printed
+            }
+        }
+    }
+
+    @Theory
+    @InlineData(false, false)
+    @InlineData(true, false)
+    @InlineData(false, true)
+    @InlineData(true, true)
+    func ManagedAnonymousContractsRemainInvariantAcrossDocumentOrder(nullableFirst bool, sameContract bool) {
+        let references = List[Microsoft.CodeAnalysis.MetadataReference](CSharpProjectLoader.RuntimeReferences())
+        {
+            Microsoft
+                .CodeAnalysis
+                .MetadataReference
+                .CreateFromFile(typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location)
+        }
+        let project = CSharpProjectLoader.LoadInMemory(
+            [](string, string){
+                (
+                    "First.cs",
+                    "#nullable enable\nusing Gsharp.Values; public static class First { public static string Run() { var array = new string[]{\"safe\"}; var value = new { Reference = ManagedRef<string>.FromArray(array, 0) }; return value.Reference.Borrow() + \":\"; } }"
+                ),
+                (
+                    "Second.cs",
+                    if sameContract {
+                        "#nullable enable\nusing Gsharp.Values; public static class Second { public static string Run() { var array = new string[]{\"next\"}; var value = new { Reference = ManagedRef<string>.FromArray(array, 0) }; return value.Reference.Borrow(); } }"
+                    } else {
+                        "#nullable enable\nusing Gsharp.Values; public static class Second { public static string Run() { var array = new string?[]{null}; var value = new { Reference = ManagedRef<string?>.FromArray(array, 0) }; return value.Reference.Borrow() ?? \"nil\"; } }"
+                    }
+                )
+            },
+            references
+        )
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        let translator = CSharpToGSharpTranslator()
+        for special in[]bool{false, true, false} {
+            let printed = [2]string
+            for index in(
+                if nullableFirst {
+                    []int32{1, 0}
+                } else {
+                    []int32{0, 1}
+                }
+            ) {
+                let document = project.Documents[index]
+                printed[index] = GSharpPrinter.Print(
+                    translator.TranslateDocument(
+                        document,
+                        TranslationContext(
+                            project.Compilation,
+                            project.Compilation.GetSemanticModel(document.SyntaxTree, ignoreAccessibility: special),
+                            document.FilePath
+                        )
+                    )
+                )
+            }
+            CompileFilesTogether(("First.gs", printed[0]), ("Second.gs", printed[1]))
+            CompileAndRunOutput(
+                [](Name string, Text string){("First.gs", printed[0]), ("Second.gs", printed[1])},
+                if sameContract {
+                    "safe:next"
+                } else {
+                    "safe:nil"
+                },
+                []string{typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location}
+            )
+            if sameContract {
+                Assert.Single(AnonymousTypeNames(printed[0]).Concat(AnonymousTypeNames(printed[1])))
+            } else {
+                Assert.Matches("data class [^\\n]+\\(Reference managed\\[string\\]\\)", printed[0])
+                Assert.Matches("data class [^\\n]+\\(Reference managed\\[string\\?\\]\\)", printed[1])
+            }
+        }
+    }
+
+    @Theory
+    @InlineData(0, 0)
+    @InlineData(0, 1)
+    @InlineData(1, 0)
+    @InlineData(1, 1)
+    @InlineData(0, 2)
+    @InlineData(2, 0)
+    @InlineData(2, 2)
+    func OutputDeclarationOwnership_SurvivesCollectedContextsAndMixedModels(firstMode int32, secondMode int32) {
+        let project = CSharpProjectLoader.LoadInMemory(
+            [](string, string){
+                (
+                    "First.cs",
+                    "public static class First { public static int Run() { var item = new { Id = 21 }; return item.Id; } }"
+                ),
+                (
+                    "Second.cs",
+                    "public static class Second { public static int Run() { var item = new { Id = 22 }; return item.Id; } }"
+                )
+            }
+        )
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        let translator = CSharpToGSharpTranslator()
+        let first = TranslateTemporaryContext(translator, project.Compilation, project.Documents[0], firstMode)
+        GC.Collect()
+        GC.WaitForPendingFinalizers()
+        GC.Collect()
+        Assert.False(first.Context.IsAlive)
+        Assert.False(first.Catalog.IsAlive)
+        let second = TranslateTemporaryContext(translator, project.Compilation, project.Documents[1], secondMode)
+        CompileFilesTogether(("First.gs", first.Printed), ("Second.gs", second.Printed))
+        TranslationTestValidation.AssertBinds(first.Printed, second.Printed)
+        CompileAndRunOutput(first.Printed + "\n" + second.Printed)
+    }
+
+    @Fact
+    func OutputDeclarationOwnership_DoesNotRetainTheSourceCompilation() {
+        let translator = CSharpToGSharpTranslator()
+        let compilation = TranslateCollectibleProject(translator)
+        GC.Collect()
+        GC.WaitForPendingFinalizers()
+        GC.Collect()
+        Assert.False(compilation.IsAlive)
+        GC.KeepAlive(translator)
+    }
+
+    @Theory
+    @InlineData(false, false)
+    @InlineData(true, false)
+    @InlineData(false, true)
+    @InlineData(true, true)
+    func OutputDeclarationOwnership_DistinguishesEffectivePropertyContracts(specialFirst bool, nested bool) {
+        let creation = if nested {
+            "new { Wrap = new { Item = VALUE } }"
+        } else {
+            "new { Item = VALUE }"
+        }
+        let read = if nested {
+            "item.Wrap.Item"
+        } else {
+            "item.Item"
+        }
+        let project = CSharpProjectLoader.LoadInMemory(
+            [](string, string){
+                (
+                    "First.cs",
+                    "public static class First { public static string Run() { var item = " + creation.Replace(
+                        "VALUE",
+                        "\"safe\""
+                    ) +
+                        "; return " +
+                        read +
+                        " + \":\"; } }"
+                ),
+                (
+                    "Second.cs",
+                    "public static class Second { public static string Run() { var item = " + creation.Replace(
+                        "VALUE",
+                        "\"safe\""
+                    ) +
+                        "; return " +
+                        read +
+                        " ?? \"nil\"; } }"
+                )
+            }
+        )
+        let second = project.Documents[1]
+        let original = second
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax]()
+            .Single()
+        let replacement = Assert.IsAssignableFrom[Microsoft.CodeAnalysis.CSharp.Syntax.BaseMethodDeclarationSyntax](
+            Microsoft
+                .CodeAnalysis
+                .CSharp
+                .SyntaxFactory
+                .ParseMemberDeclaration(
+                "public static string Run() { var item = " + creation.Replace("VALUE", "(string)null") +
+                    "; if (" +
+                    read +
+                    " != null) return \"wrong\"; return \"nil\"; }"
+            )
+        )
+        Assert.True(
+            Microsoft
+                .CodeAnalysis
+                .CSharp
+                .CSharpExtensions
+                .TryGetSpeculativeSemanticModelForMethodBody(
+                second.SemanticModel,
+                original.Body!!.SpanStart,
+                replacement,
+                out var speculative
+            )
+        )
+        let special = speculative ?? throw InvalidOperationException("Speculative model missing.")
+        let translator = CSharpToGSharpTranslator()
+        let printed = [2]string
+        for index in(
+            if specialFirst {
+                []int32{1, 0}
+            } else {
+                []int32{0, 1}
+            }
+        ) {
+            let document = project.Documents[index]
+            let model = if index == 1 {
+                special
+            } else {
+                document.SemanticModel
+            }
+            let catalog = List[Microsoft.CodeAnalysis.CSharp.CSharpCompilation]{project.Compilation}
+            let context = TranslationContext(project.Compilation, model, document.FilePath, catalog, catalog)
+            printed[index] = GSharpPrinter.Print(translator.TranslateDocument(document, context))
+        }
+        CompileFilesTogether(("First.gs", printed[0]), ("Second.gs", printed[1]))
+        CompileAndRunOutput(printed[0] + "\n" + printed[1], "safe:nil")
+        Assert.Matches("data class [^\\n]+\\(Item string\\)", printed[0])
+        Assert.Matches("data class [^\\n]+\\(Item string\\?\\)", printed[1])
+    }
+
+    @MethodImpl(MethodImplOptions.NoInlining)
+    private func TranslateCollectibleProject(translator CSharpToGSharpTranslator) WeakReference {
+        let project = CSharpProjectLoader.LoadInMemory(
+            [](string, string){
+                (
+                    "Collectible.cs",
+                    "public static class Collectible { public static object Make() => new { Id = 42 }; }"
+                )
+            }
+        )
+        let document = project.Documents[0]
+        let catalog = List[Microsoft.CodeAnalysis.CSharp.CSharpCompilation]{project.Compilation}
+        let context = TranslationContext(
+            project.Compilation,
+            document.SemanticModel,
+            document.FilePath,
+            catalog,
+            catalog
+        )
+        Assert.Contains(
+            "data class AnonymousType",
+            GSharpPrinter.Print(translator.TranslateDocument(document, context))
+        )
+        return WeakReference(project.Compilation)
+    }
+
+    @MethodImpl(MethodImplOptions.NoInlining)
+    private func TranslateTemporaryContext(
+        translator CSharpToGSharpTranslator,
+        compilation Microsoft.CodeAnalysis.CSharp.CSharpCompilation,
+        document LoadedDocument,
+        mode int32
+    )(Printed string, Context WeakReference, Catalog WeakReference) {
+        var model = compilation.GetSemanticModel(document.SyntaxTree, ignoreAccessibility: mode == 1)
+        if mode == 2 {
+            let original = document
+                .GetRoot()
+                .DescendantNodes()
+                .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax]()
+                .Single()
+            let replacement = Assert.IsAssignableFrom[Microsoft.CodeAnalysis.CSharp.Syntax.BaseMethodDeclarationSyntax](
+                Microsoft.CodeAnalysis.CSharp.SyntaxFactory.ParseMemberDeclaration(original.ToString())
+            )
+            Assert.True(
+                Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .CSharpExtensions
+                    .TryGetSpeculativeSemanticModelForMethodBody(
+                    model,
+                    original.Body!!.SpanStart,
+                    replacement,
+                    out var speculative
+                )
+            )
+            model = speculative ?? throw InvalidOperationException("Speculative model missing.")
+        }
+        let catalog = List[Microsoft.CodeAnalysis.CSharp.CSharpCompilation]{compilation}
+        let context = TranslationContext(compilation, model, document.FilePath, catalog, catalog)
+        let printed = GSharpPrinter.Print(translator.TranslateDocument(document, context))
+        return (printed, WeakReference(context), WeakReference(catalog))
+    }
+
+    private func CompileAndRunOutput(
+        printed string,
+        expected string = "43",
+        extraReferences IReadOnlyList[string]? = nil
+    ) ->
+    this.CompileAndRunOutput([](Name string, Text string){("Output.gs", printed)}, expected, extraReferences)
+
+    private func CompileAndRunOutput(
+        files IReadOnlyList[(Name string, Text string)],
+        expected string,
+        extraReferences IReadOnlyList[string]? = nil
+    ) {
+        let compiler = FindCompiler() ?? throw InvalidOperationException("Compiler missing.")
+        let directory = Path.Combine(AppContext.BaseDirectory, "issue2292-runtime", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let dll = Path.Combine(directory, "Output.dll")
+            let sources = List[string]()
+            for file in files {
+                let path = Path.Combine(directory, file.Name)
+                File.WriteAllText(path, file.Text)
+                sources.Add("\"" + path + "\"")
+            }
+            let driver = Path.Combine(directory, "Driver.gs")
+            File.WriteAllText(driver, "System.Console.WriteLine(First.Run() + Second.Run())\n")
+            sources.Add("\"" + driver + "\"")
+            let extra = extraReferences ?? Array.Empty[string]()
+            let arguments = string.Join(" ", extra.Select((path string) -> "/reference:\"" + path + "\""))
+            let (compileExit, compileOutput) = RunDotnet(
+                "\"" + compiler + "\" /out:\"" + dll + "\" " + string.Join(" ", sources) + " " + arguments
+            )
+            Assert.True(compileExit == 0, compileOutput)
+            File.WriteAllText(
+                Path.ChangeExtension(dll, ".runtimeconfig.json"),
+                "{\"runtimeOptions\":{\"tfm\":\"net10.0\",\"framework\":{\"name\":\"Microsoft.NETCore.App\",\"version\":\"10.0.0\"}}}"
+            )
+            VerifyOutputIL(dll, extra)
+            for reference in extra {
+                File.Copy(reference, Path.Combine(directory, Path.GetFileName(reference)), overwrite: true)
+            }
+            let (runExit, output) = RunDotnet("\"" + dll + "\"")
+            Assert.True(runExit == 0, output)
+            Assert.Equal(Encoding.UTF8.GetBytes(expected + Environment.NewLine), Encoding.UTF8.GetBytes(output))
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    private func CompileAndRunNative(compilation CSharpCompilation, expected string) {
+        let directory = Path.Combine(AppContext.BaseDirectory, "issue2292-native", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let driver = CSharpSyntaxTree.ParseText(
+                "System.Console.WriteLine(First.Run() + Second.Run());",
+                path: "NativeDriver.cs"
+            )
+            let executable = compilation.AddSyntaxTrees(driver).WithOptions(
+                compilation.Options.WithOutputKind(Microsoft.CodeAnalysis.OutputKind.ConsoleApplication)
+            )
+            let dll = Path.Combine(directory, "Native.dll")
+            let emitted = executable.Emit(dll)
+            Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics))
+            File.WriteAllText(
+                Path.ChangeExtension(dll, ".runtimeconfig.json"),
+                "{\"runtimeOptions\":{\"tfm\":\"net10.0\",\"framework\":{\"name\":\"Microsoft.NETCore.App\",\"version\":\"10.0.0\"}}}"
+            )
+            VerifyOutputIL(dll, Array.Empty[string]())
+            let (exit, output) = RunDotnet("\"" + dll + "\"")
+            Assert.True(exit == 0, output)
+            Assert.Equal(Encoding.UTF8.GetBytes(expected + Environment.NewLine), Encoding.UTF8.GetBytes(output))
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    private func VerifyOutputIL(dll string, extra IReadOnlyList[string]) {
+        let references = string.Join(
+            " ",
+            Directory.EnumerateFiles(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "*.dll").Select(
+                (path string) -> "-r \"" + path + "\""
+            )
+        )
+        let (verifyExit, verifyOutput) = RunDotnet(
+            "tool run ilverify \"" + dll + "\" -s System.Private.CoreLib " + references + " " + string.Join(
+                " ",
+                extra.Select((path string) -> "-r \"" + path + "\"")
+            )
+        )
+        Assert.True(verifyExit == 0, verifyOutput)
+    }
+
     @Fact
     func DistinctAnonymousShapes_InDifferentFiles_SamePackage_GetDistinctSyntheticNames() {
         const SourceA = `
@@ -63,8 +1059,12 @@ namespace Demo
         CompileFilesTogether(("MigrationA.gs", printedA), ("MigrationB.gs", printedB))
     }
 
-    @Fact
-    func IdenticalAnonymousShape_InDifferentFiles_SamePackage_SharesOneSynthesizedType() {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func IdenticalAnonymousShape_InDifferentFiles_SamePackage_SharesOneSynthesizedType(
+        separateEquivalentCatalogs bool
+    ) {
         const SourceA = `
 namespace Demo
 {
@@ -87,7 +1087,13 @@ namespace Demo
         }
     }
 }`
-        let (printedA, printedB) = TranslateTwoFiles("MigrationA.cs", SourceA, "MigrationB.cs", SourceB)
+        let (printedA, printedB) = TranslateTwoFiles(
+            "MigrationA.cs",
+            SourceA,
+            "MigrationB.cs",
+            SourceB,
+            separateEquivalentCatalogs
+        )
         let name = AnonymousTypeNames(printedA).Single()
         // The FIRST file to need the shape declares it...
         Assert.Contains("data class $name(Id int32, Name string)", printedA)
@@ -227,10 +1233,13 @@ Printed:
         /// every document of a real project — so the package-scoped anonymous-type
         /// registry is actually shared across the two files, the way it is in
         /// production.
-        private func TranslateTwoFiles(fileNameA string, sourceA string, fileNameB string, sourceB string)(
-            PrintedA string,
-            PrintedB string
-        ) {
+        private func TranslateTwoFiles(
+            fileNameA string,
+            sourceA string,
+            fileNameB string,
+            sourceB string,
+            separateEquivalentCatalogs bool = false
+        )(PrintedA string, PrintedB string) {
             let project = CSharpProjectLoader.LoadInMemory(
                 [](string, string){(fileNameA, sourceA), (fileNameB, sourceB)}
             )
@@ -242,12 +1251,37 @@ Printed:
             let translator = CSharpToGSharpTranslator()
             let documentA = project.Documents[0]
             let documentB = project.Documents[1]
-            let contextA = TranslationContext(project.Compilation, documentA.SemanticModel, documentA.FilePath)
+            let firstCatalog = if separateEquivalentCatalogs {
+                List[Microsoft.CodeAnalysis.CSharp.CSharpCompilation]{project.Compilation}
+            } else {
+                default(List[Microsoft.CodeAnalysis.CSharp.CSharpCompilation]?)
+            }
+            let secondCatalog = if separateEquivalentCatalogs {
+                List[Microsoft.CodeAnalysis.CSharp.CSharpCompilation]{project.Compilation}
+            } else {
+                default(List[Microsoft.CodeAnalysis.CSharp.CSharpCompilation]?)
+            }
+            let contextA = TranslationContext(
+                project.Compilation,
+                documentA.SemanticModel,
+                documentA.FilePath,
+                firstCatalog,
+                firstCatalog
+            )
             let unitA = translator.TranslateDocument(documentA, contextA)
             let printedA = GSharpPrinter.Print(unitA)
-            let contextB = TranslationContext(project.Compilation, documentB.SemanticModel, documentB.FilePath)
+            let contextB = TranslationContext(
+                project.Compilation,
+                documentB.SemanticModel,
+                documentB.FilePath,
+                secondCatalog,
+                secondCatalog
+            )
             let unitB = translator.TranslateDocument(documentB, contextB)
             let printedB = GSharpPrinter.Print(unitB)
+            if separateEquivalentCatalogs {
+                CompileFilesTogether(("MigrationA.gs", printedA), ("MigrationB.gs", printedB))
+            }
             TranslationTestValidation.AssertBinds(printedA, printedB)
             return (printedA, printedB)
         }
