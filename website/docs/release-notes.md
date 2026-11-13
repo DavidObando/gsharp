@@ -16,6 +16,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Show child-process status in hot-reload E2E failures with verbose `dotnet watch` output. This diagnostic-only change does not resolve the intermittent startup failure. (Part of #5976)
+
 - Accept declared aliases for qualified nested named types with generic arguments on each segment. Preserve constructed outer identity and existing type binding rules. (Fixes #5983)
 
 - **Omit redundant outer-array assertions in cs2gs nested initializers** (Fixes #5978). Array-element bridges use emitted value nullability, so nullable inner elements do not force `!!` on non-null outer storage. Required nullable-value assertions remain.

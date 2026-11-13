@@ -169,7 +169,7 @@ dotnet restore "$APP" --nologo
 
 echo "==> Starting dotnet watch"
 : > "$LOG"
-dotnet watch --project "$APP" --no-restore --non-interactive >"$LOG" 2>&1 &
+dotnet watch --project "$APP" --no-restore --non-interactive --verbose >"$LOG" 2>&1 &
 WATCH_PID=$!
 
 wait_for "values=1,2,3" "initial application output"
