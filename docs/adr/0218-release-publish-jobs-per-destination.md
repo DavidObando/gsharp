@@ -501,6 +501,10 @@ No question remains open.
 - Step 1 (`build/release-publish.py`): `verify` takes `--nupkgs <dir>` and `--vsix <dir>`
   (the two download folders), not one `--artifacts` folder. With `--tag` and `GITHUB_OUTPUT`
   set it writes `version` and `prerelease`.
+- `verify` checks each expected `.nupkg` identity in its root `.nuspec` (#5550).
+  The single metadata element must contain one nonempty `id` and `version`.
+  Both values must equal the filename values, as in the existing inventory and version checks.
+  The same XML read checks publication metadata. Symbol packages retain their inventory and filename-version checks.
 - The `PackageDownload` check reads `build/Gsharp.NET.Sdk.props` in the SDK package. That file
   does not hold a stamped version: it asks for `[$(GsharpSdkVersion)]`, and the props file
   derives that value from the name of the SDK's own folder, which is the SDK package version.

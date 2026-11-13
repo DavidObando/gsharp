@@ -73,7 +73,7 @@ Seven jobs, one per destination (ADR-0218). The only retry tool is "Re-run faile
 
 | Job | What it does |
 |---|---|
-| `publish-verify` | `release-publish.py verify`: the package inventory (6 RID compiler packages, 6 other packages, 5 symbol packages), one version, tag against version, both VSIX versions and the pre-release marker, the template SDK pins. Fails before the first push. |
+| `publish-verify` | `release-publish.py verify`: the package inventory (6 RID compiler packages, 6 other packages, 5 symbol packages), each `.nupkg`'s embedded nuspec identity against its filename, one version, tag against version, both VSIX versions and the pre-release marker, the template SDK pins. Fails before the first push. |
 | `publish-github-release` | Creates the release as a **draft** (`--prerelease` for a prerelease tag) and uploads every `.nupkg`, `.snupkg` and both `.vsix` with `--clobber`. |
 | `publish-nuget-compiler` | Pushes the six `Gsharp.NET.Sdk.Compiler.<rid>` packages with `--skip-duplicate`, then waits up to 30 minutes for them on the flat container. |
 | `publish-nuget-sdk` | Needs the previous job. Checks the six RID packages are on the feed, pushes `Gsharp.NET.Sdk` and the remaining packages, each `.nupkg` (with `--no-symbols`) then its `.snupkg`, so each symbol package is pushed once, then checks the SDK is on the feed. |
