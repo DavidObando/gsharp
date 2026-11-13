@@ -26,6 +26,8 @@ Separate source declaration scheduling into header, member, and usage-validation
    Publish a selected nominal base before awaiting that base's remaining header contracts.
    Complete nominal ancestry with its own iterative worklist, without requiring ancestor signatures or constraints.
    Require constructed signatures only for qualifier containers; a selected base definition does not require its complete header.
+   Constraint targets require nominal identities, not completed child headers.
+   Inherited qualifier lookup through an active declaration waits for the supplying ancestors' constructed signatures.
    Plain nominal type arguments use declared identities; only qualifier lookup requires their header readiness.
    Complete constructed base signatures later; nominal identity alone does not publish header or member readiness.
    Resolve each header once in its captured declaration scope, package, tree, unsafe context, and type-parameter context.
@@ -34,7 +36,9 @@ Separate source declaration scheduling into header, member, and usage-validation
    Schedule enclosing type-parameter constraints independently, without requiring the enclosing body's completion.
    Schedule enclosing base headers before nested header lookup, without waiting for enclosing members.
    Complete source qualifier-container headers before binding named constraints that use inherited nested types.
-   Bind each complete constraint contract once, before the declaration's own base clauses.
+   Publish keyword constraint flags before constructing signatures through the existing constraint resolver.
+   Resolve complete named constraint contracts after the declaration's own constructed base signature exists.
+   Report constraint diagnostics from the complete pass only; the early flag pass does not publish diagnostics.
    Apply qualifier prerequisites throughout base/interface clauses, including nested type arguments.
    Use the binder's lexical, arity-aware lookup for prerequisite discovery and actual type binding.
    Resolve each nested segment through its selected container, preserving all preceding segment arities.

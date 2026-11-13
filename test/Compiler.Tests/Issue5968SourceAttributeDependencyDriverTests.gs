@@ -319,24 +319,33 @@ class Holder {
     @InlineData("constraint")
     @InlineData("constructed-owner")
     @InlineData("closed-signature")
+    @InlineData("active-ancestor")
+    @InlineData("constraint-constructed-ancestor")
     func BaseIdentity_PrecedesGenericArgumentHeaderContracts(kind string) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let driver = CompileBoundedStackDriver(fixture)
         let nestedOwner = kind == "constructed-owner"
         let argumentName = switch kind {
-            case "self": "A.Nested"
+            case "self", "active-ancestor": "A.Nested"
             case "constraint": "Root.Nested"
+            case "constraint-constructed-ancestor": "Root[int32].Nested"
             default: "B"
         }
         let declarations = []string{
-            if kind == "closed-signature" {
+            if kind == "active-ancestor" || kind == "constraint-constructed-ancestor" {
+                "open class Root[U] { public open class Nested {} }"
+            } else if kind == "closed-signature" {
                 "open class Root[U] {}"
             } else if nestedOwner {
                 "open class Root {}"
             } else {
                 "open class Root { public open class Nested {} }"
             },
-            if kind == "closed-signature" {
+            if kind == "constraint-constructed-ancestor" {
+                "open class G[T A.Nested] : Root[int32] {}"
+            } else if kind == "active-ancestor" {
+                "open class G[T] : Root[int32] {}"
+            } else if kind == "closed-signature" {
                 "open class G[T] : Root[A.Nested] { public open class Nested {} }"
             } else if nestedOwner {
                 "open class G[T] { public open class Nested {} }"
@@ -350,7 +359,11 @@ class Holder {
             } else {
                 "class A : G[" + argumentName + "] {}"
             },
-            if kind == "self" || kind == "constraint" || kind == "closed-signature" {
+            if kind == "self" ||
+                kind == "constraint" ||
+                kind == "closed-signature" ||
+                kind == "active-ancestor" ||
+                kind == "constraint-constructed-ancestor" {
                 ""
             } else {
                 "class B : A.Nested {}"
@@ -383,7 +396,10 @@ class Holder {
             let baseType = a.BaseType!!
             let argument = Assert.Single(baseType.GetGenericArguments())
             Assert.Equal("G`1", baseType.GetGenericTypeDefinition().Name)
-            if kind == "closed-signature" {
+            if kind == "active-ancestor" || kind == "constraint-constructed-ancestor" {
+                Assert.Equal(nested, argument.GetGenericTypeDefinition())
+                Assert.Equal(typeof(int32), Assert.Single(argument.GetGenericArguments()))
+            } else if kind == "closed-signature" {
                 Assert.Equal(typeof(int32), argument)
                 let gString = baseType.GetGenericTypeDefinition().MakeGenericType(typeof(string))
                 let rootArgument = Assert.Single(gString.BaseType!!.GetGenericArguments())
@@ -404,6 +420,60 @@ class Holder {
                 Assert.NotNull(Activator.CreateInstance(argument))
             }
             Assert.NotNull(Activator.CreateInstance(a))
+        }
+    }
+
+    @Fact
+    func SelfNestedConstraint_UsesIdentityBeforeItsConstructedHeader() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let driver = CompileBoundedStackDriver(fixture)
+        let declarations = []string{
+            "open class G[V] { public open class Inherited {} }",
+            "open class Outer[T Outer[T].Nested] : G[int32] { public open class Nested : Inherited {} }",
+            "class Concrete : Outer[Concrete].Nested {}",
+            "open class Box[U] {}",
+            "class OptionalValue[U struct] : Box[U?] {}",
+            "class OptionalReference[U class] : Box[U?] {}"
+        }
+        for reverse in[]bool{false, true} {
+            let sourcePath = Path.Combine(fixture.Directory, "self-nested-constraint.gs")
+            let dll = Path.Combine(fixture.Directory, "self-nested-constraint-" + reverse.ToString() + ".dll")
+            File.WriteAllText(
+                sourcePath,
+                string.Join(
+                    "\n",
+                    if reverse {
+                        declarations.Reverse()
+                    } else {
+                        declarations
+                    }
+                )
+            )
+            let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+                sourcePath,
+                dll,
+                driver
+            )
+            Assert.True(code == 0, output)
+            IlVerifier.Verify(dll)
+            let types = EmittedFixture.Load(dll).GetTypes()
+            let outer = types.Single((type Type) -> type.Name == "Outer`1")
+            let nested = types.Single((type Type) -> type.Name == "Nested")
+            let concrete = types.Single((type Type) -> type.Name == "Concrete")
+            Assert.Equal(nested.MakeGenericType(concrete), concrete.BaseType)
+            let inherited = concrete.BaseType!!.BaseType!!
+            Assert.Equal("Inherited", inherited.Name)
+            Assert.Equal(typeof(int32), Assert.Single(inherited.GetGenericArguments()))
+            Assert.NotNull(Activator.CreateInstance(outer.MakeGenericType(concrete)))
+            Assert.NotNull(Activator.CreateInstance(concrete))
+            let optionalValue = types.Single((type Type) -> type.Name == "OptionalValue`1").MakeGenericType(
+                typeof(int32)
+            )
+            Assert.Equal(typeof(int32?), Assert.Single(optionalValue.BaseType!!.GetGenericArguments()))
+            let optionalReference = types.Single((type Type) -> type.Name == "OptionalReference`1").MakeGenericType(
+                typeof(string)
+            )
+            Assert.Equal(typeof(string), Assert.Single(optionalReference.BaseType!!.GetGenericArguments()))
         }
     }
 

@@ -216,8 +216,8 @@ internal partial class DeclarationBinder {
                     continue
                 }
                 pending.Add(symbol)
-                work.Push((symbol, bindHeader))
                 work.Push((symbol, requestConstraints))
+                work.Push((symbol, bindHeader))
                 work.Push((symbol, bindBaseIdentity))
                 if symbol.ContainingType is StructSymbol containing {
                     let containingDefinition = containing.Definition ?? containing
@@ -229,6 +229,22 @@ internal partial class DeclarationBinder {
             }
             if phase == bindBaseIdentity {
                 EnsureStructBaseIdentityBound(symbol)
+                RunInStructDeclarationContext(
+                    symbol,
+                    () -> {
+                        // Publish keyword flags now; the complete pass reports every diagnostic once.
+                        let diagnosticMark = Diagnostics.Count
+                        try {
+                            ResolveTypeParameterConstraints(
+                                symbol.Declaration!!.TypeParameterList,
+                                symbol.TypeParameters,
+                                bindNamedConstraints: false
+                            )
+                        } finally {
+                            Diagnostics.TruncateTo(diagnosticMark)
+                        }
+                    }
+                )
                 continue
             }
             if phase == requestConstraints {
@@ -345,7 +361,7 @@ internal partial class DeclarationBinder {
                 addConstraints(list)
             }
         }
-        return FindPendingTypeQualifierHeader(clauses, activeHeaders)
+        return FindPendingTypeQualifierHeader(clauses, activeHeaders, requireRootHeaders: false)
     }
 
     private func EnsureDeclarationSignatureHeaders(syntax SyntaxNode) {
@@ -440,6 +456,24 @@ internal partial class DeclarationBinder {
                 current = resolved
                 if resolved is StructSymbol container {
                     let definition = container.Definition ?? container
+                    if !nominalOnly && index < segments.Length - 1 && activeHeaders.Contains(definition) &&
+                        !structBaseBindings.ContainsKey(definition) && !$scope.TryLookupNestedTypeAlias(
+                        definition,
+                        segments[index + 1],
+                        clause.GetSegmentTypeArguments(index + 1)?.Count ?? -1,
+                        out _
+                    ) {
+                        for ancestor in container.GetHierarchy().Skip(1) {
+                            let ancestorDefinition = ancestor.Definition ?? ancestor
+                            if nestedStructPackages.ContainsKey(ancestorDefinition) && !structBaseBindings.ContainsKey(
+                                ancestorDefinition
+                            ) &&
+                                !activeHeaders.Contains(ancestorDefinition) {
+                                prerequisite = ancestorDefinition
+                                return nil
+                            }
+                        }
+                    }
                     let ready = if nominalOnly {
                         readyStructBaseIdentities.Contains(definition)
                     } else {

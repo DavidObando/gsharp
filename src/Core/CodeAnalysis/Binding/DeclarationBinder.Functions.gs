@@ -1275,7 +1275,8 @@ internal partial class DeclarationBinder {
 
     private func ResolveTypeParameterConstraints(
         syntax TypeParameterListSyntax?,
-        symbols ImmutableArray[TypeParameterSymbol]
+        symbols ImmutableArray[TypeParameterSymbol],
+        bindNamedConstraints bool = true
     ) {
         if syntax == nil {
             return
@@ -1310,7 +1311,9 @@ internal partial class DeclarationBinder {
                             symbol.Constraint = TypeParameterConstraint.Comparable
                         }
                         default {
-                            ResolveInterfaceConstraint(p, symbol)
+                            if bindNamedConstraints {
+                                ResolveInterfaceConstraint(p, symbol)
+                            }
                         }
                     }
                 }
