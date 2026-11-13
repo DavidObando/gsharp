@@ -52,8 +52,22 @@ class TranslationContext {
 
     private let rootCompilation CSharpCompilation
     private var sharedCatalogIdentity object?
+    private var specialModelDomain SpecialModelDomain?
 
-    internal prop CatalogIdentity object -> this.sharedCatalogIdentity ?? if this.catalogSnapshot == nil {
+    private class SpecialModelDomain {
+        init(model SemanticModel) {
+            this.Model = model
+        }
+        let Model SemanticModel
+        let Effects StorageIndexes = StorageIndexes()
+    }
+
+    internal prop HasNonstandardSemanticModel bool -> this.specialModelDomain != nil
+
+    // Special supplied models cannot share facts derived from normal binding.
+    internal prop CatalogIdentity object -> this.specialModelDomain ??
+        this.sharedCatalogIdentity ??
+        if this.catalogSnapshot == nil {
         cast[object](this.rootCompilation)
     } else {
         cast[object](this.catalogSnapshot)
@@ -73,6 +87,7 @@ class TranslationContext {
             this.CancellationToken
         )
         related.sharedCatalogIdentity = this.CatalogIdentity
+        related.specialModelDomain = this.specialModelDomain ?? related.specialModelDomain
         return related
     }
 
@@ -131,6 +146,9 @@ class TranslationContext {
         this.Compilation = compilation ?? throw ArgumentNullException("compilation")
         this.rootCompilation = this.Compilation
         this.SemanticModel = semanticModel ?? throw ArgumentNullException("semanticModel")
+        if semanticModel.IgnoresAccessibility || semanticModel.IsSpeculativeSemanticModel {
+            this.specialModelDomain = SpecialModelDomain(semanticModel)
+        }
         this.suppliedModels[(semanticModel.Compilation, semanticModel.SyntaxTree)] = semanticModel
         CacheSemanticModel(this.Compilation, this.SemanticModel)
         this.FilePath = filePath
@@ -190,7 +208,7 @@ class TranslationContext {
         )
     }
 
-    internal prop EffectIndexes StorageIndexes -> this.SourceOwners(true).Effects
+    internal prop EffectIndexes StorageIndexes -> this.specialModelDomain?.Effects ?? this.SourceOwners(true).Effects
 
     /// Gets the owning C# compilation.
     prop Compilation CSharpCompilation {
@@ -263,12 +281,26 @@ class TranslationContext {
             .ContainsSyntaxTree(tree) {
             this.Compilation
         } else {
-            this.SourceOwners(false).UniqueTreeOwner(tree) ?? this.SourceOwners(true).UniqueTreeOwner(tree) ??
+            (
+                if this.rootCompilation.ContainsSyntaxTree(tree) {
+                    this.rootCompilation
+                } else {
+                    default(CSharpCompilation?)
+                }
+            ) ??
+                this
+                .SourceOwners(false).UniqueTreeOwner(tree) ?? this.SourceOwners(true).UniqueTreeOwner(tree) ??
                 throw InvalidOperationException("A source tree requires an explicit compilation owner.")
         }
         let key(Owner Compilation, Tree SyntaxTree) = (ownerCompilation, tree)
         let model = if this.suppliedModels.TryGetValue(key, out var supplied) {
             supplied
+        } else if this.specialModelDomain is {} domain && object.ReferenceEquals(
+            domain.Model.Compilation,
+            ownerCompilation
+        ) &&
+            object.ReferenceEquals(domain.Model.SyntaxTree, tree) {
+            domain.Model
         } else {
             GetSemanticModel(ownerCompilation, tree)
         }
@@ -355,7 +387,7 @@ class TranslationContext {
     }
 
     internal prop OwnershipTreeEntries int32 -> this.SourceOwners(true).TreeEntries
-    internal prop OwnershipIndexIdentity object -> this.SourceOwners(true)
+    internal prop OwnershipIndexIdentity object -> this.specialModelDomain ?? cast[object](this.SourceOwners(true))
     internal prop HasOwnershipIndex bool -> this.actualOwners != nil
 
     private class SourceOwnershipIndex {
@@ -659,40 +691,63 @@ class TranslationContext {
         ConditionalWeakTable[MetadataId, StrongBox[string]]()
 
         /// Bind and verify the same immutable bytes; a caller-supplied path is not image provenance.
+        /// Linked-module references remain file-backed and untrusted.
         func CreateOwnedMetadataReference(
             path string,
             properties MetadataReferenceProperties = default(MetadataReferenceProperties),
             snapshots Dictionary[string, PortableExecutableReference]? = nil
         ) PortableExecutableReference {
+            return if TryCreateOwnedMetadataReference(path, properties, snapshots, out var reference) {
+                reference ?? throw InvalidOperationException("The owned reference was not created.")
+            } else {
+                MetadataReference.CreateFromFile(path, properties: properties)
+            }
+        }
+
+        func TryCreateOwnedMetadataReference(
+            path string,
+            properties MetadataReferenceProperties,
+            snapshots Dictionary[string, PortableExecutableReference]?,
+            out reference PortableExecutableReference?
+        ) bool {
+            reference = nil
             let key = Path.GetFullPath(path)
             if snapshots != nil && snapshots.TryGetValue(key, out var snapshot) && OwnedEffectImages.TryGetValue(
                 snapshot,
                 out var fingerprint
             ) {
                 if snapshot.Properties.Equals(properties) {
-                    return snapshot
+                    reference = snapshot
+                    return true
                 }
                 let projected = snapshot.WithProperties(properties)
                 OwnedEffectImages.Add(projected, fingerprint)
-                return projected
+                reference = projected
+                return true
             }
             let image = ImmutableArray.CreateRange(File.ReadAllBytes(path))
-            let reference = MetadataReference.CreateFromImage(image, properties: properties, filePath: path)
-            let metadata = reference.GetMetadata()
+            let captured = MetadataReference.CreateFromImage(image, properties: properties, filePath: path)
+            let metadata = captured.GetMetadata()
             if metadata is AssemblyMetadata assembly {
                 for module in assembly.GetModules() {
-                    let _ = module.GetMetadataReader()
+                    let reader = module.GetMetadataReader()
+                    for file in reader.AssemblyFiles {
+                        if reader.GetAssemblyFile(file).ContainsMetadata {
+                            return false
+                        }
+                    }
                 }
             } else if metadata is ModuleMetadata module {
                 let _ = module.GetMetadataReader()
             }
             let ownedFingerprint = StrongBox[string](Convert.ToHexString(SHA256.HashData(image.AsSpan())))
-            OwnedEffectImages.Add(reference, ownedFingerprint)
+            OwnedEffectImages.Add(captured, ownedFingerprint)
             OwnedEffectMetadata.Add(metadata.Id, ownedFingerprint)
             if snapshots != nil {
-                snapshots[key] = reference
+                snapshots[key] = captured
             }
-            return reference
+            reference = captured
+            return true
         }
 
         internal func HasTrustedEffectImage(reference PortableExecutableReference, identity string) bool {

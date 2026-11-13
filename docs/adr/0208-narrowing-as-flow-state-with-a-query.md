@@ -469,15 +469,32 @@ taint results, null-argument graphs, source-assembly classification, and anonymo
 shape evidence. These answers must not use a compilation-only mutable cache.
 Translation and direct analyzer entry points enter a catalog query scope and
 restore the prior scope on exit. Weak scope/compilation caches share completed
-answers only within that version. Source membership derives from the captured
+answers only for equivalent semantic inputs. Source membership derives from the captured
 version and never expands a process-wide compilation set. Immutable syntax/path
 facts remain compilation-shared. Related linked-storage visitors retain the same
 catalog identity; reconciliation stages a batch before publishing its entries.
+The analyzer projects source membership through the compilation's bound assembly
+references, using its existing source-classification query. Weakly interned
+equivalent classifications reuse that compilation's analysis across consumers.
+An added or removed relevant source produces another domain; unrelated consumers
+do not force another library analysis. Full-catalog storage and container-flow
+queries retain the complete captured version instead of this projection.
 
 A supplied semantic model remains context-local under its actual compilation
 and tree. Nested tree switches consult that model before a shared normal model.
 Accessibility-ignoring and speculative models never enter the normal shared
-cache. The Windows loaded-image witness renames the mapped original aside before
+cache. Their model-sensitive effect, projection, storage, container-flow, and
+shape caches use a context-local domain, inherited by related visitors.
+Normal document peers still share the normal graph/catalog caches.
+Implicit one-argument tree scopes prefer an active owner, then the root, before
+requiring a unique external owner. An explicit selected owner always wins.
+
+Manifest-only image capture cannot preserve linked metadata modules. Such
+references remain original, file-backed, and untrusted until all modules can be
+captured together. Missing or corrupt modules retain their Roslyn diagnostics.
+Single-module references retain immutable-image capture and shared provenance.
+
+The Windows loaded-image witness renames the mapped original aside before
 moving the genuine image to its original path; it retains the loaded assembly
 through the trust and diagnostic checks.
 

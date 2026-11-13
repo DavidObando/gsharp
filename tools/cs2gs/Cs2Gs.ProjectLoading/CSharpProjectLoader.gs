@@ -1811,7 +1811,14 @@ shared class CSharpProjectLoader {
                 if fileInputs != nil && fileInputs.Contains(reference) &&
                     reference is PortableExecutableReference{FilePath: {} path} {
                     try {
-                        owned = TranslationContext.CreateOwnedMetadataReference(path, reference.Properties, images)
+                        if TranslationContext.TryCreateOwnedMetadataReference(
+                            path,
+                            reference.Properties,
+                            images,
+                            out var captured
+                        ) {
+                            owned = captured ?? throw InvalidOperationException("The owned reference was not created.")
+                        }
                     } catch (error IOException) { } catch (error UnauthorizedAccessException) { } catch (
                         error BadImageFormatException
                     ) { }

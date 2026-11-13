@@ -63,9 +63,17 @@ internal shared class ObliviousNullabilityAnalyzer {
     private let UnboundAnalysisScopes ConditionalWeakTable[object, AnalysisPublication] =
     ConditionalWeakTable[object, AnalysisPublication]()
     private let DefaultAnalysisIdentity object = System.Object()
+    private let AnalysisDomains ConditionalWeakTable[Compilation, List[WeakReference[AnalysisDomain]]] =
+    ConditionalWeakTable[Compilation, List[WeakReference[AnalysisDomain]]]()
 
     private class AnalysisScope {
-        init(identity object, sources IEnumerable[CSharpCompilation], first object?, second object?) {
+        init(
+            identity object,
+            sources IEnumerable[CSharpCompilation],
+            first object?,
+            second object?,
+            special object? = nil
+        ) {
             this.Identity = identity
             this.SourceNames = sources
                 .Select((source CSharpCompilation) -> source.Assembly.Identity.GetDisplayName())
@@ -73,11 +81,51 @@ internal shared class ObliviousNullabilityAnalyzer {
                 .ToImmutableArray()
             this.FirstCatalog = first
             this.SecondCatalog = second
+            this.Special = special
         }
         let Identity object
         let SourceNames IReadOnlyList[string]
         let FirstCatalog object?
         let SecondCatalog object?
+        let Special object?
+        private let domains ConditionalWeakTable[Compilation, AnalysisDomain] =
+        ConditionalWeakTable[Compilation, AnalysisDomain]()
+
+        func CacheIdentity(compilation Compilation) object -> this.domains.GetValue(
+            compilation,
+            (current Compilation) -> SharedAnalysisDomain(current, this)
+        )
+    }
+
+    private class AnalysisDomain {
+        init(sources SourceAssemblySet, special object?) {
+            this.Sources = sources
+            this.Special = special
+        }
+        let Sources SourceAssemblySet
+        let Special object?
+    }
+
+    private func SharedAnalysisDomain(compilation Compilation, catalogScope AnalysisScope) AnalysisDomain {
+        // Only source classifications reachable through this compilation affect its cached analysis.
+        let sources = SourceAssemblySet(compilation, catalogScope.SourceNames)
+        let domains = AnalysisDomains.GetOrCreateValue(compilation)
+        lock domains {
+            for var index = domains.Count - 1; index >= 0; index-- {
+                if !domains[index].TryGetTarget(out var existing) {
+                    domains.RemoveAt(index)
+                } else if object.ReferenceEquals(existing.Special, catalogScope.Special) &&
+                    existing
+                    .Sources
+                    .Names
+                    .SetEquals(sources.Names) {
+                    return existing
+                }
+            }
+            let domain = AnalysisDomain(sources, catalogScope.Special)
+            domains.Add(WeakReference[AnalysisDomain](domain))
+            return domain
+        }
     }
 
     private class RestoreAnalysis : IDisposable {
@@ -106,18 +154,18 @@ internal shared class ObliviousNullabilityAnalyzer {
     internal class ScopedCompilationCache[T class] {
         private let scopes ConditionalWeakTable[object, ConditionalWeakTable[Compilation, T]] =
         ConditionalWeakTable[object, ConditionalWeakTable[Compilation, T]]()
-        private func Table() ConditionalWeakTable[Compilation, T] ->
-        this.scopes.GetOrCreateValue(CurrentAnalysis.Value?.Identity ?? DefaultAnalysisIdentity)
+        private func Table(compilation Compilation) ConditionalWeakTable[Compilation, T] ->
+        this.scopes.GetOrCreateValue(CurrentAnalysis.Value?.CacheIdentity(compilation) ?? DefaultAnalysisIdentity)
 
         func GetValue(compilation Compilation, factory Func[Compilation, T]) T ->
-        this.Table().GetValue(compilation, (current Compilation) -> factory(current))
+        this.Table(compilation).GetValue(compilation, (current Compilation) -> factory(current))
 
-        func TryGetValue(compilation Compilation, out result T?) bool -> this.Table().TryGetValue(
+        func TryGetValue(compilation Compilation, out result T?) bool -> this.Table(compilation).TryGetValue(
             compilation,
             out result
         )
 
-        func Remove(compilation Compilation) bool -> this.Table().Remove(compilation)
+        func Remove(compilation Compilation) bool -> this.Table(compilation).Remove(compilation)
     }
 
     internal func UseCatalogScope(context TranslationContext) IDisposable {
@@ -135,7 +183,12 @@ internal shared class ObliviousNullabilityAnalyzer {
                 )
                     .Concat(context.SiblingCompilations ?? Array.Empty[CSharpCompilation]()),
                 context.RepositoryCompilations,
-                context.SiblingCompilations
+                context.SiblingCompilations,
+                if context.HasNonstandardSemanticModel {
+                    identity
+                } else {
+                    nil
+                }
             )
         )
         CurrentAnalysis.Value = selected
@@ -613,7 +666,7 @@ internal shared class ObliviousNullabilityAnalyzer {
     }
 
     private class SourceAssemblySet {
-        init(current Compilation) {
+        init(current Compilation, sources IEnumerable[string]? = nil) {
             let currentAssembly = current.Assembly.Identity.GetDisplayName()
             this.Names = HashSet[string](StringComparer.Ordinal){currentAssembly}
             let referenced = HashSet[string](StringComparer.Ordinal){currentAssembly}
@@ -621,7 +674,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 referenced.Add(assembly.Identity.GetDisplayName())
             }
             this.ReferencedNames = referenced
-            for name in CurrentAnalysis.Value?.SourceNames ?? Array.Empty[string]() {
+            for name in sources ?? CurrentAnalysis.Value?.SourceNames ?? Array.Empty[string]() {
                 if referenced.Contains(name) {
                     this.Names.Add(name)
                 }

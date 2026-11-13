@@ -31,6 +31,105 @@ import Xunit
 /// output with the output of the C#.
 open class Issue5617ByReferenceAccessorNarrowingTests {
     @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RefParameter_SpecialSuppliedModelsKeepTheirBoundCallbackAndProjectionInventories(specialFirst bool) {
+        let tree = CSharpSyntaxTree.ParseText(`
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Gsharp.Values;
+public class Bucket<T> : List<ManagedRef<T>> where T : class { public Bucket() {} public void PublicObserve() {} private void Observe() {} }
+public static class Secrets {
+    private static IEqualityComparer<int> Make() => EqualityComparer<int>.Create((x,y) => x == y, x => { Demo.Global = null; return x; });
+}
+public static class Demo {
+    public static string? Global;
+    private static Dictionary<int,int> table = new Dictionary<int,int>(Secrets.Make());
+    private static void Probe() { _ = Enumerable.Count(new[] {1}); _ = table.ContainsKey(1); }
+    private static int Guard(ref string? value) { if(value == null)return 0; Probe(); return value.Length; }
+    public static void Project(Bucket<string> bucket) { bucket.PublicObserve(); bucket.Observe(); }
+    public static string Run() { Global = "safe"; return Guard(ref Global).ToString(); }
+}`, path: "SpecialModelInventory.cs")
+        let compilation = CSharpCompilation.Create(
+            "SpecialModelInventory5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences().Append(
+                cast[MetadataReference](
+                    MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location)
+                )
+            ),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+                NullableContextOptions.Enable
+            )
+        )
+        let normal = compilation.GetSemanticModel(tree)
+        let special = compilation.GetSemanticModel(tree, ignoreAccessibility: true)
+        let factory = tree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax]()
+            .Single(
+            (
+                call Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax
+            ) -> call.ToString() == "Secrets.Make()"
+        )
+        let projected = tree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax]()
+            .Single(
+            (
+                call Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax
+            ) -> call.ToString() == "bucket.Observe()"
+        )
+        Assert.Null(normal.GetSymbolInfo(factory).Symbol)
+        Assert.NotNull(special.GetSymbolInfo(factory).Symbol)
+        Assert.Null(normal.GetSymbolInfo(projected).Symbol)
+        Assert.NotNull(special.GetSymbolInfo(projected).Symbol)
+        for isSpecial in[]bool{specialFirst, !specialFirst} {
+            let model = if isSpecial {
+                special
+            } else {
+                normal
+            }
+            let context = TranslationContext(compilation, model, tree.FilePath)
+            let printed = GSharpPrinter.Print(
+                CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, model), context)
+            )
+            Assert.Contains("return value!!.Length", printed)
+            let callbacks = Assert.IsType[TranslationContext.DeferredCallbackIndex](context.EffectIndexes.DeferredIndex)
+            Assert.NotEmpty(callbacks.Comparers)
+            Assert.Equal(
+                isSpecial,
+                callbacks.Comparers.Any(
+                    (
+                        entry(
+                            Syntax Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax,
+                            Owner CSharpCompilation
+                        )
+                    ) ->
+                    object.ReferenceEquals(entry.Syntax, factory)
+                )
+            )
+            let projection = ProjectedBaseCompilationIndex.For(context.OwnershipIndexIdentity)
+            Assert.True(projection.IsIndexed)
+            Assert.NotEmpty(projection.MemberConsumersByCandidate)
+            Assert.Equal(
+                isSpecial,
+                projection
+                    .MemberConsumersByCandidate
+                    .Values
+                    .Any(
+                    (entries List[(CSharpCompilation, SyntaxNode)]) -> entries.Any(
+                        (entry(CSharpCompilation, SyntaxNode)) -> object.ReferenceEquals(entry.Item2, projected)
+                    )
+                )
+            )
+        }
+    }
+
+    @Theory
     @InlineData("values.Aggregate((left, right) => { global = null; return left; });", true)
     @InlineData("values.Where(value => { global = null; return true; });", false)
     func RefParameter_DeclaredEnumerableExecutionContractsPreserveClosedControls(statement string, immediate bool) {
