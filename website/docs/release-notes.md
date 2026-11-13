@@ -16,11 +16,13 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
-- Preserve nullable writable storage in flat `cs2gs` deconstruction declarations. Materialize typed locals when tuple inference loses their contract. Reuse ordinary inferred-local nullability, live default-origin analysis, and ref-storage contracts. Keep required read assertions and evaluate the source once. (Fixes #5994)
+- Preserve nullable writable storage in flat `cs2gs` deconstruction declarations. Materialize typed locals when tuple inference loses their contract. Reuse ordinary inferred-local nullability, live default-origin analysis, and ref-storage contracts. Preserve nested nullable positions and retain native bindings when inference already matches. Keep required read assertions and evaluate the source once. (Fixes #5994)
 
 - Initialize captured switch-pattern variables before evaluating `when` guards. Immediate and escaping guard closures now retain the matched values in both switch forms, including after false guards. Pattern bindings remain read-only. (Fixes #5998)
 
 - Avoid redundant null assertions on inferred deconstruction locals from non-null positional properties. Reuse the emitted declaration's nullability decision. Keep nullable and changed locals guarded. (Fixes #5597)
+
+- Propagate nullable constructor parameters through guarded readonly field storage in `cs2gs`. Keep semantic guard proofs separate from target narrowing across calls. Preserve required assertions or reuse existing captured locals when calls invalidate member narrowing. Keep unsafe handoffs, mutable fields, changed receivers, and deferred reads pinned. (Fixes #5585)
 
 - Omit author-written null assertions in `cs2gs` when an unwidened oblivious source declaration already emits a non-null G# value. Apply the same decision to plain reads, pattern captures, and inferred deconstruction destinations. Keep required nullable, analyzer-mapped, and unknown-value assertions, including bridges into non-null stores. (Fixes #5609)
 

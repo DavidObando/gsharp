@@ -207,8 +207,10 @@ namespace Demo
         }
     }
 }`)
-        Assert.Contains("let viewModel = viewModel!!", printed)
+        Assert.Contains("let viewModel = viewModel", printed)
+        Assert.DoesNotContain("viewModel!!", printed)
         Assert.Contains("viewModel.DoSomething()", printed)
+        Issue5585ReadonlyNullArgumentTests.AssertClean(printed)
     }
 
     @Fact
@@ -462,8 +464,10 @@ namespace Demo
         }
     }
 }`)
-        Assert.Contains("let f = f!!", printed)
+        Assert.Contains("let f = f", printed)
+        Assert.DoesNotContain("f!!", printed)
         Assert.Contains("f.ToUpper()", printed)
+        Issue5585ReadonlyNullArgumentTests.AssertClean(printed)
     }
 
     @Fact
