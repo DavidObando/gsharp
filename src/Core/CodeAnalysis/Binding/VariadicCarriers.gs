@@ -148,8 +148,7 @@ internal shared class VariadicCarriers {
     /// interface carriers, `new List<T>(T[])` for the list
     /// carrier, and the span's `T[]` constructor for span carriers.
     /// @param conversions The conversion classifier, used to bind the interface upcast.
-    /// @param diagnostics Receives a diagnostic when a collection carrier over a same-compilation (erased)
-    /// element cannot be constructed.
+    /// @param diagnostics Receives a diagnostic when the carrier has no supported constructor.
     /// @param callSyntax The originating call syntax for diagnostics.
     /// @param carrierType The variadic parameter's declared type.
     /// @param packedArray The packed (cref:BoundArrayCreationExpression) of the element type.
@@ -240,12 +239,7 @@ internal shared class VariadicCarriers {
         } else {
             ResolveElementInCarrierContext(carrierClr, NullableTypeSymbol.GetEffectiveClrType(elementType))
         }
-        if carrierClr == nil || elementClr == nil || TypeSymbol.ContainsTypeParameter(elementType) ||
-            TypeSymbol
-            .ContainsSameCompilationUserType(elementType) {
-            // A collection carrier over a same-compilation (erased) element
-            // has no closed CLR construction shape yet; the array family
-            // still covers that case.
+        if carrierClr == nil || elementClr == nil {
             diagnostics.ReportVariadicCarrierElementNotConstructible(
                 callSyntax?.Location ?? default(TextLocation),
                 carrierType,
