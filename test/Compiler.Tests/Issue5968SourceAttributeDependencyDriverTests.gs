@@ -657,6 +657,71 @@ class Holder {
         }
     }
 
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func DirectNestedQualifierChains_DoNotRequireChildHeaders(generic bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let driver = CompileBoundedStackDriver(fixture)
+        let self = if generic {
+            "A[T]"
+        } else {
+            "A"
+        }
+        let declarations = []string{
+            "open class G[U] { public open class Inherited {} }",
+            "class " +
+                self +
+                " : G[" +
+                self +
+                ".Nested.Target] { public open class Nested : Inherited { public class Target {} } }"
+        }
+        for reverse in[]bool{false, true} {
+            let sourcePath = Path.Combine(fixture.Directory, "direct-nested-chain.gs")
+            let dll = Path.Combine(fixture.Directory, "direct-nested-chain-" + reverse.ToString() + ".dll")
+            File.WriteAllText(
+                sourcePath,
+                string.Join(
+                    "\n",
+                    if reverse {
+                        declarations.Reverse()
+                    } else {
+                        declarations
+                    }
+                )
+            )
+            let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+                sourcePath,
+                dll,
+                driver
+            )
+            Assert.True(code == 0, output)
+            IlVerifier.Verify(dll)
+            let types = EmittedFixture.Load(dll).GetTypes()
+            var a = types.Single(
+                (type Type) -> type.Name == if generic {
+                    "A`1"
+                } else {
+                    "A"
+                }
+            )
+            var nested = types.Single((type Type) -> type.Name == "Nested")
+            var target = types.Single((type Type) -> type.Name == "Target")
+            if generic {
+                a = a.MakeGenericType(typeof(string))
+                nested = nested.MakeGenericType(typeof(string))
+                target = target.MakeGenericType(typeof(string))
+            }
+            Assert.Equal(target, Assert.Single(a.BaseType!!.GetGenericArguments()))
+            let inherited = nested.BaseType!!
+            Assert.Equal("Inherited", inherited.Name)
+            Assert.Equal(target, Assert.Single(inherited.GetGenericArguments()))
+            Assert.NotNull(Activator.CreateInstance(a))
+            Assert.NotNull(Activator.CreateInstance(nested))
+            Assert.NotNull(Activator.CreateInstance(target))
+        }
+    }
+
     @Fact
     func ConstructedInheritanceCycles_ReportLocatedDiagnosticsWithoutExpandingForever() {
         using let fixture = NativeSliceLanguageTests.Fixture()

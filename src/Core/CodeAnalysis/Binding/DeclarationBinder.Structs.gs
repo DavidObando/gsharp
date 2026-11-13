@@ -562,11 +562,18 @@ internal partial class DeclarationBinder {
                     } else {
                         readyStructHeaders.Contains(definition) || structBaseBindings.ContainsKey(definition)
                     }
-                    if (requireFinalHeader || index < segments.Length - 1) && nestedStructPackages.ContainsKey(
+                    let needsHeader = (requireFinalHeader || index < segments.Length - 1) &&
+                        (
+                        nominalOnly || index == segments.Length - 1 || !$scope.TryLookupNestedTypeAlias(
+                            definition,
+                            segments[index + 1],
+                            clause.GetSegmentTypeArguments(index + 1)?.Count ?? -1,
+                            out _
+                        )
+                    )
+                    if needsHeader && nestedStructPackages.ContainsKey(definition) && !ready && !activeHeaders.Contains(
                         definition
-                    ) &&
-                        !ready &&
-                        !activeHeaders.Contains(definition) {
+                    ) {
                         prerequisite = definition
                         return if index == segments.Length - 1 {
                             current
