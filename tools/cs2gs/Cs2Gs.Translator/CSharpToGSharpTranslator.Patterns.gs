@@ -4007,7 +4007,7 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func TranslateArrayCreation(creation ArrayCreationExpressionSyntax) GExpression {
-            var elementType GTypeReference? = this.GetArrayElementType(creation, creation.Type.ElementType)
+            let elementType = this.MapArrayCreationElementType(creation)
             let elementTypeSymbol ITypeSymbol? = (
                 this.context.GetTypeInfo(creation).Type as IArrayTypeSymbol
             )?.ElementType
@@ -4038,12 +4038,7 @@ partial class CSharpToGSharpTranslator {
                             .ToList()
                         FlattenRectangularArrayInitializer(creation.Initializer, 0, rank, [rank]int32, leaves)
                     }
-                    let leafElementType GTypeReference? = this.PromoteElementTypeForNullElements(
-                        elementType,
-                        elementTypeSymbol,
-                        leaves,
-                        creation
-                    )
+                    let leafElementType = elementType
                     let leafAcceptsNil = leafElementType!!.IsNullable
                     return ArrayAllocationExpression(
                         leafElementType,
@@ -4058,10 +4053,6 @@ partial class CSharpToGSharpTranslator {
                             .ToList()
                     )
                 }
-                if elementType != nil && !elementType.IsNullable && this.IsWidenedArrayCreationElement(creation) {
-                    elementType = MakeNullable(elementType)
-                }
-                elementType = this.PromoteObliviousArrayElement(elementType, elementTypeSymbol, creation)
                 return ArrayAllocationExpression(
                     elementType,
                     creation
@@ -4077,12 +4068,7 @@ partial class CSharpToGSharpTranslator {
             if creation.Initializer != nil {
                 // `new T[]{a, b}` / `new T[0]` (with an explicit, possibly empty,
                 // initializer) → the slice literal `[]T{a, b}`.
-                let literalElementType GTypeReference? = this.PromoteElementTypeForNullElements(
-                    elementType,
-                    elementTypeSymbol,
-                    creation.Initializer!!.Expressions,
-                    creation
-                )
+                let literalElementType = elementType
                 let literalAcceptsNil = literalElementType!!.IsNullable
                 return ArrayLiteralExpression(
                     literalElementType,
@@ -4124,17 +4110,36 @@ partial class CSharpToGSharpTranslator {
             } else {
                 length = LiteralExpression.Int("0")
             }
-            // Issues #4482/#4491: an element of this array passed by `out`/`ref` to a
-            // parameter cs2gs emits `T?` is storage the callee may write nil
-            // into, and gsc requires by-ref storage to match the parameter's
-            // nullability exactly (GS0612). Widen the ELEMENT (`[n]T?`).
-            if elementType != nil && elementType.IsNullable == false && this.IsWidenedArrayCreationElement(creation) {
+            return ArrayAllocationExpression(elementType, length)
+        }
+
+        // Allocations and typed local materializations must retain the same element contract.
+        private func MapArrayCreationElementType(creation ArrayCreationExpressionSyntax) GTypeReference? {
+            var elementType = this.GetArrayElementType(creation, creation.Type.ElementType)
+            let elementTypeSymbol = (this.context.GetTypeInfo(creation).Type as IArrayTypeSymbol)?.ElementType
+            let rectangular = creation.Type.RankSpecifiers.Count > 0 && creation.Type.RankSpecifiers[0].Sizes.Count > 1
+            if creation.Initializer != nil {
+                if rectangular {
+                    let rank = creation.Type.RankSpecifiers[0].Sizes.Count
+                    let leaves = List[ExpressionSyntax]()
+                    FlattenRectangularArrayInitializer(creation.Initializer, 0, rank, [rank]int32, leaves)
+                    return this.PromoteElementTypeForNullElements(elementType, elementTypeSymbol, leaves, creation)
+                }
+                return this.PromoteElementTypeForNullElements(
+                    elementType,
+                    elementTypeSymbol,
+                    creation.Initializer!!.Expressions,
+                    creation
+                )
+            }
+            if elementType != nil && !elementType.IsNullable && this.IsWidenedArrayCreationElement(creation) {
                 elementType = MakeNullable(elementType)
             }
-            // Issue #5537: an array stored in oblivious container storage has its
-            // element type, nested positions included (#5541).
             elementType = this.PromoteObliviousArrayElement(elementType, elementTypeSymbol, creation)
-            if this.TryGetAssignedInferredArrayInitializer(creation, out var lhsDepthOffset) is {} assignedInitArray {
+            if !rectangular && this.TryGetAssignedInferredArrayInitializer(
+                creation,
+                out var lhsDepthOffset
+            ) is {} assignedInitArray {
                 let initComponent = this.GetImplicitArrayComponent(assignedInitArray)
                 elementType = this.PromoteImplicitArrayLevel(
                     elementType,
@@ -4144,7 +4149,7 @@ partial class CSharpToGSharpTranslator {
                     initComponent.Depth + lhsDepthOffset
                 )
             }
-            return ArrayAllocationExpression(elementType, length)
+            return elementType
         }
 
         // Issues #4482, #4491, #4500 and #4507: the one decision "this array

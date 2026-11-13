@@ -295,8 +295,8 @@ public static class Host {
     }
 
     @Fact
-    func ReassignedLocal_KeepsItsReadAssertionAtTheExistingDeclarationWriteGap() {
-        let project = CSharpProjectLoader.LoadInMemory([](string, string){("Probe.cs", `
+    func ReassignedLocal_KeepsItsReadAssertionWithNullableStorage() {
+        Issue5609AuthorSuppressionTests.AssertRuns(`
 #nullable enable
 namespace Demo {
     public class Node { public override string ToString() => "node"; }
@@ -308,17 +308,13 @@ namespace Demo {
             return changed.ToString();
         }
     }
-}`)})
-        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
-        let document = Assert.Single(project.Documents)
-        let printed = GSharpPrinter.Print(
-            CSharpToGSharpTranslator().TranslateDocument(
-                document,
-                TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
-            )
-        )
-        AssertRejected(printed, []string{"GS0155:error:15,19,15,22", "GS0536:warning:16,23,16,25"})
-        Assert.Contains("return changed!!.ToString()", printed, StringComparison.Ordinal)
+}`, `
+public static class Host {
+    public static void Main() {
+        try { System.Console.Write(Demo.Use.Read(new Demo.Entry(new Demo.Node(), 0))); }
+        catch (System.NullReferenceException) { System.Console.Write("NRE"); }
+    }
+}`, "NRE", (printed string) -> Assert.Contains("return changed!!.ToString()", printed, StringComparison.Ordinal))
     }
 
     shared {
