@@ -754,7 +754,8 @@ class CSharpTypeMapper {
         // after translation. Calls and selected operation-bound expressions can
         // also map types absent from syntax. Pre-scan only those emitted shapes
         // so future bare names reserve alias candidates before first use.
-        for tree in contributingTrees {
+        for root in TranslationContext.GetEffectiveSyntaxRoots(compilation, contributingTrees) {
+            let tree = root.SyntaxTree
             let semanticModel = if tree == context
                 .SemanticModel
                 .SyntaxTree &&
@@ -766,7 +767,7 @@ class CSharpTypeMapper {
             } else {
                 TranslationContext.GetEffectiveSemanticModel(compilation, tree)
             }
-            for node in tree.GetRoot().DescendantNodes() {
+            for node in TranslationContext.GetEffectiveNodes(root) {
                 if node is Microsoft
                     .CodeAnalysis
                     .CSharp
@@ -4054,9 +4055,11 @@ class CSharpTypeMapper {
             let result = Dictionary[string, List[(PropertyTypes[]ITypeSymbol, AcceptsNil[]bool)]](
                 StringComparer.Ordinal
             )
-            for tree in compilation.SyntaxTrees {
+            for root in TranslationContext.GetEffectiveSyntaxRoots(compilation) {
+                let tree = root.SyntaxTree
                 let model = TranslationContext.GetEffectiveSemanticModel(compilation, tree)
-                for creation in tree.GetRoot().DescendantNodes().OfType[AnonymousObjectCreationExpressionSyntax]() {
+                for creation in TranslationContext.GetEffectiveNodes(root)
+                    .OfType[AnonymousObjectCreationExpressionSyntax]() {
                     if model.GetTypeInfo(creation).Type is not INamedTypeSymbol candidateType {
                         continue
                     }

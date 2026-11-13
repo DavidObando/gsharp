@@ -303,11 +303,11 @@ internal class EmittedNameAllocator {
             if !this.compilation.ContainsSyntaxTree(reference.SyntaxTree) {
                 continue
             }
-            let declaration = reference.GetSyntax()
+            let declaration = TranslationContext.GetEffectiveDeclaration(reference.GetSyntax())
             if !this.referencedBindingNames.TryGetValue(declaration, out var bindings) {
                 bindings = Dictionary[ISymbol, HashSet[string]](SymbolEqualityComparer.Default)
-                let model = TranslationContext.GetEffectiveSemanticModel(this.compilation, reference.SyntaxTree)
-                for identifier in declaration.DescendantNodes().OfType[IdentifierNameSyntax]() {
+                let model = TranslationContext.GetEffectiveSemanticModel(this.compilation, declaration.SyntaxTree)
+                for identifier in TranslationContext.GetEffectiveNodes(declaration).OfType[IdentifierNameSyntax]() {
                     if identifier.Identifier.ValueText != "_" {
                         continue
                     }
@@ -565,8 +565,8 @@ internal class EmittedNameAllocator {
                 Enumerable.Empty[SyntaxReference]()
         )
         for reference in references {
-            let root = reference.GetSyntax()
-            let model = TranslationContext.GetEffectiveSemanticModel(this.compilation, reference.SyntaxTree)
+            let root = TranslationContext.GetEffectiveDeclaration(reference.GetSyntax())
+            let model = TranslationContext.GetEffectiveSemanticModel(this.compilation, root.SyntaxTree)
             for node in root.DescendantNodesAndSelf() {
                 let declared ISymbol? = model.GetDeclaredSymbol(node)
                 if declared is ILocalSymbol ||
@@ -645,8 +645,8 @@ internal class EmittedNameAllocator {
                 default: current.DeclaringSyntaxReferences.AsEnumerable()
             }
             for reference in references {
-                let root = reference.GetSyntax()
-                let model = TranslationContext.GetEffectiveSemanticModel(this.compilation, reference.SyntaxTree)
+                let root = TranslationContext.GetEffectiveDeclaration(reference.GetSyntax())
+                let model = TranslationContext.GetEffectiveSemanticModel(this.compilation, root.SyntaxTree)
                 for token in root.DescendantTokens() {
                     if token.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.IdentifierToken) &&
                         token.ValueText != "_" {
@@ -960,10 +960,10 @@ internal class EmittedNameAllocator {
     }
 
     private func CollectInvocationSensitiveSymbols() {
-        for tree in this.compilation.SyntaxTrees {
+        for root in TranslationContext.GetEffectiveSyntaxRoots(this.compilation) {
+            let tree = root.SyntaxTree
             let model = TranslationContext.GetEffectiveSemanticModel(this.compilation, tree)
-            let root = tree.GetRoot()
-            for invocation in root.DescendantNodes().OfType[InvocationExpressionSyntax]() {
+            for invocation in TranslationContext.GetEffectiveNodes(root).OfType[InvocationExpressionSyntax]() {
                 if invocation.Expression is not SimpleNameSyntax simple || model.GetSymbolInfo(simple)
                     .Symbol is not{} symbol {
                     continue
@@ -983,7 +983,7 @@ internal class EmittedNameAllocator {
                     this.AddPrecomputedContext(symbol, GSharpIdentifierNameContext.Index)
                 }
             }
-            for creation in root.DescendantNodes()
+            for creation in TranslationContext.GetEffectiveNodes(root)
                 .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.ObjectCreationExpressionSyntax]() {
                 if model.GetSymbolInfo(creation).Symbol is not IMethodSymbol constructor {
                     continue
@@ -999,7 +999,8 @@ internal class EmittedNameAllocator {
                     this.AddPrecomputedContext(constructor.ContainingType, GSharpIdentifierNameContext.Index)
                 }
             }
-            for creation in root.DescendantNodes().OfType[ImplicitObjectCreationExpressionSyntax]() {
+            for creation in TranslationContext.GetEffectiveNodes(root)
+                .OfType[ImplicitObjectCreationExpressionSyntax]() {
                 if model.GetTypeInfo(creation).Type is INamedTypeSymbol type && GSharpSyntaxFacts.IsReservedIdentifier(
                     type.Name,
                     GSharpIdentifierNameContext.Invocation
@@ -1013,7 +1014,7 @@ internal class EmittedNameAllocator {
                     this.AddPrecomputedContext(genericType, GSharpIdentifierNameContext.Index)
                 }
             }
-            for access in root.DescendantNodes().OfType[ElementAccessExpressionSyntax]() {
+            for access in TranslationContext.GetEffectiveNodes(root).OfType[ElementAccessExpressionSyntax]() {
                 if access.Expression is IdentifierNameSyntax identifier && GSharpSyntaxFacts.IsReservedIdentifier(
                     identifier.Identifier.ValueText,
                     GSharpIdentifierNameContext.Index

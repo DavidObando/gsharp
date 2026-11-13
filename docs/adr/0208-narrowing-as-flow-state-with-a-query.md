@@ -463,6 +463,11 @@ identity-and-version ownership, without copying catalogs per document. This
 preserves the pipeline's fresh-context-per-retranslation behavior and avoids
 invalidating live projection boundaries during a pass. Existing CLR constructor
 and semantic-model-scope overloads remain executable for compiled consumers.
+Equivalent ordered compilation catalogs also reuse a weak canonical version,
+even when callers supply different list instances. Declaration ownership can
+then deduplicate anonymous classes without sharing privileged model results.
+Derived signature and producer visitors use the related-context factory, retaining
+cancellation and the captured model/catalog inputs.
 
 The captured catalog also owns linked ref-storage promotions, frozen contracts,
 taint results, null-argument graphs, source-assembly classification, and anonymous
@@ -497,6 +502,14 @@ Ref-storage scans enter the owning scope before capturing its active model.
 Normal declaration inventories retain the separate normal-model reader.
 An unscoped cache lookup uses the same canonical default compilation domain as
 an ordinary query, without computing its taint graph merely to inspect the cache.
+Speculative method bodies form an effective syntax inventory over the original
+compilation. Roslyn's parent model and original speculation position identify
+the actual owning declaration. Inventories omit that declaration's original body
+and add the supplied replacement body under its actual speculative model.
+Signatures, unaffected declarations, and other trees remain original inputs.
+Return, ref-storage, null-flow, shape, effect, projection, import, and naming
+walks use the same inventory and declaration resolver. Body translation uses
+the replacement while retaining the original declared method and parameter symbols.
 Implicit one-argument tree scopes prefer an active owner, then the root, before
 requiring a unique external owner. An explicit selected owner always wins.
 

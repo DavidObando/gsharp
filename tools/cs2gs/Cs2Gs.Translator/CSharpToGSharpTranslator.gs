@@ -309,6 +309,7 @@ partial class CSharpToGSharpTranslator {
     ) CompilationUnit {
         using let catalogAnalysis = ObliviousNullabilityAnalyzer.UseCatalogScope(context)
         let root = document.GetRoot()
+        using let documentModel = context.UseSemanticModelFor(root.SyntaxTree, context.Compilation)
         // A document split into several package units is translated once per
         // unit; only the first (or only) unit reports its directives.
         if this.packageFilter == nil || this.includeGlobalNamespace {
@@ -1620,10 +1621,10 @@ partial class CSharpToGSharpTranslator {
             HashSet[string]
         ] {
             let result = Dictionary[INamedTypeSymbol, HashSet[string]](SymbolEqualityComparer.Default)
-            for tree in compilation.SyntaxTrees {
-                let typeOfExpressions = tree
-                    .GetRoot()
-                    .DescendantNodes()
+            for root in TranslationContext.GetEffectiveSyntaxRoots(compilation) {
+                let tree = root.SyntaxTree
+                let typeOfExpressions = TranslationContext
+                    .GetEffectiveNodes(root)
                     .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.TypeOfExpressionSyntax]()
                     .ToList()
                 if typeOfExpressions.Count == 0 {

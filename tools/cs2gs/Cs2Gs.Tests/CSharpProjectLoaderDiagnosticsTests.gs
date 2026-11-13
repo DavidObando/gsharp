@@ -28,6 +28,69 @@ open class CSharpProjectLoaderDiagnosticsTests {
     @Theory
     @InlineData(false)
     @InlineData(true)
+    func SpeculativeBodyInventory_SupersedesOriginalBody(boolAddNull bool) {
+        let originalWrite = if boolAddNull {
+            "Value = \"safe\";"
+        } else {
+            "Value = null;"
+        }
+        let replacementWrite = if boolAddNull {
+            "Value = null;"
+        } else {
+            "Value = \"safe\";"
+        }
+        let tree = CSharpSyntaxTree.ParseText(
+            "public static class Store { public static string Value = \"safe\"; public static string Other = \"safe\"; public static void Change() { " +
+                originalWrite +
+                " } public static void Keep() { Other = null; } }",
+            path: "SpeculativeInventory.cs"
+        )
+        let compilation = CSharpCompilation.Create(
+            "SpeculativeInventory5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        let normal = compilation.GetSemanticModel(tree)
+        let original = tree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[MethodDeclarationSyntax]()
+            .Single((method MethodDeclarationSyntax) -> method.Identifier.ValueText == "Change")
+        let replacement = Assert.IsAssignableFrom[BaseMethodDeclarationSyntax](
+            SyntaxFactory.ParseMemberDeclaration("public static void Change() { " + replacementWrite + " }")
+        )
+        Assert.True(
+            Microsoft
+                .CodeAnalysis
+                .CSharp
+                .CSharpExtensions
+                .TryGetSpeculativeSemanticModelForMethodBody(
+                normal,
+                original.Body!!.SpanStart,
+                replacement,
+                out var speculativeModel
+            )
+        )
+        let supplied = speculativeModel ?? throw InvalidOperationException("Speculative model missing.")
+        let context = TranslationContext(compilation, supplied, supplied.SyntaxTree.FilePath)
+        let owner = compilation.GetTypeByMetadataName("Store") ?? throw InvalidOperationException("Store missing.")
+        let value = Assert.IsAssignableFrom[IFieldSymbol](Assert.Single(owner.GetMembers("Value")))
+        let other = Assert.IsAssignableFrom[IFieldSymbol](Assert.Single(owner.GetMembers("Other")))
+        Assert.True(
+            SymbolEqualityComparer.Default.Equals(
+                normal.GetDeclaredSymbol(original),
+                supplied.GetEnclosingSymbol(replacement.Body!!.SpanStart)
+            )
+        )
+        using let analysis = ObliviousNullabilityAnalyzer.UseCatalogScope(context)
+        Assert.Equal(boolAddNull, ObliviousNullabilityAnalyzer.IsTainted(compilation, value))
+        Assert.True(ObliviousNullabilityAnalyzer.IsTainted(compilation, other))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
     func ScopedEffectiveModelReader_PreservesBindingsAndRestoresNormalPeers(speculative bool) {
         let first = CSharpSyntaxTree.ParseText(
             "public class Hidden { private static int Value = 1; } public class Reader { public static int Read() { return Hidden.Value; } }",

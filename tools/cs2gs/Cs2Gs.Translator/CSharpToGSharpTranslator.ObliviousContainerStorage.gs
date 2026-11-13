@@ -2188,9 +2188,10 @@ partial class CSharpToGSharpTranslator {
                     (Creation AnonymousObjectCreationExpressionSyntax, Properties[]IPropertySymbol, Model SemanticModel)
                 ]
             ](System.StringComparer.Ordinal)
-            for tree in compilation.SyntaxTrees {
+            for root in TranslationContext.GetEffectiveSyntaxRoots(compilation) {
+                let tree = root.SyntaxTree
                 let model = this.context.GetOwnedSemanticModel(tree, cast[CSharpCompilation](compilation))
-                for node in tree.GetRoot().DescendantNodes() {
+                for node in TranslationContext.GetEffectiveNodes(root) {
                     if node is AnonymousObjectCreationExpressionSyntax anonymousCreation && model.GetTypeInfo(
                         anonymousCreation
                     )

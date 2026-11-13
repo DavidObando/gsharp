@@ -63,8 +63,12 @@ namespace Demo
         CompileFilesTogether(("MigrationA.gs", printedA), ("MigrationB.gs", printedB))
     }
 
-    @Fact
-    func IdenticalAnonymousShape_InDifferentFiles_SamePackage_SharesOneSynthesizedType() {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func IdenticalAnonymousShape_InDifferentFiles_SamePackage_SharesOneSynthesizedType(
+        separateEquivalentCatalogs bool
+    ) {
         const SourceA = `
 namespace Demo
 {
@@ -87,7 +91,13 @@ namespace Demo
         }
     }
 }`
-        let (printedA, printedB) = TranslateTwoFiles("MigrationA.cs", SourceA, "MigrationB.cs", SourceB)
+        let (printedA, printedB) = TranslateTwoFiles(
+            "MigrationA.cs",
+            SourceA,
+            "MigrationB.cs",
+            SourceB,
+            separateEquivalentCatalogs
+        )
         let name = AnonymousTypeNames(printedA).Single()
         // The FIRST file to need the shape declares it...
         Assert.Contains("data class $name(Id int32, Name string)", printedA)
@@ -227,10 +237,13 @@ Printed:
         /// every document of a real project — so the package-scoped anonymous-type
         /// registry is actually shared across the two files, the way it is in
         /// production.
-        private func TranslateTwoFiles(fileNameA string, sourceA string, fileNameB string, sourceB string)(
-            PrintedA string,
-            PrintedB string
-        ) {
+        private func TranslateTwoFiles(
+            fileNameA string,
+            sourceA string,
+            fileNameB string,
+            sourceB string,
+            separateEquivalentCatalogs bool = false
+        )(PrintedA string, PrintedB string) {
             let project = CSharpProjectLoader.LoadInMemory(
                 [](string, string){(fileNameA, sourceA), (fileNameB, sourceB)}
             )
@@ -242,12 +255,37 @@ Printed:
             let translator = CSharpToGSharpTranslator()
             let documentA = project.Documents[0]
             let documentB = project.Documents[1]
-            let contextA = TranslationContext(project.Compilation, documentA.SemanticModel, documentA.FilePath)
+            let firstCatalog = if separateEquivalentCatalogs {
+                List[Microsoft.CodeAnalysis.CSharp.CSharpCompilation]{project.Compilation}
+            } else {
+                default(List[Microsoft.CodeAnalysis.CSharp.CSharpCompilation]?)
+            }
+            let secondCatalog = if separateEquivalentCatalogs {
+                List[Microsoft.CodeAnalysis.CSharp.CSharpCompilation]{project.Compilation}
+            } else {
+                default(List[Microsoft.CodeAnalysis.CSharp.CSharpCompilation]?)
+            }
+            let contextA = TranslationContext(
+                project.Compilation,
+                documentA.SemanticModel,
+                documentA.FilePath,
+                firstCatalog,
+                firstCatalog
+            )
             let unitA = translator.TranslateDocument(documentA, contextA)
             let printedA = GSharpPrinter.Print(unitA)
-            let contextB = TranslationContext(project.Compilation, documentB.SemanticModel, documentB.FilePath)
+            let contextB = TranslationContext(
+                project.Compilation,
+                documentB.SemanticModel,
+                documentB.FilePath,
+                secondCatalog,
+                secondCatalog
+            )
             let unitB = translator.TranslateDocument(documentB, contextB)
             let printedB = GSharpPrinter.Print(unitB)
+            if separateEquivalentCatalogs {
+                CompileFilesTogether(("MigrationA.gs", printedA), ("MigrationB.gs", printedB))
+            }
             TranslationTestValidation.AssertBinds(printedA, printedB)
             return (printedA, printedB)
         }

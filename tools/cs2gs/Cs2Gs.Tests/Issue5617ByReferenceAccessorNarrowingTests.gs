@@ -31,6 +31,273 @@ import Xunit
 /// output with the output of the C#.
 open class Issue5617ByReferenceAccessorNarrowingTests {
     @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func RefParameter_SpeculativeInventoriesReplaceNullSeedsRefEdgesAndAnonymousShapes(
+        replacementWritesNull bool,
+        specialFirst bool
+    ) {
+        let changed = "Use(null); Ref(ref Slot); var shape = new { Item = (string)null };"
+        let unchanged = "Use(\"safe\"); var shape = new { Item = \"safe\" };"
+        let tree = CSharpSyntaxTree.ParseText(
+            "public static class Demo { public static string Slot = \"safe\"; private static void Use(string text) {} private static void Ref(ref string value) {} public static object Stable() => new { Item = \"safe\" }; public static void Change() { " +
+                (
+                if replacementWritesNull {
+                    unchanged
+                } else {
+                    changed
+                }
+            ) +
+                " } public static string Run() { Change(); return \"ok\"; } }",
+            path: "SpeculativeAllInventories.cs"
+        )
+        let compilation = CSharpCompilation.Create(
+            "SpeculativeAllInventories5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        let normal = compilation.GetSemanticModel(tree)
+        let original = tree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax]()
+            .Single(
+            (method Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax) -> method
+                .Identifier
+                .ValueText == "Change"
+        )
+        let replacement = Assert.IsAssignableFrom[Microsoft.CodeAnalysis.CSharp.Syntax.BaseMethodDeclarationSyntax](
+            SyntaxFactory.ParseMemberDeclaration(
+                "public static void Change() { " +
+                    (
+                    if replacementWritesNull {
+                        changed
+                    } else {
+                        unchanged
+                    }
+                ) +
+                    " }"
+            )
+        )
+        Assert.True(
+            Microsoft
+                .CodeAnalysis
+                .CSharp
+                .CSharpExtensions
+                .TryGetSpeculativeSemanticModelForMethodBody(
+                normal,
+                original.Body!!.SpanStart,
+                replacement,
+                out var speculativeModel
+            )
+        )
+        let supplied = speculativeModel ?? throw InvalidOperationException("Speculative model missing.")
+        let owner = compilation.GetTypeByMetadataName("Demo") ?? throw InvalidOperationException("Demo missing.")
+        let input = Assert.IsAssignableFrom[IMethodSymbol](Assert.Single(owner.GetMembers("Use"))).Parameters[0]
+        let normalContext = TranslationContext(compilation, normal, tree.FilePath)
+        let specialContext = TranslationContext(compilation, supplied, tree.FilePath)
+        var normalConnected = false
+        var specialConnected = false
+        normalContext.AfterRefStorageConnection = (target ISymbol, source ISymbol) -> {
+            if target is IParameterSymbol{Name: "value"} && source is IFieldSymbol{Name: "Slot"} {
+                normalConnected = true
+            }
+        }
+        specialContext.AfterRefStorageConnection = (target ISymbol, source ISymbol) -> {
+            if target is IParameterSymbol{Name: "value"} && source is IFieldSymbol{Name: "Slot"} {
+                specialConnected = true
+            }
+        }
+        for isSpecial in[]bool{specialFirst, !specialFirst, specialFirst} {
+            let model = if isSpecial {
+                supplied
+            } else {
+                normal
+            }
+            let context = if isSpecial {
+                specialContext
+            } else {
+                normalContext
+            }
+            let expected = if isSpecial {
+                replacementWritesNull
+            } else {
+                !replacementWritesNull
+            }
+            using let analysis = ObliviousNullabilityAnalyzer.UseCatalogScope(context)
+            Assert.Equal(
+                expected,
+                ObliviousNullabilityAnalyzer.IsNullArgumentTarget(compilation, input, context.SiblingCompilations)
+            )
+            let printed = GSharpPrinter.Print(
+                CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, normal), context)
+            )
+            Assert.Equal(
+                expected,
+                if isSpecial {
+                    specialConnected
+                } else {
+                    normalConnected
+                }
+            )
+            Assert.Equal(expected, Regex.IsMatch(printed, "data class [^\\n]+\\(Item string\\?\\)"))
+            Assert.Equal(
+                Encoding.UTF8.GetBytes("ok" + Environment.NewLine),
+                Encoding.UTF8.GetBytes(CompileAndRun(printed, Array.Empty[byte](), strictIl: true))
+            )
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RefParameter_SpeculativeBodyOverlayExecutesReplacementNotOriginal(replacementNull bool) {
+        let originalWrite = if replacementNull {
+            "Value = \"safe\";"
+        } else {
+            "Value = null;"
+        }
+        let replacementWrite = if replacementNull {
+            "Value = null;"
+        } else {
+            "Value = \"safe\";"
+        }
+        let tree = CSharpSyntaxTree.ParseText(
+            "public static class Demo { public static string Value = \"safe\"; public static string Other = \"before\"; public static void Change() { " +
+                originalWrite +
+                " } public static void Keep() { Other = \"other\"; } public static string Run() { Change(); Keep(); return (Value ?? \"nil\") + \":\" + Other; } }",
+            path: "SpeculativeRuntime.cs"
+        )
+        let compilation = CSharpCompilation.Create(
+            "SpeculativeRuntime5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        let normal = compilation.GetSemanticModel(tree)
+        let original = tree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax]()
+            .Single(
+            (method Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax) -> method
+                .Identifier
+                .ValueText == "Change"
+        )
+        let replacement = Assert.IsAssignableFrom[Microsoft.CodeAnalysis.CSharp.Syntax.BaseMethodDeclarationSyntax](
+            SyntaxFactory.ParseMemberDeclaration("public static void Change() { " + replacementWrite + " }")
+        )
+        Assert.True(
+            Microsoft
+                .CodeAnalysis
+                .CSharp
+                .CSharpExtensions
+                .TryGetSpeculativeSemanticModelForMethodBody(
+                normal,
+                original.Body!!.SpanStart,
+                replacement,
+                out var speculativeModel
+            )
+        )
+        let supplied = speculativeModel ?? throw InvalidOperationException("Speculative model missing.")
+        let context = TranslationContext(compilation, supplied, tree.FilePath)
+        let printed = GSharpPrinter.Print(
+            CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, normal), context)
+        )
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(
+                (
+                    if replacementNull {
+                        "nil:other"
+                    } else {
+                        "safe:other"
+                    }
+                ) +
+                    Environment.NewLine
+            ),
+            Encoding.UTF8.GetBytes(CompileAndRun(printed, Array.Empty[byte](), strictIl: true))
+        )
+        let peer = TranslationContext(compilation, normal, tree.FilePath)
+        let originalOutput = GSharpPrinter.Print(
+            CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, normal), peer)
+        )
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(
+                (
+                    if replacementNull {
+                        "safe:other"
+                    } else {
+                        "nil:other"
+                    }
+                ) +
+                    Environment.NewLine
+            ),
+            Encoding.UTF8.GetBytes(CompileAndRun(originalOutput, Array.Empty[byte](), strictIl: true))
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RefParameter_ProducerOwnedExtensionInheritsCancellationAndSuppliedBindings(special bool) {
+        let producerTree = CSharpSyntaxTree.ParseText(
+            "namespace Lib5617 { public class Box {} public static class Extensions { public static int Size(this Box box) => 7; } }",
+            path: "ProducerOwnedExtension.cs"
+        )
+        let options = CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        let producer = CSharpCompilation.Create(
+            "Lib5617",
+            []SyntaxTree{producerTree},
+            CSharpProjectLoader.RuntimeReferences(),
+            options
+        )
+        let tree = CSharpSyntaxTree.ParseText(
+            "using Lib5617; public class Secret { private static int Value = 1; } public static class Demo { public static int Read() => Secret.Value; public static string Run() => new Box().Size().ToString(); }",
+            path: "OwnedExtensionCaller.cs"
+        )
+        let compilation = CSharpCompilation.Create(
+            "OwnedExtensionCaller5326",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences().Append(cast[MetadataReference](producer.ToMetadataReference())),
+            options
+        )
+        let model = compilation.GetSemanticModel(tree, ignoreAccessibility: special)
+        let privateRead = tree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax]()
+            .Single(
+            (
+                access Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax
+            ) -> access.ToString() == "Secret.Value"
+        )
+        using let cancellation = CancellationTokenSource()
+        let catalog = List[CSharpCompilation]{compilation, producer}
+        let context = TranslationContext(compilation, model, tree.FilePath, catalog, catalog, cancellation.Token)
+        var entered = false
+        var publishedAfterCancellation = false
+        context.BeforeProducerExtensionAnalysis = (child TranslationContext) -> {
+            entered = true
+            {
+                using let caller = child.UseSemanticModelFor(tree, compilation)
+                Assert.Equal(special, child.GetSymbolInfo(privateRead).Symbol != nil)
+            }
+            child.BeforeRefStoragePublication = () -> {
+                publishedAfterCancellation = true
+            }
+            cancellation.Cancel()
+        }
+        Assert.ThrowsAny[OperationCanceledException](
+            () -> CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, model), context)
+        )
+        Assert.True(entered)
+        Assert.False(publishedAfterCancellation)
+    }
+
+    @Theory
     @InlineData(false)
     @InlineData(true)
     func RefParameter_PrivateRefStorageConsumesTheSuppliedModel(specialFirst bool) {

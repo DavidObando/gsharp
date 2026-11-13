@@ -2763,16 +2763,17 @@ partial class CSharpToGSharpTranslator {
             // Constructed slots retain nullable arguments. Declaration constraints use the original symbol.
             this.frozenRefStorageContracts = Dictionary[ISymbol, HashSet[int32]](SymbolEqualityComparer.Default)
             this.linkedRefStoragePromotions = cache.LinkedPromotions
-            for tree in compilation.SyntaxTrees {
+            for root in TranslationContext.GetEffectiveSyntaxRoots(compilation) {
+                let tree = root.SyntaxTree
                 this.context.CancellationToken.ThrowIfCancellationRequested()
                 using let modelScope = this.context.UseSemanticModelFor(tree, compilation)
                 let model = this.context.SemanticModel
-                for reference in tree.GetRoot().DescendantNodes().OfType[RefExpressionSyntax]() {
+                for reference in TranslationContext.GetEffectiveNodes(root).OfType[RefExpressionSyntax]() {
                     if this.RefStorageDestination(reference, model) is {} destination {
                         this.ConnectRefStorage(this.GetRefStorageSlot(destination, 0), reference.Expression, model)
                     }
                 }
-                for argument in tree.GetRoot().DescendantNodes().OfType[ArgumentSyntax]() {
+                for argument in TranslationContext.GetEffectiveNodes(root).OfType[ArgumentSyntax]() {
                     if (argument.RefKindKeyword.IsKind(SyntaxKind.RefKeyword)) && model.GetOperation(
                         argument
                     ) is IArgumentOperation{Parameter: {RefKind: RefKind.Ref} parameter} {
@@ -3651,7 +3652,12 @@ partial class CSharpToGSharpTranslator {
                         case property is IPropertySymbol: property.PartialImplementationPart ?? property
                         default: parameter.ContainingSymbol
                     }
-                    return owner?.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                    let syntax = owner?.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                    return if syntax == nil {
+                        nil
+                    } else {
+                        TranslationContext.GetEffectiveDeclaration(syntax)
+                    }
                 }
                 case field is IFieldSymbol {
                     return field.ContainingType?.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()

@@ -183,6 +183,7 @@ class TranslationContext {
     internal var BeforeOwnershipTree Action?
     internal var BeforeRefStoragePublication Action?
     internal var AfterRefStorageConnection Action[ISymbol, ISymbol]?
+    internal var BeforeProducerExtensionAnalysis Action[TranslationContext]?
 
     internal class DeferredCallbackIndex {
         init(
@@ -353,7 +354,14 @@ class TranslationContext {
         } else {
             this.SourceCompilation(symbol)
         }
-        return if owner == nil || !owner.ContainsSyntaxTree(tree) {
+        return if owner == nil ||
+            (
+            !owner.ContainsSyntaxTree(tree) &&
+                !(
+                this.SuppliedNonstandardModel is {} supplied && object.ReferenceEquals(supplied.Compilation, owner) &&
+                    object.ReferenceEquals(supplied.SyntaxTree, tree)
+            )
+        ) {
             nil
         } else {
             this.UseSemanticModelFor(tree, owner)
@@ -468,6 +476,7 @@ class TranslationContext {
         var Index SourceOwnershipIndex?
         var Snapshot SourceCatalogSnapshot?
         let Catalogs ConditionalWeakTable[object, SourceCatalogs] = ConditionalWeakTable[object, SourceCatalogs]()
+        let Versions List[WeakReference[SourceCatalogSnapshot]] = List[WeakReference[SourceCatalogSnapshot]]()
     }
 
     private class SourceCatalogs {
@@ -488,7 +497,7 @@ class TranslationContext {
     /// Resolves the declared symbol for a declaration node via the active model.
     /// @param node The declaration syntax node.
     /// @returns The declared symbol, or `null` if none.
-    func GetDeclaredSymbol(node SyntaxNode?) ISymbol? -> this.SemanticModel.GetDeclaredSymbol(node!!)
+    func GetDeclaredSymbol(node SyntaxNode?) ISymbol? -> GetEffectiveDeclaredSymbol(this.SemanticModel, node!!)
 
     /// Resolves symbol information for an expression or reference via the active model.
     /// @param node The expression or reference node.
@@ -633,6 +642,21 @@ class TranslationContext {
         }
     }
 
+    private class SpeculativeBody {
+        init(
+            model SemanticModel,
+            original Microsoft.CodeAnalysis.CSharp.Syntax.BaseMethodDeclarationSyntax,
+            replacement Microsoft.CodeAnalysis.CSharp.Syntax.BaseMethodDeclarationSyntax
+        ) {
+            this.Model = model
+            this.Original = original
+            this.Replacement = replacement
+        }
+        let Model SemanticModel
+        let Original Microsoft.CodeAnalysis.CSharp.Syntax.BaseMethodDeclarationSyntax
+        let Replacement Microsoft.CodeAnalysis.CSharp.Syntax.BaseMethodDeclarationSyntax
+    }
+
     shared {
         private let SourceOwnershipByCompilation ConditionalWeakTable[CSharpCompilation, SourceOwnershipPublication] =
         ConditionalWeakTable[CSharpCompilation, SourceOwnershipPublication]()
@@ -682,7 +706,27 @@ class TranslationContext {
                     siblings.ToImmutableArray()
                 }
                 cancellationToken.ThrowIfCancellationRequested()
-                let snapshot = SourceCatalogSnapshot(siblingVersion, repositoryVersion)
+                var snapshot SourceCatalogSnapshot? = nil
+                lock owner.Versions {
+                    cancellationToken.ThrowIfCancellationRequested()
+                    for var index = owner.Versions.Count - 1; index >= 0; index-- {
+                        if !owner.Versions[index].TryGetTarget(out var existing) {
+                            owner.Versions.RemoveAt(index)
+                        } else if (existing.Repository == nil) == (repositoryVersion == nil) &&
+                            (existing.Siblings == nil) == (siblingVersion == nil) &&
+                            SameCompilations(existing.Repository, repositoryVersion) &&
+                            SameCompilations(existing.Siblings, siblingVersion) {
+                            snapshot = existing
+                            break
+                        }
+                    }
+                    if snapshot == nil {
+                        cancellationToken.ThrowIfCancellationRequested()
+                        snapshot = SourceCatalogSnapshot(siblingVersion, repositoryVersion)
+                        owner.Versions.Add(WeakReference[SourceCatalogSnapshot](snapshot))
+                    }
+                }
+                cancellationToken.ThrowIfCancellationRequested()
                 publication.Snapshot = snapshot
                 return snapshot
             }
@@ -816,6 +860,101 @@ class TranslationContext {
             } else {
                 GetSemanticModel(compilation, tree)
             }
+        }
+
+        private let SpeculativeBodies ConditionalWeakTable[SemanticModel, StrongBox[SpeculativeBody?]] =
+        ConditionalWeakTable[SemanticModel, StrongBox[SpeculativeBody?]]()
+
+        private func ActiveSpeculativeBody() SpeculativeBody? {
+            let model = ObliviousNullabilityAnalyzer.ScopedSemanticModel
+            if model?.IsSpeculativeSemanticModel != true {
+                return nil
+            }
+            return SpeculativeBodies.GetValue(
+                model!!,
+                (current SemanticModel) -> {
+                    if current.ParentModel is not{} parent || current.SyntaxTree.GetRoot() is not Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .BaseMethodDeclarationSyntax{Body: not nil} replacement ||
+                        parent.GetEnclosingSymbol(current.OriginalPositionForSpeculation) is not IMethodSymbol method {
+                        return StrongBox[SpeculativeBody?](nil)
+                    }
+                    for reference in method.DeclaringSyntaxReferences {
+                        if object.ReferenceEquals(reference.SyntaxTree, parent.SyntaxTree) &&
+                            reference.GetSyntax() is Microsoft
+                            .CodeAnalysis
+                            .CSharp
+                            .Syntax
+                            .BaseMethodDeclarationSyntax{Body: not nil} original {
+                            return StrongBox[SpeculativeBody?](SpeculativeBody(current, original, replacement))
+                        }
+                    }
+                    return StrongBox[SpeculativeBody?](nil)
+                }
+            )
+                .Value
+        }
+
+        internal func GetEffectiveSyntaxRoots(compilation Compilation) IEnumerable[SyntaxNode] ->
+        GetEffectiveSyntaxRoots(compilation, compilation.SyntaxTrees)
+
+        internal func GetEffectiveSyntaxRoots(compilation Compilation, trees IEnumerable[SyntaxTree]) sequence[
+            SyntaxNode
+        ] {
+            let overlay = ActiveSpeculativeBody()
+            var includeReplacement = false
+            for tree in trees {
+                yield tree.GetRoot()
+                includeReplacement |= overlay != nil && object.ReferenceEquals(tree, overlay.Original.SyntaxTree)
+            }
+            if includeReplacement && overlay != nil && object.ReferenceEquals(overlay.Model.Compilation, compilation) {
+                yield overlay.Replacement.Body!!
+            }
+        }
+
+        internal func GetEffectiveNodes(root SyntaxNode) IEnumerable[SyntaxNode] {
+            if ActiveSpeculativeBody() is {} overlay && object.ReferenceEquals(
+                root.SyntaxTree,
+                overlay.Original.SyntaxTree
+            ) {
+                if object.ReferenceEquals(root, overlay.Original.Body) {
+                    return Enumerable.Empty[SyntaxNode]()
+                }
+                return root.DescendantNodes((node SyntaxNode) -> !object.ReferenceEquals(node, overlay.Original.Body))
+                    .Where((node SyntaxNode) -> !object.ReferenceEquals(node, overlay.Original.Body))
+            }
+            return root.DescendantNodes()
+        }
+
+        internal func GetEffectiveDeclaration(node SyntaxNode) SyntaxNode -> if ActiveSpeculativeBody() is {} overlay &&
+            object.ReferenceEquals(node, overlay.Original) {
+            overlay.Replacement
+        } else {
+            node
+        }
+
+        internal func GetEffectiveDeclaredSymbol(model SemanticModel, node SyntaxNode) ISymbol? {
+            if ActiveSpeculativeBody() is {} overlay && object.ReferenceEquals(model, overlay.Model) {
+                let owner = overlay.Model.ParentModel!!.GetEnclosingSymbol(
+                    overlay.Model.OriginalPositionForSpeculation
+                ) as IMethodSymbol
+                if object.ReferenceEquals(node, overlay.Replacement) {
+                    return owner
+                }
+                if node is Microsoft.CodeAnalysis.CSharp.Syntax.ParameterSyntax parameter && object.ReferenceEquals(
+                    parameter.Parent,
+                    overlay.Replacement.ParameterList
+                ) &&
+                    owner != nil {
+                    let index = overlay.Replacement.ParameterList.Parameters.IndexOf(parameter)
+                    if index >= 0 && index < owner.Parameters.Length {
+                        return owner.Parameters[index]
+                    }
+                }
+            }
+            return model.GetDeclaredSymbol(node)
         }
 
         internal func CacheSemanticModel(compilation Compilation, model SemanticModel) {

@@ -2048,12 +2048,10 @@ partial class CSharpToGSharpTranslator {
         private func CanonicalEmittedType(type ITypeSymbol, method IMethodSymbol?) string {
             // Collision probing must not add imports or unsupported diagnostics
             // to the real translation (e.g. an Index-typed unrelated overload).
-            let signatureContext = TranslationContext(
+            let signatureContext = this.context.CreateRelatedContext(
                 this.context.Compilation,
                 this.context.SemanticModel,
-                this.context.FilePath,
-                this.context.SiblingCompilations,
-                this.context.RepositoryCompilations
+                this.context.FilePath
             )
             let signatureMapper = CSharpTypeMapper(AnonymousTypeRegistry(), this.nameAllocator)
             let mapped GTypeReference? = signatureMapper.Map(type, signatureContext, Location.None)
@@ -2084,13 +2082,12 @@ partial class CSharpToGSharpTranslator {
                 if owner != nil && declared.DeclaringSyntaxReferences.FirstOrDefault() is SyntaxReference reference {
                     // Ask the declaring project's registry and eligibility reader,
                     // including its body-based suspension/nullability context.
-                    let ownerContext = TranslationContext(
+                    let ownerContext = this.context.CreateRelatedContext(
                         owner,
                         TranslationContext.GetEffectiveSemanticModel(owner, reference.SyntaxTree),
-                        reference.SyntaxTree.FilePath,
-                        this.context.SiblingCompilations,
-                        this.context.RepositoryCompilations
+                        reference.SyntaxTree.FilePath
                     )
+                    this.context.BeforeProducerExtensionAnalysis?.Invoke(ownerContext)
                     let ownerVisitor = DeclarationVisitor(
                         ownerContext,
                         this.typeMapper,

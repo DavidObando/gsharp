@@ -6913,10 +6913,11 @@ partial class CSharpToGSharpTranslator {
                 return this.GetReceiverOwnerType(receiver)
             }
             for compilation in knownCompilations {
-                for tree in compilation.SyntaxTrees {
+                for root in TranslationContext.GetEffectiveSyntaxRoots(compilation) {
+                    let tree = root.SyntaxTree
                     this.context.CancellationToken.ThrowIfCancellationRequested()
                     using let _ = this.context.UseSemanticModelFor(tree, compilation)
-                    for node in tree.GetRoot().DescendantNodes() {
+                    for node in TranslationContext.GetEffectiveNodes(root) {
                         if node is TypeDeclarationSyntax declaredTypeSyntax && this.context.GetDeclaredSymbol(
                             declaredTypeSyntax
                         ) is INamedTypeSymbol declaredType {
