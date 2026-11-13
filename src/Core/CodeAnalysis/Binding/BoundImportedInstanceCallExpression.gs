@@ -15,7 +15,7 @@ import System.Reflection
 /// originates from a CLR (cref:System.Type).
 class BoundImportedInstanceCallExpression : BoundCallOperationExpression {
     private var calledFunction ImportedFunctionSymbol?
-    private let signatureReturnType TypeSymbol
+    private var signatureReturnType TypeSymbol
 
     /// Initializes a new instance of the (cref:BoundImportedInstanceCallExpression) class.
     /// @param syntax The originating syntax.
@@ -109,6 +109,19 @@ class BoundImportedInstanceCallExpression : BoundCallOperationExpression {
     private var _type TypeSymbol
 
     override prop Type TypeSymbol -> _type
+
+    internal prop SignatureReturnType TypeSymbol -> signatureReturnType
+
+    /// Copies the declared return type without changing expression-flow typing.
+    /// @param copy The reconstructed call.
+    /// @returns The call with its original declared return type.
+    internal func CopySignatureReturnTypeTo(
+        copy BoundImportedInstanceCallExpression
+    ) BoundImportedInstanceCallExpression {
+        copy.signatureReturnType = SignatureReturnType
+        copy.calledFunction = nil
+        return copy
+    }
 
     /// Gets the receiver expression.
     prop Receiver BoundExpression {

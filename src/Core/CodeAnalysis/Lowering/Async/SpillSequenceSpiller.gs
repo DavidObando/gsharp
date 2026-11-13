@@ -1686,6 +1686,7 @@ shared class SpillSequenceSpiller {
                 call.ConstrainedInterfaceType,
                 call.IsNonVirtualBaseCall
             )
+            call.CopySignatureReturnTypeTo(value)
             return BoundSpillSequenceExpression(nil, locals, sideEffects, value)
         }
 

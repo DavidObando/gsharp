@@ -1352,6 +1352,7 @@ abstract class BoundTreeRewriter {
             node.ConstrainedInterfaceType,
             node.IsNonVirtualBaseCall
         )
+        node.CopySignatureReturnTypeTo(copy)
         node.CopyMemberGroupTo(copy)
         return copy
     }

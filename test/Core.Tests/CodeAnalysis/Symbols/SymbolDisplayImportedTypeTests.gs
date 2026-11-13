@@ -119,6 +119,45 @@ public class ImportedReturns {
         }
 
         @Fact
+        func RewrittenConditionalReturn_PreservesDeclaredSignatureAndFlowNarrowing() {
+            using let fixture = CSharpFixture(Contract)
+            let tree = SyntaxTree.Parse(`import DisplayContext
+func Use(api Calls) {
+    let value = api.Repeat("text")
+}`)
+            let compilation = Compilation(fixture.RuntimeReferences(), tree)
+            Assert.Empty(compilation.GlobalScope.Diagnostics)
+            Assert.Empty(compilation.BoundProgram.Diagnostics)
+            let accessor = Assert.Single(tree.Root.DescendantNodesAndSelf().OfType[AccessorExpressionSyntax]())
+            let original = Assert.IsType[BoundImportedInstanceCallExpression](
+                compilation.GetSemanticModel(tree).GetBoundNode(accessor)
+            )
+            let copy = Assert.IsType[BoundImportedInstanceCallExpression](OperandCopyRewriter().Apply(original))
+            Assert.NotSame(original, copy)
+            Assert.NotSame(original.Arguments[0], copy.Arguments[0])
+            let originalSymbol = Assert.IsType[ImportedFunctionSymbol](original.CalledFunction)
+            let copiedSymbol = Assert.IsType[ImportedFunctionSymbol](copy.CalledFunction)
+            let originalLabel = SymbolDisplay.ToDisplayString(originalSymbol, SymbolDisplayFormat.Signature)
+            let copiedLabel = SymbolDisplay.ToDisplayString(copiedSymbol, SymbolDisplayFormat.Signature)
+            output.WriteLine("original expression: ${SymbolDisplay.ToTypeDisplayString(original.Type)}")
+            output.WriteLine("copied expression: ${SymbolDisplay.ToTypeDisplayString(copy.Type)}")
+            output.WriteLine("original signature: $originalLabel")
+            output.WriteLine("copied signature: $copiedLabel")
+            Assert.Equal(ReferenceNullabilityKind.NotNull, original.Type.ReferenceNullability)
+            Assert.Same(original.Type, copy.Type)
+            Assert.Same(originalSymbol.Type, copiedSymbol.Type)
+            Assert.Equal("func Repeat(input string?) string?", copiedLabel)
+            Assert.Equal(originalLabel, copiedLabel)
+        }
+
+        private class OperandCopyRewriter : BoundTreeRewriter {
+            func Apply(node BoundExpression) BoundExpression -> RewriteExpression(node)
+
+            protected override func RewriteLiteralExpression(node BoundLiteralExpression) BoundExpression ->
+            BoundLiteralExpression(node.Syntax, node.Value, node.Type)
+        }
+
+        @Fact
         func SeparateStaticCalls_DoNotShareErasedMethodArgumentContext() {
             let tree = SyntaxTree.Parse(`import System.Linq
 class First { }

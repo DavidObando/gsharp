@@ -867,7 +867,8 @@ shared class SymbolDisplay {
                     aggregate.Definition?.Name ?? aggregate.Name,
                     aggregate.ContainingType,
                     aggregate.EnclosingTypeArguments,
-                    GetDisplayTypeArguments(aggregate.TypeArguments, aggregate.TypeParameters)
+                    GetDisplayTypeArguments(aggregate.TypeArguments, aggregate.TypeParameters),
+                    qualifyNames
                 )
             }
             case enumSymbol is EnumSymbol {
@@ -875,7 +876,8 @@ shared class SymbolDisplay {
                     enumSymbol.Definition?.Name ?? enumSymbol.Name,
                     enumSymbol.ContainingType,
                     enumSymbol.EnclosingTypeArguments,
-                    ImmutableArray[TypeSymbol].Empty
+                    ImmutableArray[TypeSymbol].Empty,
+                    qualifyNames
                 )
             }
             case interface_ is InterfaceSymbol {
@@ -883,7 +885,8 @@ shared class SymbolDisplay {
                     interface_.Definition?.Name ?? interface_.Name,
                     interface_.ContainingType,
                     interface_.EnclosingTypeArguments,
-                    GetDisplayTypeArguments(interface_.TypeArguments, interface_.DeclaredTypeParameters)
+                    GetDisplayTypeArguments(interface_.TypeArguments, interface_.DeclaredTypeParameters),
+                    qualifyNames
                 )
             }
             case delegateType is DelegateTypeSymbol {
@@ -891,7 +894,8 @@ shared class SymbolDisplay {
                     delegateType.Definition?.Name ?? delegateType.Name,
                     containingType: nil,
                     ImmutableArray[TypeSymbol].Empty,
-                    GetDisplayTypeArguments(delegateType.TypeArguments, delegateType.TypeParameters)
+                    GetDisplayTypeArguments(delegateType.TypeArguments, delegateType.TypeParameters),
+                    qualifyNames
                 )
             }
             case imported is ImportedTypeSymbol {
@@ -1076,22 +1080,24 @@ shared class SymbolDisplay {
         name string,
         containingType TypeSymbol?,
         enclosingTypeArguments ImmutableArray[TypeSymbol],
-        typeArguments ImmutableArray[TypeSymbol]
+        typeArguments ImmutableArray[TypeSymbol],
+        qualifyNames bool
     ) string {
         var prefix = string.Empty
         if containingType != nil {
             prefix = if enclosingTypeArguments.IsDefaultOrEmpty {
-                "${FormatType(containingType)}."
+                "${FormatType(containingType, qualifyNames)}."
             } else {
-                "${FormatContainingSourceType(containingType, enclosingTypeArguments)}."
+                "${FormatContainingSourceType(containingType, enclosingTypeArguments, qualifyNames)}."
             }
         }
-        return prefix + name + FormatTypeArguments(typeArguments)
+        return prefix + name + FormatTypeArguments(typeArguments, qualifyNames)
     }
 
     private func FormatContainingSourceType(
         containingType TypeSymbol?,
-        enclosingTypeArguments ImmutableArray[TypeSymbol]
+        enclosingTypeArguments ImmutableArray[TypeSymbol],
+        qualifyNames bool
     ) string {
         if containingType is StructSymbol aggregate {
             let ownArgumentCount = Math.Min(aggregate.TypeParameters.Length, enclosingTypeArguments.Length)
@@ -1100,17 +1106,18 @@ shared class SymbolDisplay {
                 aggregate.Name,
                 aggregate.ContainingType,
                 enclosingTypeArguments.Take(outerArgumentCount).ToImmutableArray(),
-                enclosingTypeArguments.Skip(outerArgumentCount).ToImmutableArray()
+                enclosingTypeArguments.Skip(outerArgumentCount).ToImmutableArray(),
+                qualifyNames
             )
         }
-        return FormatType(containingType)
+        return FormatType(containingType, qualifyNames)
     }
 
-    private func FormatTypeArguments(typeArguments ImmutableArray[TypeSymbol]) string {
+    private func FormatTypeArguments(typeArguments ImmutableArray[TypeSymbol], qualifyNames bool) string {
         return if typeArguments.IsDefaultOrEmpty {
             string.Empty
         } else {
-            "[${string.Join(", ", typeArguments.Select(FormatType))}]"
+            "[${string.Join(", ", typeArguments.Select((type TypeSymbol) -> FormatType(type, qualifyNames)))}]"
         }
     }
 

@@ -60,6 +60,13 @@ class Issue5492ImportedMethodDisplayTests {
         "(line int32, column int32)",
         false
     )
+    @InlineData(
+        "Box[List[string]]",
+        "Add",
+        "func Add(key string, value Box[List[string]])",
+        "Box[System.Collections.Generic.List[string]]",
+        false
+    )
     func ReceiverSignature_IsSharedByBoundSymbolHoverSignatureHelpAndCompletion(
         element string,
         member string,
@@ -78,6 +85,7 @@ class Issue5492ImportedMethodDisplayTests {
         }
         let source = `import System.Collections.Generic
 class Item { var X int32 = 0 }
+class Box[T any] { }
 INHERITED
 func Use(d RECEIVER, s sequence[ELEMENT], value ELEMENT) {
     EXPRESSION
@@ -147,7 +155,7 @@ func Use(d RECEIVER, s sequence[ELEMENT], value ELEMENT) {
         }
         Assert.Equal(expected, label)
         let expectedHover = if member == "Add" {
-            "Add(key string, value " + element + ")"
+            "Add(key string, value " + expectedBoundType + ")"
         } else {
             "GetEnumerator() System.Collections.Generic.IEnumerator[" + element + "]"
         }
