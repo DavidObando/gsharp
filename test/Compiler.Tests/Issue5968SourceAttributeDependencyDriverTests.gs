@@ -2,6 +2,7 @@ package GSharp.Compiler.Tests
 
 import GSharp.Tests
 import System
+import System.Collections.Generic
 import System.IO
 import System.Linq
 import System.Reflection
@@ -144,6 +145,695 @@ class TagAttribute : Attribute {}`
         )
         Assert.NotEqual(0, constructorCode)
         Assert.Equal([]string{"GS0583@2,1,2,8"}, DiagnosticLocations(constructorOutput))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ImportedConstructorConstraints_DoNotReadEmptySourceShells(privateConstructor bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let driver = CompileBoundedStackDriver(fixture)
+        let library = fixture.CompileCSharp(
+            "namespace Contracts { public class NeedsCtor<T> where T : new() {} }",
+            "constructor-contracts"
+        )
+        let item = if privateConstructor {
+            "class Item { private init() {} }"
+        } else {
+            "class Item(Value int32) {}"
+        }
+        const wrapper = "class Wrapper : NeedsCtor[Item] {}"
+        for reverse in[]bool{false, true} {
+            let source = "import Contracts\n" + if reverse {
+                wrapper + "\n" + item
+            } else {
+                item + "\n" + wrapper
+            }
+            let sourcePath = Path.Combine(fixture.Directory, "constructor.gs")
+            let response = Path.Combine(fixture.Directory, "constructor.rsp")
+            let dll = Path.Combine(fixture.Directory, "constructor-" + reverse.ToString() + ".dll")
+            File.WriteAllText(sourcePath, source)
+            File.WriteAllText(response, "/reference:\"" + library + "\"\n\"" + sourcePath + "\"")
+            let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+                "@" + response,
+                dll,
+                driver
+            )
+            Assert.True(code == 1, output)
+            Assert.Equal(
+                []string{
+                    "GS0152@" +
+                        (
+                        if reverse {
+                            "2"
+                        } else {
+                            "3"
+                        }
+                    ) +
+                        ",17," +
+                        (
+                        if reverse {
+                            "2"
+                        } else {
+                            "3"
+                        }
+                    ) +
+                        ",26"
+                },
+                DiagnosticLocations(output)
+            )
+            Assert.False(File.Exists(dll))
+        }
+    }
+
+    @Fact
+    func DeferredImportedConstraints_RetainRichChildDiagnostics() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let driver = CompileBoundedStackDriver(fixture)
+        let library = fixture.CompileCSharp(
+            "namespace Contracts { public class NeedsCtor<T> where T : new() {} }",
+            "child-constructor-contracts"
+        )
+        const source = `import Contracts
+interface Reader { func Read(); }
+class Item(Value int32) {}
+class Holder {
+    let Value Reader = object : Reader {
+        func Read() { let invalid = NeedsCtor[Item]() }
+    }
+}`
+        let sourcePath = Path.Combine(fixture.Directory, "child.gs")
+        let response = Path.Combine(fixture.Directory, "child.rsp")
+        let dll = Path.Combine(fixture.Directory, "child.dll")
+        File.WriteAllText(sourcePath, source)
+        File.WriteAllText(response, "/reference:\"" + library + "\"\n\"" + sourcePath + "\"")
+        let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+            "@" + response,
+            dll,
+            driver
+        )
+        Assert.True(code == 1, output)
+        Assert.Equal([]string{"GS0152@6,37,6,46"}, DiagnosticLocations(output))
+        Assert.False(File.Exists(dll))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func HeaderPointerArguments_ValidateCompleteSourcePointees(importedWrapper bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let driver = CompileBoundedStackDriver(fixture)
+        let library = fixture.CompileCSharp(
+            "namespace Contracts { public struct Box<T> where T : struct { public T Value; } }",
+            "pointer-pointee-wrapper"
+        )
+        let declarations = []string{
+            "struct Payload { var Text string }",
+            "unsafe open class GenericBase[T] {}",
+            "unsafe class Derived : GenericBase[[]*" + if importedWrapper {
+                "Box[Payload]"
+            } else {
+                "Payload"
+            } + "] {}"
+        }
+        for reverse in[]bool{false, true} {
+            let sourcePath = Path.Combine(fixture.Directory, "pointer-contract.gs")
+            let response = Path.Combine(fixture.Directory, "pointer-contract.rsp")
+            let dll = Path.Combine(fixture.Directory, "pointer-contract-" + reverse.ToString() + ".dll")
+            File.WriteAllText(
+                sourcePath,
+                "import Contracts\n" + string.Join(
+                    "\n",
+                    if reverse {
+                        declarations.Reverse()
+                    } else {
+                        declarations
+                    }
+                )
+            )
+            File.WriteAllText(response, "/reference:\"" + library + "\"\n\"" + sourcePath + "\"")
+            let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+                "@" + response,
+                dll,
+                driver
+            )
+            Assert.True(code == 1, output)
+            let line = if reverse {
+                "2"
+            } else {
+                "4"
+            }
+            let endColumn = if importedWrapper {
+                "51"
+            } else {
+                "46"
+            }
+            Assert.Equal([]string{"GS0398@" + line + ",39," + line + "," + endColumn}, DiagnosticLocations(output))
+            Assert.False(File.Exists(dll))
+            File.WriteAllText(sourcePath, File.ReadAllText(sourcePath).Replace("var Text string", "var Number int32"))
+            let (validCode, validOutput) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+                "@" + response,
+                dll,
+                driver
+            )
+            Assert.True(validCode == 0, validOutput)
+            IlVerifier.Verify(dll, []string{library})
+            let derived = EmittedFixture.Load(dll).GetTypes().Single((type Type) -> type.Name == "Derived")
+            let array = Assert.Single(derived.BaseType!!.GetGenericArguments())
+            Assert.True(array.IsArray)
+            Assert.True(array.GetElementType()!!.IsPointer)
+            var pointee = array.GetElementType()!!.GetElementType()!!
+            if importedWrapper {
+                Assert.Equal("Box`1", pointee.GetGenericTypeDefinition().Name)
+                pointee = Assert.Single(pointee.GetGenericArguments())
+            }
+            Assert.Equal("Payload", pointee.Name)
+            Assert.Equal(typeof(int32), pointee.GetField("Number")!!.FieldType)
+            Assert.NotNull(Activator.CreateInstance(derived))
+        }
+    }
+
+    @Theory
+    @InlineData("indirect")
+    @InlineData("self")
+    @InlineData("constraint")
+    @InlineData("constructed-owner")
+    @InlineData("closed-signature")
+    @InlineData("active-ancestor")
+    @InlineData("constraint-constructed-ancestor")
+    func BaseIdentity_PrecedesGenericArgumentHeaderContracts(kind string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let driver = CompileBoundedStackDriver(fixture)
+        let nestedOwner = kind == "constructed-owner"
+        let argumentName = switch kind {
+            case "self", "active-ancestor": "A.Nested"
+            case "constraint": "Root.Nested"
+            case "constraint-constructed-ancestor": "Root[int32].Nested"
+            default: "B"
+        }
+        let declarations = []string{
+            if kind == "active-ancestor" || kind == "constraint-constructed-ancestor" {
+                "open class Root[U] { public open class Nested {} }"
+            } else if kind == "closed-signature" {
+                "open class Root[U] {}"
+            } else if nestedOwner {
+                "open class Root {}"
+            } else {
+                "open class Root { public open class Nested {} }"
+            },
+            if kind == "constraint-constructed-ancestor" {
+                "open class G[T A.Nested] : Root[int32] {}"
+            } else if kind == "active-ancestor" {
+                "open class G[T] : Root[int32] {}"
+            } else if kind == "closed-signature" {
+                "open class G[T] : Root[A.Nested] { public open class Nested {} }"
+            } else if nestedOwner {
+                "open class G[T] { public open class Nested {} }"
+            } else if kind == "constraint" {
+                "open class G[T A.Nested] : Root {}"
+            } else {
+                "open class G[T] : Root {}"
+            },
+            if kind == "closed-signature" {
+                "class A : G[int32] {}"
+            } else {
+                "class A : G[" + argumentName + "] {}"
+            },
+            if kind == "self" ||
+                kind == "constraint" ||
+                kind == "closed-signature" ||
+                kind == "active-ancestor" ||
+                kind == "constraint-constructed-ancestor" {
+                ""
+            } else {
+                "class B : A.Nested {}"
+            }
+        }
+        for reverse in[]bool{false, true} {
+            let sourcePath = Path.Combine(fixture.Directory, "base-identity.gs")
+            let dll = Path.Combine(fixture.Directory, "base-identity-" + reverse.ToString() + ".dll")
+            File.WriteAllText(
+                sourcePath,
+                string.Join(
+                    "\n",
+                    if reverse {
+                        declarations.Reverse()
+                    } else {
+                        declarations
+                    }
+                )
+            )
+            let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+                sourcePath,
+                dll,
+                driver
+            )
+            Assert.True(code == 0, output)
+            IlVerifier.Verify(dll)
+            let types = EmittedFixture.Load(dll).GetTypes()
+            let nested = types.Single((type Type) -> type.Name == "Nested")
+            let a = types.Single((type Type) -> type.Name == "A")
+            let baseType = a.BaseType!!
+            let argument = Assert.Single(baseType.GetGenericArguments())
+            Assert.Equal("G`1", baseType.GetGenericTypeDefinition().Name)
+            if kind == "active-ancestor" || kind == "constraint-constructed-ancestor" {
+                Assert.Equal(nested, argument.GetGenericTypeDefinition())
+                Assert.Equal(typeof(int32), Assert.Single(argument.GetGenericArguments()))
+            } else if kind == "closed-signature" {
+                Assert.Equal(typeof(int32), argument)
+                let gString = baseType.GetGenericTypeDefinition().MakeGenericType(typeof(string))
+                let rootArgument = Assert.Single(gString.BaseType!!.GetGenericArguments())
+                Assert.Equal(nested, rootArgument.GetGenericTypeDefinition())
+                Assert.Equal(typeof(int32), Assert.Single(rootArgument.GetGenericArguments()))
+                Assert.NotNull(Activator.CreateInstance(gString))
+            } else if kind == "self" || kind == "constraint" {
+                Assert.Equal(nested, argument)
+            } else {
+                Assert.Equal("B", argument.Name)
+                if nestedOwner {
+                    let nestedBase = argument.BaseType!!
+                    Assert.Equal(nested, nestedBase.GetGenericTypeDefinition())
+                    Assert.Equal(argument, Assert.Single(nestedBase.GetGenericArguments()))
+                } else {
+                    Assert.Equal(nested, argument.BaseType)
+                }
+                Assert.NotNull(Activator.CreateInstance(argument))
+            }
+            Assert.NotNull(Activator.CreateInstance(a))
+        }
+    }
+
+    @Fact
+    func SelfNestedConstraint_UsesIdentityBeforeItsConstructedHeader() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let driver = CompileBoundedStackDriver(fixture)
+        let declarations = []string{
+            "open class G[V] { public open class Inherited {} }",
+            "open class Outer[T Outer[T].Nested] : G[int32] { public open class Nested : Inherited {} }",
+            "class Concrete : Outer[Concrete].Nested {}",
+            "open class Box[U] {}",
+            "class OptionalValue[U struct] : Box[U?] {}",
+            "class OptionalReference[U class] : Box[U?] {}"
+        }
+        for reverse in[]bool{false, true} {
+            let sourcePath = Path.Combine(fixture.Directory, "self-nested-constraint.gs")
+            let dll = Path.Combine(fixture.Directory, "self-nested-constraint-" + reverse.ToString() + ".dll")
+            File.WriteAllText(
+                sourcePath,
+                string.Join(
+                    "\n",
+                    if reverse {
+                        declarations.Reverse()
+                    } else {
+                        declarations
+                    }
+                )
+            )
+            let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+                sourcePath,
+                dll,
+                driver
+            )
+            Assert.True(code == 0, output)
+            IlVerifier.Verify(dll)
+            let types = EmittedFixture.Load(dll).GetTypes()
+            let outer = types.Single((type Type) -> type.Name == "Outer`1")
+            let nested = types.Single((type Type) -> type.Name == "Nested")
+            let concrete = types.Single((type Type) -> type.Name == "Concrete")
+            Assert.Equal(nested.MakeGenericType(concrete), concrete.BaseType)
+            let inherited = concrete.BaseType!!.BaseType!!
+            Assert.Equal("Inherited", inherited.Name)
+            Assert.Equal(typeof(int32), Assert.Single(inherited.GetGenericArguments()))
+            Assert.NotNull(Activator.CreateInstance(outer.MakeGenericType(concrete)))
+            Assert.NotNull(Activator.CreateInstance(concrete))
+            let optionalValue = types.Single((type Type) -> type.Name == "OptionalValue`1").MakeGenericType(
+                typeof(int32)
+            )
+            Assert.Equal(typeof(int32?), Assert.Single(optionalValue.BaseType!!.GetGenericArguments()))
+            let optionalReference = types.Single((type Type) -> type.Name == "OptionalReference`1").MakeGenericType(
+                typeof(string)
+            )
+            Assert.Equal(typeof(string), Assert.Single(optionalReference.BaseType!!.GetGenericArguments()))
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func NamedConstraintSequenceElements_ValidateAfterBounds(asynchronous bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let driver = CompileBoundedStackDriver(fixture)
+        let sequenceKind = if asynchronous {
+            "async sequence"
+        } else {
+            "sequence"
+        }
+        let declarations = []string{
+            "open class Animal {}",
+            "open class Box[U] {}",
+            "class Derived[T Animal] : Box[" + sequenceKind + "[T?]] {}"
+        }
+        for reverse in[]bool{false, true} {
+            let sourcePath = Path.Combine(fixture.Directory, "sequence-bound.gs")
+            let dll = Path.Combine(fixture.Directory, "sequence-bound-" + reverse.ToString() + ".dll")
+            File.WriteAllText(
+                sourcePath,
+                string.Join(
+                    "\n",
+                    if reverse {
+                        declarations.Reverse()
+                    } else {
+                        declarations
+                    }
+                )
+            )
+            let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+                sourcePath,
+                dll,
+                driver
+            )
+            Assert.True(code == 0, output)
+            IlVerifier.Verify(dll)
+            let types = EmittedFixture.Load(dll).GetTypes()
+            let animal = types.Single((type Type) -> type.Name == "Animal")
+            let derived = types.Single((type Type) -> type.Name == "Derived`1")
+            Assert.Equal(
+                animal,
+                Assert.Single(Assert.Single(derived.GetGenericArguments()).GetGenericParameterConstraints())
+            )
+            let closed = derived.MakeGenericType(animal)
+            let argument = Assert.Single(closed.BaseType!!.GetGenericArguments())
+            Assert.Equal(
+                if asynchronous {
+                    "System.Collections.Generic.IAsyncEnumerable`1"
+                } else {
+                    "System.Collections.Generic.IEnumerable`1"
+                },
+                argument.GetGenericTypeDefinition().FullName
+            )
+            Assert.Equal(animal, Assert.Single(argument.GetGenericArguments()))
+            Assert.NotNull(Activator.CreateInstance(closed))
+        }
+        let invalidPath = Path.Combine(fixture.Directory, "unbounded-sequence.gs")
+        let invalidDll = Path.Combine(fixture.Directory, "unbounded-sequence.dll")
+        File.WriteAllText(invalidPath, string.Join("\n", declarations).Replace("[T Animal]", "[T]"))
+        let (invalidCode, invalidOutput) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+            invalidPath,
+            invalidDll,
+            driver
+        )
+        Assert.True(invalidCode == 1, invalidOutput)
+        let column = if asynchronous {
+            "39"
+        } else {
+            "33"
+        }
+        let endColumn = if asynchronous {
+            "41"
+        } else {
+            "35"
+        }
+        Assert.Equal([]string{"GS0508@3," + column + ",3," + endColumn}, DiagnosticLocations(invalidOutput))
+        Assert.False(File.Exists(invalidDll))
+    }
+
+    @Theory
+    @InlineData(false, false)
+    @InlineData(true, false)
+    @InlineData(false, true)
+    @InlineData(true, true)
+    func UnqualifiedInheritedArguments_UseConstructedAncestryBeforeHomonyms(homonym bool, nearerGeneric bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let driver = CompileBoundedStackDriver(fixture)
+        let declarations = []string{
+            "class A : G[Nested] {}",
+            if nearerGeneric {
+                "open class G[T] : Root[int32] { public class Nested[V] {} }"
+            } else {
+                "open class G[T] : Root[int32] {}"
+            },
+            "open class Root[U] { public open class Nested {} }",
+            if homonym {
+                "open class Nested {}"
+            } else {
+                ""
+            }
+        }
+        for reverse in[]bool{false, true} {
+            let sourcePath = Path.Combine(fixture.Directory, "lexical-inherited.gs")
+            let dll = Path.Combine(fixture.Directory, "lexical-inherited-" + reverse.ToString() + ".dll")
+            File.WriteAllText(
+                sourcePath,
+                string.Join(
+                    "\n",
+                    if reverse {
+                        declarations.Reverse()
+                    } else {
+                        declarations
+                    }
+                )
+            )
+            let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+                sourcePath,
+                dll,
+                driver
+            )
+            Assert.True(code == 0, output)
+            IlVerifier.Verify(dll)
+            let types = EmittedFixture.Load(dll).GetTypes()
+            let a = types.Single((type Type) -> type.Name == "A")
+            let nested = types.Single((type Type) -> type.Name == "Nested" && type.DeclaringType != nil)
+            let argument = Assert.Single(a.BaseType!!.GetGenericArguments())
+            Assert.Equal(nested, argument.GetGenericTypeDefinition())
+            Assert.Equal(typeof(int32), Assert.Single(argument.GetGenericArguments()))
+            Assert.NotNull(Activator.CreateInstance(a))
+        }
+    }
+
+    @Fact
+    func NominalInheritedIdentities_DoNotRequireConstructedEnclosingArguments() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let driver = CompileBoundedStackDriver(fixture)
+        let declarations = []string{
+            "class B : G[B.Target] {}",
+            "open class G[T] : Envelope.A {}",
+            "open class Envelope : Root[int32] { public open class A : Nested {} }",
+            "open class Root[U] { public open class Nested { public class Target {} } }"
+        }
+        for reverse in[]bool{false, true} {
+            let sourcePath = Path.Combine(fixture.Directory, "nominal-inherited.gs")
+            let dll = Path.Combine(fixture.Directory, "nominal-inherited-" + reverse.ToString() + ".dll")
+            File.WriteAllText(
+                sourcePath,
+                string.Join(
+                    "\n",
+                    if reverse {
+                        declarations.Reverse()
+                    } else {
+                        declarations
+                    }
+                )
+            )
+            let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+                sourcePath,
+                dll,
+                driver
+            )
+            Assert.True(code == 0, output)
+            IlVerifier.Verify(dll)
+            let types = EmittedFixture.Load(dll).GetTypes()
+            let b = types.Single((type Type) -> type.Name == "B")
+            let argument = Assert.Single(b.BaseType!!.GetGenericArguments())
+            Assert.Equal("Target", argument.Name)
+            Assert.Equal(typeof(int32), Assert.Single(argument.GetGenericArguments()))
+            Assert.Equal("Nested", argument.DeclaringType!!.Name)
+            let a = b.BaseType!!.BaseType!!
+            Assert.Equal("A", a.Name)
+            Assert.Equal("Envelope", a.DeclaringType!!.Name)
+            let nestedBase = a.BaseType!!
+            Assert.Equal("Nested", nestedBase.Name)
+            Assert.Equal(typeof(int32), Assert.Single(nestedBase.GetGenericArguments()))
+            Assert.NotNull(Activator.CreateInstance(b))
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func DirectNestedQualifierChains_DoNotRequireChildHeaders(generic bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let driver = CompileBoundedStackDriver(fixture)
+        let self = if generic {
+            "A[T]"
+        } else {
+            "A"
+        }
+        let declarations = []string{
+            "open class G[U] { public open class Inherited {} }",
+            "class " +
+                self +
+                " : G[" +
+                self +
+                ".Nested.Target] { public open class Nested : Inherited { public class Target {} } }"
+        }
+        for reverse in[]bool{false, true} {
+            let sourcePath = Path.Combine(fixture.Directory, "direct-nested-chain.gs")
+            let dll = Path.Combine(fixture.Directory, "direct-nested-chain-" + reverse.ToString() + ".dll")
+            File.WriteAllText(
+                sourcePath,
+                string.Join(
+                    "\n",
+                    if reverse {
+                        declarations.Reverse()
+                    } else {
+                        declarations
+                    }
+                )
+            )
+            let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+                sourcePath,
+                dll,
+                driver
+            )
+            Assert.True(code == 0, output)
+            IlVerifier.Verify(dll)
+            let types = EmittedFixture.Load(dll).GetTypes()
+            var a = types.Single(
+                (type Type) -> type.Name == if generic {
+                    "A`1"
+                } else {
+                    "A"
+                }
+            )
+            var nested = types.Single((type Type) -> type.Name == "Nested")
+            var target = types.Single((type Type) -> type.Name == "Target")
+            if generic {
+                a = a.MakeGenericType(typeof(string))
+                nested = nested.MakeGenericType(typeof(string))
+                target = target.MakeGenericType(typeof(string))
+            }
+            Assert.Equal(target, Assert.Single(a.BaseType!!.GetGenericArguments()))
+            let inherited = nested.BaseType!!
+            Assert.Equal("Inherited", inherited.Name)
+            Assert.Equal(target, Assert.Single(inherited.GetGenericArguments()))
+            Assert.NotNull(Activator.CreateInstance(a))
+            Assert.NotNull(Activator.CreateInstance(nested))
+            Assert.NotNull(Activator.CreateInstance(target))
+        }
+    }
+
+    @Fact
+    func ConstructedInheritanceCycles_ReportLocatedDiagnosticsWithoutExpandingForever() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let driver = CompileBoundedStackDriver(fixture)
+        const source = `class Root : A[int32] {}
+open class A[T] : B[A[T]] {}
+open class B[T] : A[B[T]] {}`
+        let sourcePath = Path.Combine(fixture.Directory, "constructed-cycle.gs")
+        let dll = Path.Combine(fixture.Directory, "constructed-cycle.dll")
+        File.WriteAllText(sourcePath, source)
+        let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+            sourcePath,
+            dll,
+            driver
+        )
+        Assert.True(code == 1, output)
+        let locations = DiagnosticLocations(output)
+        Assert.Equal([]string{"GS0381@2,19,2,20"}, locations)
+        Assert.DoesNotContain("GS9998", output)
+        Assert.DoesNotContain("GS0639", output)
+        Assert.False(File.Exists(dll))
+    }
+
+    @Fact
+    func NestedBaseLookup_UsesTheCompletedEnclosingHierarchy() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let driver = CompileBoundedStackDriver(fixture)
+        let declarations = []string{
+            "class Derived : Parent {}",
+            "open class Outer : Root { public open class Inner : Token {} }",
+            "open class Root { public open class Token {} }",
+            "open class Token {}"
+        }
+        for reverse in[]bool{false, true} {
+            let sourcePath = Path.Combine(fixture.Directory, "enclosing-base.gs")
+            let dll = Path.Combine(fixture.Directory, "enclosing-base-" + reverse.ToString() + ".dll")
+            File.WriteAllText(
+                sourcePath,
+                "import Parent = Outer.Inner\n" + string.Join(
+                    "\n",
+                    if reverse {
+                        declarations.Reverse()
+                    } else {
+                        declarations
+                    }
+                )
+            )
+            let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+                sourcePath,
+                dll,
+                driver
+            )
+            Assert.True(code == 0, output)
+            IlVerifier.Verify(dll)
+            let types = EmittedFixture.Load(dll).GetTypes()
+            let inherited = types.Single((type Type) -> type.Name == "Token" && type.DeclaringType?.Name == "Root")
+            let topLevel = types.Single((type Type) -> type.Name == "Token" && type.DeclaringType == nil)
+            let derived = types.Single((type Type) -> type.Name == "Derived")
+            Assert.Equal("Inner", derived.BaseType!!.Name)
+            Assert.Equal(inherited, derived.BaseType!!.BaseType)
+            Assert.NotEqual(topLevel, derived.BaseType!!.BaseType)
+            Assert.NotNull(Activator.CreateInstance(derived))
+        }
+    }
+
+    @Theory
+    @InlineData("var Token int32", true)
+    @InlineData("prop Token int32 -> 1", true)
+    @InlineData("func Token() int32 -> 1", true)
+    @InlineData("event Token System.Action", true)
+    @InlineData("public const Token int32 = 0", false)
+    func HeaderLookup_RespectsDeclaredStaticMemberHiding(member string, sharedMember bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let driver = CompileBoundedStackDriver(fixture)
+        let declarations = []string{
+            "class Derived : Outer.Token {}",
+            "open class Outer : Mid {}",
+            "open class Mid : Root { " + if sharedMember {
+                "shared { " + member + " }"
+            } else {
+                member
+            } + " }",
+            "open class Root { public open class Token {} }"
+        }
+        for reverse in[]bool{false, true} {
+            let sourcePath = Path.Combine(fixture.Directory, "hiding.gs")
+            let dll = Path.Combine(fixture.Directory, "hiding-" + reverse.ToString() + ".dll")
+            File.WriteAllText(
+                sourcePath,
+                string.Join(
+                    "\n",
+                    if reverse {
+                        declarations.Reverse()
+                    } else {
+                        declarations
+                    }
+                )
+            )
+            let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+                sourcePath,
+                dll,
+                driver
+            )
+            Assert.True(code == 1, output)
+            let line = if reverse {
+                "4"
+            } else {
+                "1"
+            }
+            Assert.Equal([]string{"GS0113@" + line + ",17," + line + ",22"}, DiagnosticLocations(output))
+            Assert.False(File.Exists(dll))
+        }
     }
 
     @Theory
@@ -355,20 +1045,40 @@ class BAttribute : Attribute {}`
     }
 
     @Theory
-    @InlineData(false)
-    @InlineData(true)
-    func DeepAttributeDependencies_ReportLocatedDiagnosticWithoutCrashing(inheritance bool) {
+    @InlineData(false, false, false)
+    @InlineData(true, false, false)
+    @InlineData(false, true, false)
+    @InlineData(true, false, true)
+    func DeepAttributeDependencies_CompileAndRetainContractsOnSmallStacks(
+        inheritance bool,
+        nested bool,
+        unrelatedNested bool
+    ) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let driver = CompileBoundedStackDriver(fixture)
         let sourceFile = Path.Combine(fixture.Directory, "dependency.gs")
         let outputFile = Path.Combine(fixture.Directory, "dependency.dll")
+        let wrapSource = func (source string) string {
+            let wrapped = if nested {
+                source.Replace("import System\n", "import System\nclass Envelope {\n") + "\n}"
+            } else {
+                source
+            }
+            return wrapped + if unrelatedNested {
+                "\nclass Unrelated { public class Distractor {} }\n"
+            } else {
+                ""
+            }
+        }
         File.WriteAllText(
             sourceFile,
-            if inheritance {
-                AttributeInheritanceChain(8)
-            } else {
-                AttributeChain(8)
-            }
+            wrapSource(
+                if inheritance {
+                    AttributeInheritanceChain(8)
+                } else {
+                    AttributeChain(8)
+                }
+            )
         )
         let (controlCode, controlOutput) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
             sourceFile,
@@ -377,45 +1087,491 @@ class BAttribute : Attribute {}`
         )
         Assert.True(controlCode == 0, controlOutput)
         File.Delete(outputFile)
-        let source = if inheritance {
-            AttributeInheritanceChain(8192)
-        } else {
-            AttributeChain(8192)
-        }
+        let source = wrapSource(
+            if inheritance {
+                AttributeInheritanceChain(8192)
+            } else {
+                AttributeChain(8192)
+            }
+        )
         File.WriteAllText(sourceFile, source)
         let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
             sourceFile,
             outputFile,
             driver
         )
-        Assert.True(
-            code == 1,
-            "Expected recoverable compiler error; exit " + code.ToString() + ": " + output.Substring(
-                0,
-                Math.Min(output.Length, 500)
-            )
-        )
+        Assert.True(code == 0, "Exit " + code.ToString() + ": " + output.Substring(0, Math.Min(output.Length, 2000)))
         Assert.DoesNotContain("Stack overflow", output, StringComparison.OrdinalIgnoreCase)
         Assert.DoesNotContain("GS9998", output)
-        let diagnostic = Assert.Single(DiagnosticLocations(output))
-        Assert.StartsWith("GS0639@", diagnostic)
-        let span = diagnostic
-            .Substring(diagnostic.IndexOf('@') + 1)
-            .Split(',')
-            .Select((value string) -> int32.Parse(value))
+        IlVerifier.Verify(outputFile)
+        using let stream = File.OpenRead(outputFile)
+        using let pe = PEReader(stream)
+        let metadata = pe.GetMetadataReader()
+        let definitions = metadata
+            .TypeDefinitions
+            .Select((handle TypeDefinitionHandle) -> metadata.GetTypeDefinition(handle))
+            .Where((type TypeDefinition) -> metadata.GetString(type.Name).StartsWith("A", StringComparison.Ordinal))
+            .OrderBy((type TypeDefinition) -> int32.Parse(metadata.GetString(type.Name).Substring(1)))
             .ToArray()
-        Assert.Equal(span[0], span[2])
-        let line = source.Split('\n')[span[0] - 1].TrimEnd('\r')
-        let identifier = Regex.Match(line, "^(?:open )?class (A[0-9]+) : ").Groups[1].Value
-        Assert.NotEmpty(identifier)
-        let column = if inheritance {
-            12
-        } else {
-            7
+        Assert.Equal(8192, definitions.Length)
+        for var index = 0; index < definitions.Length; index++ {
+            let definition = definitions[index]
+            Assert.Equal("A" + index.ToString(), metadata.GetString(definition.Name))
+            if nested {
+                Assert.Equal(
+                    "Envelope",
+                    metadata.GetString(metadata.GetTypeDefinition(definition.GetDeclaringType()).Name)
+                )
+            }
+            if inheritance && index + 1 < definitions.Length {
+                Assert.Equal(
+                    "A" + (index + 1).ToString(),
+                    metadata.GetString(metadata.GetTypeDefinition(cast[TypeDefinitionHandle](definition.BaseType)).Name)
+                )
+            } else {
+                Assert.Equal(
+                    "Attribute",
+                    metadata.GetString(metadata.GetTypeReference(cast[TypeReferenceHandle](definition.BaseType)).Name)
+                )
+            }
+            if !inheritance && index + 1 < definitions.Length {
+                let application = Assert.Single(
+                    definition.GetCustomAttributes().Select(
+                        (handle CustomAttributeHandle) -> metadata.GetCustomAttribute(handle)
+                    ),
+                    (attribute CustomAttribute) -> attribute.Constructor.Kind == HandleKind.MethodDefinition
+                )
+                let constructor = metadata.GetMethodDefinition(cast[MethodDefinitionHandle](application.Constructor))
+                Assert.Equal(
+                    "A" + (index + 1).ToString(),
+                    metadata.GetString(metadata.GetTypeDefinition(constructor.GetDeclaringType()).Name)
+                )
+                Assert.Equal([]uint8{1, 0, 0, 0}, metadata.GetBlobBytes(application.Value))
+            }
         }
-        Assert.Equal(column, span[1])
-        Assert.Equal(column + identifier.Length, span[3])
-        Assert.False(File.Exists(outputFile))
+        if !inheritance {
+            let first = EmittedFixture.Load(outputFile).GetTypes().Single((type Type) -> type.Name == "A0")
+            Assert.Equal(
+                "A1",
+                Assert
+                    .Single(
+                    first.GetCustomAttributes(false),
+                    (attribute object) -> attribute.GetType().Name.StartsWith("A", StringComparison.Ordinal)
+                )
+                    .GetType()
+                    .Name
+            )
+        }
+    }
+
+    @Fact
+    func DeepAttributeDependencies_PreserveContractsAcrossFileAndDeclarationOrders() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let driver = CompileBoundedStackDriver(fixture)
+        const count = 1024
+        let left = List[string]()
+        let right = List[string]()
+        for var index = 0; index < count; index++ {
+            let even = index % 2 == 0
+            let annotation = if index + 1 == count {
+                ""
+            } else {
+                "@" +
+                    (
+                    if even {
+                        "Right"
+                    } else {
+                        "Left"
+                    }
+                ) +
+                    ".A" +
+                    (index + 1).ToString() + "(Code: " + index.ToString() + ")\n"
+            }
+            let declaration = annotation +
+                "@AttributeUsage(AttributeTargets.All, AllowMultiple: true)\nclass A" +
+                index.ToString() +
+                "(Code int32) : " +
+                (
+                if even {
+                    "System.Attribute"
+                } else {
+                    "Base"
+                }
+            ) +
+                " {}"
+            (
+                if even {
+                    left
+                } else {
+                    right
+                }
+            ).Add(declaration)
+        }
+        let leftPath = Path.Combine(fixture.Directory, "left.gs")
+        let rightPath = Path.Combine(fixture.Directory, "right.gs")
+        let response = Path.Combine(fixture.Directory, "order.rsp")
+        var expected List[string]? = nil
+        for reverseDeclarations in[]bool{false, true} {
+            File.WriteAllText(
+                leftPath,
+                "package Left\nimport System\nimport Base = System.Exception\n" +
+                    "@Right.A1(Code: 17)\nclass Probe[T] { shared { func Identity(value T) T -> value } }\n" +
+                    string.Join(
+                    "\n",
+                    if reverseDeclarations {
+                        left.AsEnumerable().Reverse()
+                    } else {
+                        left
+                    }
+                )
+            )
+            File.WriteAllText(
+                rightPath,
+                "package Right\nimport System\nimport Base = System.Attribute\n" + string.Join(
+                    "\n",
+                    if reverseDeclarations {
+                        right.AsEnumerable().Reverse()
+                    } else {
+                        right
+                    }
+                )
+            )
+            for reverseFiles in[]bool{false, true} {
+                let paths = if reverseFiles {
+                    []string{rightPath, leftPath}
+                } else {
+                    []string{leftPath, rightPath}
+                }
+                File.WriteAllText(
+                    response,
+                    "/deterministic+\n/debug:none\n" + string.Join(
+                        "\n",
+                        paths.Select((path string) -> "\"" + path + "\"")
+                    )
+                )
+                let dll = Path.Combine(
+                    fixture.Directory,
+                    "ordered-" + reverseDeclarations.ToString() + reverseFiles.ToString() + ".dll"
+                )
+                let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+                    "@" + response,
+                    dll,
+                    driver
+                )
+                Assert.True(code == 0, output)
+                let bytes = File.ReadAllBytes(dll)
+                let (repeatCode, repeatOutput) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+                    "@" + response,
+                    dll,
+                    driver
+                )
+                Assert.True(repeatCode == 0, repeatOutput)
+                Assert.Equal(bytes, File.ReadAllBytes(dll))
+                IlVerifier.Verify(dll)
+                let types = EmittedFixture.Load(dll).GetTypes()
+                let attributes = types
+                    .Where((type Type) -> type.Name.StartsWith("A", StringComparison.Ordinal))
+                    .OrderBy((type Type) -> type.Name, StringComparer.Ordinal)
+                    .ToArray()
+                Assert.Equal(count, attributes.Length)
+                let contracts = List[string]()
+                for type in attributes {
+                    Assert.Equal(typeof(Attribute), type.BaseType)
+                    let usage = Assert.Single(
+                        type.GetCustomAttributesData(),
+                        (data CustomAttributeData) -> data.AttributeType == typeof(AttributeUsageAttribute)
+                    )
+                    Assert.Equal(int32(AttributeTargets.All), usage.ConstructorArguments[0].Value)
+                    Assert.Equal(true, Assert.Single(usage.NamedArguments).TypedValue.Value)
+                    let index = int32.Parse(type.Name.Substring(1))
+                    let applications = type
+                        .GetCustomAttributesData()
+                        .Where((data CustomAttributeData) -> data.AttributeType.Assembly == type.Assembly)
+                        .ToArray()
+                    if index + 1 == count {
+                        Assert.Empty(applications)
+                        continue
+                    }
+                    let application = Assert.Single(applications)
+                    Assert.Equal("A" + (index + 1).ToString(), application.AttributeType.Name)
+                    Assert.Equal(index, Assert.Single(application.ConstructorArguments).Value)
+                    contracts.Add(type.FullName + ":" + application.AttributeType.FullName + ":" + index.ToString())
+                }
+                let actual = contracts.ToArray()
+                if expected is {} previous {
+                    Assert.Equal(previous.ToArray(), actual)
+                } else {
+                    expected = contracts
+                }
+                let probe = types.Single((type Type) -> type.Name == "Probe`1").MakeGenericType(typeof(int32))
+                Assert.Equal(42, probe.GetMethod("Identity")!!.Invoke(nil, []object{42}))
+                Assert.Equal(
+                    17,
+                    probe
+                        .GetCustomAttributesData()
+                        .Single((data CustomAttributeData) -> data.AttributeType.Name == "A1")
+                        .ConstructorArguments[0]
+                        .Value
+                )
+            }
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func HeaderInterfaceIdentities_AreReadyForImportedConstraints(data bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let driver = CompileBoundedStackDriver(fixture)
+        let library = fixture.CompileCSharp(
+            "namespace Contracts { public interface IMarker {} " +
+                "public class NeedsMarker<T> where T : IMarker {} " +
+                "public class NeedsEquality<T> where T : System.IEquatable<T> {} }",
+            "header-contracts"
+        )
+        let marker = if data {
+            "data class Marker(Code int32) {}"
+        } else {
+            "class Marker : IMarker {}"
+        }
+        let wrapper = if data {
+            "class Wrapper : NeedsEquality[Marker] {}"
+        } else {
+            "class Wrapper[T Marker] : NeedsMarker[T] {}"
+        }
+        for reverse in[]bool{false, true} {
+            let source = "import Contracts\n" + if reverse {
+                wrapper + "\n" + marker
+            } else {
+                marker + "\n" + wrapper
+            }
+            let sourcePath = Path.Combine(fixture.Directory, "interfaces.gs")
+            let response = Path.Combine(fixture.Directory, "interfaces.rsp")
+            let dll = Path.Combine(fixture.Directory, "interfaces-" + reverse.ToString() + ".dll")
+            File.WriteAllText(sourcePath, source)
+            File.WriteAllText(response, "/reference:\"" + library + "\"\n\"" + sourcePath + "\"")
+            let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+                "@" + response,
+                dll,
+                driver
+            )
+            Assert.True(code == 0, output)
+            IlVerifier.Verify(dll, []string{library})
+            let types = EmittedFixture.Load(dll).GetTypes()
+            let markerType = types.Single((type Type) -> type.Name == "Marker")
+            var wrapperType = types.Single(
+                (type Type) -> type.Name == if data {
+                    "Wrapper"
+                } else {
+                    "Wrapper`1"
+                }
+            )
+            if data {
+                let equality = Assert.Single(
+                    markerType.GetInterfaces(),
+                    (type Type) -> type.IsGenericType && type.GetGenericTypeDefinition() == typeof(IEquatable[_])
+                )
+                Assert.Equal(markerType, Assert.Single(equality.GetGenericArguments()))
+            } else {
+                Assert.Contains(markerType.GetInterfaces(), (type Type) -> type.Name == "IMarker")
+                wrapperType = wrapperType.MakeGenericType(markerType)
+            }
+            Assert.Equal(markerType, Assert.Single(wrapperType.BaseType!!.GetGenericArguments()))
+            Assert.NotNull(Activator.CreateInstance(wrapperType))
+        }
+    }
+
+    @Theory
+    @InlineData("constraint")
+    @InlineData("base")
+    @InlineData("argument")
+    @InlineData("interface")
+    @InlineData("segmented")
+    @InlineData("escaped")
+    func QualifiedDeclarationSignatures_UseReadyLexicalHeaders(kind string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let driver = CompileBoundedStackDriver(fixture)
+        let root = if kind == "escaped" {
+            "open class Root { public open class $$interface {} }"
+        } else {
+            "open class Root { public open class Nested {} }"
+        }
+        let container = if kind == "constraint" {
+            "public open class Container[T] : Root {}"
+        } else if kind == "escaped" {
+            "public open class $$event : Root {}"
+        } else {
+            "public open class Container : Root {}"
+        }
+        let consumer = switch kind {
+            case "constraint": "public class Consumer[U Container[int32].Nested] {}"
+            case "base": "public class Consumer : Container.Nested {}"
+            case "argument": "public open class GenericBase[T] {}\npublic class Consumer : GenericBase[Container.Nested] {}"
+            case "segmented": "public class Consumer : Outer[int32].Container.Nested {}"
+            case "escaped": "public class Consumer : $$event.$$interface {}"
+            default: "public interface Contract { func Read(value Container.Nested); }\n" +
+                "public class Implementation : Contract { public func Read(value Root.Nested) {} }"
+        }
+        for reverse in[]bool{false, true} {
+            let siblings = if reverse {
+                consumer + "\n" + container
+            } else {
+                container + "\n" + consumer
+            }
+            let declarations = if kind == "segmented" {
+                []string{
+                    root,
+                    "open class Outer {}",
+                    "open class Outer[T] { public open class Container : Root {} }",
+                    consumer
+                }
+            } else {
+                []string{
+                    root,
+                    if kind == "constraint" {
+                        "open class Container[T] {}"
+                    } else {
+                        ""
+                    },
+                    "class Envelope {\n" + siblings + "\n}"
+                }
+            }
+            let sourcePath = Path.Combine(fixture.Directory, "qualifiers.gs")
+            let dll = Path.Combine(fixture.Directory, "qualifiers-" + reverse.ToString() + ".dll")
+            File.WriteAllText(
+                sourcePath,
+                string.Join(
+                    "\n",
+                    if reverse {
+                        declarations.Reverse()
+                    } else {
+                        declarations
+                    }
+                )
+            )
+            let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+                sourcePath,
+                dll,
+                driver
+            )
+            Assert.True(code == 0, output)
+            IlVerifier.Verify(dll)
+            let types = EmittedFixture.Load(dll).GetTypes()
+            let nested = types.Single(
+                (type Type) -> type.Name == if kind == "escaped" {
+                    "interface"
+                } else {
+                    "Nested"
+                }
+            )
+            if kind == "interface" {
+                let contract = types.Single((type Type) -> type.Name == "Contract")
+                let read = contract.GetMethod("Read")!!
+                Assert.Equal(nested, Assert.Single(read.GetParameters()).ParameterType)
+                let implementation = types.Single((type Type) -> type.Name == "Implementation")
+                read.Invoke(Activator.CreateInstance(implementation), []object{Activator.CreateInstance(nested)!!})
+            } else {
+                let result = types.Single(
+                    (type Type) -> type.Name == if kind == "constraint" {
+                        "Consumer`1"
+                    } else {
+                        "Consumer"
+                    }
+                )
+                if kind == "constraint" {
+                    Assert.Equal(
+                        nested,
+                        Assert.Single(Assert.Single(result.GetGenericArguments()).GetGenericParameterConstraints())
+                    )
+                    Assert.NotNull(Activator.CreateInstance(result.MakeGenericType(nested)))
+                } else {
+                    Assert.Equal(
+                        nested,
+                        if kind == "argument" {
+                            Assert.Single(result.BaseType!!.GetGenericArguments())
+                        } else {
+                            result.BaseType
+                        }
+                    )
+                    Assert.NotNull(Activator.CreateInstance(result))
+                }
+            }
+        }
+    }
+
+    @Fact
+    func HeaderConstraints_SeeInheritedNestedTypesInEitherDeclarationOrder() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let driver = CompileBoundedStackDriver(fixture)
+        let declarations = []string{
+            "class Derived[T Base.Nested] : Base {}",
+            "open class Base : Root {}",
+            "open class Root { public class Nested {} }"
+        }
+        for reverse in[]bool{false, true} {
+            let source = string.Join(
+                "\n",
+                if reverse {
+                    declarations.Reverse()
+                } else {
+                    declarations
+                }
+            )
+            let sourcePath = Path.Combine(fixture.Directory, "constraints.gs")
+            let dll = Path.Combine(fixture.Directory, "constraints-" + reverse.ToString() + ".dll")
+            File.WriteAllText(sourcePath, source)
+            let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+                sourcePath,
+                dll,
+                driver
+            )
+            Assert.True(code == 0, output)
+            IlVerifier.Verify(dll)
+            let types = EmittedFixture.Load(dll).GetTypes()
+            let nested = types.Single((type Type) -> type.Name == "Nested")
+            let derived = types.Single((type Type) -> type.Name == "Derived`1")
+            Assert.Equal(
+                nested,
+                Assert.Single(Assert.Single(derived.GetGenericArguments()).GetGenericParameterConstraints())
+            )
+            Assert.Equal("Base", derived.BaseType!!.Name)
+            Assert.NotNull(Activator.CreateInstance(derived.MakeGenericType(nested)))
+        }
+    }
+
+    @Fact
+    func NestedBaseMembers_SeeEnclosingConstraintsBeforeTheEnclosingBody() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let driver = CompileBoundedStackDriver(fixture)
+        let declarations = []string{
+            "class Derived : Outer[int32].Base {}",
+            "unsafe class Outer[T unmanaged] { public open class Base { public var Pointer *T } }"
+        }
+        for reverse in[]bool{false, true} {
+            let source = string.Join(
+                "\n",
+                if reverse {
+                    declarations.Reverse()
+                } else {
+                    declarations
+                }
+            )
+            let sourcePath = Path.Combine(fixture.Directory, "enclosing.gs")
+            let dll = Path.Combine(fixture.Directory, "enclosing-" + reverse.ToString() + ".dll")
+            File.WriteAllText(sourcePath, source)
+            let (code, output) = Issue4143CyclicAttributeDeclarationValidationTests.RunGscOutOfProcess(
+                sourcePath,
+                dll,
+                driver
+            )
+            Assert.True(code == 0, output)
+            IlVerifier.Verify(dll)
+            let derived = EmittedFixture.Load(dll).GetTypes().Single((type Type) -> type.Name == "Derived")
+            Assert.Equal("Base", derived.BaseType!!.Name)
+            Assert.Equal(typeof(int32), Assert.Single(derived.BaseType!!.GetGenericArguments()))
+            Assert.Equal(typeof(int32).MakePointerType(), derived.GetField("Pointer")!!.FieldType)
+            Assert.NotNull(Activator.CreateInstance(derived))
+        }
     }
 
     @Fact

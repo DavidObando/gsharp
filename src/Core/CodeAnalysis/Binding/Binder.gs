@@ -538,6 +538,7 @@ partial class Binder {
             },
             resolveAccessibility: ResolveAccessibility,
             lookupType: LookupType,
+            lookupTypeWithArity: LookupType,
             getEffectiveArgumentClrTypeForOverloadResolution: (t TypeSymbol) -> {
                 // Issue #3984: the two DeclarationBinder consumers of this
                 // delegate are BOTH applicability probes — they build a
@@ -4583,19 +4584,26 @@ partial class Binder {
                 return nil
             }
             if !object.ReferenceEquals(syntax, binderCtx.UnconstrainedNullableSequenceElementReturn) &&
-                elementType is NullableTypeSymbol{UnderlyingType: TypeParameterSymbol typeParameter} &&
-                !typeParameter.HasValueTypeConstraint &&
-                !typeParameter.HasReferenceTypeConstraint &&
-                typeParameter.ClassConstraint == nil {
-                Diagnostics.ReportUnconstrainedNullableSequenceElement(
-                    Invariant.Required(
-                        syntax.SequenceElementType,
-                        "IsSequence implies the parser set SequenceElementType",
-                        expression: "syntax.SequenceElementType"
-                    )
-                        .Location,
-                    typeParameter.Name
+                elementType is NullableTypeSymbol{UnderlyingType: TypeParameterSymbol typeParameter} {
+                let location = Invariant.Required(
+                    syntax.SequenceElementType,
+                    "IsSequence implies the parser set SequenceElementType",
+                    expression: "syntax.SequenceElementType"
                 )
+                    .Location
+                if $scope.IsDeferringUserGenericConstraintChecks() {
+                    $scope.GetPendingUserGenericConstraintChecks().Add(
+                        PendingUserGenericConstraintCheck(
+                            Diagnostics,
+                            ImmutableArray[TypeParameterSymbol].Empty,
+                            ImmutableArray.Create[TypeSymbol](typeParameter),
+                            location,
+                            () -> ReportUnconstrainedNullableSequenceElement(typeParameter, location)
+                        )
+                    )
+                } else {
+                    ReportUnconstrainedNullableSequenceElement(typeParameter, location)
+                }
             }
             if syntax.IsAsyncSequence {
                 return AsyncSequenceTypeSymbol.Get(elementType)
@@ -4622,30 +4630,24 @@ partial class Binder {
                 // it may not be dereferenced/indexed/advanced (the binder
                 // rejects those — GS0403) but it round-trips through
                 // `nint`/`IntPtr` and casts to/from typed pointers `*T`.
-                if pointeeType != TypeSymbol.Void && !TypeSymbol.IsLegalPointeeType(pointeeType) &&
-                    !(pointeeType is PointerTypeSymbol) &&
-                    !BlittableDetector.IsBlittableValueStructPointee(pointeeType) &&
-                    !(pointeeType is TypeParameterSymbol && pointeeType.HasUnmanagedConstraint == true) {
-                    // ADR-0122 §4 / issue #1034: a pointer to a blittable user
-                    // struct (`*Point`) is legal — accepted by the
-                    // BlittableDetector check above. Issue #1336: a pointer to a
-                    // generic type parameter constrained `unmanaged` (`*T`) is
-                    // likewise legal — the `unmanaged` constraint guarantees the
-                    // pointee is a GC-free value type, exactly as in C#. A
-                    // pointer to a non-blittable struct (one that contains a
-                    // managed reference / string / class field) or to any
-                    // managed reference type is still rejected here with GS0398,
-                    // matching C#'s unmanaged-type rule.
-                    Diagnostics.ReportUnmanagedPointerIllegalPointee(
-                        Invariant.Required(
-                            syntax.PointerPointeeType,
-                            "IsPointer implies the parser set PointerPointeeType",
-                            expression: "syntax.PointerPointeeType"
+                let location = Invariant.Required(
+                    syntax.PointerPointeeType,
+                    "IsPointer implies the parser set PointerPointeeType",
+                    expression: "syntax.PointerPointeeType"
+                )
+                    .Location
+                if $scope.IsDeferringUserGenericConstraintChecks() {
+                    $scope.GetPendingUserGenericConstraintChecks().Add(
+                        PendingUserGenericConstraintCheck(
+                            Diagnostics,
+                            ImmutableArray[TypeParameterSymbol].Empty,
+                            ImmutableArray.Create[TypeSymbol](pointeeType),
+                            location,
+                            () -> ReportIllegalUnmanagedPointee(pointeeType, location)
                         )
-                            .Location,
-                        pointeeType.Name
                     )
-                    return PointerTypeSymbol.Get(pointeeType)
+                } else {
+                    ReportIllegalUnmanagedPointee(pointeeType, location)
                 }
                 return PointerTypeSymbol.Get(pointeeType)
             }
@@ -4733,7 +4735,8 @@ partial class Binder {
                 clrOpenType,
                 clrArgs,
                 symbolicArgs.ToImmutable(),
-                identifierToken.Location
+                identifierToken.Location,
+                bindingScope: $scope
             ) {
                 return nil
             }
@@ -5033,6 +5036,30 @@ partial class Binder {
             return nil
         }
         return ArrayTypeSymbol.Get(element, length)
+    }
+
+    private func ReportUnconstrainedNullableSequenceElement(
+        typeParameter TypeParameterSymbol,
+        location TextLocation
+    ) bool {
+        if typeParameter.HasValueTypeConstraint ||
+            typeParameter.HasReferenceTypeConstraint ||
+            typeParameter.ClassConstraint != nil {
+            return false
+        }
+        Diagnostics.ReportUnconstrainedNullableSequenceElement(location, typeParameter.Name)
+        return true
+    }
+
+    private func ReportIllegalUnmanagedPointee(pointeeType TypeSymbol, location TextLocation) bool {
+        if pointeeType == TypeSymbol.Void || TypeSymbol.IsLegalPointeeType(pointeeType) ||
+            pointeeType is PointerTypeSymbol ||
+            BlittableDetector.IsBlittableValueStructPointee(pointeeType) ||
+            (pointeeType is TypeParameterSymbol && pointeeType.HasUnmanagedConstraint == true) {
+            return false
+        }
+        Diagnostics.ReportUnmanagedPointerIllegalPointee(location, pointeeType.Name)
+        return true
     }
 
     private func BindTypeClause(syntax TypeClauseSyntax?) TypeSymbol? {
@@ -5771,7 +5798,8 @@ partial class Binder {
             clrType,
             clrArgs,
             symbolicArgs.ToImmutable(),
-            identifierToken.Location
+            identifierToken.Location,
+            bindingScope: $scope
         ) {
             return nil
         }
@@ -6009,7 +6037,8 @@ partial class Binder {
             nestedDef,
             clrArgs,
             symbolicArgs.ToImmutable(),
-            identifierToken.Location
+            identifierToken.Location,
+            bindingScope: $scope
         ) {
             return nil
         }
@@ -6696,10 +6725,7 @@ partial class Binder {
         BodyBindResult
     ] { }
 
-    /// Issues #4089/#4090: one G#-declared generic TYPE-CLAUSE construction
-    /// whose constraint check has been recorded but not yet answered, because
-    /// at the construction site the definition's own type-parameter constraints
-    /// may not be resolved yet.
+    /// Records a declaration type-contract check until source signatures, members, and layouts are complete.
     /// @remarks The (cref:DiagnosticBag) is captured rather than looked up at
     /// flush time: a binder's bag is its own, and a type clause bound inside a
     /// field initializer or a lambda during the declaration phase belongs to a
@@ -6709,12 +6735,14 @@ partial class Binder {
             diagnostics DiagnosticBag,
             declaredParameters ImmutableArray[TypeParameterSymbol],
             typeArgs ImmutableArray[TypeSymbol],
-            location TextLocation
+            location TextLocation,
+            deferredCheck(() -> bool)? = nil
         ) {
             Diagnostics = diagnostics
             DeclaredParameters = declaredParameters
             TypeArgs = typeArgs
             Location = location
+            DeferredCheck = deferredCheck
         }
 
         /// Gets the bag the diagnostic is reported into.
@@ -6734,6 +6762,10 @@ partial class Binder {
 
         /// Gets the location the diagnostic is anchored to.
         prop Location TextLocation {
+            get;
+        }
+
+        prop DeferredCheck(() -> bool)? {
             get;
         }
     }
@@ -7292,6 +7324,7 @@ partial class Binder {
                     declaredTypeAliases.Add(declaredAlias)
                 }
             }
+            binder.declarations.BindSourceStructHeaders()
             binder.declarations.BindPendingShellAttributes()
             for (delegateSyntax, delegateSymbol) in declaredDelegates {
                 let owningPackage = packageByTree[delegateSyntax.SyntaxTree]
@@ -7310,162 +7343,8 @@ partial class Binder {
                     richAnonymousMap[node] = sym
                 }
             }
-            // Issue #2489: shells make base types resolvable up front, but override
-            // validation also needs the base type's members. Bind same-compilation
-            // base classes before their derived classes, independent of tree/source
-            // order.
-            let declarationsByName = Dictionary[string, List[(Index int32, PackageName string, IsClass bool)]](
-                StringComparer.Ordinal
-            )
-            let declarationsBySymbol = Dictionary[StructSymbol, int32](ReferenceEqualityComparer.Instance)
-            for var i = 0; i < declaredStructs.Count; i++ {
-                let name = declaredStructs[i].Symbol.Name
-                if !declarationsByName.TryGetValue(name, out var indices) {
-                    indices = List[(Index int32, PackageName string, IsClass bool)]()
-                    declarationsByName.Add(name, indices)
-                }
-                indices.Add((i, declaredStructs[i].Symbol.PackageName, declaredStructs[i].Symbol.IsClass))
-                declarationsBySymbol[declaredStructs[i].Symbol] = i
-            }
-            for aliasSymbol in declaredTypeAliases {
-                let aliasedStruct StructSymbol? = (aliasSymbol.Target as StructSymbol)?.Definition ??
-                    (aliasSymbol.Target as StructSymbol)
-                if aliasedStruct == nil || !aliasedStruct.IsClass {
-                    continue
-                }
-                var topLevelTarget StructSymbol = aliasedStruct
-                while topLevelTarget.ContainingType is StructSymbol enclosingStruct {
-                    topLevelTarget = enclosingStruct.Definition ?? enclosingStruct
-                }
-                if declarationsBySymbol.TryGetValue(topLevelTarget, out var targetIndex) {
-                    if !declarationsByName.TryGetValue(aliasSymbol.Name, out var aliasIndices) {
-                        aliasIndices = List[(Index int32, PackageName string, IsClass bool)]()
-                        declarationsByName.Add(aliasSymbol.Name, aliasIndices)
-                    }
-                    let entry = (targetIndex, aliasSymbol.PackageName, true)
-                    if !aliasIndices.Contains(entry) {
-                        aliasIndices.Add(entry)
-                    }
-                }
-            }
-            let bindingState = [declaredStructs.Count]uint8
-            let bindingOrder = List[int32](declaredStructs.Count)
-            var AddNestedBaseDependencies((StructDeclarationSyntax, string, HashSet[string]) -> void)? = nil
-            var AddBaseFirst((int32) -> void)? = nil
-            var FindTopLevelBaseIndex((StructDeclarationSyntax, string, HashSet[string]?) -> int32)? = nil
-            FindTopLevelBaseIndex = func (
-                syntax StructDeclarationSyntax,
-                packageName string,
-                visibleNestedTypeNames HashSet[string]? = nil
-            ) int32 {
-                if !syntax.IsClass {
-                    return -1
-                }
-                let baseType TypeClauseSyntax? = if syntax.BaseTypeClauses.Count > 0 {
-                    syntax.BaseTypeClauses[0]
-                } else {
-                    (
-                        if syntax.BaseTypeIdentifier == nil {
-                            default(TypeClauseSyntax?)
-                        } else {
-                            TypeClauseSyntax(syntax.BaseTypeIdentifier.SyntaxTree, syntax.BaseTypeIdentifier)
-                        }
-                    )
-                }
-                let baseName string? = baseType
-                    ?.QualifierIdentifierTokens
-                    .LastOrDefault()
-                    ?.Text ??
-                    baseType
-                    ?.Identifier
-                    ?.Text
-                if baseName == nil ||
-                    (
-                    baseType != nil && baseType.HasQualifier == false && visibleNestedTypeNames?.Contains(
-                        baseName
-                    ) == true
-                ) ||
-                    !declarationsByName.TryGetValue(baseName, out var candidates) {
-                    return -1
-                }
-                let nonNullBaseType = Invariant.Required(
-                    baseType,
-                    "baseName is non-null only when baseType is non-null",
-                    expression: "baseType"
-                )
-                let requestedPackage = if nonNullBaseType.HasQualifier {
-                    nonNullBaseType.DottedName[.. ^(baseName.Length + 1)]
-                } else {
-                    packageName
-                }
-                let matchingPackage = List[int32]()
-                let uniqueClassCandidates = List[int32]()
-                for candidate in candidates {
-                    if !candidate.IsClass {
-                        continue
-                    }
-                    if !uniqueClassCandidates.Contains(candidate.Index) {
-                        uniqueClassCandidates.Add(candidate.Index)
-                    }
-                    if candidate.PackageName == requestedPackage && !matchingPackage.Contains(candidate.Index) {
-                        matchingPackage.Add(candidate.Index)
-                    }
-                }
-                return if matchingPackage.Count == 1 {
-                    matchingPackage[0]
-                } else {
-                    (
-                        if uniqueClassCandidates.Count == 1 {
-                            uniqueClassCandidates[0]
-                        } else {
-                            -1
-                        }
-                    )
-                }
-            }
-            AddNestedBaseDependencies = func (
-                container StructDeclarationSyntax,
-                packageName string,
-                inheritedNestedTypeNames HashSet[string]
-            ) {
-                let visibleNestedTypeNames = HashSet[string](inheritedNestedTypeNames, StringComparer.Ordinal)
-                for nested in container.NestedTypes.OfType[StructDeclarationSyntax]() {
-                    visibleNestedTypeNames.Add(nested.Identifier.ValueText)
-                }
-                for nested in container.NestedTypes.OfType[StructDeclarationSyntax]() {
-                    let baseIndex = FindTopLevelBaseIndex!!(nested, packageName, visibleNestedTypeNames)
-                    if baseIndex >= 0 {
-                        AddBaseFirst!!(baseIndex)
-                    }
-                    AddNestedBaseDependencies!!(nested, packageName, visibleNestedTypeNames)
-                }
-            }
-            AddBaseFirst = func (index int32) {
-                if bindingState[index] == uint8(2) {
-                    return
-                }
-                if bindingState[index] == uint8(1) {
-                    return
-                }
-                bindingState[index] = uint8(1)
-                let (syntax, symbol) = declaredStructs[index]
-                let baseIndex = FindTopLevelBaseIndex!!(syntax, symbol.PackageName, nil)
-                if baseIndex >= 0 {
-                    AddBaseFirst!!(baseIndex)
-                }
-                // Issue #3413: nested type bodies are bound recursively while their
-                // owning top-level type is bound. Order any top-level source bases
-                // used by those nested declarations first too, so override
-                // validation sees the base members regardless of file order.
-                AddNestedBaseDependencies!!(syntax, symbol.PackageName, HashSet[string](StringComparer.Ordinal))
-                bindingState[index] = uint8(2)
-                bindingOrder.Add(index)
-            }
-            for var i = 0; i < declaredStructs.Count; i++ {
-                AddBaseFirst(i)
-            }
-            for index in bindingOrder {
-                let (structSyntax, structSymbol) = declaredStructs[index]
+            // The declaration scheduler resolves semantic bases and resumes members without native-stack dependencies.
+            for (structSyntax, structSymbol) in declaredStructs {
                 let owningPackage = packageByTree[structSyntax.SyntaxTree]
                 RunWithPackage(
                     owningPackage,
@@ -7563,7 +7442,7 @@ partial class Binder {
             // order — see CheckUserGenericTypeClauseConstraints. Constructions bound
             // after this point (method bodies, later passes) are answered in
             // place.
-            FlushPendingUserGenericConstraintChecks(binder.$scope)
+            FlushPendingUserGenericConstraintChecks(binder.$scope, binder.Diagnostics)
             // ADR-0149: bind every explicit-interface qualifier clause
             // (`func (IFoo) M(...)` / `prop (IFoo) P T`) to its target interface
             // before VerifyInterfaceImplementations resolves them against each
@@ -12338,12 +12217,33 @@ partial class Binder {
             openDefinition Type?,
             clrArgs[]?Type,
             symbolicArgs ImmutableArray[TypeSymbol],
-            location TextLocation
+            location TextLocation,
+            bindingScope BoundScope? = nil
         ) bool {
             if openDefinition == nil ||
                 clrArgs == nil ||
                 symbolicArgs.IsDefaultOrEmpty ||
                 symbolicArgs.Length != clrArgs.Length {
+                return false
+            }
+            if bindingScope is {} declaringScope && declaringScope.IsDeferringUserGenericConstraintChecks() {
+                // Headers cannot validate incomplete source constructor or interface contracts.
+                let capturedArgs = clrArgs.ToArray()
+                declaringScope.GetPendingUserGenericConstraintChecks().Add(
+                    PendingUserGenericConstraintCheck(
+                        diagnostics,
+                        ImmutableArray[TypeParameterSymbol].Empty,
+                        symbolicArgs,
+                        location,
+                        () -> ReportUnsatisfiedGenericTypeConstraint(
+                            diagnostics,
+                            openDefinition,
+                            capturedArgs,
+                            symbolicArgs,
+                            location
+                        )
+                    )
+                )
                 return false
             }
             var anyOpen = false
@@ -12539,9 +12439,7 @@ partial class Binder {
             return false
         }
 
-        /// Issues #4089/#4090: answers every queued G#-declared generic
-        /// type-clause constraint check and latches the queue closed, so any later
-        /// construction is answered at its own site.
+        /// Validates queued declaration type contracts after member binding and closes the queue.
         /// @remarks Called from `BindGlobalScope` after
         /// `ExpandStructInterfaceClosures`. The BINDING constraint is the
         /// interface-members loop just above it: that is where an interface's own
@@ -12573,7 +12471,8 @@ partial class Binder {
         /// the error-path counterpart of the two speculative rollback sites in
         /// `ResolvePartialTypeParameterConstraints`.
         /// @param scope Any scope in the compilation's chain.
-        internal func FlushPendingUserGenericConstraintChecks($scope BoundScope) {
+        /// @param diagnostics The compilation diagnostic bag, including late reports from child binders.
+        internal func FlushPendingUserGenericConstraintChecks($scope BoundScope, diagnostics DiagnosticBag? = nil) {
             let pending = $scope.GetPendingUserGenericConstraintChecks()
             // Clear the latch FIRST: anything the reports themselves bind is
             // answered in place rather than re-queued behind a flush that has
@@ -12586,7 +12485,11 @@ partial class Binder {
             let draining = pending.ToArray()
             pending.Clear()
             for check in draining {
+                let diagnosticMark = check.Diagnostics.Count
                 RunUserGenericTypeClauseConstraintCheck(check)
+                if diagnostics != nil && !object.ReferenceEquals(diagnostics, check.Diagnostics) {
+                    diagnostics.AddRange(check.Diagnostics.VisibleSince(diagnosticMark))
+                }
             }
         }
 
@@ -12618,6 +12521,9 @@ partial class Binder {
         /// one-diagnostic-per-construction budget.
         /// @param check The recorded construction.
         private func RunUserGenericTypeClauseConstraintCheck(check PendingUserGenericConstraintCheck) bool {
+            if check.DeferredCheck is {} deferred {
+                return deferred()
+            }
             if ReportUnforwardedUserGenericConstraint(
                 check.Diagnostics,
                 check.DeclaredParameters,

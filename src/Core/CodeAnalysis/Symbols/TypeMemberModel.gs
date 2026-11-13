@@ -5,6 +5,7 @@
 package GSharp.Core.CodeAnalysis.Symbols
 
 import GSharp.Core.CodeAnalysis.Binding
+import GSharp.Core.CodeAnalysis.Syntax
 import System
 import System.Collections.Generic
 import System.Collections.Immutable
@@ -1301,6 +1302,40 @@ shared class TypeMemberModel {
             if !method.HasExplicitInterfaceClause && method.Name == name {
                 return true
             }
+        }
+        // Source headers expose declaration names before member contracts are bound.
+        let declaration = (type.Definition ?? type).Declaration
+        if declaration != nil && declaration.Fields.Any(
+            (field FieldDeclarationSyntax) -> field.IsConst && field.Identifier.ValueText == name
+        ) {
+            return true
+        }
+        if declaration?.SharedBlock is {} sharedBlock {
+            return sharedBlock.Fields.Any((field FieldDeclarationSyntax) -> field.Identifier.ValueText == name) ||
+                sharedBlock
+                .Properties
+                .Any(
+                (property PropertyDeclarationSyntax) -> !property.HasExplicitInterfaceClause &&
+                    property
+                    .Identifier
+                    .ValueText == name
+            ) ||
+                sharedBlock
+                .Events
+                .Any(
+                (event EventDeclarationSyntax) -> !event.HasExplicitInterfaceClause &&
+                    event
+                    .Identifier
+                    .ValueText == name
+            ) ||
+                sharedBlock
+                .Methods
+                .Any(
+                (method FunctionDeclarationSyntax) -> !method.HasExplicitInterfaceClause &&
+                    method
+                    .Identifier
+                    .ValueText == name
+            )
         }
         return false
     }

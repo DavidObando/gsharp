@@ -38,6 +38,7 @@ internal partial class DeclarationBinder {
     private let bindInterpolatedStringAsFormattable DeclarationBinder_BindInterpolatedStringAsFormattableDelegate?
     private let resolveAccessibility(SyntaxToken?) -> Accessibility
     private let lookupType(string) -> TypeSymbol?
+    private let lookupTypeWithArity(string, int32) -> TypeSymbol?
     private let getEffectiveArgumentClrTypeForOverloadResolution(TypeSymbol) -> Type?
     private let isAsyncIteratorReturnType(TypeSymbol) -> bool
     private let isAsyncSequenceReturnType(TypeSymbol) -> bool
@@ -170,18 +171,22 @@ internal partial class DeclarationBinder {
         StructSymbol
     ]()
     private let nestedStructPackages Dictionary[StructSymbol, PackageSymbol] = Dictionary[StructSymbol, PackageSymbol]()
+    private let structDeclarationScopes Dictionary[StructSymbol, BoundScope] = Dictionary[StructSymbol, BoundScope]()
+    private let sourceStructDeclarationOrder List[StructSymbol] = List[StructSymbol]()
+    private let structBaseBindings Dictionary[StructSymbol, StructBaseBindingResult] = Dictionary[
+        StructSymbol,
+        StructBaseBindingResult
+    ]()
+    private let readyStructHeaders HashSet[StructSymbol] = HashSet[StructSymbol]()
+    private let readyStructBaseIdentities HashSet[StructSymbol] = HashSet[StructSymbol]()
+    private let boundStructTypeParameterConstraints HashSet[StructSymbol] = HashSet[StructSymbol]()
+    private let checkedStructInheritance HashSet[StructSymbol] = HashSet[StructSymbol]()
     private let boundStructBodies HashSet[StructSymbol] = HashSet[StructSymbol]()
-    private let bindingStructBodies HashSet[StructSymbol] = HashSet[StructSymbol]()
-    private let completedStructBodies HashSet[StructSymbol] = HashSet[StructSymbol]()
     private let requestedNestedTypeBindings HashSet[StructSymbol] = HashSet[StructSymbol]()
-    private let pendingStructMemberBindings Dictionary[StructSymbol, () -> void] = Dictionary[
-        StructSymbol,
-        () -> void
+    private let structDeclarationWork Stack[(Symbol StructSymbol, BindMembers bool)] = Stack[
+        (Symbol StructSymbol, BindMembers bool)
     ]()
-    private let pendingDerivedStructs Dictionary[StructSymbol, List[StructSymbol]] = Dictionary[
-        StructSymbol,
-        List[StructSymbol]
-    ]()
+    private var drainingStructDeclarations bool
     private let boundNestedTypeContainers HashSet[StructSymbol] = HashSet[StructSymbol]()
 
     private let nestedInterfaceShells Dictionary[InterfaceDeclarationSyntax, InterfaceSymbol] = Dictionary[
@@ -199,6 +204,7 @@ internal partial class DeclarationBinder {
         bindArrayCreationExpression DeclarationBinder_BindArrayCreationExpressionDelegate,
         resolveAccessibility(SyntaxToken?) -> Accessibility,
         lookupType(string) -> TypeSymbol?,
+        lookupTypeWithArity(string, int32) -> TypeSymbol?,
         getEffectiveArgumentClrTypeForOverloadResolution(TypeSymbol) -> Type?,
         isAsyncIteratorReturnType(TypeSymbol) -> bool,
         isAsyncSequenceReturnType(TypeSymbol) -> bool,
@@ -235,6 +241,7 @@ internal partial class DeclarationBinder {
         this.bindInterpolatedStringAsFormattable = bindInterpolatedStringAsFormattable
         this.resolveAccessibility = resolveAccessibility ?? throw ArgumentNullException("resolveAccessibility")
         this.lookupType = lookupType ?? throw ArgumentNullException("lookupType")
+        this.lookupTypeWithArity = lookupTypeWithArity ?? throw ArgumentNullException("lookupTypeWithArity")
         this.getEffectiveArgumentClrTypeForOverloadResolution = getEffectiveArgumentClrTypeForOverloadResolution ??
             throw ArgumentNullException("getEffectiveArgumentClrTypeForOverloadResolution")
         this.isAsyncIteratorReturnType = isAsyncIteratorReturnType ??
@@ -625,9 +632,14 @@ internal partial class DeclarationBinder {
     /// not loop forever. Direct self-inheritance (`class A : A`) never
     /// reaches here because it is rejected — and its base left unset — in the
     /// base-clause loop.
-    internal func DetectClassInheritanceCycles(classSymbols IEnumerable[StructSymbol]) {
-        let acyclic = HashSet[StructSymbol]()
-        for start in classSymbols.Concat(nestedStructShells.Values.Where((s StructSymbol) -> s.IsClass)) {
+    internal func DetectClassInheritanceCycles(classSymbols IEnumerable[StructSymbol], includeNestedTypes bool = true) {
+        let acyclic = checkedStructInheritance
+        let candidates = if includeNestedTypes {
+            classSymbols.Concat(nestedStructShells.Values.Where((s StructSymbol) -> s.IsClass))
+        } else {
+            classSymbols
+        }
+        for start in candidates {
             let startDef = start.Definition ?? start
             if startDef.BaseClass == nil || acyclic.Contains(startDef) {
                 continue
@@ -735,6 +747,8 @@ internal partial class DeclarationBinder {
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name)
         }
         nestedStructPackages[structSymbol] = $package
+        structDeclarationScopes[structSymbol] = $scope
+        sourceStructDeclarationOrder.Add(structSymbol)
         return structSymbol
     }
 
