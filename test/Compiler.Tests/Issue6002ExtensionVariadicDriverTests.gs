@@ -266,6 +266,32 @@ Counter[string]().Collect(0, @items)
 `, "GS0154")
     }
 
+    @Fact
+    func NamedCarrierOverloads_MapOmittedAndReorderedFixedSlotsBeforeInference() {
+        using let driver = Driver()
+        driver.Check(`import System
+import System.Collections.Generic
+func (receiver int32) Pick[T](prefix int32 = 7, items ...List[T]) int32 -> 10 + items.Count
+func (receiver int32) Pick(prefix int32 = 7, items ...object) int32 -> 20 + items.Length
+func Choose[T](prefix int32 = 7, items ...List[T]) int32 -> 10 + items.Count
+func Choose(prefix int32 = 7, items ...object) int32 -> 20 + items.Length
+class Picker {
+    func Pick[T](prefix int32 = 7, items ...List[T]) int32 -> 10 + items.Count
+    func Pick(prefix int32 = 7, items ...object) int32 -> 20 + items.Length
+}
+let items = List[string]{"x", "y"}
+Console.Write((0).Pick(items: items))
+Console.Write("|")
+Console.Write((0).Pick(items: items, prefix: 7))
+Console.Write("|")
+Console.Write((0).Pick(7, "x", "y"))
+Console.Write("|")
+Console.Write(Choose(prefix: 7, items: items))
+Console.Write("|")
+Console.Write(Picker().Pick(prefix: 7, items: items))
+`, "12|12|12|12|12")
+    }
+
     private class Driver : IDisposable {
         private let directory string
 

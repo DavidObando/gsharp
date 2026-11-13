@@ -1937,6 +1937,7 @@ internal partial class OverloadResolver {
                         overloadSet,
                         boundArguments,
                         syntax.Arguments.Count,
+                        argumentNames,
                         explicitOverloadTypeArguments,
                         out var unconstrainedTypeParameter
                     ) {
