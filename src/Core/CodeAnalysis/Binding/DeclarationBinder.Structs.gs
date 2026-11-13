@@ -341,7 +341,12 @@ internal partial class DeclarationBinder {
                 continue
             }
             if node is TypeClauseSyntax clause {
-                ResolveTypeHeaderIdentity(clause, activeHeaders, out var prerequisite)
+                ResolveTypeHeaderIdentity(
+                    clause,
+                    activeHeaders,
+                    out var prerequisite,
+                    requireFinalHeader: rootSet.Contains(node)
+                )
                 if prerequisite != nil {
                     return prerequisite
                 }
@@ -356,7 +361,8 @@ internal partial class DeclarationBinder {
     private func ResolveTypeHeaderIdentity(
         clause TypeClauseSyntax,
         activeHeaders HashSet[StructSymbol],
-        out prerequisite StructSymbol?
+        out prerequisite StructSymbol?,
+        requireFinalHeader bool = true
     ) TypeSymbol? {
         prerequisite = nil
         let identifier = clause.Identifier
@@ -401,10 +407,17 @@ internal partial class DeclarationBinder {
                 current = resolved
                 if resolved is StructSymbol container {
                     let definition = container.Definition ?? container
-                    if nestedStructPackages.ContainsKey(definition) && !readyStructHeaders.Contains(definition) &&
-                        !structBaseBindings.ContainsKey(definition) && !activeHeaders.Contains(definition) {
+                    if (requireFinalHeader || index < segments.Length - 1) && nestedStructPackages.ContainsKey(
+                        definition
+                    ) &&
+                        !readyStructHeaders.Contains(definition) && !structBaseBindings.ContainsKey(definition) &&
+                        !activeHeaders.Contains(definition) {
                         prerequisite = definition
-                        return nil
+                        return if index == segments.Length - 1 {
+                            current
+                        } else {
+                            nil
+                        }
                     }
                 }
             }

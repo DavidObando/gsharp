@@ -314,20 +314,34 @@ class Holder {
     }
 
     @Theory
-    @InlineData(false)
-    @InlineData(true)
-    func BaseIdentity_PrecedesGenericArgumentHeaderContracts(selfQualifier bool) {
+    @InlineData("indirect")
+    @InlineData("self")
+    @InlineData("constraint")
+    @InlineData("constructed-owner")
+    func BaseIdentity_PrecedesGenericArgumentHeaderContracts(kind string) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let driver = CompileBoundedStackDriver(fixture)
+        let nestedOwner = kind == "constructed-owner"
+        let argumentName = switch kind {
+            case "self": "A.Nested"
+            case "constraint": "Root.Nested"
+            default: "B"
+        }
         let declarations = []string{
-            "open class Root { public open class Nested {} }",
-            "open class G[T] : Root {}",
-            "class A : G[" + if selfQualifier {
-                "A.Nested"
+            if nestedOwner {
+                "open class Root {}"
             } else {
-                "B"
-            } + "] {}",
-            if selfQualifier {
+                "open class Root { public open class Nested {} }"
+            },
+            if nestedOwner {
+                "open class G[T] { public open class Nested {} }"
+            } else if kind == "constraint" {
+                "open class G[T A.Nested] : Root {}"
+            } else {
+                "open class G[T] : Root {}"
+            },
+            "class A : G[" + argumentName + "] {}",
+            if kind == "self" || kind == "constraint" {
                 ""
             } else {
                 "class B : A.Nested {}"
@@ -360,11 +374,17 @@ class Holder {
             let baseType = a.BaseType!!
             let argument = Assert.Single(baseType.GetGenericArguments())
             Assert.Equal("G`1", baseType.GetGenericTypeDefinition().Name)
-            if selfQualifier {
+            if kind == "self" || kind == "constraint" {
                 Assert.Equal(nested, argument)
             } else {
                 Assert.Equal("B", argument.Name)
-                Assert.Equal(nested, argument.BaseType)
+                if nestedOwner {
+                    let nestedBase = argument.BaseType!!
+                    Assert.Equal(nested, nestedBase.GetGenericTypeDefinition())
+                    Assert.Equal(argument, Assert.Single(nestedBase.GetGenericArguments()))
+                } else {
+                    Assert.Equal(nested, argument.BaseType)
+                }
                 Assert.NotNull(Activator.CreateInstance(argument))
             }
             Assert.NotNull(Activator.CreateInstance(a))
