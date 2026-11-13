@@ -37,6 +37,48 @@ public static class Host {
 }`, "node|7", (printed string) -> Assert.DoesNotContain("var value T?", printed, StringComparison.Ordinal))
     }
 
+    @Fact
+    func RefWrites_UseTheActualNullableOrFixedStorageContract() {
+        Issue5609AuthorSuppressionTests.AssertRuns(`
+#nullable enable
+using System;
+namespace Demo {
+    public class Node { public override string ToString() => "node"; }
+    public record Entry(Node Item, int Id);
+    public static class Use {
+        static void Keep(ref Node value) { Console.Write(value.ToString() + "|"); }
+        static void Clear(ref Node? value) { value = null; Console.Write("write|"); }
+        public static string Read(Entry entry) {
+var (kept, _) = entry;
+Keep(ref kept);
+var (changed, _) = entry;
+Console.Write(changed.ToString() + "|");
+Clear(ref changed);
+return changed.ToString();
+        }
+    }
+}`, `
+public static class Host {
+    public static void Main() {
+        try { System.Console.Write(Demo.Use.Read(new Demo.Entry(new Demo.Node(), 7))); }
+        catch (System.NullReferenceException) { System.Console.Write("NRE"); }
+    }
+}`, "node|node|write|NRE", (
+                printed string
+            ) -> {
+                Assert.DoesNotContain(
+                    "kept Node?",
+                    printed,
+                    StringComparison.Ordinal
+                )
+                Assert.Contains(
+                    "var changed Node?",
+                    printed,
+                    StringComparison.Ordinal
+                )
+            })
+    }
+
     @Theory
     @InlineData("var (changed, _) = Next(entry);", "changed = null;")
     @InlineData("(Node? changed, int id) = Next(entry);", "changed = null;")
