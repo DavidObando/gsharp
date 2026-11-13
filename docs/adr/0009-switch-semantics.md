@@ -57,6 +57,11 @@ Neutral:
 
 ## Implementation notes
 
+Captured arm bindings receive their matched values before the `when` guard creates or invokes a closure.
+Capture boxing seeds each cell once after a successful pattern match, before the guard or an unguarded body/result.
+The guard and body/result share that cell. A closure retained by a false guard keeps its arm's value.
+Statement and expression switches use the same capture-boxing helpers. This preserves existing closure semantics (#5998).
+
 **ADR-0202 (2026-10-17).** The example above is now implemented as written.
 Comma multi-pattern arms (`case 1, 2, 3`, issue #3501 A3) fold into the `or`
 disjunction in both forms through one parser helper, so they mean the same in

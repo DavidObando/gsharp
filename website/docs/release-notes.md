@@ -16,6 +16,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Initialize captured switch-pattern variables before evaluating `when` guards. Immediate and escaping guard closures now retain the matched values in both switch forms, including after false guards. Pattern bindings remain read-only. (Fixes #5998)
+
 - Avoid redundant null assertions on inferred deconstruction locals from non-null positional properties. Reuse the emitted declaration's nullability decision. Keep nullable and changed locals guarded. (Fixes #5597)
 
 - Omit author-written null assertions in `cs2gs` when an unwidened oblivious source declaration already emits a non-null G# value. Apply the same decision to plain reads, pattern captures, and inferred deconstruction destinations. Keep required nullable, analyzer-mapped, and unknown-value assertions, including bridges into non-null stores. (Fixes #5609)
