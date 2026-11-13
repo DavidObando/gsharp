@@ -1775,7 +1775,8 @@ internal partial class OverloadResolver {
         let argumentType = RefCapabilities.GetValueArgumentInferenceType(arguments[firstArgument].Type)
         if arguments.Length - firstArgument == 1 {
             // A failed normal-form probe must not replace fixed-argument bounds.
-            let normalSubstitution = Dictionary[TypeParameterSymbol, TypeSymbol](substitution)
+            let normalSubstitution = Dictionary[TypeParameterSymbol, TypeSymbol](substitution.Comparer)
+            MemberLookup.CopySourceTypeInference(substitution, normalSubstitution)
             inferTypeArguments(carrierType, argumentType, normalSubstitution)
             let normalCarrier = substituteType(carrierType, normalSubstitution)
             if !normalSubstitution.Values.Any(MemberLookup.IsSymbolicInferenceConflict) && Conversion.Classify(
@@ -1783,9 +1784,7 @@ internal partial class OverloadResolver {
                 normalCarrier
             )
                 .IsImplicit {
-                for pair in normalSubstitution {
-                    substitution[pair.Key] = pair.Value
-                }
+                MemberLookup.CopySourceTypeInference(normalSubstitution, substitution)
                 return
             }
         }

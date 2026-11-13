@@ -237,6 +237,35 @@ Console.Write(object.ReferenceEquals(maybe, nested[0]))
 `, "1|True|1|True")
     }
 
+    @Fact
+    func NormalCarrierInference_RefinesProvisionalButNotOwnerBounds() {
+        using let driver = Driver()
+        driver.Check(`import System
+import System.Collections.Generic
+func (receiver int32) Collect[T](seed T, items ...List[T]) List[T] -> items
+func Ordinary[T](seed T, items ...List[T]) List[T] -> items
+class Counter {
+    func Collect[T](seed T, items ...List[T]) List[T] -> items
+}
+let items = List[object]{"x", "y"}
+let extension = (0).Collect("seed", items)
+let instance = Counter().Collect("seed", items)
+let ordinary = Ordinary("seed", items)
+Console.Write(extension.Count)
+Console.Write("|")
+Console.Write(object.ReferenceEquals(items, extension))
+Console.Write(object.ReferenceEquals(items, instance))
+Console.Write(object.ReferenceEquals(items, ordinary))
+`, "2|TrueTrueTrue")
+        driver.Reject(`import System.Collections.Generic
+class Counter[T] {
+    func Collect[U](seed U, items ...List[T]) int32 -> items.Count
+}
+let items = List[object]{"x"}
+Counter[string]().Collect(0, @items)
+`, "GS0154")
+    }
+
     private class Driver : IDisposable {
         private let directory string
 
