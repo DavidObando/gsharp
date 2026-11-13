@@ -1773,18 +1773,28 @@ internal partial class OverloadResolver {
     ) {
         let elementType = VariadicCarriers.GetElementType(carrierType)
         let argumentType = RefCapabilities.GetValueArgumentInferenceType(arguments[firstArgument].Type)
-        if arguments.Length - firstArgument == 1 && argumentType is SliceTypeSymbol passThroughSlice {
-            inferTypeArguments(elementType, passThroughSlice.ElementType, substitution)
-        } else if arguments.Length - firstArgument == 1 && Conversion.Classify(argumentType, carrierType).IsImplicit {
-            inferTypeArguments(carrierType, argumentType, substitution)
-        } else {
-            for var i = firstArgument; i < arguments.Length; i++ {
-                inferTypeArguments(
-                    elementType,
-                    RefCapabilities.GetValueArgumentInferenceType(arguments[i].Type),
-                    substitution
-                )
+        if arguments.Length - firstArgument == 1 {
+            // A failed normal-form probe must not replace fixed-argument bounds.
+            let normalSubstitution = Dictionary[TypeParameterSymbol, TypeSymbol](substitution)
+            inferTypeArguments(carrierType, argumentType, normalSubstitution)
+            let normalCarrier = substituteType(carrierType, normalSubstitution)
+            if !normalSubstitution.Values.Any(MemberLookup.IsSymbolicInferenceConflict) && Conversion.Classify(
+                argumentType,
+                normalCarrier
+            )
+                .IsImplicit {
+                for pair in normalSubstitution {
+                    substitution[pair.Key] = pair.Value
+                }
+                return
             }
+        }
+        for var i = firstArgument; i < arguments.Length; i++ {
+            inferTypeArguments(
+                elementType,
+                RefCapabilities.GetValueArgumentInferenceType(arguments[i].Type),
+                substitution
+            )
         }
     }
 

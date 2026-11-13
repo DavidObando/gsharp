@@ -154,6 +154,89 @@ Console.Write((1).Read(in value))
 `, "12|5|6")
     }
 
+    @Fact
+    func OverloadedVariadics_AllowOmittedOptionalFixedParameters() {
+        using let driver = Driver()
+        driver.Check(`import System
+import System.Collections.Generic
+func (receiver int32) Measure(prefix int32 = 7, items ...List[string]) int32 ->
+    receiver + prefix + items.Count
+func (receiver int32) Measure(prefix string, items ...List[string]) int32 -> 99
+func Ordinary(prefix int32 = 7, items ...List[string]) int32 -> prefix + items.Count
+func Ordinary(prefix string, items ...List[string]) int32 -> 99
+class Counter {
+    func Measure(prefix int32 = 7, items ...List[string]) int32 -> prefix + items.Count
+    func Measure(prefix string, items ...List[string]) int32 -> 99
+}
+Console.Write((1).Measure())
+Console.Write("|")
+Console.Write((1).Measure(items: List[string]{"x"}))
+Console.Write("|")
+Console.Write(Ordinary())
+Console.Write("|")
+Console.Write(Counter().Measure())
+Console.Write("|")
+Console.Write((1).Measure("prefix", "x"))
+`, "8|9|7|7|99")
+    }
+
+    @Fact
+    func GenericArrayElements_AreNotMistakenForListCarriers() {
+        using let driver = Driver()
+        driver.Check(`import System
+import System.Collections.Generic
+import System.Linq
+func (receiver int32) Count[T](items ...List[T]) int32 -> items.Count
+func (receiver int32) Sequence[T](items ...IEnumerable[T]) int32 -> items.Count()
+func (receiver int32) Array[T](items ...T) int32 -> items.Length
+func (receiver int32) Pick[T](items ...List[T]) int32 -> items.Count
+func (receiver int32) Pick(items ...int32) int32 -> 99
+func Ordinary[T](items ...List[T]) int32 -> items.Count
+func Ordinary(items ...int32) int32 -> 99
+class Counter {
+    func Count[T](items ...List[T]) int32 -> items.Count
+    func Count(items ...int32) int32 -> 99
+}
+let values = []string{"x", "y"}
+Console.Write((0).Count(values))
+Console.Write("|")
+Console.Write(Counter().Count(values))
+Console.Write("|")
+Console.Write((0).Sequence(values))
+Console.Write("|")
+Console.Write((0).Array(values))
+Console.Write("|")
+Console.Write((0).Pick(values))
+Console.Write("|")
+Console.Write(Ordinary(values))
+Console.Write("|")
+Console.Write(Ordinary("x", "y"))
+`, "1|1|2|2|1|1|2")
+    }
+
+    @Fact
+    func FailedNormalFormInference_DoesNotPolluteElementBounds() {
+        using let driver = Driver()
+        driver.Check(`import System
+import System.Collections.Generic
+func (receiver int32) Collect[T](seed T, items ...List[T]) List[T] -> items
+func (receiver int32) Elements[T](items ...List[T]) List[T] -> items
+func Maybe() List[string]? -> List[string]{"a"}
+let seed object = "seed"
+let items = List[string]{"x", "y"}
+let result = (0).Collect(seed, items)
+Console.Write(result.Count)
+Console.Write("|")
+Console.Write(object.ReferenceEquals(items, result[0]))
+let maybe = Maybe()
+let nested List[List[string]?] = (0).Elements(maybe)
+Console.Write("|")
+Console.Write(nested.Count)
+Console.Write("|")
+Console.Write(object.ReferenceEquals(maybe, nested[0]))
+`, "1|True|1|True")
+    }
+
     private class Driver : IDisposable {
         private let directory string
 

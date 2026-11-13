@@ -1728,26 +1728,17 @@ internal partial class OverloadResolver {
                 substitution
             )
         }
-        if isVariadic && VariadicCarriers.GetElementType(
-            candidate.Parameters[candidate.Parameters.Length - 1].Type
-        ) is {} inferenceElement &&
-            inferenceElement != TypeSymbol
+        if isVariadic &&
+            argumentCount > fixedParamCount &&
+            boundArguments.Count > fixedParamCount &&
+            VariadicCarriers.GetElementType(candidate.Parameters[candidate.Parameters.Length - 1].Type) != TypeSymbol
             .Error {
-            for var i = fixedParamCount; i < argumentCount && i < boundArguments.Count; i++ {
-                let argType TypeSymbol? = boundArguments[i]?.Type
-                if argType == nil {
-                    continue
-                }
-                // Normalize first, so a top-level `T!` over a slice is still
-                // recognised as a pass-through carrier.
-                let normalized = RefCapabilities.GetValueArgumentInferenceType(argType)
-                let source = if normalized is SliceTypeSymbol argSlice {
-                    argSlice.ElementType
-                } else {
-                    normalized
-                }
-                inferTypeArguments(inferenceElement, source, substitution)
-            }
+            InferVariadicArguments(
+                candidate.Parameters[candidate.Parameters.Length - 1].Type,
+                boundArguments.ToImmutable().Slice(0, Math.Min(argumentCount, boundArguments.Count)),
+                fixedParamCount,
+                substitution
+            )
         }
         for tp in candidate.TypeParameters {
             if !substitution.ContainsKey(tp) {
@@ -2731,38 +2722,38 @@ internal partial class OverloadResolver {
                 paramLen
             }
             // Compute required (non-optional) leading-parameter count.
-            var requiredParamCount = paramLen
-            for var i = paramLen - 1; i >= 0; i-- {
+            var requiredParamCount = fixedParamCount
+            for var i = fixedParamCount - 1; i >= 0; i-- {
                 if candidate.Parameters[i + parameterOffset].HasExplicitDefaultValue {
                     requiredParamCount = i
                 } else {
                     break
                 }
             }
-            if isVariadic {
-                if argumentCount < fixedParamCount {
-                    return false
-                }
-            } else if argumentCount < requiredParamCount || argumentCount > paramLen {
+            if argumentNames.IsDefault {
+                return argumentCount >= requiredParamCount && (isVariadic || argumentCount <= paramLen)
+            }
+            if !isVariadic && argumentCount > paramLen {
                 return false
             }
-            // Named-argument names must each correspond to a parameter.
-            if !argumentNames.IsDefault {
-                for var i = 0; i < argumentNames.Length; i++ {
-                    let n string? = argumentNames[i]
-                    if n == nil {
-                        continue
-                    }
-                    var found = false
-                    for var p = 0; p < paramLen; p++ {
-                        if candidate.Parameters[p + parameterOffset].Name == n {
-                            found = true
-                            break
-                        }
-                    }
-                    if !found {
+            let supplied = [fixedParamCount]bool
+            for var i = 0; i < argumentCount; i++ {
+                let slot = MapArgumentIndexToParameterSlot(candidate, argumentNames, i, parameterOffset, paramLen)
+                if slot < 0 {
+                    return false
+                }
+                if slot < fixedParamCount {
+                    if supplied[slot] {
                         return false
                     }
+                    supplied[slot] = true
+                } else if !isVariadic {
+                    return false
+                }
+            }
+            for var i = 0; i < fixedParamCount; i++ {
+                if !supplied[i] && !candidate.Parameters[i + parameterOffset].HasExplicitDefaultValue {
+                    return false
                 }
             }
             return true
