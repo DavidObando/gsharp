@@ -16,6 +16,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Initialize repository version metadata before G# build preparation, including projects that disable generated version sources. Build Extensions without a bundled self-reference and reuse its graph output for SDK packing. Unchanged builds retain identical metadata and skip compilation. (Fixes #5116)
+
 - Check imported generic `class`, `struct`, and `new()` constraints before reading type-bound constraints. Missing type-bound dependencies no longer bypass known special flags. The older unreadable type-bound fallback remains unchanged pending ADR-0209's post-stage-7 follow-up (#5176). (Fixes #6023)
 
 - Document the twelve acknowledged imported-attribute support gaps, including partial marker readers and the distinction from source attributes. This changes documentation only; compiler behavior is unchanged. (Fixes #5177)

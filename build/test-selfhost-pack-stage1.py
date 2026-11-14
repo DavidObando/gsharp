@@ -8,6 +8,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -330,6 +331,111 @@ class SdkPublishGraphTests(unittest.TestCase):
         inputs.write_text(inputs.read_text().replace("Input.gs;Removed.gs", "Input.gs"))
         os.utime(inputs, ns=(timestamp.st_atime_ns, timestamp.st_mtime_ns))
         self.assertIn("COMPILING_REPOSITORY_INPUTS", self.dotnet("msbuild", "Inputs.proj"))
+
+    def test_version_opt_out_preserves_metadata_and_skips_unchanged_build_contexts(self) -> None:
+        write(self.root / "global.json", (REPO / "global.json").read_text())
+        write(self.root / "version.json", '{"version":"7.8","publicReleaseRefSpec":[".*"]}')
+        properties = ET.parse(REPO / "build/gsharp.build.props").getroot()
+        versioning = properties.find(".//NerdbankGitVersioningPackageReference")
+        self.assertIsNotNone(versioning)
+        relative = "src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj"
+        project_file = self.root / relative
+        shutil.copytree((REPO / relative).parent, project_file.parent)
+        project = ET.parse(project_file)
+        ET.SubElement(ET.SubElement(project.getroot(), "PropertyGroup"),
+                      "IsTestProject").text = "true"
+        ET.SubElement(ET.SubElement(project.getroot(), "ItemGroup"), "PackageReference",
+                      {"Include": "Nerdbank.GitVersioning", "Version": versioning.get("Version")})
+        ET.SubElement(project.getroot(), "Import", {"Project": str(REPO / "build/gsharp.build.targets")})
+        project.write(project_file, encoding="utf-8")
+        source = project_file.parent / "Value.gs"
+        write(source, "package Versioned\npublic class Value { public prop Number int32 -> 42 }")
+        sdk = ET.parse(REPO / "src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj").getroot()
+        pack = sdk.find("./Target[@Name='PackGsharpExtensions']")
+        self.assertIsNotNone(pack)
+        driver = ET.fromstring(f"""<Project>
+  <PropertyGroup>
+    <BaseOutputPath>{self.root}/out/Release/</BaseOutputPath>
+    <IntermediateOutputPath>{self.root}/obj/stage/</IntermediateOutputPath>
+  </PropertyGroup>
+  <Target Name="Build">
+    <MSBuild Projects="../Gsharp.Extensions/Gsharp.Extensions.csproj"
+             Targets="Build" Properties="Configuration=Release"/>
+  </Target>
+  <Target Name="Stage" DependsOnTargets="Build;PackGsharpExtensions">
+    <WriteLinesToFile File="$(MSBuildProjectDirectory)/payloads.txt"
+                      Lines="@(None->'%(FullPath)')" Overwrite="true"/>
+  </Target>
+</Project>""")
+        driver.append(pack)
+        stage_project = self.root / "src/Sdk/Gsharp.NET.Sdk/Stage.proj"
+        write(stage_project, ET.tostring(driver, encoding="unicode"))
+        write(self.root / "src/Compiler/Compiler.gsproj", '<Project><Target Name="Build"/></Project>')
+        write(self.root / "Inspector/Inspector.csproj",
+              '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType></PropertyGroup></Project>')
+        write(self.root / "Inspector/Program.cs", """using System;
+using System.Reflection;
+Console.Write(Assembly.LoadFile(System.IO.Path.GetFullPath(args[0]))
+    .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion);
+""")
+        for args in (("init", "-q"), ("add", "."),
+                     ("-c", "user.name=Build tests", "-c", "user.email=tests@example.invalid",
+                      "commit", "-qm", "Version fixture")):
+            subprocess.run(["git", *args], cwd=self.root, check=True, capture_output=True)
+        self.dotnet("restore", relative)
+        self.dotnet("build", "Inspector/Inspector.csproj", "-c", "Release")
+        expected = self.dotnet("msbuild", relative,
+                               "-t:GetBuildVersion", "-getProperty:Version", "-v:quiet").strip()
+        self.assertRegex(expected, r"^7\.8\.\d+")
+        assembly = self.root / "out/Release/Gsharp.Extensions/Gsharp.Extensions.dll"
+        inspector = self.root / "out/Release/Inspector/Inspector.dll"
+
+        def build(*args: str) -> str:
+            return self.dotnet("build", relative, "-c", "Release",
+                               "--no-restore", "-v:diagnostic", "-p:GSharpUseSharedCompilation=false",
+                               "-p:GSharpMaxWorkers=1", *args)
+
+        def assert_version() -> None:
+            result = subprocess.run(["dotnet", str(inspector), str(assembly)],
+                                    cwd=self.root, text=True, capture_output=True, check=True)
+            self.assertEqual(expected, result.stdout)
+
+        def assert_stage() -> None:
+            staged = self.dotnet("msbuild", str(stage_project), "-t:Stage", "-v:diagnostic",
+                                 "-p:Configuration=Release", "-p:GSharpUseSharedCompilation=false",
+                                 "-p:GSharpMaxWorkers=1")
+            self.assertEqual(0, len(re.findall(r'Task "BuildTask" \(TaskId:', staged)))
+            payloads = [Path(path) for path in
+                        stage_project.with_name("payloads.txt").read_text().splitlines()]
+            self.assertTrue(payloads)
+            self.assertEqual({"Gsharp.Extensions" + suffix for suffix in (".dll", ".pdb", ".xml")},
+                             {path.name for path in payloads})
+            for path in payloads:
+                self.assertEqual((assembly.parent / path.name).read_bytes(), path.read_bytes())
+
+        cold = build("-t:Rebuild")
+        self.assertEqual(1, len(re.findall(r'Task "BuildTask" \(TaskId:', cold)))
+        assert_version()
+        outputs = list(assembly.parent.glob("Gsharp.Extensions.*"))
+        self.assertTrue(outputs)
+        self.assertTrue({".dll", ".pdb", ".xml"}.issubset({path.suffix for path in outputs}))
+        original = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in outputs}
+        for context in (("-p:BuildProjectReferences=false",), ()):
+            with self.subTest(context=context):
+                unchanged = build(*context)
+                self.assertEqual(0, len(re.findall(r'Task "BuildTask" \(TaskId:', unchanged)))
+                for path, (content, timestamp) in original.items():
+                    self.assertEqual(content, path.read_bytes(), str(path))
+                    self.assertEqual(timestamp, path.stat().st_mtime_ns, str(path))
+                assert_version()
+        assert_stage()
+        source.write_text(source.read_text().replace("42", "43"))
+        changed = build()
+        self.assertEqual(1, len(re.findall(r'Task "BuildTask" \(TaskId:', changed)))
+        self.assertNotEqual(original[assembly][0], assembly.read_bytes())
+        assert_version()
+        self.assertEqual(0, len(re.findall(r'Task "BuildTask" \(TaskId:', build())))
+        assert_stage()
 
 
 def project(sdk_attribute: str, body: str = "") -> str:
