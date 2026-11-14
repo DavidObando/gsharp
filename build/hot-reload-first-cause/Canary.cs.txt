@@ -1,0 +1,113 @@
+using System;
+using System.IO;
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using System.Security;
+using System.Threading;
+using Microsoft.Build.Execution;
+using Microsoft.Build.Framework;
+using Microsoft.Build.Logging;
+
+public sealed class WaitingTask : Microsoft.Build.Utilities.Task, ICancelableTask
+{
+    public string StartFile { get; set; }
+    public string StopFile { get; set; }
+
+    public override bool Execute()
+    {
+        Log.LogMessage(MessageImportance.High, Canary.Secret);
+        File.WriteAllText(StartFile, "1");
+        var end = DateTime.UtcNow.AddSeconds(20);
+        while (!File.Exists(StopFile) && DateTime.UtcNow < end)
+            Thread.Sleep(10);
+        return false;
+    }
+
+    public void Cancel() => File.WriteAllText(StopFile, "1");
+}
+
+public sealed class PrivatePayloadException : Exception
+{
+    public PrivatePayloadException() : base(Canary.Secret)
+    {
+        HResult = unchecked((int)0xF1234567);
+    }
+}
+
+public static class Canary
+{
+    internal const string Secret = "PRIVATE_5976_CANARY_NOT_FOR_PUBLICATION";
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ControlledThrow()
+    {
+        throw new InvalidOperationException(Secret);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void UnknownThrow()
+    {
+        throw new PrivatePayloadException();
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void NativeCancellationOwner(BuildManager manager)
+    {
+        try { ControlledThrow(); }
+        catch (InvalidOperationException) { }
+        try { UnknownThrow(); }
+        catch (PrivatePayloadException) { }
+        manager.CancelAllSubmissions();
+    }
+
+    public static int Main(string[] args)
+    {
+        var root = Path.GetFullPath(args[0]);
+        Directory.CreateDirectory(root);
+        var start = Path.Combine(root, "started");
+        var stop = Path.Combine(root, "stopped");
+        var project = Path.Combine(root, "Canary.proj");
+        var assembly = SecurityElement.Escape(Assembly.GetExecutingAssembly().Location);
+        File.WriteAllText(project,
+            "<Project><UsingTask TaskName=\"WaitingTask\" AssemblyFile=\"" + assembly +
+            "\"/><Target Name=\"" + Secret +
+            "\"><WaitingTask StartFile=\"" + SecurityElement.Escape(start) +
+            "\" StopFile=\"" + SecurityElement.Escape(stop) + "\"/></Target></Project>");
+        var noise = args.Length > 1 && args[1] == "loss";
+        for (var i = 0; i < (noise ? 30000 : 2000); i++)
+        {
+            try { throw new FormatException(Secret + (noise ? new string('x', 2048) : "")); }
+            catch (FormatException) { }
+        }
+        using var manager = new BuildManager();
+        manager.BeginBuild(new BuildParameters {
+            Loggers = new ILogger[] {
+                new BinaryLogger {
+                    Parameters = Path.Combine(root, "native.binlog") +
+                        ";ProjectImports=None;OmitInitialInfo"
+                }
+            }
+        });
+        var request = new BuildRequestData(project,
+            new System.Collections.Generic.Dictionary<string, string> { [Secret] = Secret },
+            null, new[] { Secret }, null);
+        var submission = manager.PendBuildRequest(request);
+        submission.ExecuteAsync(null, null);
+        var deadline = DateTime.UtcNow.AddSeconds(20);
+        while (!File.Exists(start) && DateTime.UtcNow < deadline)
+            Thread.Sleep(10);
+        NativeCancellationOwner(manager);
+        manager.EndBuild();
+        File.WriteAllText(Path.Combine(root, "expected.json"),
+            "{\"throw_token\":" + typeof(Canary).GetMethod("ControlledThrow",
+                BindingFlags.Static | BindingFlags.NonPublic).MetadataToken +
+            ",\"owner_token\":" + typeof(Canary).GetMethod("NativeCancellationOwner",
+                BindingFlags.Static | BindingFlags.NonPublic).MetadataToken +
+            ",\"unknown_token\":" + typeof(Canary).GetMethod("UnknownThrow",
+                BindingFlags.Static | BindingFlags.NonPublic).MetadataToken +
+            ",\"unknown_type_hash\":\"" + Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(
+                    typeof(PrivatePayloadException).FullName))) + "\"}");
+        return File.Exists(start) ? 0 : 1;
+    }
+}

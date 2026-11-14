@@ -10,6 +10,15 @@ on:
   schedule:
     - cron: '17 7 * * *'
   workflow_dispatch:
+    inputs:
+      issue_5976_first_cause:
+        description: 'Private one-execution startup capture; diagnostic branch only'
+        type: boolean
+        default: false
+      expected_sha:
+        description: 'Parent-reviewed diagnostic commit SHA'
+        type: string
+        default: ''
 
 permissions:
   contents: write
@@ -24,6 +33,7 @@ env:
 
 jobs:
   nightly:
+    if: github.event_name != 'workflow_dispatch' || !inputs.issue_5976_first_cause
     runs-on: ubuntu-latest
 
     steps:
@@ -123,3 +133,85 @@ jobs:
           if [[ "${{ steps.migrate.outputs.migrate_exit }}" != "0" ]]; then
             exit 1
           fi
+
+  issue-5976-first-cause:
+    name: issue-5976-first-cause (diagnostic-only)
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.issue_5976_first_cause &&
+      github.ref == 'refs/heads/oats/5976-first-submission-cause' &&
+      github.sha == inputs.expected_sha &&
+      github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require exact approved observation identity
+        id: guard5976
+        env:
+          OBS_EVENT: ${{ github.event_name }}
+          OBS_REF: ${{ github.ref }}
+          OBS_SHA: ${{ github.sha }}
+          OBS_ATTEMPT: ${{ github.run_attempt }}
+          OBS_ENABLED: ${{ inputs.issue_5976_first_cause }}
+          OBS_EXPECTED: ${{ inputs.expected_sha }}
+        run: python3 build/hot-reload-first-cause.py guard
+      - name: Setup .NET SDK (main)
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+      - name: Setup .NET 8 (for multitarget tests)
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '8.0.x'
+      - name: Restore SDK and cs2gs dependency graph
+        run: python3 build/ci-projects.py restore --projects "tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.gsproj src/Sdk/Gsharp.Templates/Gsharp.Templates.gsproj"
+      - name: Install netcoredbg
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./build/install-netcoredbg.sh
+      - name: Run original end-to-end suite with private capture
+        id: e2e5976
+        env:
+          GSHARP_HOT_RELOAD_FIRST_CAUSE: '1'
+        run: |
+          test ! -e out/artifacts/issue-5976-first-cause/capture
+          printf 'capture_fresh=true\n' >> "$GITHUB_OUTPUT"
+          set +e
+          ./build/run-e2e-tests.sh
+          status=$?
+          printf 'exit_code=%s\n' "$status" >> "$GITHUB_OUTPUT"
+          exit "$status"
+      - name: Project private capture after the suite
+        id: project5976
+        if: always() && steps.guard5976.outcome == 'success' && steps.e2e5976.outputs.capture_fresh == 'true'
+        env:
+          E2E_EXIT: ${{ steps.e2e5976.outputs.exit_code || '255' }}
+        run: |
+          raw=out/artifacts/issue-5976-first-cause/capture/raw
+          mkdir -p "$raw"
+          python3 build/hot-reload-first-cause.py project "$E2E_EXIT" >"$raw/private-driver.log" 2>&1
+      - name: Validate the exact public payload
+        id: validate5976
+        if: always() && steps.project5976.outcome == 'success'
+        run: |
+          raw=out/artifacts/issue-5976-first-cause/capture/raw
+          python3 build/hot-reload-first-cause.py validate >"$raw/private-validator.log" 2>&1
+      - name: Upload field-only diagnostic result
+        if: always() && steps.validate5976.outcome == 'success'
+        uses: actions/upload-artifact@v5
+        with:
+          name: issue-5976-first-cause-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 1
+          if-no-files-found: error
+          path: |
+            out/artifacts/issue-5976-first-cause/capture/publish/summary.json
+            out/artifacts/issue-5976-first-cause/capture/publish/manifest.json
+      - name: Remove only private capture
+        if: always() && steps.guard5976.outcome == 'success' && steps.e2e5976.outputs.capture_fresh == 'true'
+        run: python3 build/hot-reload-first-cause.py cleanup >/dev/null 2>&1
