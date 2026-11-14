@@ -217,6 +217,47 @@ func Use(comparison Comparison[ARG], item ARG) {
         Assert.DoesNotContain(constructedItems, (i CompletionItem) -> i.Label == "_items" || i.Label == "_size")
     }
 
+    @Theory
+    @InlineData("Item", "")
+    @InlineData("Item", "Cr")
+    @InlineData("int32", "")
+    @InlineData("int32", "Cr")
+    @InlineData("object", "")
+    @InlineData("object", "Cr")
+    func ComputeCompletions_OnIncompleteConstructedType_OffersStaticMembers(argument string, prefix string) {
+        let source = `import System.Collections.Generic
+class Item { }
+func Use() {
+    Comparer[ARG].PREFIX
+}
+`.Replace("ARG", argument, StringComparison.Ordinal).Replace("PREFIX", prefix, StringComparison.Ordinal)
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = ServerCompilation.Create(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        let items = CompletionComputer.ComputeCompletions(
+            content,
+            After(source, "Comparer[" + argument + "]." + prefix)
+        )
+        let create = Assert.Single(items.Where((i CompletionItem) -> i.Label == "Create"))
+        Assert.Equal(CompletionItemKind.Method, create.Kind)
+        Assert.DoesNotContain(items, (i CompletionItem) -> i.Label == "Compare" || i.Label == "GetType")
+        Assert.DoesNotContain(items, (i CompletionItem) -> i.Label == ".ctor" || i.Label == "init")
+
+        let valueSource = `import System.Collections.Generic
+class Item { prop Marker int32 }
+func Use(Comparer []Item, Item int32) {
+    Comparer[Item].PREFIX
+}
+`.Replace("PREFIX", prefix, StringComparison.Ordinal)
+        let valueItems = CompletionComputer.ComputeCompletions(
+            LanguageServerTestHelpers.Content(valueSource),
+            After(valueSource, "Comparer[Item]." + prefix)
+        )
+        let marker = Assert.Single(valueItems.Where((i CompletionItem) -> i.Label == "Marker"))
+        Assert.Equal(CompletionItemKind.Property, marker.Kind)
+        Assert.DoesNotContain(valueItems, (i CompletionItem) -> i.Label == "Create" || i.Label == "Default")
+    }
+
     @Fact
     func ComputeCompletions_AfterDotOnStructValue_OffersInstanceFields() {
         const source = `struct Point {
