@@ -332,6 +332,34 @@ class SdkPublishGraphTests(unittest.TestCase):
         os.utime(inputs, ns=(timestamp.st_atime_ns, timestamp.st_mtime_ns))
         self.assertIn("COMPILING_REPOSITORY_INPUTS", self.dotnet("msbuild", "Inputs.proj"))
 
+    def test_cold_restore_then_publish_handles_deferred_versioning_import(self) -> None:
+        write(self.root / "global.json", (REPO / "global.json").read_text())
+        properties = ET.parse(REPO / "build/gsharp.build.props").getroot()
+        versioning = properties.find(".//NerdbankGitVersioningPackageReference")
+        self.assertIsNotNone(versioning)
+        write(self.root / "Cold/Cold.gsproj", f"""<Project Sdk="Gsharp.NET.Sdk">
+  <PropertyGroup>
+    <GenerateAssemblyVersionInfo>false</GenerateAssemblyVersionInfo>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Nerdbank.GitVersioning" Version="{versioning.get('Version')}"/>
+  </ItemGroup>
+  <Import Project="{REPO / 'build/gsharp.build.targets'}"/>
+  <Target Name="ReportVersionImport" AfterTargets="PrepareForBuild">
+    <Message Text="NBGV_IMPORTED=$(_NBGV_Common_Targets_Imported)" Importance="High"/>
+  </Target>
+</Project>""")
+        write(self.root / "Cold/Value.gs",
+              "package Cold\npublic class Value { public prop Number int32 -> 42 }")
+        cold = self.dotnet("msbuild", "Cold/Cold.gsproj", "-t:Restore;Publish",
+                           "-p:GSharpUseSharedCompilation=false", "-p:GSharpMaxWorkers=1")
+        self.assertIn("NBGV_IMPORTED=", cold)
+        self.assertNotIn("NBGV_IMPORTED=true", cold)
+        warm = self.dotnet("msbuild", "Cold/Cold.gsproj", "-t:PrepareForBuild", "-v:diagnostic")
+        self.assertIn("NBGV_IMPORTED=true", warm)
+        self.assertIn('Target "GetBuildVersion:', warm)
+
     def test_version_opt_out_preserves_metadata_and_skips_unchanged_build_contexts(self) -> None:
         write(self.root / "global.json", (REPO / "global.json").read_text())
         write(self.root / "version.json", '{"version":"7.8","publicReleaseRefSpec":[".*"]}')

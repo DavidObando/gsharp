@@ -16,7 +16,7 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
-- Initialize repository version metadata before G# build preparation, including projects that disable generated version sources. Build Extensions without a bundled self-reference and reuse its graph output for SDK packing. Unchanged builds retain identical metadata and skip compilation. (Fixes #5116)
+- Initialize repository version metadata before G# build preparation when NBGV targets are imported, including projects that disable generated version sources. Preserve cold restore-and-publish evaluations before those imports exist. Build Extensions without a bundled self-reference and reuse its graph output for SDK packing. Unchanged builds retain identical metadata and skip compilation. Keep stage-2 certification's exact SDK target inventory current. (Fixes #5116)
 
 - Check imported generic `class`, `struct`, and `new()` constraints before reading type-bound constraints. Missing type-bound dependencies no longer bypass known special flags. The older unreadable type-bound fallback remains unchanged pending ADR-0209's post-stage-7 follow-up (#5176). (Fixes #6023)
 
