@@ -1990,7 +1990,7 @@ partial class CSharpToGSharpTranslator {
                     )
                 ) {
                     result ??= ObliviousPositionSet()
-                    result!!.Nullable.Add("")
+                    result.Nullable.Add("")
                 }
                 if suppressedTopLevel && result != nil {
                     result.Nullable.Remove("")
@@ -2010,13 +2010,13 @@ partial class CSharpToGSharpTranslator {
                     .Annotated
             ) {
                 result ??= ObliviousPositionSet()
-                result!!.Nullable.Add("")
+                result.Nullable.Add("")
             }
             if symbol != nil && !(symbol is ILocalSymbol) {
                 let declared = this.ObliviousContainerPositions(symbol)
                 if declared != nil && declared.Count > 0 {
                     result ??= ObliviousPositionSet()
-                    result!!.Nullable.UnionWith(declared)
+                    result.Nullable.UnionWith(declared)
                 }
             }
             if suppressedTopLevel && result != nil {
@@ -2091,7 +2091,7 @@ partial class CSharpToGSharpTranslator {
                 for returnExpression in GetLambdaResultExpressions(anonymousFunction) {
                     if this.GetExpressionNullablePositions(returnExpression) is {} expressionPositions {
                         returnPositions ??= ObliviousPositionSet()
-                        returnPositions!!.UnionWith(expressionPositions)
+                        returnPositions.UnionWith(expressionPositions)
                     }
                 }
                 if anonymousFunction.AsyncKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AsyncKeyword) &&
@@ -2130,16 +2130,16 @@ partial class CSharpToGSharpTranslator {
             }
             if promotedTopLevel {
                 result ??= ObliviousPositionSet()
-                result!!.Nullable.Add("")
+                result.Nullable.Add("")
             }
             let declared = this.ObliviousContainerPositions(symbol)
             if declared != nil && declared.Count > 0 {
                 result ??= ObliviousPositionSet()
-                result!!.Nullable.UnionWith(declared)
+                result.Nullable.UnionWith(declared)
             }
             if this.IsFrozenObliviousImportMember(symbol) {
                 result ??= ObliviousPositionSet()
-                CollectPlatformPositions(StorageType(UnreducedDefinition(symbol)), "", result!!.Platform)
+                CollectPlatformPositions(StorageType(UnreducedDefinition(symbol)), "", result.Platform)
             }
             return result
         }
@@ -2673,14 +2673,14 @@ partial class CSharpToGSharpTranslator {
                 ) ??
                     source
             }
-            this.JoinRefStorageSlots(target, this.GetRefStorageSlot(source!!, depth))
+            this.JoinRefStorageSlots(target, this.GetRefStorageSlot(source, depth))
             var type = this.RefStorageSlotType(target)
             var nestedDepth = 0
             while type is IArrayTypeSymbol array {
                 nestedDepth++
                 this.JoinRefStorageSlots(
                     this.GetRefStorageSlot(target.Symbol, target.Depth + nestedDepth),
-                    this.GetRefStorageSlot(source!!, depth + nestedDepth)
+                    this.GetRefStorageSlot(source, depth + nestedDepth)
                 )
                 type = array.ElementType
             }
@@ -3148,7 +3148,7 @@ partial class CSharpToGSharpTranslator {
             this.EnsureRepositorySharedDocumentPaths()
             for reference in symbol!!.DeclaringSyntaxReferences {
                 let path string? = reference.SyntaxTree?.FilePath
-                if !string.IsNullOrEmpty(path) && this.repositorySharedDocumentPaths!!.Contains(path!!) {
+                if !string.IsNullOrEmpty(path) && this.repositorySharedDocumentPaths!!.Contains(path) {
                     return true
                 }
             }

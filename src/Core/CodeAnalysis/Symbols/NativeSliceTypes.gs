@@ -48,7 +48,7 @@ internal shared class NativeSliceTypes {
             arguments[0]
         } else {
             TypeSymbol.FromClrTypeWithoutNullability(
-                clrType!!.GetGenericArguments()[0],
+                clrType.GetGenericArguments()[0],
                 NullabilityFreeReason.TypeStructure
             )
         }
@@ -73,7 +73,7 @@ internal shared class NativeSliceTypes {
             out type
         ) &&
             IsDefinition(type, out _) &&
-            type!!
+            type
             .GetMethods().Any((m MethodInfo) -> m.Name == "Subslice" && m.GetParameters().Length == 4) &&
             type!!
             .GetMethods().Any((m MethodInfo) -> m.Name == "FromArray" && m.GetParameters().Length == 1) {
@@ -101,8 +101,9 @@ internal shared class NativeSliceTypes {
             TryGetElement(source, out var from, out _) &&
             TryGetElement(target, out var to, out _) &&
             (
-            !Conversion.ClassifyNonStructural(from!!, to!!).IsIdentity || !NullableFlagsBuilder.Build(from!!)
-                .SequenceEqual(NullableFlagsBuilder.Build(to!!))
+            !Conversion.ClassifyNonStructural(from, to).IsIdentity || !NullableFlagsBuilder.Build(from).SequenceEqual(
+                NullableFlagsBuilder.Build(to)
+            )
         )
     }
 }

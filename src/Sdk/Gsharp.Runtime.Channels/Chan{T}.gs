@@ -267,12 +267,12 @@ partial class Chan[T] : Channel[T], ISelectable[T], ISendSelectableCore[T], IDis
             }
             closed = true
             while receivers.TryDequeue(out var node) {
-                completions.Add(node!!)
-                node!!.OnClosed()
+                completions.Add(node)
+                node.OnClosed()
             }
             while senders.TryDequeue(out var node) {
-                completions.Add(node!!)
-                node!!.OnClosed()
+                completions.Add(node)
+                node.OnClosed()
             }
         }
         completions.Publish()
@@ -428,8 +428,8 @@ partial class Chan[T] : Channel[T], ISelectable[T], ISendSelectableCore[T], IDis
         // Rendezvous hand-off: take directly from a parked sender. Lost select
         // nodes and notifiers decline; keep looking.
         while senders.TryDequeue(out var node) {
-            completions.Add(node!!)
-            if node!!.TryCommitSend(out var handed) {
+            completions.Add(node)
+            if node.TryCommitSend(out var handed) {
                 value = handed
                 ok = true
                 return true
@@ -473,8 +473,8 @@ partial class Chan[T] : Channel[T], ISelectable[T], ISendSelectableCore[T], IDis
 
     private func RefillFromSenderLocked(ref completions Completions) {
         while senders.TryDequeue(out var node) {
-            completions.Add(node!!)
-            if node!!.TryCommitSend(out var handed) {
+            completions.Add(node)
+            if node.TryCommitSend(out var handed) {
                 EnqueueBuffer(handed)
                 return
             }
@@ -488,8 +488,8 @@ partial class Chan[T] : Channel[T], ISelectable[T], ISendSelectableCore[T], IDis
         // Direct hand-off to a parked receiver. Notifiers are woken (readable
         // now) but never consume; lost select nodes decline; keep looking.
         while receivers.TryDequeue(out var node) {
-            completions.Add(node!!)
-            if node!!.TryCommitReceive(value) {
+            completions.Add(node)
+            if node.TryCommitReceive(value) {
                 return SendOutcome.Sent
             }
         }

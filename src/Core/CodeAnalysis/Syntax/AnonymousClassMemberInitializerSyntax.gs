@@ -66,5 +66,5 @@ partial class AnonymousClassMemberInitializerSyntax : SyntaxNode {
     }
 
     /// Gets a value indicating whether this member was declared read-only (`let`).
-    prop IsReadOnly bool -> LetOrVarKeyword != nil && LetOrVarKeyword!!.Kind == SyntaxKind.LetKeyword
+    prop IsReadOnly bool -> LetOrVarKeyword != nil && LetOrVarKeyword.Kind == SyntaxKind.LetKeyword
 }

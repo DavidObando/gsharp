@@ -291,7 +291,7 @@ internal partial class OverloadResolver {
         if expectedType == nil || MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(expectedType, out _) ||
             (argument.Type != nil && MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(argument.Type, out _)) ||
             !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(expectedType, out var targetFnType) ||
-            TypeSymbol.ContainsTypeParameter(targetFnType!!) {
+            TypeSymbol.ContainsTypeParameter(targetFnType) {
             return false
         }
         if lambda != nil && !IsLambdaReturnShapeCompatible(argument, expectedType, lambda) {
@@ -313,14 +313,14 @@ internal partial class OverloadResolver {
             ) {
                 cast[BoundExpression](naturalLiteral!!)
             } else {
-                bindLambdaWithTarget!!(lambda, targetFnType!!)
+                bindLambdaWithTarget!!(lambda, targetFnType)
             }
-        } else if targetFnType!!.ReturnType == TypeSymbol.Void &&
+        } else if targetFnType.ReturnType == TypeSymbol.Void &&
             tryGetFunctionLiteral(argument, out var literal) &&
             literal!!.FunctionType is FunctionTypeSymbol literalFunctionType &&
             literalFunctionType.ReturnType != TypeSymbol.Void &&
             literalFunctionType.ReturnType != TypeSymbol.Error &&
-            literalFunctionType.Arity == targetFnType!!.Arity {
+            literalFunctionType.Arity == targetFnType.Arity {
             candidate = literal!!
         } else {
             return false
@@ -447,7 +447,7 @@ internal partial class OverloadResolver {
                 bindExpression(resolvedBranchySyntax)
             }
             return if rebindDeferredArgumentWithSnapshot != nil {
-                rebindDeferredArgumentWithSnapshot!!(resolvedBranchySyntax, rebind)
+                rebindDeferredArgumentWithSnapshot(resolvedBranchySyntax, rebind)
             } else {
                 rebind()
             }
@@ -487,7 +487,7 @@ internal partial class OverloadResolver {
                     )
                 )
                 return if rebindDeferredArgumentWithSnapshot != nil {
-                    rebindDeferredArgumentWithSnapshot!!(nonNullInner, rebind)
+                    rebindDeferredArgumentWithSnapshot(nonNullInner, rebind)
                 } else {
                     rebind()
                 }
@@ -522,8 +522,8 @@ internal partial class OverloadResolver {
             if arguments[i] is NamedArgumentExpressionSyntax named {
                 names ??= [arguments.Count]string
                 seenNames ??= HashSet[string](StringComparer.Ordinal)
-                names!![i] = named.NameToken.ValueText
-                if !seenNames!!.Add(named.NameToken.ValueText) {
+                names[i] = named.NameToken.ValueText
+                if !seenNames.Add(named.NameToken.ValueText) {
                     Diagnostics.ReportDuplicateNamedArgument(named.NameToken.Location, named.NameToken.ValueText)
                     ok = false
                 }
@@ -555,7 +555,7 @@ internal partial class OverloadResolver {
             let resolved = conversions.ResolveReboundArgument(arg)
             if !object.ReferenceEquals(resolved, arg) {
                 reboundBuilder ??= parameterOrderedArguments.ToBuilder()
-                reboundBuilder!![i] = resolved
+                reboundBuilder[i] = resolved
             }
         }
         if reboundBuilder != nil {
@@ -841,7 +841,7 @@ internal partial class OverloadResolver {
                 continue
             }
             knownNames ??= MemberLookup.CollectClrParameterNames(receiverClrType, methodName, bindingFlags)
-            if !ContainsClrParameterName(knownNames!!, name) {
+            if !ContainsClrParameterName(knownNames, name) {
                 let location = if ce.Arguments[i] is NamedArgumentExpressionSyntax named {
                     named.NameToken.Location
                 } else {
@@ -875,7 +875,7 @@ internal partial class OverloadResolver {
                 continue
             }
             knownNames ??= MemberLookup.CollectClrConstructorParameterNames(clrType)
-            if !ContainsClrParameterName(knownNames!!, name) {
+            if !ContainsClrParameterName(knownNames, name) {
                 let location = if ce.Arguments[i] is NamedArgumentExpressionSyntax named {
                     named.NameToken.Location
                 } else {
@@ -1183,7 +1183,7 @@ internal partial class OverloadResolver {
                     }
                 }
                 forwarded ??= handler.ForwardedArguments.ToBuilder()
-                forwarded!![i] = captured
+                forwarded[i] = captured
             }
             return interpolated.Update(
                 interpolated.Parts,

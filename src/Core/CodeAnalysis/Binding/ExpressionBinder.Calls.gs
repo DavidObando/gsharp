@@ -135,7 +135,7 @@ internal partial class ExpressionBinder {
                 !hasUpdateProperty ||
                     IsFieldAtLeastAsNearAsProperty(
                     structType,
-                    fieldDeclaringType!!,
+                    fieldDeclaringType,
                     Invariant.Required(
                         updateProperty,
                         "a resolved property has a symbol",
@@ -152,20 +152,20 @@ internal partial class ExpressionBinder {
                 // enforce the same `protected`/`private` accessibility rule as a
                 // plain assignment / composite literal member init (issue #950 /
                 // #2044 / #2059).
-                if !AccessibilityChecker.IsAccessible(field!!.Accessibility, fieldDeclaringType, this.function) {
+                if !AccessibilityChecker.IsAccessible(field.Accessibility, fieldDeclaringType, this.function) {
                     Diagnostics.ReportMemberInaccessible(
                         initSyntax.FieldIdentifier.Location,
-                        field!!.Name,
-                        fieldDeclaringType!!.Name,
-                        field!!.Accessibility
+                        field.Name,
+                        fieldDeclaringType.Name,
+                        field.Accessibility
                     )
                 }
-                let fieldValueExpr = BindExpression(initSyntax.Value, field!!.Type)
+                let fieldValueExpr = BindExpression(initSyntax.Value, field.Type)
                 let fieldAssignment = BoundFieldAssignmentExpression(
                     initSyntax,
                     copiedValue,
-                    fieldDeclaringType!!,
-                    field!!,
+                    fieldDeclaringType,
+                    field,
                     fieldValueExpr
                 )
                 ApplySubExpressionNarrowingEffects(initSyntax, fieldAssignment)
@@ -192,7 +192,7 @@ internal partial class ExpressionBinder {
                     out propertyDeclaringType
                 )
             ) &&
-                property!!
+                property
                 .HasSetter {
                 propertyDeclaringType = Invariant.Required(
                     propertyDeclaringType,
@@ -200,23 +200,23 @@ internal partial class ExpressionBinder {
                     expression: "propertyDeclaringType"
                 )
                 if !AccessibilityChecker.IsAccessible(
-                    property!!.SetterAccessibility,
+                    property.SetterAccessibility,
                     propertyDeclaringType,
                     this.function
                 ) {
                     Diagnostics.ReportMemberInaccessible(
                         initSyntax.FieldIdentifier.Location,
-                        property!!.Name,
+                        property.Name,
                         propertyDeclaringType.Name,
-                        property!!.SetterAccessibility
+                        property.SetterAccessibility
                     )
                 }
-                let propertyValueExpr = BindExpression(initSyntax.Value, property!!.Type)
+                let propertyValueExpr = BindExpression(initSyntax.Value, property.Type)
                 let propertyAssignment = BoundPropertyAssignmentExpression(
                     initSyntax,
                     BoundVariableExpression(nil, copiedValue),
                     propertyDeclaringType,
-                    property!!,
+                    property,
                     propertyValueExpr
                 )
                 ApplySubExpressionNarrowingEffects(initSyntax, propertyAssignment)
@@ -353,7 +353,7 @@ internal partial class ExpressionBinder {
             BindCollectionElementsForDiagnostics(syntax)
             return BoundErrorExpression(nil)
         }
-        return BindCollectionInitializerSuffix(syntax, BindExpression(syntax.Target!!))
+        return BindCollectionInitializerSuffix(syntax, BindExpression(syntax.Target))
     }
 
     private func BindCollectionInitializerSuffix(
@@ -1148,7 +1148,7 @@ internal partial class ExpressionBinder {
                 return true
             }
             try {
-                clrType = openType!!.MakeGenericType(clrArgs)
+                clrType = openType.MakeGenericType(clrArgs)
             } catch (ArgumentException) {
                 return false
             }
@@ -1168,8 +1168,8 @@ internal partial class ExpressionBinder {
                 typeAlias is ImportedTypeSymbol{ClrType: not nil} importedAlias {
                 clrType = importedAlias.ClrType
             } else if $scope.TryLookupImport(name, out var aliasImport) &&
-                aliasImport!!.IsAlias &&
-                $scope.References!!.TryResolveType(aliasImport!!.Target, out var aliasedType) {
+                aliasImport.IsAlias &&
+                $scope.References!!.TryResolveType(aliasImport.Target, out var aliasedType) {
                 clrType = aliasedType
             } else if $scope.TryLookupImportedClass(name, declaration: nil, out var importedClass, out var ambiguity) {
                 // Issue #3734: `Thing()` with two imports each exporting a
@@ -1177,7 +1177,7 @@ internal partial class ExpressionBinder {
                 if ambiguity != nil {
                     Diagnostics.ReportAmbiguousImportedTypeReference(syntax.Identifier.Location, name, ambiguity)
                 }
-                clrType = importedClass!!.ClassType
+                clrType = importedClass.ClassType
             } else {
                 let resolved = lookupTypeToken(syntax.Identifier)
                 if resolved == TypeSymbol.Error {
@@ -1215,7 +1215,7 @@ internal partial class ExpressionBinder {
                 $scope.References,
                 out var nullableAggregate
             ) {
-                checkedTarget = nullableAggregate!!
+                checkedTarget = nullableAggregate
             }
             result = conversions.BindConversion(
                 syntax.Arguments[0],
@@ -1264,8 +1264,8 @@ internal partial class ExpressionBinder {
             $scope.References,
             out var dataClassAggregate
         ) &&
-            dataClassAggregate!!.IsData &&
-            dataClassAggregate!!
+            dataClassAggregate.IsData &&
+            dataClassAggregate
             .HasPrimaryConstructor {
             // Issue #2550: gsc data classes also expose a parameterless CLR
             // constructor as an implementation detail. Bind their source-level
@@ -1273,12 +1273,12 @@ internal partial class ExpressionBinder {
             // so `Settings()` supplies declared defaults instead of selecting
             // that zero-initializing constructor. C# records have no gsc marker
             // and keep using CLR overload resolution (#2291/#2458).
-            if dataClassAggregate!!.IsClass && ImportedAssemblySemantics.TryGetTypeSemantics(resolvedClrType, out _) {
-                let primaryParameterCount = dataClassAggregate!!.PrimaryConstructorParameters.Length
+            if dataClassAggregate.IsClass && ImportedAssemblySemantics.TryGetTypeSemantics(resolvedClrType, out _) {
+                let primaryParameterCount = dataClassAggregate.PrimaryConstructorParameters.Length
                 var primaryAcceptsArity = syntax.Arguments.Count <= primaryParameterCount
                 if primaryAcceptsArity {
                     for var i = syntax.Arguments.Count; i < primaryParameterCount; i++ {
-                        primaryAcceptsArity &= dataClassAggregate!!
+                        primaryAcceptsArity &= dataClassAggregate
                             .PrimaryConstructorParameters[i]
                             .HasExplicitDefaultValue
                     }
@@ -1321,7 +1321,7 @@ internal partial class ExpressionBinder {
                         dataClassAggregate
                     )
                 }
-                result = overloads.BindConstructorCallExpression(syntax, dataClassAggregate!!)
+                result = overloads.BindConstructorCallExpression(syntax, dataClassAggregate)
                 return true
             }
             let bound = TryBindClrConstructorFromType(
@@ -1365,8 +1365,8 @@ internal partial class ExpressionBinder {
             $scope.References,
             out var aggregate
         ) &&
-            aggregate!!.HasPrimaryConstructor {
-            result = overloads.BindConstructorCallExpression(syntax, aggregate!!)
+            aggregate.HasPrimaryConstructor {
+            result = overloads.BindConstructorCallExpression(syntax, aggregate)
             return true
         }
         return FinishClrConstructorBindingFailure(
@@ -1465,10 +1465,10 @@ internal partial class ExpressionBinder {
             // never resolves and the whole conversion reported GS0267. Bind it
             // as the conversion it is, but only when one genuinely exists —
             // an argument that cannot convert still falls through to GS0267.
-            if conversionTarget!!.ClrType is {} targetClr && ClrTypeUtilities.IsDelegateType(targetClr) &&
+            if conversionTarget.ClrType is {} targetClr && ClrTypeUtilities.IsDelegateType(targetClr) &&
                 argument.Type is {} argumentType &&
                 Conversion
-                .Classify(argumentType, conversionTarget!!).Exists {
+                .Classify(argumentType, conversionTarget).Exists {
                 result = conversions.BindConversion(
                     syntax.Arguments[0].Location,
                     argument,
@@ -1489,7 +1489,7 @@ internal partial class ExpressionBinder {
             // not-found/overload diagnostics rather than a new one.
             if argument.Type is {} sourceType && sourceType != TypeSymbol.Error && Conversion.Classify(
                 sourceType,
-                conversionTarget!!
+                conversionTarget
             )
                 .Exists {
                 result = conversions.BindConversion(
@@ -2056,7 +2056,7 @@ internal partial class ExpressionBinder {
                 !clrType.IsEnum &&
                 !clrType.IsPrimitive &&
                 !(
-                ImportedAssemblySemantics.TryGetTypeSemantics(clrType, out var zeroSemantics) && zeroSemantics!!.IsData
+                ImportedAssemblySemantics.TryGetTypeSemantics(clrType, out var zeroSemantics) && zeroSemantics.IsData
             ) &&
                 !clrType
                 .ContainsGenericParameters {
@@ -2174,7 +2174,7 @@ internal partial class ExpressionBinder {
                     continue
                 }
                 ctorParameterTypeOverrides ??= Dictionary[int32, TypeSymbol]()
-                ctorParameterTypeOverrides!![p] = recovered
+                ctorParameterTypeOverrides[p] = recovered
             }
         }
         // Issue #1638: route through the shared CLR call-argument-construction
@@ -2234,7 +2234,7 @@ internal partial class ExpressionBinder {
         if verifyCallArgumentsAfterConversions != nil {
             var verifiedNoApplicable = false
             var verifiedFailedArgs = default(ImmutableArray[BoundExpression])
-            result = verifyCallArgumentsAfterConversions!!(
+            result = verifyCallArgumentsAfterConversions(
                 syntax.Arguments,
                 result,
                 () -> {
@@ -2596,7 +2596,7 @@ internal partial class ExpressionBinder {
                 .GetParameterTypeSymbol(parameter).StripToBareShape()
             let syntheticParameter = RefCapabilities.CreateParameterSymbol(parameter, pointeeType, "value")
             rebuilt ??= arguments.ToBuilder()
-            rebuilt!![i] = BindRefArgumentExpression(refArgument, syntheticParameter)
+            rebuilt[i] = BindRefArgumentExpression(refArgument, syntheticParameter)
         }
         return rebuilt?.ToImmutable() ?? arguments
     }
@@ -2628,7 +2628,7 @@ internal partial class ExpressionBinder {
             inner,
             out var blockTarget
         ) {
-            return BindExpression(inner, blockTarget!!)
+            return BindExpression(inner, blockTarget)
         }
         if OverloadResolver.GetLambdaArgumentSyntax(inner) is {} lambdaSyntax &&
             TryResolveDelegateTargetFromCandidates(
@@ -2645,7 +2645,7 @@ internal partial class ExpressionBinder {
                 lambdaSyntax,
                 candidateParameterLists,
                 (parameters[]ParameterInfo) -> FindCandidateSlot(parameters, paramOffset, sourceArgIndex, argName),
-                target!!,
+                target,
                 false,
                 (literal BoundExpression) -> ConvertLiteralToNominalDelegate(argumentSyntax, literal, nominalTarget)
             )
@@ -2885,12 +2885,12 @@ internal partial class ExpressionBinder {
             return false
         }
         let constructedTarget = if openGenericDefinition != nil && !symbolicTypeArgs.IsDefaultOrEmpty {
-            cast[TypeSymbol](ImportedTypeSymbol.GetConstructed(nestedType!!, openGenericDefinition, symbolicTypeArgs))
+            cast[TypeSymbol](ImportedTypeSymbol.GetConstructed(nestedType, openGenericDefinition, symbolicTypeArgs))
         } else {
             TypeSymbol.FromClrTypeWithoutNullability(nestedType, NullabilityFreeReason.TypeStructure)
         }
         let bound = TryBindClrConstructorFromType(
-            nestedType!!,
+            nestedType,
             syntax,
             out result,
             out var noApplicableOverload,
@@ -2901,7 +2901,7 @@ internal partial class ExpressionBinder {
         return bound ||
             FinishClrConstructorBindingFailure(
             syntax,
-            nestedType!!.Name,
+            nestedType.Name,
             noApplicableOverload,
             boundArguments,
             &result,

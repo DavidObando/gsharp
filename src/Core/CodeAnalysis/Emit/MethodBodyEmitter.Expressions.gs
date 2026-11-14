@@ -2710,8 +2710,8 @@ internal partial class MethodBodyEmitter {
             }
             if DeclarationBinder.TryGetRankOneNonSzArrayElementType(coreType, out var nonSzElement) &&
                 coreType.ClrType is {IsArray: true} rankOneClr {
-                arrayType = MemberLookup.ConstructRankOneNonSzArray(nonSzElement!!, rankOneClr)
-                elementType = nonSzElement!!
+                arrayType = MemberLookup.ConstructRankOneNonSzArray(nonSzElement, rankOneClr)
+                elementType = nonSzElement
                 rank = 1
                 return true
             }

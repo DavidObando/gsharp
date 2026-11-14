@@ -540,7 +540,7 @@ internal partial class StatementBinder {
             let nonNullByRefAfterFinally = CaptureNonNullByRefVariables()
             RestoreNonNullByRefVariables(nonNullByRefExits ?? nonNullByRefEntry)
             let normalFinallyAliases = finallyEntryExternalCallableAliases[syntax.FinallyClause!!]
-            KillNonNullByRefExitEffects(finallyBlock!!, normalFinallyAliases, syntax.FinallyClause)
+            KillNonNullByRefExitEffects(finallyBlock, normalFinallyAliases, syntax.FinallyClause)
             binderCtx.NonNullByRefVariables.UnionWith(nonNullByRefAfterFinally)
         } else {
             RestoreExternalCallableAliases(callableExits ?? callableEntry)
@@ -2403,7 +2403,7 @@ internal partial class StatementBinder {
                 // A receive arm over an `ISelectable[T]` — the library's timers
                 // (ADR-0174 D9), which join a select without pretending to be
                 // channels.
-                shapes[i] = (selectableElement!!, ChannelDirection.In, true)
+                shapes[i] = (selectableElement, ChannelDirection.In, true)
             } else {
                 // A recovery arm: the diagnostic is already reported, and emit
                 // never runs for a program that has one.
@@ -3334,7 +3334,7 @@ internal partial class StatementBinder {
                     openMethod = nil
                 }
                 if openMethod?.ReturnType.IsByRef == true && MemberLookup.GetClrOpenMethodReturnTypeSymbol(
-                    openMethod!!,
+                    openMethod,
                     imported.OpenDefinition,
                     imported.TypeArguments
                 ) is ByRefTypeSymbol pinned {

@@ -560,7 +560,7 @@ internal partial class MethodBodyEmitter {
                 }
                 default {
                     throw NotSupportedException(
-                        "CLR property-pattern member '${field.ClrMember!!.GetType().Name}' is not supported."
+                        "CLR property-pattern member '${field.ClrMember.GetType().Name}' is not supported."
                     )
                 }
             }

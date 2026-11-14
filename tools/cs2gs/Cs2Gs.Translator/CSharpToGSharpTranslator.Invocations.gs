@@ -2140,7 +2140,7 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             let candidateElementType ITypeSymbol? = GetParamsElementType(parameter)
-            if candidateElementType == nil || argumentList.Arguments.IndexOf(argument) < parameter!!.Ordinal {
+            if candidateElementType == nil || argumentList.Arguments.IndexOf(argument) < parameter.Ordinal {
                 return false
             }
             if (
@@ -2159,7 +2159,7 @@ partial class CSharpToGSharpTranslator {
                 default: default(ImmutableArray[IArgumentOperation])
             }
             if !callArguments.IsDefaultOrEmpty && callArguments.FirstOrDefault(
-                (candidate IArgumentOperation) -> candidate.Parameter?.Name == parameter!!.Name
+                (candidate IArgumentOperation) -> candidate.Parameter?.Name == parameter.Name
             ) is {} paramsArgument {
                 if paramsArgument.ArgumentKind is not(ArgumentKind.ParamArray or ArgumentKind.ParamCollection) {
                     return false
@@ -2168,12 +2168,12 @@ partial class CSharpToGSharpTranslator {
                 paramsParameter = parameter
                 return true
             }
-            if argumentList.Arguments.Count == parameter!!.Ordinal + 1 {
+            if argumentList.Arguments.Count == parameter.Ordinal + 1 {
                 let sourceType = this.context.GetTypeInfo(argument.Expression)
-                if SymbolEqualityComparer.Default.Equals(sourceType.Type, parameter!!.Type) ||
+                if SymbolEqualityComparer.Default.Equals(sourceType.Type, parameter.Type) ||
                     SymbolEqualityComparer
                     .Default
-                    .Equals(sourceType.ConvertedType, parameter!!.Type) {
+                    .Equals(sourceType.ConvertedType, parameter.Type) {
                     return false
                 }
             }
@@ -11722,7 +11722,7 @@ partial class CSharpToGSharpTranslator {
             private func GetParamsElementType(
                 parameter IParameterSymbol?
             ) ITypeSymbol? -> if parameter?.IsParams == true &&
-                (parameter!!.Type is IArrayTypeSymbol || IsSupportedParamsCollectionType(parameter!!.Type)) {
+                (parameter.Type is IArrayTypeSymbol || IsSupportedParamsCollectionType(parameter.Type)) {
                 ObliviousNullabilityAnalyzer.ParamsElementType(parameter)
             } else {
                 default(ITypeSymbol?)

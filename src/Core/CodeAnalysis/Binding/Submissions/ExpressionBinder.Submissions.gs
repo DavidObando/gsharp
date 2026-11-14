@@ -93,7 +93,7 @@ internal partial class ExpressionBinder {
         }
         if member is FieldInfo globalField {
             targetSymbol = SubmissionGlobalTypeProjection.ReverseProject(
-                targetSymbol!!,
+                targetSymbol,
                 globalField.FieldType,
                 resolvedDeclared.Type,
                 $scope.References!!
@@ -104,9 +104,9 @@ internal partial class ExpressionBinder {
         result = BoundClrPropertyAssignmentExpression(
             nil,
             receiver: nil,
-            member!!,
+            member,
             converted,
-            targetSymbol!!,
+            targetSymbol,
             staticContainerType: nil
         )
         return true
@@ -140,7 +140,7 @@ internal partial class ExpressionBinder {
         if !TryBindSubmissionStaticMember(bareName, out var boundLeft) {
             return false
         }
-        let compoundTarget = boundLeft!!
+        let compoundTarget = boundLeft
         var leftExpr = compoundTarget
         let previousValue = CapturePostfixCompoundValue(
             syntax.ReturnsPreviousValue,
@@ -186,9 +186,9 @@ internal partial class ExpressionBinder {
         let assignment = BoundClrPropertyAssignmentExpression(
             nil,
             receiver: nil,
-            member!!,
+            member,
             converted,
-            targetSymbol!!,
+            targetSymbol,
             staticContainerType: nil
         )
         result = FinishPostfixCompoundAssignment(syntax, previousDeclaration, previousValue, assignment)
@@ -210,7 +210,7 @@ internal partial class ExpressionBinder {
         let nameSyntax = NameExpressionSyntax(syntax.SyntaxTree, syntax.TargetIdentifier)
         if !TryBindSubmissionStaticMember(nameSyntax, out var receiver) ||
             receiver is BoundErrorExpression ||
-            receiver!!.Type == TypeSymbol.Error {
+            receiver.Type == TypeSymbol.Error {
             return false
         }
         let tempName = "<idxAsn${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>"
@@ -318,7 +318,7 @@ internal partial class ExpressionBinder {
             receiver,
             instanceMember,
             converted,
-            targetSymbol!!,
+            targetSymbol,
             staticContainerType: nil
         )
         return true

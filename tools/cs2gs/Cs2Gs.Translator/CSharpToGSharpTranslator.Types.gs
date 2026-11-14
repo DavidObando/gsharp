@@ -1633,7 +1633,7 @@ partial class CSharpToGSharpTranslator {
             let typeInfo = this.context.GetTypeInfo(node.Expression)
             let declaredType ITypeSymbol? = this.GetDeclaredValueType(node.Expression)
             if declaredType?.IsReferenceType == true &&
-                declaredType!!.NullableAnnotation == Microsoft
+                declaredType.NullableAnnotation == Microsoft
                 .CodeAnalysis
                 .NullableAnnotation
                 .Annotated &&

@@ -74,7 +74,7 @@ class Issue5397HeapDataStressTests {
                         for var slot = 0; slot < slotCount; slot++ {
                             let m = mutableRefs[slot]!!
                             let ro = readOnlyRefs[slot]!!
-                            let observed = Volatile.Read(ref Unsafe.AsRef(in ro.Borrow()))
+                            let observed = Volatile.Read(in Unsafe.AsRef(in ro.Borrow()))
                             Assert.True(
                                 IsValidTaggedSlotValue(slot, iterationsPerWorker, observed),
                                 "slot $slot observed torn or invalid value $observed"
@@ -145,7 +145,7 @@ class Issue5397HeapDataStressTests {
                     } else {
                         for var idx = 0; idx < SharedWindowLength; idx++ {
                             let sub = readOnlyWindow.Subslice(idx, idx + 1)
-                            let node = Volatile.Read(ref Unsafe.AsRef(in sub.GetReadOnlyManagedReference(0).Borrow()))
+                            let node = Volatile.Read(in Unsafe.AsRef(in sub.GetReadOnlyManagedReference(0).Borrow()))
                             Assert.NotNull(node)
                             Assert.Equal(12 + idx, node.Id)
                             Assert.True(

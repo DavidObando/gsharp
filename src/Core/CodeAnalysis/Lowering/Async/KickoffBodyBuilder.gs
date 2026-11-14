@@ -167,7 +167,7 @@ class KickoffBodyPlan {
         operations.Add(KickoffOperation.DeclareStateMachineLocal(StateMachineLocal))
         operations.Add(KickoffOperation.InitializeBuilder(StateMachineLocal, BuilderField, BuilderCreateMethod))
         if ThisField != nil {
-            operations.Add(KickoffOperation.CopyThis(StateMachineLocal, ThisField!!))
+            operations.Add(KickoffOperation.CopyThis(StateMachineLocal, ThisField))
         }
         for copy in ParameterCopies {
             operations.Add(KickoffOperation.CopyParameter(StateMachineLocal, copy.Parameter, copy.Field))
@@ -176,7 +176,7 @@ class KickoffBodyPlan {
         operations.Add(KickoffOperation.StartStateMachine(StateMachineLocal, BuilderField, BuilderStartMethod))
         operations.Add(
             if BuilderTaskProperty != nil {
-                KickoffOperation.ReturnBuilderTask(StateMachineLocal, BuilderField, BuilderTaskProperty!!)
+                KickoffOperation.ReturnBuilderTask(StateMachineLocal, BuilderField, BuilderTaskProperty)
             } else {
                 KickoffOperation.ReturnVoid()
             }

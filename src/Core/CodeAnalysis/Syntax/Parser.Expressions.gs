@@ -122,7 +122,7 @@ open partial class Parser {
         ) {
             let equalsToken = NextToken()
             let value = ParseAssignmentExpression()
-            return MemberIndexAssignmentExpressionSyntax(syntaxTree, indexedLhs!!, equalsToken, value)
+            return MemberIndexAssignmentExpressionSyntax(syntaxTree, indexedLhs, equalsToken, value)
         }
         // Issue #648: chained member-access assignment whose target is an
         // arbitrary expression (e.g. `a.B.C = v`, `GetObj().Field = v`). The
@@ -139,9 +139,9 @@ open partial class Parser {
             let value = ParseAssignmentExpression()
             return MemberFieldAssignmentExpressionSyntax(
                 syntaxTree,
-                memberReceiver!!,
-                memberDot!!,
-                memberField!!,
+                memberReceiver,
+                memberDot,
+                memberField,
                 equalsToken,
                 value
             )
@@ -158,12 +158,7 @@ open partial class Parser {
             .TryLiftTrailingIndexer(expression, out var compoundIndexedLhs) {
             let compoundOpToken = NextToken()
             let compoundRhs = ParseAssignmentExpression()
-            return CompoundIndexAssignmentExpressionSyntax(
-                syntaxTree,
-                compoundIndexedLhs!!,
-                compoundOpToken,
-                compoundRhs
-            )
+            return CompoundIndexAssignmentExpressionSyntax(syntaxTree, compoundIndexedLhs, compoundOpToken, compoundRhs)
         }
         // ADR-0062: general two-arm conditional (ternary) expression
         // `cond ? a : b`. Right-associative; lower precedence than

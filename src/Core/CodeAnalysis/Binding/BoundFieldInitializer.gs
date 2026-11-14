@@ -61,7 +61,7 @@ data class BoundFieldInitializer : IEquatable[BoundFieldInitializer] {
     // one, so a null Field implies a non-null Property.
     /// Gets the name of the targeted member (field or property).
     prop MemberName string -> if Field != nil {
-        Field!!.Name
+        Field.Name
     } else {
         Property!!.Name
     }
@@ -69,7 +69,7 @@ data class BoundFieldInitializer : IEquatable[BoundFieldInitializer] {
     // Either-or, as for MemberName above.
     /// Gets the declared type of the targeted member (field or property).
     prop MemberType TypeSymbol -> if Field != nil {
-        Field!!.Type
+        Field.Type
     } else {
         Property!!.Type
     }

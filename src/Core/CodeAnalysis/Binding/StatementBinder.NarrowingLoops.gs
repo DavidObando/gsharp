@@ -302,8 +302,8 @@ internal partial class StatementBinder {
             isProperty = true
             getterRunsUserCode = true
             if TypeMemberModel.TryGetPropertyWithOwner(thisInterface, name, out var property, out var owner) &&
-                !property!!.IsIndexer {
-                type = (owner as InterfaceSymbol)?.SubstituteMemberType(property!!.Type) ?? property!!.Type
+                !property.IsIndexer {
+                type = (owner as InterfaceSymbol)?.SubstituteMemberType(property.Type) ?? property.Type
             } else if MemberLookup.GetInterfaceImportedBaseInstanceProperty(
                 thisInterface,
                 name,
@@ -5490,9 +5490,9 @@ internal partial class StatementBinder {
             activeCleanupSet ??= HashSet[BoundStatement](activeCleanupStatements)
             for jump in pending {
                 let copy = jump.Clone()
-                if ApplyExitedFinallyEffects(copy, activeFinallySet!!, activeCleanupSet!!) {
+                if ApplyExitedFinallyEffects(copy, activeFinallySet, activeCleanupSet) {
                     incoming ??= List[NarrowingJumpState]()
-                    incoming!!.Add(copy)
+                    incoming.Add(copy)
                 }
             }
         }
@@ -5602,7 +5602,7 @@ internal partial class StatementBinder {
                 ApplyBreakPrefixEffects(snapshot, loopBody, boundBody, condition, loopEntryAliases, boundPost)
                 if ApplyExitedFinallyEffects(snapshot, activeFinallySet, activeCleanupSet) {
                     reachableBreaks ??= List[NarrowingState](rawBreaks.Count)
-                    reachableBreaks!!.Add(NarrowingState.Empty.WithAll(snapshot.GetNarrowedVariablesSnapshot()))
+                    reachableBreaks.Add(NarrowingState.Empty.WithAll(snapshot.GetNarrowedVariablesSnapshot()))
                 }
             }
         }
@@ -5648,7 +5648,7 @@ internal partial class StatementBinder {
                 let removed = DecideRegionKill(path, entry.Value, headerEffects, resolved, filterWrites).Killed
                 if !removed {
                     survivingElseFacts ??= Dictionary[AccessPath, TypeSymbol]()
-                    survivingElseFacts!![path] = entry.Value
+                    survivingElseFacts[path] = entry.Value
                     headerFalseState = headerFalseState.With(path, entry.Value)
                 }
             }

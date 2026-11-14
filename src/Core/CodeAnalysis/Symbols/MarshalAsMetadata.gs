@@ -102,10 +102,10 @@ data class MarshalAsMetadata : IEquatable[MarshalAsMetadata] {
                 // managed element type.
                 bb.WriteByte(uint8((ArraySubType ?? UnmanagedType(0x50))))
                 if (SizeParamIndex != nil) && (SizeConst != nil) {
-                    bb.WriteCompressedInteger(SizeParamIndex!!)
+                    bb.WriteCompressedInteger(SizeParamIndex)
                     bb.WriteCompressedInteger(SizeConst!!)
                 } else if (SizeParamIndex != nil) {
-                    bb.WriteCompressedInteger(SizeParamIndex!!)
+                    bb.WriteCompressedInteger(SizeParamIndex)
                 } else if (SizeConst != nil) {
                     // ParamNum = 0 placeholder so the runtime reads
                     // NumElem from the next compressed-int slot.
@@ -122,7 +122,7 @@ data class MarshalAsMetadata : IEquatable[MarshalAsMetadata] {
                 // upstream.
                 bb.WriteCompressedInteger(SizeConst ?? 0)
                 if (ArraySubType != nil) {
-                    bb.WriteByte(uint8(ArraySubType!!))
+                    bb.WriteByte(uint8(ArraySubType))
                 }
             }
             case UnmanagedType.ByValTStr {
@@ -134,7 +134,7 @@ data class MarshalAsMetadata : IEquatable[MarshalAsMetadata] {
                 // ECMA-335 II.23.4 — NATIVE_TYPE_SAFEARRAY:
                 //   [<VarType>]
                 if (SafeArraySubType != nil) {
-                    bb.WriteCompressedInteger(int32(SafeArraySubType!!))
+                    bb.WriteCompressedInteger(int32(SafeArraySubType))
                 }
             }
             default { }
