@@ -1327,17 +1327,19 @@ internal partial class StatementBinder {
                 rebuilt = copy
             }
             case call is BoundImportedInstanceCallExpression {
-                rebuilt = BoundImportedInstanceCallExpression(
-                    call.Syntax,
-                    captureReceiver(call.Receiver),
-                    call.Method,
-                    call.Type,
-                    CaptureArguments(call.Arguments, captureArgument),
-                    call.ArgumentRefKinds,
-                    call.TypeArgumentSymbols,
-                    call.ConstrainedReceiverTypeParameter,
-                    call.ConstrainedInterfaceType,
-                    call.IsNonVirtualBaseCall
+                rebuilt = call.CopySignatureReturnTypeTo(
+                    BoundImportedInstanceCallExpression(
+                        call.Syntax,
+                        captureReceiver(call.Receiver),
+                        call.Method,
+                        call.Type,
+                        CaptureArguments(call.Arguments, captureArgument),
+                        call.ArgumentRefKinds,
+                        call.TypeArgumentSymbols,
+                        call.ConstrainedReceiverTypeParameter,
+                        call.ConstrainedInterfaceType,
+                        call.IsNonVirtualBaseCall
+                    )
                 )
             }
             case call is BoundBaseClassCallExpression {

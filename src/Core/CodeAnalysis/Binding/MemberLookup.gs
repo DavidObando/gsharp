@@ -6037,6 +6037,24 @@ internal class MemberLookup {
             targetType TypeSymbol,
             closedMethod MethodBase,
             parameterIndex int32
+        ) TypeSymbol -> GetClrMethodParameterTypeSymbol(
+            targetType,
+            closedMethod,
+            parameterIndex,
+            default(ImmutableArray[TypeSymbol?])
+        )
+
+        /// Reads a parameter through its receiver and method type arguments.
+        /// @param targetType The symbolic imported receiver type.
+        /// @param closedMethod The reflected method selected from the erased receiver.
+        /// @param parameterIndex The zero-based parameter index.
+        /// @param methodTypeArguments The method's symbolic type arguments, when supplied.
+        /// @returns The declaration-merged parameter type.
+        internal func GetClrMethodParameterTypeSymbol(
+            targetType TypeSymbol,
+            closedMethod MethodBase,
+            parameterIndex int32,
+            methodTypeArguments ImmutableArray[TypeSymbol?]
         ) TypeSymbol {
             if GetProjectionReceiverImportedType(targetType) is ImportedTypeSymbol imported &&
                 TryGetSymbolicDeclaringContext(
@@ -6046,7 +6064,7 @@ internal class MemberLookup {
                 out var declaringTypeArguments
             ) &&
                 openDefinition != nil {
-                let openMethod MethodBase? = if closedMethod is MethodInfo methodInfo {
+                var openMethod MethodBase? = if closedMethod is MethodInfo methodInfo {
                     TryGetOpenMethodOnDeclaringType(openDefinition, methodInfo)
                 } else {
                     ClrTypeUtilities.FindMetadataDefinition(
@@ -6054,6 +6072,13 @@ internal class MemberLookup {
                         closedMethod,
                         BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static
                     ) as MethodBase
+                }
+                if !methodTypeArguments.IsDefaultOrEmpty &&
+                    openMethod is MethodInfo{
+                    IsGenericMethod: true,
+                    IsGenericMethodDefinition: false
+                } constructedMethod {
+                    openMethod = constructedMethod.GetGenericMethodDefinition()
                 }
                 let openParameters[]?ParameterInfo = openMethod?.GetParameters()
                 if openParameters != nil && uint32(parameterIndex) < uint32(openParameters.Length) {
@@ -6063,47 +6088,24 @@ internal class MemberLookup {
                     // parameter annotates the POINTEE (by-ref contributes no
                     // nullability byte), which is why the flags are merged after
                     // peeling and before re-wrapping.
-                    let openParameter = openParameters[parameterIndex]
-                    let openParameterType = ClrNullability.GetSignatureType(openParameter)
-                    let parameterFlags = ClrNullability.ReadNullableFlags(openParameter, openMethod)
-                    if openParameterType.IsByRef {
-                        let pointeeType = Invariant.Required(
-                            openParameterType.GetElementType(),
-                            "a by-ref parameter type has an element type",
-                            expression: "openParameterType.GetElementType()"
-                        )
-                        let pointee = TupleElementNamesReader.ApplyNames(
-                            NullableFlagsBuilder.MergeDeclarationNullability(
-                                MapOpenClrTypeToSymbolic(pointeeType, openDefinition, declaringTypeArguments),
-                                pointeeType,
-                                parameterFlags
-                            ),
-                            openParameter,
-                            pointeeType
-                        )
-                        return ByRefTypeSymbol.Get(
-                            if ClrNullability.HasOptionalNullDefault(openParameter) {
-                                NullabilityImportRule.ApplyNullDefaultLift(pointee)
-                            } else {
-                                pointee
-                            }
-                        )
-                    }
-                    let mapped = TupleElementNamesReader.ApplyNames(
-                        NullableFlagsBuilder.MergeDeclarationNullability(
-                            MapOpenClrTypeToSymbolic(openParameterType, openDefinition, declaringTypeArguments),
-                            openParameterType,
-                            parameterFlags
-                        ),
-                        openParameter,
-                        openParameterType
+                    return GetClrOpenParameterTypeSymbol(
+                        openParameters[parameterIndex],
+                        openDefinition,
+                        declaringTypeArguments,
+                        openMethod as MethodInfo,
+                        methodTypeArguments
                     )
-                    return if ClrNullability.HasOptionalNullDefault(openParameter) {
-                        NullabilityImportRule.ApplyNullDefaultLift(mapped)
-                    } else {
-                        mapped
-                    }
                 }
+            }
+            if !methodTypeArguments.IsDefault && closedMethod is MethodInfo{IsGenericMethod: true} genericMethod {
+                let openMethod = genericMethod.GetGenericMethodDefinition()
+                return GetClrOpenParameterTypeSymbol(
+                    openMethod.GetParameters()[parameterIndex],
+                    openDefinition: nil,
+                    ImmutableArray[TypeSymbol].Empty,
+                    openMethod,
+                    methodTypeArguments
+                )
             }
             // Issue #3705 (family 2): same omission as GetClrMethodReturnTypeSymbol,
             // compounded — the bare `FromClrType` also failed to peel `ByRef`, so an

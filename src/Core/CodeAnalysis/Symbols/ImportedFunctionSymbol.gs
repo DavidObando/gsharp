@@ -7,6 +7,7 @@ package GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Documentation
 import GSharp.Core.CodeAnalysis.Syntax
+import System.Collections.Immutable
 import System.Reflection
 
 /// Represents an imported function symbol in the language.
@@ -59,6 +60,31 @@ class ImportedFunctionSymbol : Symbol {
     prop Type TypeSymbol {
         get;
     }
+
+    internal prop SignatureReceiverType TypeSymbol? {
+        get;
+        set;
+    }
+
+    internal prop SignatureMethodTypeArguments ImmutableArray[TypeSymbol?] {
+        get;
+        set;
+    }
+
+    internal prop SignatureReceiver TypeSymbol? -> SignatureReceiverType ?? ImportedClass.ConstructedReceiver
+
+    /// Gets a parameter's declared type at this symbol's constructed receiver.
+    /// @param parameterIndex The zero-based metadata parameter index.
+    /// @returns The parameter type, including its declared nullability.
+    internal func GetParameterType(parameterIndex int32) TypeSymbol -> MemberLookup.GetClrMethodParameterTypeSymbol(
+        SignatureReceiver ?? ImportedTypeSymbol.GetWithoutNullability(
+            ImportedClass.ClassType,
+            NullabilityFreeReason.TypeStructure
+        ),
+        Method,
+        parameterIndex,
+        MemberLookup.MergeSymbolicAndClosedMethodTypeArgs(Method, SignatureMethodTypeArguments)
+    )
 
     /// Gets the imported return's managed-reference capability.
     prop ReturnRefKind RefKind -> RefCapabilities.GetReturnRefKind(Method)

@@ -15,6 +15,7 @@ import System.Reflection
 /// originates from a CLR (cref:System.Type).
 class BoundImportedInstanceCallExpression : BoundCallOperationExpression {
     private var calledFunction ImportedFunctionSymbol?
+    private var signatureReturnType TypeSymbol
 
     /// Initializes a new instance of the (cref:BoundImportedInstanceCallExpression) class.
     /// @param syntax The originating syntax.
@@ -59,6 +60,7 @@ class BoundImportedInstanceCallExpression : BoundCallOperationExpression {
     ) : base(syntax) {
         Receiver = receiver
         Method = method
+        signatureReturnType = returnType
         // Issue #3802: a `[return: NotNullIfNotNull(nameof(p))]` post-condition
         // is a fact about THIS call, so it narrows the node's type, never the
         // declared return type read from metadata.
@@ -84,14 +86,18 @@ class BoundImportedInstanceCallExpression : BoundCallOperationExpression {
     /// ```
     override prop Kind BoundNodeKind -> BoundNodeKind.ImportedInstanceCallExpression
 
-    /// Gets the called method as a symbol (ADR-0169, issue #3920). Built on
-    /// demand from (cref:Method) with THIS node's return type, so an
-    /// imported generic method closed over a user-defined type reports the
-    /// constructed type rather than the reflected placeholder (PR #3968
-    /// review).
+    /// Gets the called method with its declared signature.
+    /// Keeps conditional result narrowing on (cref:Type), not on the method symbol.
     override prop CalledFunction Symbol -> (
         if calledFunction == nil {
-            (calledFunction = BoundCallOperationExpression.ImportedCallee(Method, Type))
+            (
+                calledFunction = BoundCallOperationExpression.ImportedCallee(
+                    Method,
+                    signatureReturnType,
+                    ConstrainedInterfaceType ?? Receiver.Type,
+                    TypeArgumentSymbols
+                )
+            )
         } else {
             calledFunction
         }
@@ -103,6 +109,19 @@ class BoundImportedInstanceCallExpression : BoundCallOperationExpression {
     private var _type TypeSymbol
 
     override prop Type TypeSymbol -> _type
+
+    internal prop SignatureReturnType TypeSymbol -> signatureReturnType
+
+    /// Copies the declared return type without changing expression-flow typing.
+    /// @param copy The reconstructed call.
+    /// @returns The call with its original declared return type.
+    internal func CopySignatureReturnTypeTo(
+        copy BoundImportedInstanceCallExpression
+    ) BoundImportedInstanceCallExpression {
+        copy.signatureReturnType = SignatureReturnType
+        copy.calledFunction = nil
+        return copy
+    }
 
     /// Gets the receiver expression.
     prop Receiver BoundExpression {

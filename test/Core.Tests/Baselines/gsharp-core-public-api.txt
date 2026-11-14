@@ -8242,6 +8242,7 @@ type static class GSharp.Core.CodeAnalysis.Symbols.ClrTypeUtilities : System.Obj
   method public static System.Reflection.PropertyInfo[] SafeGetProperties(System.Type type, System.Reflection.BindingFlags flags)
   method public static System.Type GetEnumUnderlyingTypeSafe(System.Type type)
 type static class GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplay : System.Object
+  method public static Boolean RequiresSymbolicSignature(GSharp.Core.CodeAnalysis.Symbols.ImportedFunctionSymbol symbol)
   method public static String ToDisplayString(GSharp.Core.CodeAnalysis.Symbols.Symbol symbol, GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayFormat format, GSharp.Core.CodeAnalysis.Compilation.Compilation compilation = null)
   method public static String ToDisplayString(System.Reflection.MemberInfo member, GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayFormat format)
   method public static String ToDisplayString(System.Type clrType, GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayFormat format)
