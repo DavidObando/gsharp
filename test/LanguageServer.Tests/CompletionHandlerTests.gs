@@ -4,6 +4,7 @@
 
 package GSharp.LanguageServer.Tests
 
+import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.LanguageServer
 import GSharp.LanguageServer.Protocol
 import System
@@ -145,6 +146,75 @@ Console.
         Assert.Contains(items, (i CompletionItem) -> i.Label == "WriteLine" && i.Kind == CompletionItemKind.Method)
         Assert.Contains(items, (i CompletionItem) -> i.Label == "ReadLine" && i.Kind == CompletionItemKind.Method)
         Assert.DoesNotContain(items, (i CompletionItem) -> i.Kind == CompletionItemKind.Keyword)
+    }
+
+    @Theory
+    @InlineData("Item")
+    @InlineData("int32")
+    @InlineData("object")
+    func ComputeCompletions_OnConstructedImportedType_OffersOnlyAccessibleStaticMembers(argument string) {
+        let source = `import System
+import System.Collections.Generic
+class Item { }
+func Use(comparison Comparison[ARG], item ARG) {
+    let comparer = Comparer[ARG].Create(comparison)
+    let order = comparer.Compare(item, item)
+    let length = Array.Empty[ARG]().Length
+    let count = List[ARG]().Count
+}
+`.Replace("ARG", argument, StringComparison.Ordinal)
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = ServerCompilation.Create(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.GetDiagnostics())
+        let token = SemanticLookup.FindTokenAt(content.SyntaxTree, source.IndexOf("Create", StringComparison.Ordinal))
+        Assert.NotNull(token)
+        let method = Assert.IsType[ImportedFunctionSymbol](
+            compilation.GetSemanticModel(content.SyntaxTree).GetSymbolInfo(token!!).Symbol
+        )
+        Assert.True(method.Method.IsPublic)
+        Assert.True(method.Method.IsStatic)
+        Assert.False(method.Method.IsGenericMethod)
+        Assert.Equal(
+            "System.Collections.Generic.Comparer`1",
+            method.Method.DeclaringType!!.GetGenericTypeDefinition().FullName
+        )
+
+        let items = CompletionComputer.ComputeCompletions(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "Create")
+        )
+        let create = Assert.Single(items.Where((i CompletionItem) -> i.Label == "Create"))
+        Assert.Equal(CompletionItemKind.Method, create.Kind)
+        Assert.Contains(items, (i CompletionItem) -> i.Label == "Default" && i.Kind == CompletionItemKind.Property)
+        Assert.DoesNotContain(items, (i CompletionItem) -> i.Label == "Compare" || i.Label == "GetType")
+        Assert.DoesNotContain(items, (i CompletionItem) -> i.Label == ".ctor" || i.Label == "init")
+        Assert.DoesNotContain(items, (i CompletionItem) -> i.Kind == CompletionItemKind.Keyword)
+
+        let instanceItems = CompletionComputer.ComputeCompletions(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "Compare(")
+        )
+        let compare = Assert.Single(instanceItems.Where((i CompletionItem) -> i.Label == "Compare"))
+        Assert.Equal(CompletionItemKind.Method, compare.Kind)
+        Assert.DoesNotContain(instanceItems, (i CompletionItem) -> i.Label == "Create" || i.Label == "Default")
+
+        let arrayItems = CompletionComputer.ComputeCompletions(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "Length")
+        )
+        let length = Assert.Single(arrayItems.Where((i CompletionItem) -> i.Label == "Length"))
+        Assert.Equal(CompletionItemKind.Property, length.Kind)
+        Assert.DoesNotContain(arrayItems, (i CompletionItem) -> i.Label == "Empty")
+
+        let constructedItems = CompletionComputer.ComputeCompletions(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "Count")
+        )
+        let count = Assert.Single(constructedItems.Where((i CompletionItem) -> i.Label == "Count"))
+        Assert.Equal(CompletionItemKind.Property, count.Kind)
+        Assert.DoesNotContain(constructedItems, (i CompletionItem) -> i.Label == ".ctor" || i.Label == "init")
+        Assert.DoesNotContain(constructedItems, (i CompletionItem) -> i.Label == "_items" || i.Label == "_size")
     }
 
     @Fact
