@@ -3,10 +3,14 @@ using System.IO;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Security;
+using System.Runtime.Loader;
+using System.Text.Json;
 using System.Threading;
 using Microsoft.Build.Execution;
 using Microsoft.Build.Framework;
 using Microsoft.Build.Logging;
+using Microsoft.Diagnostics.Tracing;
+using Microsoft.Diagnostics.Tracing.Etlx;
 
 public sealed class WaitingTask : Microsoft.Build.Utilities.Task, ICancelableTask
 {
@@ -64,6 +68,41 @@ public static class Canary
     {
         var root = Path.GetFullPath(args[0]);
         Directory.CreateDirectory(root);
+        if (args.Length > 1 && args[1] == "early-failure")
+        {
+            var source = new NativeEvents();
+            var logger = new BinaryLogger { Parameters = args[2] };
+            logger.Initialize(source);
+            source.Emit(new BuildStartedEventArgs(Secret, null));
+            source.Emit(new BuildErrorEventArgs("", "EARLY_CANARY", Secret, 0, 0, 0, 0, Secret, null, "canary"));
+            source.Emit(new BuildFinishedEventArgs(Secret, null, false));
+            logger.Shutdown();
+            var helperAssembly = Assembly.LoadFrom(args[3]);
+            var taskType = Array.Find(helperAssembly.GetTypes(), type => type.Name == "ProjectionTask");
+            var task = Activator.CreateInstance(taskType);
+            foreach (var pair in new System.Collections.Generic.Dictionary<string, string> {
+                ["Binlog"] = Directory.GetFiles(args[5], "initial-*.binlog")[0],
+                ["InitialTrace"] = Path.Combine(root, "missing-initial"),
+                ["WatcherTrace"] = Path.Combine(root, "missing-watcher"),
+                ["InitialPid"] = "0", ["WatcherPid"] = "0",
+                ["SummaryFile"] = Path.Combine(root, "early-summary.json"),
+                ["ExpectedProject"] = args[4],
+                ["SnapshotFile"] = Path.Combine(root, "early-snapshot.binlog"),
+                ["OwnershipFile"] = Path.Combine(root, "early-ownership.json")
+            })
+                taskType.GetProperty(pair.Key).SetValue(task, pair.Value);
+            return (bool)taskType.GetMethod("Execute").Invoke(task, null) ? 0 : 1;
+        }
+        if (args.Length > 1 && args[1] == "reader-controls")
+        {
+            ReaderControls(root, args[2]);
+            return 0;
+        }
+        if (args.Length > 1 && args[1] == "trace-controls")
+        {
+            TraceControls(root, args[2], args[3], int.Parse(args[4]));
+            return 0;
+        }
         var start = Path.Combine(root, "started");
         var stop = Path.Combine(root, "stopped");
         var project = Path.Combine(root, "Canary.proj");
@@ -110,4 +149,145 @@ public static class Canary
                     typeof(PrivatePayloadException).FullName))) + "\"}");
         return File.Exists(start) ? 0 : 1;
     }
+
+    private static void ReaderControls(string root, string helperPath)
+    {
+        foreach (var finished in new[] { false, true })
+        {
+            var file = Path.Combine(root, finished ? "success26.binlog" : "no-finish26.binlog");
+            var source = new NativeEvents();
+            var logger = new BinaryLogger { Parameters = file + ";ProjectImports=None;OmitInitialInfo" };
+            logger.Initialize(source);
+            source.Emit(new BuildStartedEventArgs(Secret, null));
+            source.Emit(new BuildMessageEventArgs(Secret, null, "canary", MessageImportance.High));
+            if (finished)
+                source.Emit(new BuildFinishedEventArgs(Secret, null, true));
+            logger.Shutdown();
+        }
+        File.WriteAllBytes(Path.Combine(root, "corrupt26.binlog"), Array.Empty<byte>());
+        var helperDirectory = Path.GetDirectoryName(helperPath);
+        AssemblyLoadContext.Default.Resolving += (_, name) =>
+        {
+            var path = Path.Combine(helperDirectory, name.Name + ".dll");
+            return File.Exists(path) ? Assembly.LoadFrom(path) : null;
+        };
+        var assembly = Assembly.LoadFrom(helperPath);
+        var projection = Array.Find(assembly.GetTypes(), type => type.Name == "Projection");
+        var flags = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
+        var replay = projection.GetMethod("ReplayBuild", flags);
+        var write = projection.GetMethod("WriteReader", flags);
+        void Save(string name, object state)
+        {
+            using var stream = File.Create(Path.Combine(root, name + ".json"));
+            using var writer = new Utf8JsonWriter(stream);
+            write.Invoke(null, new[] { writer, state });
+            writer.Flush();
+        }
+        foreach (var name in new[] { "success26", "no-finish26", "corrupt26" })
+            Save(name, replay.Invoke(null, new object[] {
+                Path.Combine(root, name + ".binlog"), new Action<BuildEventArgs>(_ => { })
+            }));
+        Save("projection-throw", replay.Invoke(null, new object[] {
+            Path.Combine(root, "success26.binlog"),
+            new Action<BuildEventArgs>(_ => throw new InvalidOperationException(Secret))
+        }));
+        using var native = BinaryLogReplayEventSource.OpenReader(Path.Combine(root, "success26.binlog"));
+        using var switched = new SwitchableReadStream(native.BaseStream);
+        using var binary = new BinaryReader(switched);
+        using var opened = BinaryLogReplayEventSource.OpenBuildEventsReader(binary, false);
+        switched.Fail = true;
+        var state = Activator.CreateInstance(
+            Array.Find(assembly.GetTypes(), type => type.Name == "ReaderState"), true);
+        Save("native-read-throw", projection.GetMethod("ReplayOpened", flags).Invoke(null, new object[] {
+            opened, new Action<BuildEventArgs>(_ => { }), state
+        }));
+    }
+
+    private static void TraceControls(string root, string helperPath, string input, int pid)
+    {
+        var assembly = Assembly.LoadFrom(helperPath);
+        var projection = Array.Find(assembly.GetTypes(), type => type.Name == "Projection");
+        var stateType = Array.Find(assembly.GetTypes(), type => type.Name == "ReaderState");
+        var processType = Array.Find(assembly.GetTypes(), type => type.Name == "ProcessData");
+        var flags = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
+        void Save(string name, object value, string method)
+        {
+            using var stream = File.Create(Path.Combine(root, name + ".json"));
+            using var writer = new Utf8JsonWriter(stream);
+            projection.GetMethod(method, flags).Invoke(null, new[] { writer, value });
+            writer.Flush();
+        }
+        var valid = Path.Combine(root, "valid.etlx");
+        TraceLog.CreateFromEventPipeDataFile(input, valid,
+            new TraceLogOptions { KeepAllEvents = true, ConversionLog = TextWriter.Null });
+        var invalid = Path.Combine(root, "invalid.etlx");
+        File.WriteAllBytes(invalid, Array.Empty<byte>());
+        var failedOpen = projection.GetMethod("ReadConverted", flags).Invoke(null, new object[] {
+            invalid, pid, 1, 0L, Activator.CreateInstance(processType, true), 1000000
+        });
+        Save("trace-open", failedOpen, "WriteProcess");
+        void Scan(string name, TraceLog trace, Action<TraceEvent> observer)
+        {
+            var state = Activator.CreateInstance(stateType, true);
+            try
+            {
+                projection.GetMethod("ScanTrace", flags).Invoke(null, new object[] { trace, observer, state });
+            }
+            catch (TargetInvocationException error)
+            {
+                projection.GetMethod("TraceFailure", flags).Invoke(null, new[] { state, error.InnerException });
+            }
+            Save(name, state, "WriteReader");
+        }
+        var disposed = new TraceLog(valid);
+        disposed.Dispose();
+        Scan("trace-iteration", disposed, _ => { });
+        using (var trace = new TraceLog(valid))
+            Scan("trace-projection", trace, _ => throw new InvalidOperationException(Secret));
+        var truncated = Path.Combine(root, "truncated.etlx");
+        TraceLog.CreateFromEventPipeDataFile(input, truncated,
+            new TraceLogOptions { KeepAllEvents = true, MaxEventCount = 1, ConversionLog = TextWriter.Null });
+        Save("trace-truncated", projection.GetMethod("ReadConverted", flags).Invoke(null, new object[] {
+            truncated, pid, 1, 0L, Activator.CreateInstance(processType, true), 1
+        }), "WriteProcess");
+    }
+}
+
+public sealed class NativeEvents : IEventSource
+{
+    public event AnyEventHandler AnyEventRaised;
+    public event BuildStartedEventHandler BuildStarted;
+    public event BuildFinishedEventHandler BuildFinished;
+    public event CustomBuildEventHandler CustomEventRaised;
+    public event BuildErrorEventHandler ErrorRaised;
+    public event BuildMessageEventHandler MessageRaised;
+    public event BuildStatusEventHandler StatusEventRaised;
+    public event BuildWarningEventHandler WarningRaised;
+    public event ProjectStartedEventHandler ProjectStarted;
+    public event ProjectFinishedEventHandler ProjectFinished;
+    public event TargetStartedEventHandler TargetStarted;
+    public event TargetFinishedEventHandler TargetFinished;
+    public event TaskStartedEventHandler TaskStarted;
+    public event TaskFinishedEventHandler TaskFinished;
+    public void Emit(BuildEventArgs value) => AnyEventRaised?.Invoke(this, value);
+}
+
+public sealed class SwitchableReadStream : Stream
+{
+    private readonly Stream inner;
+    public bool Fail;
+    public SwitchableReadStream(Stream inner) => this.inner = inner;
+    public override int Read(byte[] buffer, int offset, int count) =>
+        Fail ? throw new IOException(Canary.Secret) : inner.Read(buffer, offset, count);
+    public override int Read(Span<byte> buffer) =>
+        Fail ? throw new IOException(Canary.Secret) : inner.Read(buffer);
+    public override bool CanRead => true;
+    public override bool CanWrite => false;
+    public override bool CanSeek => false;
+    public override long Length => throw new NotSupportedException();
+    public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+    public override void Flush() { }
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+    public override void SetLength(long value) => throw new NotSupportedException();
+    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
 }

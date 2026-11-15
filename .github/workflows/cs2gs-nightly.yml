@@ -12,13 +12,18 @@ on:
   workflow_dispatch:
     inputs:
       issue_5976_first_cause:
-        description: 'Private one-execution startup capture; diagnostic branch only'
+        description: 'Private initial-native-binlog-only observation; diagnostic branch only'
         type: boolean
         default: false
       expected_sha:
         description: 'Parent-reviewed diagnostic commit SHA'
         type: string
         default: ''
+      observation_scope:
+        description: 'Explicit reviewed partial observation scope'
+        type: choice
+        options: [UNSPECIFIED, BINLOG_ONLY]
+        default: UNSPECIFIED
 
 permissions:
   contents: write
@@ -139,6 +144,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' &&
       inputs.issue_5976_first_cause &&
+      inputs.observation_scope == 'BINLOG_ONLY' &&
       github.ref == 'refs/heads/oats/5976-first-submission-cause' &&
       github.sha == inputs.expected_sha &&
       github.run_attempt == 1
@@ -160,6 +166,7 @@ jobs:
           OBS_ATTEMPT: ${{ github.run_attempt }}
           OBS_ENABLED: ${{ inputs.issue_5976_first_cause }}
           OBS_EXPECTED: ${{ inputs.expected_sha }}
+          OBS_SCOPE: ${{ inputs.observation_scope }}
         run: python3 build/hot-reload-first-cause.py guard
       - name: Setup .NET SDK (main)
         uses: actions/setup-dotnet@v5
@@ -178,7 +185,7 @@ jobs:
       - name: Run original end-to-end suite with private capture
         id: e2e5976
         env:
-          GSHARP_HOT_RELOAD_FIRST_CAUSE: '1'
+          GSHARP_HOT_RELOAD_FIRST_CAUSE: BINLOG_ONLY
         run: |
           test ! -e out/artifacts/issue-5976-first-cause/capture
           printf 'capture_fresh=true\n' >> "$GITHUB_OUTPUT"
@@ -206,7 +213,7 @@ jobs:
         if: always() && steps.validate5976.outcome == 'success'
         uses: actions/upload-artifact@v5
         with:
-          name: issue-5976-first-cause-${{ github.run_id }}-${{ github.run_attempt }}
+          name: issue-5976-initial-native-binlog-${{ github.run_id }}-${{ github.run_attempt }}
           retention-days: 1
           if-no-files-found: error
           path: |

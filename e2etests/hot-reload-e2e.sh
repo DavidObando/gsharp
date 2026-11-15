@@ -16,9 +16,6 @@ WATCH_PID=""
 FIRST_CAUSE_RAW=""
 
 cleanup() {
-    if [[ -n "$FIRST_CAUSE_RAW" ]]; then
-        python3 build/hot-reload-first-cause.py identify-watch "$WATCH_PID" >"$FIRST_CAUSE_RAW/private-identify.log" 2>&1 || true
-    fi
     if [[ -n "$WATCH_PID" ]] && kill -0 "$WATCH_PID" 2>/dev/null; then
         kill "$WATCH_PID"
         wait "$WATCH_PID" 2>/dev/null || true
@@ -178,19 +175,13 @@ dotnet restore "$APP" --nologo
 echo "==> Starting dotnet watch"
 : > "$LOG"
 WATCH_COMMAND=(dotnet watch --project "$APP" --no-restore --non-interactive --verbose)
-if [[ "${GSHARP_HOT_RELOAD_FIRST_CAUSE:-}" == "1" ]]; then
+if [[ "${GSHARP_HOT_RELOAD_FIRST_CAUSE:-}" == "BINLOG_ONLY" ]]; then
     FIRST_CAUSE_RAW="$ROOT/out/artifacts/issue-5976-first-cause/capture/raw"
-    if python3 build/hot-reload-first-cause.py prepare; then
+    if FIRST_CAUSE_BINLOG_OPTION=$(python3 build/hot-reload-first-cause.py prepare); then
         exec >"$FIRST_CAUSE_RAW/private-harness.log" 2>&1
         WATCH_COMMAND=(
-            env
-            DOTNET_EnableEventPipe=1
-            "DOTNET_EventPipeOutputPath=$FIRST_CAUSE_RAW/process-{pid}.nettrace"
-            DOTNET_EventPipeConfig=Microsoft-Build:1:4,Microsoft-Windows-DotNETRuntime:8000:4
-            DOTNET_EventPipeCircularMB=8
-            DOTNET_EventPipeOutputStreaming=0
             "${WATCH_COMMAND[@]}"
-            "-bl:$FIRST_CAUSE_RAW/initial-{}.binlog;ProjectImports=None;OmitInitialInfo"
+            "$FIRST_CAUSE_BINLOG_OPTION"
         )
     else
         FIRST_CAUSE_RAW=""
