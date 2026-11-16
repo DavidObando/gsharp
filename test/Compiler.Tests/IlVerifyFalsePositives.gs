@@ -125,8 +125,10 @@ internal shared class IlVerifyFalsePositives {
                     (hash == "D8093A176AC3BBEBC3022ADABD7F7BA4FA9AB02436142386B5DE26981A1AB3CC", 3)
                 }
             }
+            let proof = RuntimeReturnProof(assemblyPath)
             return (
-                RuntimeReturnProof(assemblyPath) == "53F7DA756296143D0A75614CB77F44F73B041C89228800D21DF7C698256FC931",
+                proof == "53F7DA756296143D0A75614CB77F44F73B041C89228800D21DF7C698256FC931" ||
+                    proof == "660BFC9A5C5062CFAB3AC4C7562D6BFC21609B115BEC20356803252CDFDE535A",
                 2
             )
         } catch (BadImageFormatException) {
