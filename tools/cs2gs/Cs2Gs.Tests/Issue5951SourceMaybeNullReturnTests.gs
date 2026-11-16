@@ -17,6 +17,50 @@ import Xunit
 
 class Issue5951SourceMaybeNullReturnTests {
     @Theory
+    @InlineData("Task<int> value = Task.FromResult(1); ref Task<int> alias = ref value; alias = Empty();", "value")
+    @InlineData(
+        "var value = (Task.FromResult(1), 0); ref (Task<int>, int) alias = ref value; alias.Item1 = Empty();",
+        "value.Item1"
+    )
+    @InlineData(
+        "var value = (Task.FromResult(1), 0); ref Task<int> alias = ref value.Item1; alias = Empty();",
+        "value.Item1"
+    )
+    @InlineData(
+        "Task<int> value = Task.FromResult(1); ref Task<int> alias = ref Slot(ref value); alias = Empty();",
+        "value"
+    )
+    @InlineData(
+        "Task<int> value = Task.FromResult(1), other = Task.FromResult(2); ref Task<int> alias = ref (calls == 0 ? ref value : ref other); alias = Empty();",
+        "value"
+    )
+    func RefAliasWrites_PreserveNullableTaskStorage(write string, read string) {
+        let source = `
+#nullable disable
+using System;
+using System.Diagnostics.CodeAnalysis;
+using System.Threading.Tasks;
+public static class P
+{
+    static int calls;
+    [return: MaybeNull] static Task<int> Empty() { calls++; return null; }
+    static ref Task<int> Slot(ref Task<int> value) => ref value;
+    static Task<int> Read()
+    {
+        ` + write + `
+        return ` + read + `;
+    }
+    public static void Main() { Console.WriteLine(Read() == null); Console.WriteLine(calls); }
+}`
+        LiteralConstructionRuntimeParity.AssertMatches(
+            source,
+            verifyIL: true,
+            nullableContextOptions: NullableContextOptions.Disable,
+            expectedOutput: string.Join(Environment.NewLine, []string{"True", "1", ""})
+        )
+    }
+
+    @Theory
     @InlineData(false)
     @InlineData(true)
     func TransitiveSourceOwners_IsolateReturnContractCatalogs(throughInterface bool) {

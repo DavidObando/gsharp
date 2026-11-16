@@ -1540,8 +1540,23 @@ internal shared class ObliviousNullabilityAnalyzer {
             for root in TranslationContext.GetEffectiveSyntaxRoots(owner) {
                 for candidate in TranslationContext.GetEffectiveNodes(root, owner) {
                     let syntax = TranslationContext.GetEffectiveDeclaration(candidate, owner, out var model)
+                    if syntax is RefExpressionSyntax reference && RefStorageDestination(reference, model) is {} target {
+                        CollectRefValueContractEdges(target, reference.Expression, model, tupleEdges)
+                    }
                     for (parameter, value) in EnumerateArgumentValueFlows(syntax, model, includeGuarded: true) {
-                        AddValueContractFlows(owner, parameter, value, model, graph, tupleEdges, isCallBoundary: true)
+                        if parameter.RefKind == RefKind.Out {
+                            CollectRefValueContractEdges(parameter, value, model, tupleEdges)
+                        } else {
+                            AddValueContractFlows(
+                                owner,
+                                parameter,
+                                value,
+                                model,
+                                graph,
+                                tupleEdges,
+                                isCallBoundary: true
+                            )
+                        }
                     }
                     for (receiver, parameter) in EnumerateRefOutputFlows(syntax, model) {
                         if GetValueContractNode(owner, receiver, graph) is {} receiverNode {
@@ -1554,6 +1569,16 @@ internal shared class ObliviousNullabilityAnalyzer {
                         DelegateDeclarationSyntax
                     let propertyDeclaration = syntax is PropertyDeclarationSyntax or IndexerDeclarationSyntax
                     let assignment = syntax as AssignmentExpressionSyntax
+                    if assignment != nil && assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
+                        TryResolveTupleElementSource(assignment.Left, model, out var tupleTarget) &&
+                        GetValueContractNode(
+                        owner,
+                        tupleTarget.ContractSymbol,
+                        graph,
+                        tupleTarget.ContractPath
+                    ) is {} tupleStorage {
+                        AddValueContractFlow(tupleStorage, assignment.Right, model)
+                    }
                     if assignment != nil && assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
                         assignment.Left is TupleExpressionSyntax or
                         DeclarationExpressionSyntax {
@@ -1771,6 +1796,33 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
         } while changed
         return graph
+    }
+
+    private func CollectRefValueContractEdges(
+        target ISymbol,
+        expression ExpressionSyntax,
+        model SemanticModel,
+        tupleEdges List[(Target TupleElementKey, Source TupleElementKey)]
+    ) {
+        let tupleScalarEdges = List[(Target TupleElementKey, Source ISymbol)]()
+        let scalarTupleEdges = List[(Target ISymbol, Source TupleElementKey)]()
+        CollectRefTupleStorage(
+            target,
+            expression,
+            model,
+            HashSet[TupleElementKey](TupleContractKeyComparer.Instance),
+            tupleEdges,
+            tupleEdges,
+            tupleScalarEdges,
+            scalarTupleEdges,
+            position: ScalarFlowPosition.Value
+        )
+        for (tuple, scalar) in tupleScalarEdges {
+            tupleEdges.Add((tuple, TupleElementKey(scalar, "")))
+        }
+        for (scalar, tuple) in scalarTupleEdges {
+            tupleEdges.Add((TupleElementKey(scalar, ""), tuple))
+        }
     }
 
     private func AddValueContractFlows(
@@ -9035,7 +9087,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         tupleContractEdges List[(Target TupleElementKey, Source TupleElementKey)],
         tupleEdges List[(Target TupleElementKey, Source TupleElementKey)],
         tupleScalarEdges List[(Target TupleElementKey, Source ISymbol)],
-        scalarTupleEdges List[(Target ISymbol, Source TupleElementKey)]
+        scalarTupleEdges List[(Target ISymbol, Source TupleElementKey)],
+        position ScalarFlowPosition = ScalarFlowPosition.AwaitedResult
     ) {
         if target == nil {
             return
@@ -9050,7 +9103,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                 tupleContractEdges,
                 tupleEdges,
                 tupleScalarEdges,
-                scalarTupleEdges
+                scalarTupleEdges,
+                position
             )
             return
         }
@@ -9063,7 +9117,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                 tupleContractEdges,
                 tupleEdges,
                 tupleScalarEdges,
-                scalarTupleEdges
+                scalarTupleEdges,
+                position
             )
             CollectRefTupleStorage(
                 target,
@@ -9073,11 +9128,16 @@ internal shared class ObliviousNullabilityAnalyzer {
                 tupleContractEdges,
                 tupleEdges,
                 tupleScalarEdges,
-                scalarTupleEdges
+                scalarTupleEdges,
+                position
             )
             return
         }
-        let targetType = SymbolValueType(target)
+        let targetType = if position == ScalarFlowPosition.Value {
+            SymbolDeclaredType(target)
+        } else {
+            SymbolValueType(target)
+        }
         // Out writes caller storage without freezing the caller's declaration.
         let isOutput = target is IParameterSymbol{RefKind: RefKind.Out}
         let sources = List[(Symbol ISymbol?, Type ITypeSymbol?, Path string)]()
@@ -9101,7 +9161,12 @@ internal shared class ObliviousNullabilityAnalyzer {
         if sources.Count == 0 {
             if !isOutput && targetType?.IsReferenceType == true {
                 for scalar in ResolveSources(storage, model) {
-                    if SymbolValueType(scalar)?.IsReferenceType != true {
+                    let sourceType = if position == ScalarFlowPosition.Value {
+                        SymbolDeclaredType(scalar)
+                    } else {
+                        SymbolValueType(scalar)
+                    }
+                    if sourceType?.IsReferenceType != true {
                         continue
                     }
                     if IsCrossMemberSubstitutablePosition(target, string.Empty, scalar) ||

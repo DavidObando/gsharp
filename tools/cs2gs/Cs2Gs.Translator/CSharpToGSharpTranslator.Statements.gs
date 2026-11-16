@@ -7984,7 +7984,7 @@ partial class CSharpToGSharpTranslator {
         // Expression nullability is absent when warnings are disabled, even
         // when the declared indexer or array element explicitly permits null.
         private func GetAssignmentTargetType(left ExpressionSyntax, target ISymbol?) ITypeSymbol? {
-            return switch target {
+            let type = switch target {
                 case local is ILocalSymbol: local.Type
                 case parameter is IParameterSymbol: parameter.Type
                 case field is IFieldSymbol: field.Type
@@ -7995,6 +7995,16 @@ partial class CSharpToGSharpTranslator {
                     .GetTypeInfo(element.Expression)
                     .Type is IArrayTypeSymbol array: array.ElementType
                 default: this.context.GetTypeInfo(left).Type
+            }
+            return if type?.IsReferenceType == true && ObliviousNullabilityAnalyzer.IsTupleElementTainted(
+                this.context.Compilation,
+                left,
+                this.context.SemanticModel,
+                this.context.SiblingCompilations
+            ) {
+                type.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
+            } else {
+                type
             }
         }
 

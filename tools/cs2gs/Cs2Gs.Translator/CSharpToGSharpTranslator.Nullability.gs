@@ -3041,7 +3041,7 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func RefStoragePositionType(symbol ISymbol, position int32) ITypeSymbol? {
-            var type = ObliviousNullabilityAnalyzer.SymbolValueType(symbol)
+            var type = ObliviousNullabilityAnalyzer.SymbolDeclaredType(symbol)
             for var depth = 0; depth < position; depth++ {
                 type = (type as IArrayTypeSymbol)?.ElementType
             }
