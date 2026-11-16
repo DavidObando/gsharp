@@ -2616,14 +2616,9 @@ internal class MemberLookup {
         /// Returns `null` when no symbolic substitution applies, so
         /// callers keep their existing return-type derivation.
         ///
-        /// ADR-0193 Phase 2 (GSA0007): this member and
-        /// (cref:ResolveByRefParameterPointeeFromSymbolicTypeArgs) return a
-        /// projected signature position with no declaration-nullability merge, so
-        /// a concrete oblivious container returned (or `out`-bound) through a
-        /// symbolically inferred generic call loses its `!`. Both reach the
-        /// door only through (cref:MapOpenSignatureWithoutDeclarationMerge),
-        /// the one suppressed member, so the gap stays one call wide.
-        /// Managed-reference and async-container returns use the canonical merged reader to retain their nullable storage contracts.
+        /// The unmerged projection only decides whether a value return needs symbolic retention.
+        /// Returned signatures use the canonical merged reader to preserve declaration nullability.
+        /// The remaining parameter and delegate projection gap stays tracked by ADR-0193.
         /// @param closed The closed generic method selected by overload resolution.
         /// @param symbolicMethodTypeArgs Per-MVar symbolic type arguments; entries may be `null`.
         /// @param receiverType The receiver's static type symbol (for type-level Var substitution); may be
@@ -2712,7 +2707,7 @@ internal class MemberLookup {
             // fallback reads the closed `string` and would drop the `!`.
             return if TypeSymbol.RequiresSymbolicProjection(mapped) || TypeSymbol.ContainsTupleType(mapped) ||
                 TypeSymbol.ContainsSourceArrayShape(mapped) || mapped is PlatformTypeSymbol {
-                mapped
+                GetClrOpenMethodReturnTypeSymbol(openMethod, receiverOpenDef, receiverTypeArgs, symbolicMethodTypeArgs)
             } else {
                 default(TypeSymbol?)
             }
@@ -2789,9 +2784,9 @@ internal class MemberLookup {
         // `[NullabilityFunnel]` and deletes the pragma. Every reference to it is
         // pinned by Adr0193SymbolicProjectionGapCallersTests.
         /// ADR-0193 Phase 2: the known symbolic-projection gap, in one place.
-        /// (cref:ResolveCallReturnTypeFromSymbolicTypeArgs) and
-        /// (cref:ResolveByRefParameterPointeeFromSymbolicTypeArgs) project
-        /// through here, and so do the symbolic lambda- and delegate-target projections (the binder's
+        /// (cref:ResolveCallReturnTypeFromSymbolicTypeArgs) uses this only to decide symbolic retention.
+        /// Its returned signatures use the canonical merged reader.
+        /// (cref:ResolveByRefParameterPointeeFromSymbolicTypeArgs) and the symbolic lambda- and delegate-target projections (the binder's
         /// `TryBuildSymbolicDelegateTarget*` and deferred-lambda paths)
         /// project a delegate-typed signature position through symbolic type
         /// arguments and read the literal's target shape off the result. They
@@ -2801,7 +2796,7 @@ internal class MemberLookup {
         /// `!` or `?` onto the projected delegate, and every one of those
         /// consumers tests the result for (cref:ImportedTypeSymbol) without
         /// peeling it: exactly the blocker that keeps
-        /// (cref:ResolveCallReturnTypeFromSymbolicTypeArgs) unmerged.
+        /// parameter and delegate projections unmerged.
         /// The params-array element projection over symbolic method type
         /// arguments (`OverloadResolver.ExpandParamsArguments`) shares the
         /// same blocker. Routing them here, rather than calling the door from

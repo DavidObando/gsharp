@@ -42,12 +42,15 @@ shared class P {
     func NestedTupleContracts_PreserveAliasesNamesAndSingleEvaluation(imported bool) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let contract = fixture.CompileCSharp(`using System.Threading.Tasks;
+using System.Collections.Generic;
 namespace Contracts6039;
 public static class Contract {
     public static ref Task<T>? Slot<T>(ref Task<T>? value) => ref value;
     public static ref readonly Task<T>? View<T>(ref Task<T>? value) => ref value;
     public static void Set<T>(out Task<T>? value, Task<T>? next) { value = next; }
     public static Task<T>? Identity<T>(Task<T>? value) => value;
+    public static List<T>? Missing<T>() => null;
+    public static void Clear<T>(out List<T>? value) { value = null; }
 }`, "Contract6039")
         let owner = if imported {
             "Contract"
@@ -56,6 +59,7 @@ public static class Contract {
         }
         let dll = fixture.Compile(`package Source6039
 import System
+import System.Collections.Generic
 import System.Threading.Tasks
 import Contracts6039
 shared class P {
@@ -68,6 +72,7 @@ shared class P {
     func View[T](ref value Task[T]?) ref readonly Task[T]? { return ref value }
     func Set[T](out value Task[T]?, next Task[T]?) { value = next }
     func Identity[T](value Task[T]?) Task[T]? { return value }
+    func Clear[T](out value List[T]?) { value = nil }
     func Main() {
         var direct Task[(string, int32)]? = nil
         var ref same Task[(string, int32)]? = OWNER.Slot(&direct)
@@ -95,10 +100,14 @@ shared class P {
         Console.WriteLine(direct!!.Result.Item2)
         alias = nil
         Console.WriteLine(view == nil)
+        OWNER.Clear[(string, int32)](out var cleared)
+        Console.WriteLine(cleared == nil)
     }
 }`.Replace("OWNER", owner), "Source6039", executable: true, "/r:" + contract)
         Assert.Equal(
-            Encoding.UTF8.GetBytes("changed\n42\n3\n1\nTrue\n7\nnamed\n42\nTrue\n".Replace("\n", Environment.NewLine)),
+            Encoding.UTF8.GetBytes(
+                "changed\n42\n3\n1\nTrue\n7\nnamed\n42\nTrue\nTrue\n".Replace("\n", Environment.NewLine)
+            ),
             fixture.RunBytes(dll)
         )
         let consumer = fixture.CompileCSharp(`using System.Threading.Tasks;
@@ -144,6 +153,28 @@ shared class P {
         Assert.True(
             diagnostics.Contains("Reject6039.gs(8,46,8,$end): error GS0155", StringComparison.Ordinal),
             diagnostics
+        )
+        let (containerCode, containerDiagnostics) = fixture.TryCompile(`package RejectContainer6039
+import System.Collections.Generic
+import Contracts6039
+shared class P {
+    func Missing[T]() List[T]? -> nil
+    func Main() {
+        let required List[(string, int32)] = OWNER.Missing[(string, int32)]()
+    }
+}`.Replace("OWNER", owner), "RejectContainer6039", executable: true, "/r:" + contract)
+        Assert.NotEqual(0, containerCode)
+        let containerEnd = if imported {
+            81
+        } else {
+            74
+        }
+        Assert.True(
+            containerDiagnostics.Contains(
+                "RejectContainer6039.gs(7,46,7,$containerEnd): error GS0155",
+                StringComparison.Ordinal
+            ),
+            containerDiagnostics
         )
     }
 }
