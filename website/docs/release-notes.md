@@ -16,6 +16,7 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- **Retain erased-array writes and nested anonymous storage contracts** (#5326). Treat unrecoverable `System.Array` elements as unknown writes. Preserve disjoint element proofs before argument conversion erases them. Reuse anonymous constructor contracts for member reads and project native managed-reference and slice elements recursively. Validate stable local results before publishing binder and slice-resolution outputs.
 - **Keep anonymous evidence and metadata fallback isolated in cs2gs** (#5326). Partition merge results by their compilation and catalog/model analysis domain. Retain original untrusted references when snapshot metadata is invalid, so default-reference loads report Roslyn diagnostics without poisoning later loads.
 - **Retain scoped anonymous input spellings in cs2gs** (#5326). Include recursively rendered aliases and qualifiers in merge-cache input identity. Preserve structural nullability contracts, canonical output deduplication, and evidence grouping.
 - **Invalidate external descendant facts at every explicit callee in G#** (#5326). Root replacement now drops readonly member narrowings. Generic constructors and event accessors enter the shared call-effect inventory. Canonicalize equivalent native and qualified managed-reference and slice identities in anonymous output while retaining scope-correct incoming contracts.

@@ -28,8 +28,15 @@ open class Adr0213LoopEntryTests {
     @MemberData("Rows")
     func EveryRow_GivesItsDiagnostics(name string, source string, expectedErrors string) {
         // Precision controls reference the framework. Host-effect regressions below use actual host resolvers.
+        let runtimeDirectory = Path.GetDirectoryName(typeof(object).Assembly.Location)!!
         let references = ReferenceResolver.ResolveDriverReferencePaths(
-            Directory.GetFiles(Path.GetDirectoryName(typeof(object).Assembly.Location) ?? ".", "*.dll")
+            ReferenceResolver.HostTrustedPlatformAssemblyPaths().Where(
+                (path string) -> string.Equals(
+                    Path.GetDirectoryName(path),
+                    runtimeDirectory,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
         )
         let result = EmittedOracle.Evaluate(
             []string{source},

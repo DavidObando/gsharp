@@ -6014,7 +6014,15 @@ internal partial class StatementBinder {
     private func ExtractBoundArgumentTypes(arguments ImmutableArray[BoundExpression]) List[TypeSymbol?] {
         let result = List[TypeSymbol?](arguments.Length)
         for arg in arguments {
-            result.Add(arg.Type)
+            var value = arg
+            while value is BoundConversionExpression conversion &&
+                (StripAllNullability(value.Type) ?? value.Type)
+                .ClrType
+                ?.FullName == "System.Array" &&
+                TryGetMutableBufferElementType(conversion.Expression.Type) != nil {
+                value = conversion.Expression
+            }
+            result.Add(value.Type)
         }
 
         return result
@@ -7821,44 +7829,27 @@ internal partial class StatementBinder {
         // 4. Imported methods writing into an Array / Span / Memory / ArraySegment argument (e.g. CopyTo, Array.Clear):
         if !IsPureViewOrQueryMethodOnArrayOrSpan(declFullName, methodName) {
             let parameters = method.GetParameters()
-            if argumentTypes != nil {
-                let count = Math.Min(argumentTypes.Count, parameters.Length)
-                for var i = 0; i < count; i++ {
-                    if ClrOverloadResolution.IsParamsArrayParameter(parameters[i]) {
-                        continue
-                    }
-                    if argumentTypes[i] is {} argType {
-                        if TryGetMutableBufferElementType(argType) is {} elemType {
-                            summary.AddElementType(SubstituteImportedEffectElement(elemType, typeArguments))
-                        }
-                    } else {
-                        let projType = if receiverType != nil {
-                            MemberLookup.GetClrMethodParameterTypeSymbol(receiverType, method, i)
-                        } else {
-                            ClrNullability.GetParameterTypeSymbol(parameters[i])
-                        }
-                        if TryGetMutableBufferElementType(projType) is {} elemType {
-                            summary.AddElementType(SubstituteImportedEffectElement(elemType, typeArguments))
-                        } else if parameters[i].ParameterType.FullName == "System.Array" {
-                            summary.AddElementType(TypeSymbol.Object)
-                        }
-                    }
-                }
+            let count = if argumentTypes != nil {
+                Math.Min(argumentTypes.Count, parameters.Length)
             } else {
-                for var i = 0; i < parameters.Length; i++ {
-                    if ClrOverloadResolution.IsParamsArrayParameter(parameters[i]) {
-                        continue
-                    }
-                    let projType = if receiverType != nil {
+                parameters.Length
+            }
+            for var i = 0; i < count; i++ {
+                if ClrOverloadResolution.IsParamsArrayParameter(parameters[i]) {
+                    continue
+                }
+                let argumentType = argumentTypes?[i] ??
+                    (
+                    if receiverType != nil {
                         MemberLookup.GetClrMethodParameterTypeSymbol(receiverType, method, i)
                     } else {
                         ClrNullability.GetParameterTypeSymbol(parameters[i])
                     }
-                    if TryGetMutableBufferElementType(projType) is {} elemType {
-                        summary.AddElementType(SubstituteImportedEffectElement(elemType, typeArguments))
-                    } else if parameters[i].ParameterType.FullName == "System.Array" {
-                        summary.AddElementType(TypeSymbol.Object)
-                    }
+                )
+                if TryGetMutableBufferElementType(argumentType) is {} elemType {
+                    summary.AddElementType(SubstituteImportedEffectElement(elemType, typeArguments))
+                } else if parameters[i].ParameterType.FullName == "System.Array" {
+                    summary.AddElementType(TypeSymbol.Object)
                 }
             }
         }

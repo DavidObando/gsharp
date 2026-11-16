@@ -5302,22 +5302,26 @@ internal partial class ExpressionBinder {
         if declaredType is StructSymbol structType && TypeMemberModel.TryGetProperty(
             structType,
             selectedProperty.Name,
-            out declaredProperty,
-            out declaredStructOwner
+            out var property,
+            out var owner
         ) &&
-            SamePropertySlot(selectedProperty, declaredProperty, MemberOperation.Write, receiverType) &&
-            object.Equals(declaredProperty.Type, selectedProperty.Type) {
+            SamePropertySlot(selectedProperty, property, MemberOperation.Write, receiverType) &&
+            object
+            .Equals(property.Type, selectedProperty.Type) {
+            declaredProperty = property
+            declaredStructOwner = owner
             declaredInterfaceOwner = nil
             return true
         }
         if declaredType is InterfaceSymbol interfaceType && TypeMemberModel.TryGetPropertyWithOwner(
             interfaceType,
             selectedProperty.Name,
-            out declaredProperty,
+            out var interfaceProperty,
             out var declaredOwner
         ) &&
             declaredOwner is InterfaceSymbol interfaceOwner &&
-            SamePropertySlot(selectedProperty, declaredProperty, MemberOperation.Write, receiverType, interfaceOwner) {
+            SamePropertySlot(selectedProperty, interfaceProperty, MemberOperation.Write, receiverType, interfaceOwner) {
+            declaredProperty = interfaceProperty
             declaredStructOwner = nil
             declaredInterfaceOwner = interfaceOwner
             return true

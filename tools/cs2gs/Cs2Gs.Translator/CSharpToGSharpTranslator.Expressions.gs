@@ -1074,64 +1074,11 @@ partial class CSharpToGSharpTranslator {
                     TranslationSeverity.Info
                 )
             )
-            let anonymousType INamedTypeSymbol? = this.context.GetTypeInfo(anonymous).Type as INamedTypeSymbol
-            let anonymousProperties = anonymousType
-                ?.GetMembers()
-                .OfType[IPropertySymbol]()
-                .ToList() ??
-                List[IPropertySymbol]()
-            var mappedPropertyTypes = anonymousProperties.Select(
-                (property IPropertySymbol, index int32) -> this.typeMapper.Map(
-                    if index < anonymous.Initializers.Count {
-                        this.GetManagedReferenceArrayProjectedExpressionType(
-                            anonymous.Initializers[index].Expression
-                        ) ??
-                            property.Type
-                    } else {
-                        property.Type
-                    },
-                    this.context,
-                    anonymous.GetLocation()
-                )!!
+            let shape = this.GetAnonymousDataClassShape(anonymous)
+            let mappedPropertyTypes = shape.PropertyTypes!!.ToList()
+            let nullablePropertyFlags = mappedPropertyTypes.Select(
+                (propertyType GTypeReference) -> propertyType.IsNullable
             )
-                .ToList()
-            var nullablePropertyFlags = mappedPropertyTypes.Select(
-                (propertyType GTypeReference, index int32) -> propertyType.IsNullable ||
-                    (
-                    index < anonymous.Initializers.Count && this.AnonymousInitializerAcceptsNil(
-                        anonymous.Initializers[index].Expression
-                    )
-                )
-            )
-                .ToList()
-            mappedPropertyTypes = mappedPropertyTypes.Select(
-                (propertyType GTypeReference, index int32) -> if nullablePropertyFlags[index] {
-                    MakeNullable(propertyType)!!
-                } else {
-                    propertyType
-                }
-            )
-                .ToList()
-            let shape(
-                Type GTypeReference,
-                Properties IReadOnlyList[IPropertySymbol],
-                PropertyTypes IReadOnlyList[GTypeReference]?
-            ) = if anonymousType != nil {
-                this.typeMapper.GetOrCreateAnonymousDataClassShape(
-                    anonymousType,
-                    this.context,
-                    anonymous.GetLocation(),
-                    mappedPropertyTypes
-                )
-            } else {
-                (
-                    NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType),
-                    Array.Empty[IPropertySymbol](),
-                    Array.Empty[GTypeReference]()
-                )
-            }
-            mappedPropertyTypes = shape.PropertyTypes!!.ToList()
-            nullablePropertyFlags = mappedPropertyTypes.Select((propertyType GTypeReference) -> propertyType.IsNullable)
                 .ToList()
             // Roslyn exposes anonymous properties in constructor order. Drive
             // construction from that same registered order rather than an
@@ -1171,6 +1118,65 @@ partial class CSharpToGSharpTranslator {
                     .ToList()
             }
             return BuildConstruction(shape.Type, arguments)
+        }
+
+        private func GetAnonymousDataClassShape(anonymous AnonymousObjectCreationExpressionSyntax)(
+            Type GTypeReference,
+            Properties IReadOnlyList[IPropertySymbol],
+            PropertyTypes IReadOnlyList[GTypeReference]?
+        ) {
+            let anonymousType INamedTypeSymbol? = this.context.GetTypeInfo(anonymous).Type as INamedTypeSymbol
+            let anonymousProperties = anonymousType
+                ?.GetMembers()
+                .OfType[IPropertySymbol]()
+                .ToList() ??
+                List[IPropertySymbol]()
+            var mappedPropertyTypes = anonymousProperties.Select(
+                (property IPropertySymbol, index int32) -> this.typeMapper.Map(
+                    if index < anonymous.Initializers.Count {
+                        this.GetManagedReferenceArrayProjectedExpressionType(
+                            anonymous.Initializers[index].Expression
+                        ) ??
+                            property.Type
+                    } else {
+                        property.Type
+                    },
+                    this.context,
+                    anonymous.GetLocation()
+                )!!
+            )
+                .ToList()
+            let nullablePropertyFlags = mappedPropertyTypes.Select(
+                (propertyType GTypeReference, index int32) -> propertyType.IsNullable ||
+                    (
+                    index < anonymous.Initializers.Count && this.AnonymousInitializerAcceptsNil(
+                        anonymous.Initializers[index].Expression
+                    )
+                )
+            )
+                .ToList()
+            mappedPropertyTypes = mappedPropertyTypes.Select(
+                (propertyType GTypeReference, index int32) -> if nullablePropertyFlags[index] {
+                    MakeNullable(propertyType)!!
+                } else {
+                    propertyType
+                }
+            )
+                .ToList()
+            return if anonymousType != nil {
+                this.typeMapper.GetOrCreateAnonymousDataClassShape(
+                    anonymousType,
+                    this.context,
+                    anonymous.GetLocation(),
+                    mappedPropertyTypes
+                )
+            } else {
+                (
+                    NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType),
+                    Array.Empty[IPropertySymbol](),
+                    Array.Empty[GTypeReference]()
+                )
+            }
         }
 
         private func AnonymousInitializerAcceptsNil(value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?) bool {
@@ -1901,6 +1907,19 @@ partial class CSharpToGSharpTranslator {
                 anonymousProperty
                 .ContainingType
                 .IsAnonymousType {
+                if this.GetRawProjectedInitializerTerminal(
+                    anonymousMember.Expression
+                ) is AnonymousObjectCreationExpressionSyntax creation {
+                    let shape = this.GetAnonymousDataClassShape(creation)
+                    for var index = 0; index < shape.Properties.Count; index++ {
+                        if shape.Properties[index].Name == anonymousProperty.Name {
+                            return this.ApplyMappedArrayElementShape(
+                                anonymousProperty.Type,
+                                shape.PropertyTypes!![index]
+                            )
+                        }
+                    }
+                }
                 return this.ApplyMappedArrayElementShape(
                     anonymousProperty.Type,
                     this.typeMapper.GetAnonymousPropertyType(

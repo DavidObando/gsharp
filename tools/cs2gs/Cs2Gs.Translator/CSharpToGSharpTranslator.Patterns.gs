@@ -4341,6 +4341,27 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func ApplyMappedArrayElementShape(source ITypeSymbol?, mapped GTypeReference?) ITypeSymbol? {
+            var mapped = mapped
+            if source is INamedTypeSymbol native {
+                let element GTypeReference? = switch mapped {
+                    case managed is ManagedReferenceTypeReference when CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(
+                        native,
+                        this.context.Compilation
+                    ): managed.ElementType
+                    case slice is NativeSliceTypeReference when CSharpTypeMapper.IsRecognizedRuntimeConsumerType(
+                        native,
+                        this.context.Compilation,
+                        "Slice",
+                        "ReadOnlySlice"
+                    ): slice.ElementType
+                    default: default(GTypeReference?)
+                }
+                if element != nil {
+                    mapped = NamedTypeReference(native.Name, []GTypeReference{element}){
+                        IsNullable = mapped!!.IsNullable
+                    }
+                }
+            }
             if source is IArrayTypeSymbol sourceArray && mapped is ArrayTypeReference mappedArray {
                 let element ITypeSymbol? = this.ApplyMappedArrayElementShape(
                     sourceArray.ElementType,

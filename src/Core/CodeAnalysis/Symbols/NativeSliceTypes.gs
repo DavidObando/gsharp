@@ -70,13 +70,14 @@ internal shared class NativeSliceTypes {
             } else {
                 "Gsharp.Values.Slice`1"
             },
-            out type
+            out var resolved
         ) &&
-            IsDefinition(type, out _) &&
-            type
+            IsDefinition(resolved, out _) &&
+            resolved
             .GetMethods().Any((m MethodInfo) -> m.Name == "Subslice" && m.GetParameters().Length == 4) &&
-            type!!
+            resolved
             .GetMethods().Any((m MethodInfo) -> m.Name == "FromArray" && m.GetParameters().Length == 1) {
+            type = resolved
             return true
         }
         type = nil

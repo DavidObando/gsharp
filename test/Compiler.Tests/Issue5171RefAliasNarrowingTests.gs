@@ -28,6 +28,69 @@ import Xunit
 /// IL-verifies, runs and asserts the output.
 open class Issue5171RefAliasNarrowingTests {
     @Theory
+    @InlineData("Array", "Array.Clear(xs)")
+    @InlineData("Array", "Array.Clear(xs, 0, 1)")
+    @InlineData("[]C?", "Array.Clear(xs)")
+    @InlineData("[]C?", "Array.Clear(xs, 0, 1)")
+    @InlineData("[]int32", "Array.Clear(xs)")
+    @InlineData("[]int32", "Array.Clear(xs, 0, 1)")
+    func ImportedArrayWritesRespectErasedAndDisjointElementStorage(bufferType string, call string) {
+        let disjoint = bufferType == "[]int32"
+        let source = `import System
+class C { var Value int32 = 1 }
+func Run(ref a C?, xs ` + bufferType + `) int32 {
+    if a == nil { return 0 }
+    ` + call + `
+    return a.Value
+}
+let items = []C?{C{}}
+` + (
+            if disjoint {
+                "let buffer = []int32{7}\n"
+            } else {
+                ""
+            }
+        ) + "Console.WriteLine(Run(ref items[0], " + (
+            if disjoint {
+                "buffer"
+            } else {
+                "items"
+            }
+        ) + "))\n"
+        let directory = Path.Combine(AppContext.BaseDirectory, "erased-array-effects", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let output = Path.Combine(directory, "ArrayEffects.dll")
+            let (exit, log) = Compile(directory, source, output)
+            if !disjoint {
+                Assert.NotEqual(0, exit)
+                Assert.False(File.Exists(output))
+                Assert.Contains(ExpectedDiagnostic(Path.Combine(directory, "ArrayEffects.gs"), source), log)
+                Assert.Equal(1, Regex.Matches(log, ": error GS").Count)
+                let checkedSource = source.Replace("return a.Value", "if a == nil { return -1 }\n    return a.Value")
+                let (checkedExit, checkedLog) = Compile(directory, checkedSource, output)
+                Assert.True(checkedExit == 0, checkedLog)
+            } else {
+                Assert.True(exit == 0, log)
+            }
+            IlVerifier.Verify(output)
+            let (runExit, stdout) = RunDotnet(output)
+            Assert.Equal(0, runExit)
+            let expected = (
+                if disjoint {
+                    "1"
+                } else {
+                    "-1"
+                }
+            ) +
+                Environment.NewLine
+            Assert.Equal(Encoding.UTF8.GetBytes(expected), Encoding.UTF8.GetBytes(stdout))
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    @Theory
     @InlineData("left + right", "ref")
     @InlineData("-left", "ref")
     @InlineData("left + right", "alias")
