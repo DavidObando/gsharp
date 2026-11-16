@@ -501,6 +501,10 @@ True
             return CompileCSharpCore(source, name, nil, extra)
         }
 
+        func CompileCSharpExecutable(source string, name string) string {
+            return CompileCSharpCore(source, name, nil, OutputKind.ConsoleApplication, []string{})
+        }
+
         func CompileCSharpWithReference(
             source string,
             name string,
@@ -508,7 +512,16 @@ True
             extra ...string
         ) string -> CompileCSharpCore(source, name, reference, extra)
 
-        private func CompileCSharpCore(source string, name string, reference string?, extra ...string) string {
+        private func CompileCSharpCore(source string, name string, reference string?, extra ...string) string ->
+        CompileCSharpCore(source, name, reference, OutputKind.DynamicallyLinkedLibrary, extra)
+
+        private func CompileCSharpCore(
+            source string,
+            name string,
+            reference string?,
+            outputKind OutputKind,
+            extra ...string
+        ) string {
             let baseReferences = BaseCSharpReferences.Value
             let metadataReferences IEnumerable[MetadataReference] = if extra.Length == 0 {
                 baseReferences
@@ -523,10 +536,7 @@ True
                 name,
                 []Microsoft.CodeAnalysis.SyntaxTree{CSharpSyntaxTree.ParseText(source)},
                 metadataReferences,
-                CSharpCompilationOptions(
-                    OutputKind.DynamicallyLinkedLibrary,
-                    nullableContextOptions: NullableContextOptions.Enable
-                )
+                CSharpCompilationOptions(outputKind, nullableContextOptions: NullableContextOptions.Enable)
             )
             let path = Path.Combine(Directory, name + ".dll")
             if reference != nil {

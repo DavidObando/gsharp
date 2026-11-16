@@ -567,7 +567,7 @@ internal shared class KnownAttributes {
             return
         }
         if attributeType is StructSymbol structSym && structSym.DerivesFromSystemAttribute() {
-            if TryReadAttributeUsageFromBound(structSym.Attributes, out var v, out var am) {
+            if TryReadAttributeUsageFromBound((structSym.Definition ?? structSym).Attributes, out var v, out var am) {
                 validOn = v
                 allowMultiple = am
             }

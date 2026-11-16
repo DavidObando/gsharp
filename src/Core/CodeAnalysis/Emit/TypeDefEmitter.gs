@@ -1114,7 +1114,7 @@ internal class TypeDefEmitter {
         // returning `Task[Token?]` exported `Task[Token]`.
         let invokeReturnType = delegateSym.ReturnType ?? TypeSymbol.Void
         let invokeNullability = MethodNullabilityPlan.ForParameters(invokeReturnType, delegateSym.Parameters)
-        let invokeReturnRow = this.AddReturnRow(invokeNullability, invokeReturnType, RefKind.None, nil)
+        let invokeReturnRow = this.AddReturnRow(invokeNullability, invokeReturnType, RefKind.None, delegateSym)
         let invokeParamHandles = ImmutableArray.CreateBuilder[ParameterHandle](delegateSym.Parameters.Length)
         for var i = 0; i < delegateSym.Parameters.Length; i++ {
             let p = delegateSym.Parameters[i]
@@ -1166,7 +1166,7 @@ internal class TypeDefEmitter {
         // @Note-style attributes silently vanish for delegate params.
         let invokeRows = invokeParamHandles.MoveToImmutable()
         this.EmitUserAttributesOnParameters(invokeRows, delegateSym.Parameters)
-        this.StampSignature(invokeHandle, invokeNullability, invokeReturnRow, invokeReturnType, nil, invokeRows)
+        this.StampSignature(invokeHandle, invokeNullability, invokeReturnRow, invokeReturnType, delegateSym, invokeRows)
         // ADR-0047 §3: user annotations targeting the delegate type land on
         // the TypeDef row (same as struct/interface/enum).
         this.emitUserAttributes(delegateTypeDef, delegateSym, AttributeTargetKind.Type)
@@ -1853,8 +1853,8 @@ internal class TypeDefEmitter {
             "callers either pass an explicit overload from classSym.ExplicitConstructors or rely on the legacy single-constructor fallback, which requires classSym to have declared at least one init(...) constructor",
             expression: "classSym.ExplicitConstructor"
         )
-        let function = ctor!!.Function
-        let init BaseConstructorInitializer? = ctor!!.BaseInitializer
+        let function = ctor.Function
+        let init BaseConstructorInitializer? = ctor.BaseInitializer
         let baseCtorToken = if classSym.IsClass {
             (
                 if init != nil {
@@ -1868,7 +1868,7 @@ internal class TypeDefEmitter {
         }
         var bodyOffset = -1
         if !this.emitCtx.MetadataOnly {
-            bodyOffset = this.emitClassConstructorWithBodyBodyBytes(classSym, ctor!!, init, baseCtorToken)
+            bodyOffset = this.emitClassConstructorWithBodyBodyBytes(classSym, ctor, init, baseCtorToken)
         }
         let ctorSig = BlobBuilder()
         BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true).Parameters(

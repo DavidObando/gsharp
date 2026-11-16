@@ -53,7 +53,7 @@ internal partial class DeclarationBinder {
         importedBaseType TypeSymbol?,
         primaryCtorParameters ImmutableArray[ParameterSymbol]
     ) {
-        let hasPrimaryOnlyDataBase = baseClassSymbol?.IsData == true && baseClassSymbol!!.HasDeclaredPrimaryConstructor
+        let hasPrimaryOnlyDataBase = baseClassSymbol?.IsData == true && baseClassSymbol.HasDeclaredPrimaryConstructor
         let hasImplicitBaseConstructorToResolve = importedBaseType != nil ||
             baseClassSymbol
             ?.EffectiveExplicitConstructors
@@ -805,10 +805,7 @@ internal partial class DeclarationBinder {
                 }
                 if !ExpressionBinder.IsDeferredBranchyArgumentPlaceholder(boundArguments[index], out var syntax) ||
                     !ExpressionBinder
-                    .CanTargetDependentBlockArgument(
-                    syntax!!,
-                    ClrNullability.GetParameterTypeSymbol(parameters[index])
-                ) {
+                    .CanTargetDependentBlockArgument(syntax, ClrNullability.GetParameterTypeSymbol(parameters[index])) {
                     deferredTargetsMatch = false
                     break
                 }
@@ -925,7 +922,7 @@ internal partial class DeclarationBinder {
                     !TryGetAddressedArgumentType(argument, out var addressedType) ||
                     (
                     addressedType != parameter.Type && !ByRefStorageMatching.AreSameStorageType(
-                        addressedType!!,
+                        addressedType,
                         parameter.Type,
                         out _,
                         out _,
@@ -938,7 +935,7 @@ internal partial class DeclarationBinder {
                 let _ = conversions.CheckByRefArgumentStorage(
                     argLocation(i),
                     parameter,
-                    addressedType!!,
+                    addressedType,
                     parameter.Type,
                     argument
                 )
@@ -1022,7 +1019,7 @@ internal partial class DeclarationBinder {
                         !TryGetAddressedArgumentType(boundArguments[i], out var addressedType) ||
                         (
                         addressedType != paramType && !ByRefStorageMatching.AreSameStorageType(
-                            addressedType!!,
+                            addressedType,
                             paramType,
                             out _,
                             out _,
@@ -1052,7 +1049,7 @@ internal partial class DeclarationBinder {
                         boundArguments[i],
                         out var deferredSyntax
                     ) &&
-                        !ExpressionBinder.CanTargetDependentBlockArgument(deferredSyntax!!, paramType) {
+                        !ExpressionBinder.CanTargetDependentBlockArgument(deferredSyntax, paramType) {
                         applicable = false
                         break
                     }
@@ -1108,7 +1105,7 @@ internal partial class DeclarationBinder {
                     let _ = conversions.CheckByRefArgumentStorage(
                         argLocation(i),
                         best.Parameters[i],
-                        selectedAddressedType!!,
+                        selectedAddressedType,
                         bestParamTypes[i],
                         boundArguments[i]
                     )
@@ -1243,15 +1240,8 @@ internal partial class DeclarationBinder {
         // constructor's own parameter list, where the class's base clause
         // was bound (`BindStructBaseAndInterfaces`) — validating it again
         // here would double-report the same offending parameter.
-        //
-        // `DerivesFromSystemAttributeDuringDeclaration`, not
-        // `DerivesFromSystemAttribute` alone — see the matching comment in
-        // `BindStructBaseAndInterfaces` for why: a NESTED same-compilation
-        // base's own flags are not reliable here when it is declared after
-        // this type in the same enclosing body, and `IsAttributeType`'s
-        // `bindTypeClause` fallback is not safe to call from here (it
-        // regressed `Issue1244GenericAbstractOverrideBinderTests`).
-        if DerivesFromSystemAttributeDuringDeclaration(structSymbol) {
+        // The header scheduler completes nested source bases before constructor validation.
+        if structSymbol.DerivesFromSystemAttribute() {
             for ctor in ctorBuilder {
                 if ctor == synthesizedPrimary {
                     continue
@@ -1418,7 +1408,7 @@ internal partial class DeclarationBinder {
                     baseClassSymbol
                     ?.EffectiveExplicitConstructors
                     .IsDefaultOrEmpty == false ||
-                    (baseClassSymbol?.IsData == true && baseClassSymbol!!.HasDeclaredPrimaryConstructor)
+                    (baseClassSymbol?.IsData == true && baseClassSymbol.HasDeclaredPrimaryConstructor)
             )
         ) {
             let capturedScope = $scope
@@ -1745,7 +1735,7 @@ internal partial class DeclarationBinder {
             for var i = 0; i < count; i++ {
                 if argSyntax(i) is InterpolatedStringExpressionSyntax {
                     flags ??= [count]bool
-                    flags!![i] = true
+                    flags[i] = true
                 }
             }
             return flags

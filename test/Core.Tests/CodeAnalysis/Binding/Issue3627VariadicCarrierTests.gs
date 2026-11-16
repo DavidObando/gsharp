@@ -117,13 +117,17 @@ countNulls(nil, "present")`.Replace("CARRIER", carrier))
     }
 
     @Fact
-    func SameCompilationElementCarrier_RemainsUnsupported() {
-        let diagnostics = Errors(`import System.Collections.Generic
+    func SameCompilationElementCarrier_PacksWithoutErasingElementIdentity() {
+        let result = EmittedOracle.Evaluate(`import System
+import System.Collections.Generic
 
 class Entry {}
-func count(values ...List[Entry]) int32 -> values.Count
-count(Entry())`)
-        Assert.Contains(diagnostics, (diagnostic Diagnostic) -> diagnostic.Id == "GS0544")
+func collect(values ...List[Entry]) List[Entry] -> values
+let entry = Entry()
+let packed = collect(entry)
+object.ReferenceEquals(entry, packed[0])`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(true, result.Value)
     }
 
     @Fact

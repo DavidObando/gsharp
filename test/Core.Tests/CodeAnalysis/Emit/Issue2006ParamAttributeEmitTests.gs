@@ -123,12 +123,7 @@ data struct Item(Maybe string?, Pair (Name string, Count int32)) {
 
     @Fact
     func DelegateInvokeParameter_UserAttribute_RoundTripsThroughReflection() {
-        // Named delegates are bound before user struct/class declarations in
-        // the same compilation (ADR-0059 / issue #255 declaration ordering),
-        // so a delegate-parameter attribute type must come from an already
-        //-compiled reference assembly here rather than a same-file
-        // `class NoteAttribute(...)`, which would not yet be resolvable when
-        // the delegate's parameters are bound.
+        // Keep the imported contract witness. Issue #5968 tests same-source attribute dependencies through the compiler driver.
         const Source = `package Issue2006Delegate
 import System
 import GSharp.Core.Tests.Fixtures

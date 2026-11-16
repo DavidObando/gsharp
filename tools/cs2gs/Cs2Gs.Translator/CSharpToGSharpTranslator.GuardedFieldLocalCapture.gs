@@ -13,6 +13,13 @@ import Microsoft.CodeAnalysis.CSharp.Syntax
 import GSharp.Core.CodeAnalysis.Syntax
 
 partial class CSharpToGSharpTranslator {
+    shared {
+        internal func IsUnqualifiedOrThisQualifiedFieldRead(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+        ) bool ->
+        DeclarationVisitor.IsUnqualifiedOrThisQualifiedFieldAccess(expression)
+    }
+
     private partial class DeclarationVisitor : CSharpSyntaxVisitor[GMember] {
         /// Issue #4262 follow-up (5-item plan, item 2): a statement-level
         /// early-return null guard on a field/property
@@ -108,12 +115,20 @@ partial class CSharpToGSharpTranslator {
                 // circuit to the (not-yet-declared) capture and translate the
                 // field read as itself.
                 let fieldRead GExpression? = this.TranslateExpression(eligibleUses[0])
+                // The capture reads before calls at its representative source use.
                 statements.Add(
                     LocalDeclarationStatement(
                         BindingKind.Let,
                         capturedName,
                         type: nil,
-                        initializer: EnsureNonNullAssertion(fieldRead)
+                        initializer: if this.IsGSharpFlowNarrowedReadonlyFieldRead(
+                            eligibleUses[0],
+                            ifStatement.Span.End
+                        ) {
+                            fieldRead
+                        } else {
+                            EnsureNonNullAssertion(fieldRead)
+                        }
                     )
                 )
                 for use in eligibleUses {
@@ -448,7 +463,7 @@ partial class CSharpToGSharpTranslator {
                 default: false
             }
 
-            private func IsUnqualifiedOrThisQualifiedFieldAccess(
+            internal func IsUnqualifiedOrThisQualifiedFieldAccess(
                 expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
             ) bool {
                 var expression = expression

@@ -6,6 +6,7 @@ package Cs2Gs.Translator
 
 import Cs2Gs.CodeModel.Ast
 import Microsoft.CodeAnalysis
+import Microsoft.CodeAnalysis.CSharp
 import Microsoft.CodeAnalysis.CSharp.Syntax
 import System
 import System.Collections.Generic
@@ -74,12 +75,16 @@ internal class ManagedReferenceArrayNullableState {
 
 internal class ProjectedBaseCompilationIndex {
     init() {
-        MemberConsumersByCandidate = Dictionary[INamedTypeSymbol, List[SyntaxNode]](SymbolEqualityComparer.Default)
-        ConversionsByCandidate = Dictionary[INamedTypeSymbol, List[ExpressionSyntax]](SymbolEqualityComparer.Default)
+        MemberConsumersByCandidate = Dictionary[INamedTypeSymbol, List[(CSharpCompilation, SyntaxNode)]](
+            SymbolEqualityComparer.Default
+        )
+        ConversionsByCandidate = Dictionary[INamedTypeSymbol, List[(CSharpCompilation, ExpressionSyntax)]](
+            SymbolEqualityComparer.Default
+        )
         DerivedTypesByCandidate = Dictionary[INamedTypeSymbol, List[INamedTypeSymbol]](SymbolEqualityComparer.Default)
         GenericInstantiationsByCandidate = Dictionary[
             INamedTypeSymbol,
-            List[(SyntaxTree, ImmutableArray[ITypeParameterSymbol], ImmutableArray[ITypeSymbol])]
+            List[(CSharpCompilation, SyntaxTree, ImmutableArray[ITypeParameterSymbol], ImmutableArray[ITypeSymbol])]
         ](SymbolEqualityComparer.Default)
         ReplacementsByType = Dictionary[INamedTypeSymbol, IReadOnlyDictionary[ITypeParameterSymbol, ITypeSymbol]?](
             SymbolEqualityComparer.Default
@@ -87,11 +92,11 @@ internal class ProjectedBaseCompilationIndex {
         IndexedCompilations = Array.Empty[Compilation]()
     }
 
-    prop MemberConsumersByCandidate Dictionary[INamedTypeSymbol, List[SyntaxNode]] {
+    prop MemberConsumersByCandidate Dictionary[INamedTypeSymbol, List[(CSharpCompilation, SyntaxNode)]] {
         get;
     }
 
-    prop ConversionsByCandidate Dictionary[INamedTypeSymbol, List[ExpressionSyntax]] {
+    prop ConversionsByCandidate Dictionary[INamedTypeSymbol, List[(CSharpCompilation, ExpressionSyntax)]] {
         get;
     }
 
@@ -101,7 +106,7 @@ internal class ProjectedBaseCompilationIndex {
 
     prop GenericInstantiationsByCandidate Dictionary[
         INamedTypeSymbol,
-        List[(SyntaxTree, ImmutableArray[ITypeParameterSymbol], ImmutableArray[ITypeSymbol])]
+        List[(CSharpCompilation, SyntaxTree, ImmutableArray[ITypeParameterSymbol], ImmutableArray[ITypeSymbol])]
     ] {
         get;
     }
@@ -124,14 +129,21 @@ internal class ProjectedBaseCompilationIndex {
         private let ByCompilation System
             .Runtime
             .CompilerServices
-            .ConditionalWeakTable[Compilation, ProjectedBaseCompilationIndex] = System
+            .ConditionalWeakTable[object, ProjectedBaseCompilationIndex] = System
             .Runtime
             .CompilerServices
-            .ConditionalWeakTable[Compilation, ProjectedBaseCompilationIndex]()
+            .ConditionalWeakTable[object, ProjectedBaseCompilationIndex]()
 
-        internal func For(compilation Compilation) ProjectedBaseCompilationIndex -> ByCompilation.GetOrCreateValue(
-            compilation
-        )
+        internal func For(graph object) ProjectedBaseCompilationIndex ->
+        if ByCompilation.TryGetValue(graph, out var index) {
+            index
+        } else {
+            ProjectedBaseCompilationIndex()
+        }
+
+        internal func Publish(graph object, index ProjectedBaseCompilationIndex) {
+            ByCompilation.GetValue(graph, (key object) -> index)
+        }
     }
 }
 

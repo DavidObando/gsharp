@@ -9,6 +9,32 @@
     "owner": "Gsharp.Runtime.Values, Version=0.5.0.0, Culture=neutral, PublicKeyToken=null",
     "compiler": "published Gsharp.NET.Sdk 0.5.460-g21e3f30fa3",
     "certificate_sha256": "53F7DA756296143D0A75614CB77F44F73B041C89228800D21DF7C698256FC931",
+    "additional_certificates": [
+      {
+        "certificate_sha256": "660BFC9A5C5062CFAB3AC4C7562D6BFC21609B115BEC20356803252CDFDE535A",
+        "compiler": "published Gsharp.NET.Sdk 0.5.698",
+        "source_head": "d13bd8d471f0932b4064d8e4e0629c2241c97210",
+        "independently_built_image_sha256": "304c586f49f5a9e853a892895c041cf9190a0ad1f9d83c754f65b96c25052a76",
+        "approval": {
+          "date": "2026-11-15",
+          "response": "Approve the newly verified image and exact finite proof renewal",
+          "scope": "Retain the existing proof. Add only this exact proof for the same complete two AsSpan diagnostics. Raw ILVerify exits 2 with the known errors, not strict-clean success. No CI, review, merge or release waiver."
+        },
+        "independent_evidence": {
+          "manifest_sha256": "e88fe659a9c5108824ae01838d0db87f1b37eba640ae33f1f6d82b498a670002",
+          "files": 308,
+          "positive_images": 4,
+          "negative_images": 15,
+          "report_controls": 57,
+          "process_reference_controls": 7,
+          "implementation_references": 172,
+          "actual_osx_arm64_native_aot_lengths": 33,
+          "verification": "The coordinator independently verified every manifest size/hash, source snapshot, implementation reference and matrix outcome. JIT/GC and normal-RID NativeAOT witnesses passed. Invalid negative images were never executed.",
+          "provenance": "New independent recreation at the exact source head, not recovery or verification of the historical 337ee2fe... image. The historical SHA difference remains unexplained."
+        },
+        "closure_comparison": "Published old and independently built new images have identical resolved by-value signatures, IL instruction offsets and signed CoreLib 10 targets. The new compiler removes an unused writable AsSpan local, changing max stack from 7 to 8 and init-locals from true to false. Metadata tokens change. Both AsSpan return offsets remain 0x10/0x17; no method or diagnostic is added."
+      }
+    ],
     "renewal": "#5244, after the #5327 renewal (556C811C... to A5AB56A0...): the bootstrap pin moves from 0.5.212 to 0.5.460-g21e3f30fa3 (#5625). The new compiler drops an unused trailing Slice<T> local from ReadOnlySlice`1::AsSpan, so its tiny header changes max stack, init-locals and the local signature. Its token-resolved IL instructions, signature, offsets and targets are unchanged. Slice`1::AsSpan and Slice`1::get_Owner are unchanged. Duplicate MemberRef, TypeSpec and MethodSpec rows are removed; the distinct resolved rows are identical. ILVerify reports the same two ReturnPtrToStack errors at the same offsets. No new method or diagnostic is admitted.",
     "previous_renewal": "F2a adds ClrArrayCopies declarations/references. Independently resolved old/new complete return closures are identical, including by-value signatures, locals, EH, offsets and signed CoreLib10 targets. V1 carrier definitions and slice sources are unchanged. No new method or diagnostic is admitted.",
     "serialization": "IlVerifyFalsePositives.RuntimeReturnProof",
@@ -21,7 +47,7 @@
       { "method": "Gsharp.Values.Slice`1::AsSpan()", "offset": "0x00000017" },
       { "method": "Gsharp.Values.ReadOnlySlice`1::AsSpan()", "offset": "0x00000010" }
     ],
-    "limits": "The signature/reference metadata and entire closure must remain identical. Other runtime methods remain fully checked."
+    "limits": "The signature/reference metadata and entire closure must match an explicitly approved finite proof. Changes require independent witnesses and explicit renewal approval. Other runtime methods remain fully checked."
   },
   "literal_research_fixture": {
     "scope": "One original #5242 MetadataBuilder image; not generated product literals.",

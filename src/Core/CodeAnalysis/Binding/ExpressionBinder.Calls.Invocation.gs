@@ -288,13 +288,13 @@ internal partial class ExpressionBinder {
         }
         var closedEnumerable Type
         try {
-            closedEnumerable = openDefinition!!.MakeGenericType(mappedElement!!)
+            closedEnumerable = openDefinition.MakeGenericType(mappedElement)
         } catch (ex Exception) when ReferenceResolver.IsProjectionFailure(ex) {
             return false
         }
         normalized = ImportedTypeSymbol.GetConstructed(
             closedEnumerable,
-            openDefinition!!,
+            openDefinition,
             ImmutableArray.Create(elementType)
         )
         return true
@@ -476,7 +476,7 @@ internal partial class ExpressionBinder {
             !TryResolveOpenStaticMethod(symbolicReceiver!!.OpenDefinition, staticFn.Method, out var openMethod) {
             return false
         }
-        let openParameters = openMethod!!.GetParameters()
+        let openParameters = openMethod.GetParameters()
         if openParameters.Length != arguments.Length {
             // Optional/params/defaulted parameter shapes are not handled by this
             // narrow symbolic path; fall back to the ordinary resolution.
@@ -531,7 +531,7 @@ internal partial class ExpressionBinder {
                 // accepts. The classifier would reject this (the erased
                 // `Comparison<object>` Invoke shape differs from the TResult
                 // literal), so build the conversion node directly.
-                let adapter = lambdas.CreateErasedFunctionLiteralAdapter(functionLiteral!!, symbolicDelegateTarget!!)
+                let adapter = lambdas.CreateErasedFunctionLiteralAdapter(functionLiteral, symbolicDelegateTarget)
                 convertedArgs.Add(BoundConversionExpression(nil, symbolicDelegateParam, adapter))
                 continue
             }
@@ -554,13 +554,13 @@ internal partial class ExpressionBinder {
                         if conversions.TryRejectClrPlatformContainerArgument(
                             argument,
                             openParameters[i],
-                            symbolicInPointee!!,
+                            symbolicInPointee,
                             argLoc,
                             out var rejectedInArgument
                         ) {
                             rejectedInArgument
                         } else {
-                            conversions.BindImplicitInArgument(argLoc, argument, symbolicInPointee!!, parameter: nil)
+                            conversions.BindImplicitInArgument(argLoc, argument, symbolicInPointee, parameter: nil)
                         }
                     )
                 )
@@ -595,7 +595,7 @@ internal partial class ExpressionBinder {
             )
         }
         let symbolicReturn = MemberLookup.GetClrOpenMethodReturnTypeSymbol(
-            openMethod!!,
+            openMethod,
             openDef,
             symbolicArgs,
             effectiveMethodTypeArgs
@@ -689,7 +689,7 @@ internal partial class ExpressionBinder {
                 for idx in deferredIndices {
                     let inner = OverloadResolver.UnwrapNamedArgumentValue(ce.Arguments[idx])
                     if OverloadResolver.GetLambdaArgumentSyntax(inner) is {} lambdaSyntax &&
-                        symbolicTargets!!
+                        symbolicTargets
                         .TryGetValue(idx, out var target) {
                         // Issue #2345: when this slot's return type was fully
                         // recovered (e.g. `void` for an Action-shaped
@@ -865,9 +865,10 @@ internal partial class ExpressionBinder {
             ) {
                 for idx in deferredIndices {
                     let inner = OverloadResolver.UnwrapNamedArgumentValue(ce.Arguments[idx])
-                    if OverloadResolver.GetLambdaArgumentSyntax(inner) is {} lambdaSyntax &&
-                        partialTargets!!
-                        .TryGetValue(idx, out var target) {
+                    if OverloadResolver.GetLambdaArgumentSyntax(inner) is {} lambdaSyntax && partialTargets.TryGetValue(
+                        idx,
+                        out var target
+                    ) {
                         boundArgs[idx] = lambdas.BindLambdaExpression(
                             lambdaSyntax,
                             target,
@@ -1094,7 +1095,7 @@ internal partial class ExpressionBinder {
                     },
                     out var resolvedOpenMethod
                 ) {
-                    openMethod = resolvedOpenMethod!!
+                    openMethod = resolvedOpenMethod
                 } else if method.IsGenericMethod {
                     openMethod = if method.IsGenericMethodDefinition {
                         method
@@ -1461,7 +1462,7 @@ internal partial class ExpressionBinder {
                 symbolicMethodTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(
                     resolvedMethod,
                     typeArgSymbols,
-                    SymbolicArgumentTypesInParameterOrder(arguments, parameterMapping, parameters!!.Length)
+                    SymbolicArgumentTypesInParameterOrder(arguments, parameterMapping, parameters.Length)
                 )
             }
             let paramIndex = if !parameterMapping.IsDefault && i < parameterMapping.Length {
@@ -1469,7 +1470,7 @@ internal partial class ExpressionBinder {
             } else {
                 i
             }
-            if paramIndex < 0 || paramIndex >= parameters!!.Length {
+            if paramIndex < 0 || paramIndex >= parameters.Length {
                 continue
             }
             // Issue #1107: when the by-ref parameter's pointee is a type-level
@@ -1500,15 +1501,11 @@ internal partial class ExpressionBinder {
                 receiverType
             ) ??
                 ClrNullability
-                .GetParameterTypeSymbol(parameters!![paramIndex]).StripToBareShape()
-            let syntheticParameter = RefCapabilities.CreateParameterSymbol(
-                parameters!![paramIndex],
-                pointeeType,
-                "value"
-            )
+                .GetParameterTypeSymbol(parameters[paramIndex]).StripToBareShape()
+            let syntheticParameter = RefCapabilities.CreateParameterSymbol(parameters[paramIndex], pointeeType, "value")
             let rebound = BindRefArgumentExpression(refArg, syntheticParameter)
             rebuilt ??= arguments.ToBuilder()
-            rebuilt!![i] = rebound
+            rebuilt[i] = rebound
         }
         return if rebuilt != nil {
             rebuilt.ToImmutable()
@@ -1528,7 +1525,7 @@ internal partial class ExpressionBinder {
         try {
             var bound = BindAccessorCallWithReceiver(receiver, classSymbol, ce, receiverSyntax, receiverStart)
             if verifyCallArgumentsAfterConversions != nil {
-                bound = verifyCallArgumentsAfterConversions!!(
+                bound = verifyCallArgumentsAfterConversions(
                     ce.Arguments,
                     bound,
                     () -> BindAccessorCallWithReceiver(receiver, classSymbol, ce, receiverSyntax, receiverStart)
@@ -1757,7 +1754,7 @@ internal partial class ExpressionBinder {
                             inner,
                             out var blockTarget
                         ) {
-                            BindExpression(inner, blockTarget!!)
+                            BindExpression(inner, blockTarget)
                         } else {
                             cast[BoundExpression](BoundErrorExpression(inner))
                         }
@@ -2030,7 +2027,7 @@ internal partial class ExpressionBinder {
                 arguments = RebindInlineOutVarArguments(
                     ce,
                     arguments,
-                    staticFn!!.Method,
+                    staticFn.Method,
                     staticMapping,
                     classSymbol.SymbolicReceiver ?? receiver?.Type,
                     typeArgSymbols
@@ -2049,7 +2046,7 @@ internal partial class ExpressionBinder {
                 // call closed over `object` (`Array.ConvertAll` then reports
                 // GS0155 against the real element type).
                 let refinedStaticSymbolicArgs = RefineSymbolicArgsForMethodGroups(
-                    staticFn!!.Method,
+                    staticFn.Method,
                     arguments,
                     staticSymbolicArgs,
                     receiverArgCount: 0,
@@ -2071,7 +2068,7 @@ internal partial class ExpressionBinder {
                     staticMethodGroupArgumentSlots
                 )
                 let staticSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(
-                    staticFn!!.Method,
+                    staticFn.Method,
                     typeArgSymbols,
                     refinedStaticSymbolicArgs,
                     staticIsExpanded,
@@ -2100,14 +2097,14 @@ internal partial class ExpressionBinder {
                     TryBindSymbolicImportedStaticCall(
                     ce,
                     classSymbol,
-                    staticFn!!,
+                    staticFn,
                     arguments,
                     staticTypeArgSymbolsForCall,
                     out var symbolicStaticCall
                 ) {
-                    return symbolicStaticCall!!
+                    return symbolicStaticCall
                 }
-                let staticParameters = staticFn!!.Method.GetParameters()
+                let staticParameters = staticFn.Method.GetParameters()
                 let staticDownstreamMapping = if staticIsExpanded {
                     default(ImmutableArray[int32])
                 } else {
@@ -2141,7 +2138,7 @@ internal partial class ExpressionBinder {
                     ClrCallDelegateRebindMode.Full,
                     out var staticHandlerPrelude,
                     out _,
-                    method: staticFn!!.Method,
+                    method: staticFn.Method,
                     receiverType: classSymbol.ConstructedReceiver ?? receiver?.Type,
                     symbolicMethodTypeArgs: staticTypeArgSymbolsForCall,
                     isExpanded: staticIsExpanded
@@ -2150,7 +2147,7 @@ internal partial class ExpressionBinder {
                     staticConvertedArgs,
                     staticDownstreamMapping,
                     staticParameters,
-                    method: staticFn!!.Method,
+                    method: staticFn.Method,
                     receiverType: classSymbol.ConstructedReceiver ?? receiver?.Type,
                     symbolicMethodTypeArgs: staticTypeArgSymbolsForCall
                 )
@@ -2175,14 +2172,14 @@ internal partial class ExpressionBinder {
                 var staticCall = ConversionClassifier.AutoDereferenceRefReturn(
                     BoundImportedCallExpression(
                         ce,
-                        staticFn!!,
+                        staticFn,
                         staticArguments,
                         refKinds,
                         staticTypeArgSymbolsForCall,
                         classSymbol.SymbolicReceiver
                     )
                 )
-                staticCall = CompleteImportedSuspendingCall(staticCall, staticFn!!.Method, ce.Location)
+                staticCall = CompleteImportedSuspendingCall(staticCall, staticFn.Method, ce.Location)
                 return WrapWithHandlerPrelude(staticCall, staticHandlerPrelude, ce)
             }
             if staticAmbiguous {
@@ -2225,14 +2222,14 @@ internal partial class ExpressionBinder {
                 argumentNames,
                 out var staticDelegateMemberCall
             ) {
-                return staticDelegateMemberCall!!
+                return staticDelegateMemberCall
             }
             // Issue #569: when no static/instance method matches, check whether
             // the call identifier names a nested type of the outer class. If so,
             // bind as a constructor invocation — this unifies the call-expression
             // path with the type-clause path that #526 already fixed.
             if TryBindNestedTypeConstructorCall(classSymbol, ce, out var nestedCtorResult) {
-                return nestedCtorResult!!
+                return nestedCtorResult
             }
             // Issue #1833: a value-type-erased type argument (a concrete
             // non-enum struct, or a bare `[T struct]` type parameter) explicitly
@@ -2464,7 +2461,7 @@ internal partial class ExpressionBinder {
                 argumentNames,
                 out var constrainedCall
             ) {
-                return constrainedCall!!
+                return constrainedCall
             }
             // Phase 3.B.3 sub-step 2b: dispatch to a user-defined class method
             // if receiver is a user struct symbol.
@@ -2515,7 +2512,7 @@ internal partial class ExpressionBinder {
                 isStatic: false,
                 out var userDelegateFieldCall
             ) {
-                return userDelegateFieldCall!!
+                return userDelegateFieldCall
             }
             // Phase 3.B.6 / ADR-0019: extension function fallback for
             // user-type receivers (struct/class/interface). Issue #1188:
@@ -2533,7 +2530,7 @@ internal partial class ExpressionBinder {
                 argumentNames,
                 out var symbolicNullableCall
             ) {
-                return symbolicNullableCall!!
+                return symbolicNullableCall
             }
             if TryBindExtensionFunctionOverload(
                 receiver,
@@ -2543,7 +2540,7 @@ internal partial class ExpressionBinder {
                 argumentNames,
                 out var userExtResult
             ) {
-                return userExtResult!!
+                return userExtResult
             }
             // Issue #296: a GSharp class inheriting an imported CLR base class
             // exposes the base's instance members. After user-defined and
@@ -2586,7 +2583,7 @@ internal partial class ExpressionBinder {
                     argumentNames,
                     allowProtectedInherited: allowProtectedInherited
                 ) {
-                    return inheritedCall!!
+                    return inheritedCall
                 }
                 if TryBindClrDelegateMemberInvocation(
                     receiver!!,
@@ -2597,7 +2594,7 @@ internal partial class ExpressionBinder {
                     argumentNames,
                     out var inheritedDelegateCall
                 ) {
-                    return inheritedDelegateCall!!
+                    return inheritedDelegateCall
                 }
             }
             // Issue #1218: an enum value is a CLR value type whose base chain is
@@ -2622,7 +2619,7 @@ internal partial class ExpressionBinder {
                 argumentNames,
                 mapEnumArgumentsToBaseClr: true
             ) {
-                return enumInheritedCall!!
+                return enumInheritedCall
             }
             // Issue #294: imported [Extension] method dispatched with instance
             // (receiver) syntax, when the receiver carries a CLR type even
@@ -2638,7 +2635,7 @@ internal partial class ExpressionBinder {
                 typeArgSymbols,
                 argumentNames
             ) {
-                return userPathExt!!
+                return userPathExt
             }
             // Issue #1181: a user interface that extends an imported/BCL
             // interface (e.g. `interface IBox : IDisposable`) inherits that
@@ -2659,7 +2656,7 @@ internal partial class ExpressionBinder {
                 typeArgSymbols,
                 argumentNames
             ) {
-                return importedBaseIfaceCall!!
+                return importedBaseIfaceCall
             }
             // Issue #1550: a value of ANY type parameter is ultimately a
             // System.Object, so the universal object instance members
@@ -2686,7 +2683,7 @@ internal partial class ExpressionBinder {
                 argumentNames,
                 out var constrainedObjectCall
             ) {
-                return constrainedObjectCall!!
+                return constrainedObjectCall
             }
             // Issue #2304: a source-declared interface (`InterfaceSymbol`,
             // ClrType still null at bind time) implicitly derives from
@@ -2704,7 +2701,7 @@ internal partial class ExpressionBinder {
                 argumentNames,
                 out var ifaceObjectCall
             ) {
-                return ifaceObjectCall!!
+                return ifaceObjectCall
             }
             let effectiveReceiverSyntax SyntaxNode? = receiverSyntax ?? receiver?.Syntax
             if (
@@ -2811,7 +2808,7 @@ internal partial class ExpressionBinder {
             isStatic: false,
             out var userDelegateCall
         ) {
-            return userDelegateCall!!
+            return userDelegateCall
         }
         // Issue #517: a value-type `T?` lowers to `System.Nullable<T>` at the
         // CLR layer; `receiver.Type.ClrType` returns the underlying T's CLR
@@ -2834,10 +2831,10 @@ internal partial class ExpressionBinder {
         if receiver.Type is NullableTypeSymbol nullableRecv {
             let nullableInnerVt = nullableRecv.UnderlyingType?.ClrType
             if nullableInnerVt?.IsValueType == true && this.memberLookup.TryGetNullableConstructedType(
-                nullableInnerVt!!,
+                nullableInnerVt,
                 out var nullableConstructed
             ) {
-                clrType = nullableConstructed!!
+                clrType = nullableConstructed
             }
         }
         // Issue #529: use interface-aware method enumeration so that
@@ -3220,7 +3217,7 @@ internal partial class ExpressionBinder {
                             argumentNames,
                             out var betterExtensionCall
                         ) {
-                            return betterExtensionCall!!
+                            return betterExtensionCall
                         }
                         // Issue #4287: an instance method on a stated `T?`
                         // receiver needs a guard first (see
@@ -3443,7 +3440,7 @@ internal partial class ExpressionBinder {
             ) {
                 cast[BoundExpression](BoundErrorExpression(nil))
             } else {
-                delegateMemberCall!!
+                delegateMemberCall
             }
         }
         // Phase 3.B.6 / ADR-0019: extension function fallback. After all
@@ -3451,7 +3448,7 @@ internal partial class ExpressionBinder {
         // Issue #1188: extension functions overload, so select the best
         // matching overload across all (receiver, name) candidates.
         if TryBindExtensionFunctionOverload(receiver, methodName, arguments, ce, argumentNames, out var extResult) {
-            return extResult!!
+            return extResult
         }
         // Issue #294: BCL/library [Extension] method dispatched with instance
         // (receiver) syntax. After instance members and user extension
@@ -3468,7 +3465,7 @@ internal partial class ExpressionBinder {
             typeArgSymbols,
             argumentNames
         ) {
-            return importedExt!!
+            return importedExt
         }
         if TryReportValueNullableByRefArgument(
             ce,
@@ -3526,7 +3523,7 @@ internal partial class ExpressionBinder {
                 TryReportStatedNullableReceiverCall(receiver, receiverSyntax, receiverStart, ce) {
                 cast[BoundExpression](BoundErrorExpression(nil))
             } else {
-                importedIfaceObjectCall!!
+                importedIfaceObjectCall
             }
         }
         // Issue #4013: before falling back to the generic "Cannot find
@@ -4017,7 +4014,7 @@ internal partial class ExpressionBinder {
                     argumentNames,
                     out var constrainedCall
                 ) {
-                    return Succeeded(constrainedCall!!)
+                    return Succeeded(constrainedCall)
                 }
             }
             if underlyingType is StructSymbol structRecv {
@@ -4064,7 +4061,7 @@ internal partial class ExpressionBinder {
                 isStatic: false,
                 out var delegateCall
             ) {
-                return Succeeded(delegateCall!!)
+                return Succeeded(delegateCall)
             }
             if TryBindExtensionFunctionOverload(
                 narrowedReceiver,
@@ -4074,7 +4071,7 @@ internal partial class ExpressionBinder {
                 argumentNames,
                 out var extensionCall
             ) {
-                return Succeeded(extensionCall!!)
+                return Succeeded(extensionCall)
             }
             if underlyingType is StructSymbol inheritedDerived &&
                 (GetInheritedClrBaseType(inheritedDerived) ?? typeof(object)) is Type inheritedBaseClr &&
@@ -4091,7 +4088,7 @@ internal partial class ExpressionBinder {
                 allowProtectedInherited: IsCurrentThisReceiver(receiver) ||
                     IsFamilyAccessibleClrMember(inheritedBaseClr, receiver)
             ) {
-                return Succeeded(inheritedCall!!)
+                return Succeeded(inheritedCall)
             }
             if underlyingType is EnumSymbol &&
                 TryBindInheritedClrInstanceCall(
@@ -4106,7 +4103,7 @@ internal partial class ExpressionBinder {
                 argumentNames,
                 mapEnumArgumentsToBaseClr: true
             ) {
-                return Succeeded(enumCall!!)
+                return Succeeded(enumCall)
             }
             if TryBindImportedExtensionCall(
                 narrowedReceiver,
@@ -4118,7 +4115,7 @@ internal partial class ExpressionBinder {
                 typeArgSymbols,
                 argumentNames
             ) {
-                return Succeeded(importedExtensionCall!!)
+                return Succeeded(importedExtensionCall)
             }
             if underlyingType is InterfaceSymbol importedBaseIface &&
                 TryBindInterfaceImportedBaseInstanceCall(
@@ -4132,7 +4129,7 @@ internal partial class ExpressionBinder {
                 typeArgSymbols,
                 argumentNames
             ) {
-                return Succeeded(importedBaseCall!!)
+                return Succeeded(importedBaseCall)
             }
             if underlyingType is TypeParameterSymbol tpObject &&
                 TryBindConstrainedObjectMemberCall(
@@ -4144,7 +4141,7 @@ internal partial class ExpressionBinder {
                 argumentNames,
                 out var objectCall
             ) {
-                return Succeeded(objectCall!!)
+                return Succeeded(objectCall)
             }
             return underlyingType is InterfaceSymbol &&
                 TryBindInterfaceObjectMemberCall(
@@ -4155,7 +4152,7 @@ internal partial class ExpressionBinder {
                 argumentNames,
                 out var interfaceObjectCall
             ) &&
-                Succeeded(interfaceObjectCall!!)
+                Succeeded(interfaceObjectCall)
         } finally {
             Diagnostics.TruncateTo(diagnosticMark)
         }
@@ -4171,14 +4168,27 @@ internal partial class ExpressionBinder {
         @NotNullWhen(true) out result BoundExpression?
     ) bool {
         result = nil
-        if methodName != "GetValueOrDefault" || ce.TypeArgumentList != nil {
+        // Symbolic storage does not grant source value types the CLR Nullable member surface (#3034).
+        if ce.TypeArgumentList != nil ||
+            (methodName != "GetValueOrDefault" && nullableReceiver.UnderlyingType is not TupleTypeSymbol) {
             return false
         }
         if !$scope.References!!.TryGetMemberLookupType(typeof(System.Nullable[_]), out var openNullable) ||
             openNullable == nil {
-            Diagnostics.ReportTargetFrameworkMemberUnavailable(ce.Location, "System.Nullable`1.GetValueOrDefault")
+            Diagnostics.ReportTargetFrameworkMemberUnavailable(ce.Location, "System.Nullable`1." + methodName)
             result = BoundErrorExpression(nil)
             return true
+        }
+        if methodName != "GetValueOrDefault" {
+            return TryBindInheritedClrInstanceCall(
+                receiver,
+                openNullable,
+                methodName,
+                arguments,
+                ce,
+                out result,
+                argumentNames: argumentNames
+            )
         }
         var openMethod MethodInfo? = nil
         for candidate in openNullable.GetMethods(BindingFlags.Public | BindingFlags.Instance) {
@@ -4578,7 +4588,7 @@ internal partial class ExpressionBinder {
         }
 
         private func PeelByRef(type Type?) Type? -> if type?.IsByRef == true {
-            type!!.GetElementType()
+            type.GetElementType()
         } else {
             type
         }
@@ -4605,7 +4615,7 @@ internal partial class ExpressionBinder {
         private func UnwrapExpressionTreeDelegate(
             type TypeSymbol
         ) TypeSymbol -> if MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(type, out var delegateType) {
-            delegateType!!
+            delegateType
         } else {
             type
         }
@@ -4615,8 +4625,8 @@ internal partial class ExpressionBinder {
             type = UnwrapExpressionTreeDelegate(type)
             if type.StripToBareShape() is ImportedTypeSymbol imported {
                 var definition Type? = imported.OpenDefinition ?? imported.ClrType
-                if definition?.IsGenericType == true && !definition!!.IsGenericTypeDefinition {
-                    definition = definition!!.GetGenericTypeDefinition()
+                if definition?.IsGenericType == true && !definition.IsGenericTypeDefinition {
+                    definition = definition.GetGenericTypeDefinition()
                 }
                 let coreLibrary Assembly? = definition?.BaseType?.Assembly
                 // definition != null is implied by coreLibrary != null (both derive
@@ -4774,7 +4784,7 @@ internal partial class ExpressionBinder {
                     // from the receiver's open type definition rather than from
                     // `GetGenericMethodDefinition()` (which only applies to
                     // method-level generics).
-                    openMethod = resolvedOpenMethod!!
+                    openMethod = resolvedOpenMethod
                 } else {
                     return false
                 }
@@ -4845,7 +4855,7 @@ internal partial class ExpressionBinder {
                     continue
                 }
                 names ??= [call.Arguments.Count + offset]string?
-                names!![sourceIndex + offset] = named.NameToken.ValueText
+                names[sourceIndex + offset] = named.NameToken.ValueText
             }
             return names
         }

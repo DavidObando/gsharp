@@ -169,7 +169,7 @@ class ControlFlowGraph {
             if Condition == nil {
                 return string.Empty
             }
-            let condition = Condition!!
+            let condition = Condition
             return condition.ToString()
         }
     }

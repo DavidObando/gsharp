@@ -62,7 +62,7 @@ func (self T?) Map[T class, U class](f (T) -> U) U? {
         let selfNullable = GetNullableAttributeValue(parameters[0])
         let methodContext = GetNullableContextAttributeValue(map_)
         Assert.True(
-            selfNullable == (2 as uint8?) || methodContext == (2 as uint8?),
+            selfNullable == uint8(2) || methodContext == uint8(2),
             "Map's `self` parameter must report nullable: selfNullable=$selfNullable, methodContext=$methodContext"
         )
     }
@@ -135,7 +135,7 @@ func (self string?) MaybeShout() string? {
         let selfAttr = GetNullableAttributeValue(selfParam)
         let methodContext = GetNullableContextAttributeValue(shout)
         Assert.True(
-            selfAttr == (2 as uint8?) || methodContext == (2 as uint8?),
+            selfAttr == uint8(2) || methodContext == uint8(2),
             "selfAttr=$selfAttr, methodContext=$methodContext"
         )
     }

@@ -1228,6 +1228,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 let name string? = this.EmittedName(binder, binder.Name)
                 let local = IdentifierExpression(name)
+                this.RecordEmittedLocalNullability(binder, storageType, nil, nil)
                 declarations.Add(LocalDeclarationStatement(BindingKind.Var, name, storageType))
                 assignments.Add(AssignmentStatement(local, replacement))
                 let nullableReceiverCapture = binder.Type.IsReferenceType && this.ScrutineeStorageIsNullableInGSharp(
@@ -2053,7 +2054,7 @@ partial class CSharpToGSharpTranslator {
                             )
                         }
                         if varBound is ILocalSymbol varLocal {
-                            this.state.LocalHoldsPromotedValueAnswers.Remove(varLocal)
+                            this.InvalidateLocalPromotedValue(varLocal)
                         }
                     } else if varPattern.Designation is ParenthesizedVariableDesignationSyntax {
                         // `var (a, b)` binds the deconstructed elements; G# has no
@@ -3778,7 +3779,12 @@ partial class CSharpToGSharpTranslator {
             var declaringPosition = pattern!!.SpanStart
             let declaringSyntax SyntaxReference? = deconstruct.DeclaringSyntaxReferences.FirstOrDefault()
             if declaringSyntax != nil {
-                declaringModel = this.context.SemanticModel.Compilation.GetSemanticModel(declaringSyntax.SyntaxTree)
+                let owner = this.context.SourceCompilation(deconstruct)
+                if owner == nil {
+                    failureReason = "the Deconstruct declaration's compilation owner is unknown"
+                    return nil
+                }
+                declaringModel = TranslationContext.GetEffectiveSemanticModel(owner, declaringSyntax.SyntaxTree)
                 declaringPosition = declaringSyntax.Span.Start
             }
             var match ISymbol? = nil
@@ -4002,7 +4008,7 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func TranslateArrayCreation(creation ArrayCreationExpressionSyntax) GExpression {
-            var elementType GTypeReference? = this.GetArrayElementType(creation, creation.Type.ElementType)
+            let elementType = this.MapArrayCreationElementType(creation)
             let elementTypeSymbol ITypeSymbol? = (
                 this.context.GetTypeInfo(creation).Type as IArrayTypeSymbol
             )?.ElementType
@@ -4033,12 +4039,7 @@ partial class CSharpToGSharpTranslator {
                             .ToList()
                         FlattenRectangularArrayInitializer(creation.Initializer, 0, rank, [rank]int32, leaves)
                     }
-                    let leafElementType GTypeReference? = this.PromoteElementTypeForNullElements(
-                        elementType,
-                        elementTypeSymbol,
-                        leaves,
-                        creation
-                    )
+                    let leafElementType = elementType
                     let leafAcceptsNil = leafElementType!!.IsNullable
                     return ArrayAllocationExpression(
                         leafElementType,
@@ -4053,10 +4054,6 @@ partial class CSharpToGSharpTranslator {
                             .ToList()
                     )
                 }
-                if elementType != nil && !elementType.IsNullable && this.IsWidenedArrayCreationElement(creation) {
-                    elementType = MakeNullable(elementType)
-                }
-                elementType = this.PromoteObliviousArrayElement(elementType, elementTypeSymbol, creation)
                 return ArrayAllocationExpression(
                     elementType,
                     creation
@@ -4072,12 +4069,7 @@ partial class CSharpToGSharpTranslator {
             if creation.Initializer != nil {
                 // `new T[]{a, b}` / `new T[0]` (with an explicit, possibly empty,
                 // initializer) → the slice literal `[]T{a, b}`.
-                let literalElementType GTypeReference? = this.PromoteElementTypeForNullElements(
-                    elementType,
-                    elementTypeSymbol,
-                    creation.Initializer!!.Expressions,
-                    creation
-                )
+                let literalElementType = elementType
                 let literalAcceptsNil = literalElementType!!.IsNullable
                 return ArrayLiteralExpression(
                     literalElementType,
@@ -4119,17 +4111,36 @@ partial class CSharpToGSharpTranslator {
             } else {
                 length = LiteralExpression.Int("0")
             }
-            // Issues #4482/#4491: an element of this array passed by `out`/`ref` to a
-            // parameter cs2gs emits `T?` is storage the callee may write nil
-            // into, and gsc requires by-ref storage to match the parameter's
-            // nullability exactly (GS0612). Widen the ELEMENT (`[n]T?`).
-            if elementType != nil && elementType.IsNullable == false && this.IsWidenedArrayCreationElement(creation) {
+            return ArrayAllocationExpression(elementType, length)
+        }
+
+        // Allocations and typed local materializations must retain the same element contract.
+        private func MapArrayCreationElementType(creation ArrayCreationExpressionSyntax) GTypeReference? {
+            var elementType = this.GetArrayElementType(creation, creation.Type.ElementType)
+            let elementTypeSymbol = (this.context.GetTypeInfo(creation).Type as IArrayTypeSymbol)?.ElementType
+            let rectangular = creation.Type.RankSpecifiers.Count > 0 && creation.Type.RankSpecifiers[0].Sizes.Count > 1
+            if creation.Initializer != nil {
+                if rectangular {
+                    let rank = creation.Type.RankSpecifiers[0].Sizes.Count
+                    let leaves = List[ExpressionSyntax]()
+                    FlattenRectangularArrayInitializer(creation.Initializer, 0, rank, [rank]int32, leaves)
+                    return this.PromoteElementTypeForNullElements(elementType, elementTypeSymbol, leaves, creation)
+                }
+                return this.PromoteElementTypeForNullElements(
+                    elementType,
+                    elementTypeSymbol,
+                    creation.Initializer!!.Expressions,
+                    creation
+                )
+            }
+            if elementType != nil && !elementType.IsNullable && this.IsWidenedArrayCreationElement(creation) {
                 elementType = MakeNullable(elementType)
             }
-            // Issue #5537: an array stored in oblivious container storage has its
-            // element type, nested positions included (#5541).
             elementType = this.PromoteObliviousArrayElement(elementType, elementTypeSymbol, creation)
-            if this.TryGetAssignedInferredArrayInitializer(creation, out var lhsDepthOffset) is {} assignedInitArray {
+            if !rectangular && this.TryGetAssignedInferredArrayInitializer(
+                creation,
+                out var lhsDepthOffset
+            ) is {} assignedInitArray {
                 let initComponent = this.GetImplicitArrayComponent(assignedInitArray)
                 elementType = this.PromoteImplicitArrayLevel(
                     elementType,
@@ -4139,7 +4150,7 @@ partial class CSharpToGSharpTranslator {
                     initComponent.Depth + lhsDepthOffset
                 )
             }
-            return ArrayAllocationExpression(elementType, length)
+            return elementType
         }
 
         // Issues #4482, #4491, #4500 and #4507: the one decision "this array
@@ -4176,18 +4187,19 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return true
             }
-            if position != "0" || symbol is not ILocalSymbol local {
+            if symbol is not ILocalSymbol local {
                 return false
             }
             let allocationOwner ILocalSymbol? = this.GetArrayAllocationOwner(
                 local,
-                HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
+                HashSet[ILocalSymbol](SymbolEqualityComparer.Default),
+                out var depth
             )
+            let allocationPosition = JoinPosition(string.Join(".", Enumerable.Repeat("0", depth)), position)
             return allocationOwner != nil &&
                 (
-                this.ObliviousContainerPositions(allocationOwner)?.Contains("0") == true || this.ElementWrittenMaybeNil(
-                    allocationOwner
-                )
+                this.ObliviousContainerPositions(allocationOwner)?.Contains(allocationPosition) == true ||
+                    this.ElementWrittenMaybeNil(allocationOwner, allocationPosition, checkRefStorage)
             )
         }
 
@@ -4311,18 +4323,46 @@ partial class CSharpToGSharpTranslator {
                     .MappedArrayElementByElementType
                     .Add(array.ElementType, mappedElement)
             }
+            let (storage, depth) = ObliviousNullabilityAnalyzer.RefArrayStorage(
+                expression!!,
+                this.context.SemanticModel
+            )
             if mappedElement != nil &&
                 !mappedElement.IsNullable &&
                 array
                 .ElementType
                 .IsReferenceType &&
-                this.ImplicitArrayExpressionHasPromotedNullableElement(expression) {
+                (
+                this.IsWidenedArrayElementStorage(storage, string.Join(".", Enumerable.Repeat("0", depth + 1))) ||
+                    this.ImplicitArrayExpressionHasPromotedNullableElement(expression)
+            ) {
                 return MakeNullable(mappedElement)
             }
             return mappedElement
         }
 
         private func ApplyMappedArrayElementShape(source ITypeSymbol?, mapped GTypeReference?) ITypeSymbol? {
+            var mapped = mapped
+            if source is INamedTypeSymbol native {
+                let element GTypeReference? = switch mapped {
+                    case managed is ManagedReferenceTypeReference when CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(
+                        native,
+                        this.context.Compilation
+                    ): managed.ElementType
+                    case slice is NativeSliceTypeReference when CSharpTypeMapper.IsRecognizedRuntimeConsumerType(
+                        native,
+                        this.context.Compilation,
+                        "Slice",
+                        "ReadOnlySlice"
+                    ): slice.ElementType
+                    default: default(GTypeReference?)
+                }
+                if element != nil {
+                    mapped = NamedTypeReference(native.Name, []GTypeReference{element}){
+                        IsNullable = mapped!!.IsNullable
+                    }
+                }
+            }
             if source is IArrayTypeSymbol sourceArray && mapped is ArrayTypeReference mappedArray {
                 let element ITypeSymbol? = this.ApplyMappedArrayElementShape(
                     sourceArray.ElementType,
@@ -4482,7 +4522,12 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
-        private func GetArrayAllocationOwner(local ILocalSymbol, visited HashSet[ILocalSymbol]) ILocalSymbol? {
+        private func GetArrayAllocationOwner(
+            local ILocalSymbol,
+            visited HashSet[ILocalSymbol],
+            out depth int32
+        ) ILocalSymbol? {
+            depth = 0
             if local.Type is not(IArrayTypeSymbol and {Rank: 1, ElementType: {IsReferenceType: true}}) || !visited.Add(
                 local
             ) {
@@ -4497,7 +4542,7 @@ partial class CSharpToGSharpTranslator {
                     .context
                     .GetSymbolInfo(deconstructedValue)
                     .Symbol is ILocalSymbol deconstructedSource {
-                    return this.GetArrayAllocationOwner(deconstructedSource, visited)
+                    return this.GetArrayAllocationOwner(deconstructedSource, visited, out depth)
                 }
                 if !(declaration is VariableDeclaratorSyntax{Initializer: {Value: {} initializer}} declarator) {
                     continue
@@ -4506,12 +4551,16 @@ partial class CSharpToGSharpTranslator {
                 if value is ArrayCreationExpressionSyntax && value.Initializer == nil {
                     return local
                 }
-                if (declarator.Parent is VariableDeclarationSyntax and {Type: {IsVar: true}}) &&
-                    this
-                    .context
-                    .GetSymbolInfo(value)
-                    .Symbol is ILocalSymbol source {
-                    return this.GetArrayAllocationOwner(source, visited)
+                if declarator.Parent is VariableDeclarationSyntax{Type: {IsVar: true}} {
+                    let (source, offset) = ObliviousNullabilityAnalyzer.RefArrayStorage(
+                        value!!,
+                        this.context.SemanticModel
+                    )
+                    if source is ILocalSymbol sourceLocal {
+                        let owner = this.GetArrayAllocationOwner(sourceLocal, visited, out var sourceDepth)
+                        depth = offset + sourceDepth
+                        return owner
+                    }
                 }
             }
             return nil
@@ -4559,7 +4608,10 @@ partial class CSharpToGSharpTranslator {
             .Symbol is ILocalSymbol local &&
             SymbolEqualityComparer
             .Default
-            .Equals(this.GetArrayAllocationOwner(local, HashSet[ILocalSymbol](SymbolEqualityComparer.Default)), owner)
+            .Equals(
+            this.GetArrayAllocationOwner(local, HashSet[ILocalSymbol](SymbolEqualityComparer.Default), out _),
+            owner
+        )
 
         private func HasConcreteReferenceArrayPosition(owner ISymbol, position string) bool {
             var current ITypeSymbol? = ObliviousNullabilityAnalyzer.SymbolValueType(owner)
@@ -4622,16 +4674,12 @@ partial class CSharpToGSharpTranslator {
                             )
                         ) &&
                             Unparenthesize(argument.Expression) is ElementAccessExpressionSyntax elementAccess {
-                            var target ExpressionSyntax = elementAccess
-                            var accessPosition = ""
-                            while target is ElementAccessExpressionSyntax currentAccess &&
-                                this
-                                .context
-                                .GetTypeInfo(currentAccess.Expression)
-                                .Type is IArrayTypeSymbol {
-                                accessPosition = JoinPosition("0", accessPosition)
-                                target = Unparenthesize(currentAccess.Expression)!!
-                            }
+                            let (_, accessDepth) = ObliviousNullabilityAnalyzer.RefArrayStorage(
+                                elementAccess,
+                                this.context.SemanticModel,
+                                out var target
+                            )
+                            let accessPosition = string.Join(".", Enumerable.Repeat("0", accessDepth))
                             if accessPosition == position && this.IsArrayStorageAlias(target, normalizedOwner) &&
                                 this
                                 .context
@@ -4768,6 +4816,16 @@ partial class CSharpToGSharpTranslator {
         // the element must be `T?` too. Otherwise the write is bridged with
         // `!!`, which throws on the nil that C# simply stores.
         private func ElementWrittenMaybeNil(owner ISymbol?, position string = "0", checkRefStorage bool = true) bool {
+            var owner = owner
+            var position = position
+            if owner is ILocalSymbol local && this.GetArrayAllocationOwner(
+                local,
+                HashSet[ILocalSymbol](SymbolEqualityComparer.Default),
+                out var ownerDepth
+            ) is {} allocationOwner {
+                owner = allocationOwner
+                position = JoinPosition(string.Join(".", Enumerable.Repeat("0", ownerDepth)), position)
+            }
             let scope_ SyntaxNode? = this.GetNullabilityScope(owner)
             if scope_ == nil {
                 return false
@@ -4777,10 +4835,18 @@ partial class CSharpToGSharpTranslator {
                 return this.ElementWrittenMaybeNil(owner, position, checkRefStorage)
             }
             for assignment in scope_.DescendantNodes().OfType[AssignmentExpressionSyntax]() {
-                let (storage, depth) = ObliviousNullabilityAnalyzer.RefArrayStorage(
+                var (storage, depth) = ObliviousNullabilityAnalyzer.RefArrayStorage(
                     assignment.Left,
                     this.context.SemanticModel
                 )
+                if storage is ILocalSymbol local && this.GetArrayAllocationOwner(
+                    local,
+                    HashSet[ILocalSymbol](SymbolEqualityComparer.Default),
+                    out var storageDepth
+                ) is {} allocationOwner {
+                    storage = allocationOwner
+                    depth += storageDepth
+                }
                 if assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) && depth == position.Split('.')
                     .Length &&
                     SymbolEqualityComparer
@@ -4991,10 +5057,11 @@ partial class CSharpToGSharpTranslator {
                 targetSymbol: nil,
                 reportedTarget: arrayType
             )
-            if translated is NonNullAssertionExpression || !this.TargetWillRemainNonNullableReference(
-                elementType,
-                targetSymbol: nil
+            if translated is NonNullAssertionExpression || this.GSharpExpressionIsStaticallyNonNull(
+                expression,
+                translated
             ) ||
+                !this.TargetWillRemainNonNullableReference(elementType, targetSymbol: nil) ||
                 IsNullOrSuppressedNull(expression) {
                 return translated
             }
@@ -5661,7 +5728,7 @@ partial class CSharpToGSharpTranslator {
             if elementType?.IsNullable != true &&
                 IsNullOrSuppressedNull(element) &&
                 targetElementSymbol?.IsReferenceType == true &&
-                targetElementSymbol!!.NullableAnnotation != Microsoft
+                targetElementSymbol.NullableAnnotation != Microsoft
                 .CodeAnalysis
                 .NullableAnnotation
                 .Annotated &&
@@ -5675,7 +5742,7 @@ partial class CSharpToGSharpTranslator {
                 !IsNullOrSuppressedNull(element) &&
                 !this.IsWithinExpressionTreeLambda(element) &&
                 targetElementSymbol?.IsReferenceType == true &&
-                targetElementSymbol!!.NullableAnnotation != Microsoft
+                targetElementSymbol.NullableAnnotation != Microsoft
                 .CodeAnalysis
                 .NullableAnnotation
                 .Annotated &&

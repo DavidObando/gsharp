@@ -125,6 +125,7 @@ internal partial class DeclarationBinder {
             }
         }
         try {
+            EnsureDeclarationSignatureHeaders(syntax)
             ResolvePartialTypeParameterConstraints(
                 syntax.TypeParameterList,
                 syntax.PartialTypeParameterLists,

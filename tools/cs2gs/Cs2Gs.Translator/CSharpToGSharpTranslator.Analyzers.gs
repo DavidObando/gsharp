@@ -180,6 +180,17 @@ partial class CSharpToGSharpTranslator {
                 }
                 suffix = PropertyPattern(fields, suffix?.Designator)
             }
+            let designation = switch site {
+                case declaration is DeclarationPatternSyntax: declaration.Designation
+                case recursive is RecursivePatternSyntax: recursive.Designation
+                default: default(VariableDesignationSyntax?)
+            }
+            if designation is SingleVariableDesignationSyntax single && this.context.GetDeclaredSymbol(
+                single
+            ) is ILocalSymbol local &&
+                designator == this.EmittedName(local, local.Name) {
+                this.RecordEmittedLocalNullability(local, mapped, nil, nil)
+            }
             return TypePattern(designator, mapped, suffix, designationAfterType)
         }
 
@@ -1989,7 +2000,7 @@ partial class CSharpToGSharpTranslator {
             for argument in invocation.ArgumentList.Arguments {
                 let parameter IParameterSymbol? = DetermineParameter(argument, this.context)
                 let parameterType ITypeSymbol? = if parameter?.IsParams == true {
-                    (parameter!!.Type as IArrayTypeSymbol)?.ElementType
+                    (parameter.Type as IArrayTypeSymbol)?.ElementType
                 } else {
                     parameter?.Type
                 }

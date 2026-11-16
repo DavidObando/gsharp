@@ -57,7 +57,7 @@ internal class ObliviousSignatureGroups {
     init(compilation Compilation) {
         let visited = HashSet[ISymbol](SymbolEqualityComparer.Default)
         for tree in compilation.SyntaxTrees {
-            let model = TranslationContext.GetSemanticModel(compilation, tree)
+            let model = TranslationContext.GetEffectiveSemanticModel(compilation, tree)
             for declaration in tree.GetRoot().DescendantNodes().OfType[BaseTypeDeclarationSyntax]() {
                 if model.GetDeclaredSymbol(declaration) is not INamedTypeSymbol type || !visited.Add(type) {
                     continue
@@ -224,7 +224,8 @@ partial class CSharpToGSharpTranslator {
             symbol
         ) != nil
 
-        private func ObliviousContainerFlowState() ObliviousContainerFlow -> ObliviousContainerFlowCache.GetValue(
+        private func ObliviousContainerFlowState() ObliviousContainerFlow -> ObliviousContainerFlowCache
+            .GetOrCreateValue(this.context.CatalogIdentity).GetValue(
             this.context.Compilation,
             (compilation Compilation) -> this.CollectObliviousContainerFlow(compilation)
         )
@@ -415,6 +416,14 @@ partial class CSharpToGSharpTranslator {
             mappedType ITypeSymbol,
             parameter IParameterSymbol
         ) GTypeReference? {
+            var type = type
+            if type != nil && this.NullArgumentParamsElementIsPromoted(parameter) {
+                type = if SymbolEqualityComparer.Default.Equals(mappedType, parameter.Type) {
+                    PromoteNestedPositions(type, mappedType, HashSet[string](System.StringComparer.Ordinal){"0"}, "")
+                } else {
+                    MakeNullable(type)
+                }
+            }
             if SymbolEqualityComparer.Default.Equals(mappedType, parameter.Type) {
                 return this.PromoteObliviousContainerStorage(type, parameter)
             }
@@ -438,8 +447,19 @@ partial class CSharpToGSharpTranslator {
         private func ObliviousParamsElementIsPromoted(parameter IParameterSymbol) bool -> GetParamsElementType(
             parameter
         ) != nil &&
-            this
-            .ObliviousContainerPositions(parameter)?.Contains("0") == true
+            (
+            this.ObliviousContainerPositions(parameter)?.Contains("0") == true ||
+                this.NullArgumentParamsElementIsPromoted(parameter)
+        )
+
+        private func NullArgumentParamsElementIsPromoted(
+            parameter IParameterSymbol
+        ) bool -> ObliviousNullabilityAnalyzer
+            .IsNullArgumentParamsElementTarget(
+            this.context.Compilation,
+            parameter,
+            this.context.RepositoryCompilations ?? this.context.SiblingCompilations
+        )
 
         /// Issue #5537: a construction stored in oblivious container storage spells the
         /// same nullable positions as the storage, so no conversion changes them.
@@ -2187,9 +2207,10 @@ partial class CSharpToGSharpTranslator {
                     (Creation AnonymousObjectCreationExpressionSyntax, Properties[]IPropertySymbol, Model SemanticModel)
                 ]
             ](System.StringComparer.Ordinal)
-            for tree in compilation.SyntaxTrees {
-                let model = TranslationContext.GetSemanticModel(compilation, tree)
-                for node in tree.GetRoot().DescendantNodes() {
+            for root in TranslationContext.GetEffectiveSyntaxRoots(compilation) {
+                let tree = root.SyntaxTree
+                let model = this.context.GetOwnedSemanticModel(tree, cast[CSharpCompilation](compilation))
+                for node in TranslationContext.GetEffectiveNodes(root, compilation) {
                     if node is AnonymousObjectCreationExpressionSyntax anonymousCreation && model.GetTypeInfo(
                         anonymousCreation
                     )
@@ -2261,15 +2282,12 @@ partial class CSharpToGSharpTranslator {
                                 byRefParameter
                             )
                         ) {
-                            var target ExpressionSyntax = elementAccess
-                            var accessPosition = ""
-                            while target is ElementAccessExpressionSyntax currentAccess && model.GetTypeInfo(
-                                currentAccess.Expression
+                            let (_, accessDepth) = ObliviousNullabilityAnalyzer.RefArrayStorage(
+                                elementAccess,
+                                model,
+                                out var target
                             )
-                                .Type is IArrayTypeSymbol {
-                                accessPosition = JoinPosition("0", accessPosition)
-                                target = Unparenthesize(currentAccess.Expression)!!
-                            }
+                            let accessPosition = string.Join(".", Enumerable.Repeat("0", accessDepth))
                             if accessPosition != "" {
                                 this.AddAliasedSourcePositions(
                                     flow,
@@ -2990,9 +3008,9 @@ partial class CSharpToGSharpTranslator {
 
         shared {
             private let ObliviousContainerFlowCache ConditionalWeakTable[
-                Compilation,
-                ObliviousContainerFlow
-            ] = ConditionalWeakTable[Compilation, ObliviousContainerFlow]()
+                object,
+                ConditionalWeakTable[Compilation, ObliviousContainerFlow]
+            ] = ConditionalWeakTable[object, ConditionalWeakTable[Compilation, ObliviousContainerFlow]]()
 
             // The declared positions of storage. A lambda parameter is found by its
             // declaration.
@@ -3916,16 +3934,9 @@ partial class CSharpToGSharpTranslator {
             }
 
             // The type, its base types and its interfaces, in a fixed order.
-            private func ContainerViews(type INamedTypeSymbol) List[INamedTypeSymbol] {
-                let views = List[INamedTypeSymbol]()
-                var current INamedTypeSymbol? = type
-                while current != nil {
-                    views.Add(current)
-                    current = current.BaseType
-                }
-                views.AddRange(type.AllInterfaces)
-                return views
-            }
+            private func ContainerViews(type INamedTypeSymbol) List[
+                INamedTypeSymbol
+            ] -> ObliviousNullabilityAnalyzer.ContainerViews(type)
 
             // Adds the positions of [`type`](paramref) after each type parameter is
             // replaced by its positions in [`bindings`](paramref).

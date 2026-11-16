@@ -54,18 +54,17 @@ partial class CSharpToGSharpTranslator {
             if IsConcurrencyRuntimeNamespace(symbol!!.ContainingType?.ContainingNamespace) {
                 return false
             }
-            let model = if this.context.SemanticModel.SyntaxTree == node.SyntaxTree {
-                this.context.SemanticModel
-            } else {
-                this.context.Compilation.GetSemanticModel(node.SyntaxTree)
-            }
-            for descendant in node.DescendantNodes() {
-                if !((descendant is IdentifierNameSyntax || descendant is GenericNameSyntax)) {
-                    continue
-                }
-                let resolved ISymbol? = model.GetSymbolInfo(descendant).Symbol
-                if IsConcurrencyRuntimeNamespace(NamespaceOf(resolved)) {
-                    return true
+            let owner = this.context.SourceCompilation(symbol!!) ?? this.context.Compilation
+            for root in TranslationContext.GetEffectiveScopeRoots(node, owner) {
+                let model = TranslationContext.GetEffectiveSemanticModel(owner, root.SyntaxTree)
+                for descendant in TranslationContext.GetEffectiveNodes(root, owner) {
+                    if !((descendant is IdentifierNameSyntax || descendant is GenericNameSyntax)) {
+                        continue
+                    }
+                    let resolved ISymbol? = model.GetSymbolInfo(descendant).Symbol
+                    if IsConcurrencyRuntimeNamespace(NamespaceOf(resolved)) {
+                        return true
+                    }
                 }
             }
             return false

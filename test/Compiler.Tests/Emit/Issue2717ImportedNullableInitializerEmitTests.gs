@@ -206,7 +206,7 @@ public sealed class Holder2717
             return if string.IsNullOrEmpty(assemblies) {
                 cast[IEnumerable[string]](Array.Empty[string]())
             } else {
-                assemblies!!.Split(Path.PathSeparator).Where(File.Exists)
+                assemblies.Split(Path.PathSeparator).Where(File.Exists)
             }
         }
     }

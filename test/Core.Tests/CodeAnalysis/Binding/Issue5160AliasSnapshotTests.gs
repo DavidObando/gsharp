@@ -17,6 +17,22 @@ import Xunit
 // scope that body workers share. Each memo is one immutable snapshot behind one
 // reference, so concurrent first readers agree on a single published value.
 class Issue5160AliasSnapshotTests {
+    @Fact
+    func UnrelatedNestedAliases_DoNotWalkUnmatchingHierarchies() {
+        let source = StringBuilder("class Unrelated { public class Distractor {} }\n")
+        for var index = 0; index < 256; index++ {
+            source.Append("open class C").Append(index)
+            if index < 255 {
+                source.Append(" : C").Append(index + 1)
+            }
+            source.Append(" {}\n")
+        }
+        using let measurements = CompilationMeasurements.Start("test")
+        let compilation = Compilation(SyntaxTree.Parse(source.ToString()))
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Equal(int64(0), measurements.GetCounter("alias.inherited-hierarchy-walks"))
+    }
+
     private func DeclareTypes(count int32)[]StructSymbol {
         let source = StringBuilder("package Snap5160\n")
         for var index = 0; index < count; index++ {

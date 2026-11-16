@@ -35,7 +35,7 @@ import Xunit
 /// | a record from another project's emitted reference | GS0155, GS0159 | as for a record of this project |
 /// | `var n = entry.Item ?? entry.Item` / `flag ? entry.Item : new Node()`, then `(n, i) = Empty()` | `n = nValue` | unchanged: storage inferred from a composed nullable read |
 /// | `var n = new Node(); (n, i) = entry` | GS0155 | `n = nValue!!`: the emitted initializer is certainly non-null |
-/// | `entry.Item is var p` / `is Node p`, then `(p, i) = Empty()` (no recorded storage) | `p = pValue` | unchanged (#5605): an unknown local is not bridged |
+/// | `entry.Item is var p` / `is Node p`, then `(p, i) = Empty()` | `p = pValue` | unchanged (#5605): the emitted nullable storage is recorded |
 /// | the same, when the consumer tests `entry.Item != null` | GS0155 | `var n Node?`: the taint keys the metadata property, as `n = entry.Item` does |
 /// | `(holder.Value, i) = entry` into another project's `Holder<T>.Value`, which the consumer null-tests | GS0155 | `holder.Value = holderValue!!`: a field is decided by its declaration |
 /// | `(h.Stored, i) = entry` into another project's `[AllowNull]` property | GS0155 | `h.Stored = hValue`: the #5577 query (`HasRunAllowNullWriteContract`) keeps the slot `T?` |
@@ -213,8 +213,8 @@ namespace Demo
         Assert.Contains("n = nValue\n", printed)
     }
 
-    /// A pattern variable has no recorded declared storage (#5605), so the bridge leaves its store as it
-    /// is on `main`: the lowerings emit `var p Node?`, and the null that C# stores is stored, not asserted.
+    /// The original unknown-storage repro now records nullable pattern storage (#5605).
+    /// The lowerings still emit `var p Node?`, and the store still accepts null without an assertion.
     @Fact
     func StoreIntoALocalOfUnknownStorage_IsNotBridged() {
         let printed = Translate(`

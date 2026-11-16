@@ -405,7 +405,7 @@ internal class ImportedMemberRefFactory {
         // the emitted PE failed to load with BadImageFormatException the
         // moment the `typeof` ran.
         if TryGetOpenGenericDefinition(type, out var definition) && this.TryGetUserTypeDef(
-            definition!!,
+            definition,
             out var definitionHandle
         ) {
             return definitionHandle
@@ -2031,7 +2031,7 @@ internal class ImportedMemberRefFactory {
             // A non-reflection-only answer means the resolver searched the host's
             // own runtime assemblies (ReferenceResolver.Default). Projecting there
             // would be a no-op at best and a cross-identity swap at worst.
-            if !resolved!!.Assembly.ReflectionOnly {
+            if !resolved.Assembly.ReflectionOnly {
                 return false
             }
             projected = resolved

@@ -420,15 +420,15 @@ class FunctionTypeSymbol : TypeSymbol {
                         if (!function.IsVariadic.IsDefaultOrEmpty && function.IsVariadic[i]) {
                             builder.Append("...")
                         }
-                        appendComponent!!(builder, function.ParameterTypes[i])
+                        appendComponent(builder, function.ParameterTypes[i])
                         builder.Append(',')
                     }
                     builder.Append(")->")
-                    appendComponent!!(builder, function.ReturnType)
+                    appendComponent(builder, function.ReturnType)
                 }
                 case n is NullableTypeSymbol {
                     builder.Append("!nullable(")
-                    appendComponent!!(builder, n.UnderlyingType)
+                    appendComponent(builder, n.UnderlyingType)
                     builder.Append(')')
                 }
                 case p2 is PlatformTypeSymbol {
@@ -436,12 +436,12 @@ class FunctionTypeSymbol : TypeSymbol {
                     // copy is reachable through the `ContainsTypeParameter` /
                     // same-compilation-user-type routes, which come here directly.
                     builder.Append("!platform(")
-                    appendComponent!!(builder, p2.UnderlyingType)
+                    appendComponent(builder, p2.UnderlyingType)
                     builder.Append(')')
                 }
                 case s is SliceTypeSymbol {
                     builder.Append("!slice(")
-                    appendComponent!!(builder, s.ElementType)
+                    appendComponent(builder, s.ElementType)
                     builder.Append(')')
                 }
                 case a is ArrayTypeSymbol {
@@ -450,17 +450,17 @@ class FunctionTypeSymbol : TypeSymbol {
                     // and `[5]int32` (and `[]int32`, via the distinct `!slice` tag
                     // above) would otherwise collide.
                     builder.Append("!array(").Append(a.Length).Append(',')
-                    appendComponent!!(builder, a.ElementType)
+                    appendComponent(builder, a.ElementType)
                     builder.Append(')')
                 }
                 case a is RectangularArrayTypeSymbol {
                     builder.Append("!mdarray(").Append(a.Rank).Append(',')
-                    appendComponent!!(builder, a.ElementType)
+                    appendComponent(builder, a.ElementType)
                     builder.Append(')')
                 }
                 case p is PinnedTypeSymbol {
                     builder.Append("!pinned(")
-                    appendComponent!!(builder, p.UnderlyingType)
+                    appendComponent(builder, p.UnderlyingType)
                     builder.Append(')')
                 }
                 case na is NullabilityAnnotatedTypeSymbol {
@@ -472,31 +472,31 @@ class FunctionTypeSymbol : TypeSymbol {
                     for var i = 0; i < na.NullableFlags.Length; i++ {
                         builder.Append(na.NullableFlags[i]).Append(',')
                     }
-                    appendComponent!!(builder, na.BaseType)
+                    appendComponent(builder, na.BaseType)
                     builder.Append(')')
                 }
                 case seq is SequenceTypeSymbol {
                     builder.Append("!seq(")
-                    appendComponent!!(builder, seq.ElementType)
+                    appendComponent(builder, seq.ElementType)
                     builder.Append(')')
                 }
                 case aseq is AsyncSequenceTypeSymbol {
                     builder.Append("!aseq(")
-                    appendComponent!!(builder, aseq.ElementType)
+                    appendComponent(builder, aseq.ElementType)
                     builder.Append(')')
                 }
                 case channel is ChannelTypeSymbol {
                     builder.Append("!chan")
                     builder.Append(int32(channel.Direction))
                     builder.Append('(')
-                    appendComponent!!(builder, channel.ElementType)
+                    appendComponent(builder, channel.ElementType)
                     builder.Append(')')
                 }
                 case m is MapTypeSymbol {
                     builder.Append("!map(")
-                    appendComponent!!(builder, m.KeyType)
+                    appendComponent(builder, m.KeyType)
                     builder.Append(',')
-                    appendComponent!!(builder, m.ValueType)
+                    appendComponent(builder, m.ValueType)
                     builder.Append(')')
                 }
                 case tup is TupleTypeSymbol {
@@ -505,7 +505,7 @@ class FunctionTypeSymbol : TypeSymbol {
                         if i > 0 {
                             builder.Append(',')
                         }
-                        appendComponent!!(builder, tup.ElementTypes[i])
+                        appendComponent(builder, tup.ElementTypes[i])
                     }
                     builder.Append(')')
                     // Issue #4160 (found alongside #4133): mirror
@@ -530,12 +530,12 @@ class FunctionTypeSymbol : TypeSymbol {
                 }
                 case br is ByRefTypeSymbol {
                     builder.Append("!byref(")
-                    appendComponent!!(builder, br.PointeeType)
+                    appendComponent(builder, br.PointeeType)
                     builder.Append(')')
                 }
                 case pointer is PointerTypeSymbol {
                     builder.Append("!ptr(")
-                    appendComponent!!(builder, pointer.PointeeType)
+                    appendComponent(builder, pointer.PointeeType)
                     builder.Append(')')
                 }
                 case functionPointer is FunctionPointerTypeSymbol {
@@ -555,10 +555,10 @@ class FunctionTypeSymbol : TypeSymbol {
                         if i > 0 {
                             builder.Append(',')
                         }
-                        appendComponent!!(builder, functionPointer.ParameterTypes[i])
+                        appendComponent(builder, functionPointer.ParameterTypes[i])
                     }
                     builder.Append(")->")
-                    appendComponent!!(builder, functionPointer.ReturnType)
+                    appendComponent(builder, functionPointer.ReturnType)
                     builder.Append(')')
                 }
                 case st is StructSymbol when !st
@@ -573,7 +573,7 @@ class FunctionTypeSymbol : TypeSymbol {
                         if i > 0 {
                             builder.Append(',')
                         }
-                        appendComponent!!(builder, effectiveArgs[i])
+                        appendComponent(builder, effectiveArgs[i])
                     }
                     builder.Append(')')
                 }
@@ -594,7 +594,7 @@ class FunctionTypeSymbol : TypeSymbol {
                         if i > 0 {
                             builder.Append(',')
                         }
-                        appendComponent!!(builder, effectiveArgs[i])
+                        appendComponent(builder, effectiveArgs[i])
                     }
                     builder.Append(')')
                 }
@@ -604,10 +604,10 @@ class FunctionTypeSymbol : TypeSymbol {
                         if i > 0 {
                             builder.Append(',')
                         }
-                        appendComponent!!(builder, del.Parameters[i].Type)
+                        appendComponent(builder, del.Parameters[i].Type)
                     }
                     builder.Append(")->")
-                    appendComponent!!(builder, del.ReturnType)
+                    appendComponent(builder, del.ReturnType)
                 }
                 case it is ImportedTypeSymbol when !it.TypeArguments.IsDefaultOrEmpty {
                     builder.Append("!imported:").Append(it.OpenDefinition?.FullName ?? it.Name).Append('(')
@@ -615,7 +615,7 @@ class FunctionTypeSymbol : TypeSymbol {
                         if i > 0 {
                             builder.Append(',')
                         }
-                        appendComponent!!(builder, it.TypeArguments[i])
+                        appendComponent(builder, it.TypeArguments[i])
                     }
                     builder.Append(')')
                 }
@@ -624,7 +624,7 @@ class FunctionTypeSymbol : TypeSymbol {
                     // composite kinds handled above (see AnyTypeParameter), so
                     // this default is unreachable in practice; keep the
                     // name-based fallback for safety.
-                    appendLeaf!!(builder, type)
+                    appendLeaf(builder, type)
                 }
             }
         }

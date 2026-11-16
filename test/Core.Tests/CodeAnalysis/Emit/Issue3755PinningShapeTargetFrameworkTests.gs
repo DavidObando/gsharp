@@ -461,7 +461,7 @@ Console.WriteLine(FirstChar("gsharp"))
                 default(string)
             } else {
                 Directory
-                    .GetParent(runtimeDirectory!!)
+                    .GetParent(runtimeDirectory)
                     ?.Parent
                     ?.Parent
                     ?.FullName ??

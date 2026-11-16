@@ -34,16 +34,16 @@ internal partial class OverloadResolver {
             !(argument is BoundClrMethodGroupExpression) ||
             !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(parameterType, out var target) ||
             (
-            !TypeSymbol.ContainsTypeParameter(target!!.ReturnType) && !target!!.ParameterTypes.Any(
+            !TypeSymbol.ContainsTypeParameter(target.ReturnType) && !target.ParameterTypes.Any(
                 TypeSymbol.ContainsTypeParameter
             )
         ) {
             return
         }
         var hasUnboundInput = false
-        let closedInputs = [target!!.ParameterTypes.Length]TypeSymbol
+        let closedInputs = [target.ParameterTypes.Length]TypeSymbol
         for var i = 0; i < closedInputs.Length; i++ {
-            let closedInput TypeSymbol? = substituteType(target!!.ParameterTypes[i], substitution)
+            let closedInput TypeSymbol? = substituteType(target.ParameterTypes[i], substitution)
             if closedInput == nil || closedInput == TypeSymbol.Error || TypeSymbol.ContainsTypeParameter(closedInput) {
                 hasUnboundInput = true
                 break
@@ -57,22 +57,22 @@ internal partial class OverloadResolver {
                 ResolveUserMethodGroupReturn(cast[BoundMethodGroupExpression](argument), closedInputs)
             }
             if selectedReturn != nil {
-                inferTypeArguments(target!!.ReturnType, selectedReturn, substitution)
+                inferTypeArguments(target.ReturnType, selectedReturn, substitution)
             }
             return
         }
         if !TryGetSingleMethodGroupSignature(
             argument,
-            target!!.ParameterTypes.Length,
+            target.ParameterTypes.Length,
             out var candidateParameters,
             out var candidateReturn
         ) {
             return
         }
-        for var i = 0; i < target!!.ParameterTypes.Length; i++ {
-            inferTypeArguments(target!!.ParameterTypes[i], candidateParameters!![i], substitution)
+        for var i = 0; i < target.ParameterTypes.Length; i++ {
+            inferTypeArguments(target.ParameterTypes[i], candidateParameters[i], substitution)
         }
-        inferTypeArguments(target!!.ReturnType, candidateReturn!!, substitution)
+        inferTypeArguments(target.ReturnType, candidateReturn, substitution)
     }
 
     private func TryGetSingleMethodGroupSignature(
@@ -724,7 +724,7 @@ internal partial class OverloadResolver {
         try {
             var bound = BindCallExpressionCore(syntax, resolvedType)
             if verifyCallArgumentsAfterConversions != nil {
-                bound = verifyCallArgumentsAfterConversions!!(
+                bound = verifyCallArgumentsAfterConversions(
                     syntax.Arguments,
                     bound,
                     () -> BindCallExpressionCore(syntax, resolvedType)
@@ -961,8 +961,8 @@ internal partial class OverloadResolver {
                 (syntax.NullableQuestionToken != nil || !HasSingleArgumentConstructorShape(singleArgClass)) {
                 reportObsoleteUseIfApplicable(
                     syntax.Identifier.Location,
-                    explicitConversionType!!,
-                    explicitConversionType!!.Name
+                    explicitConversionType,
+                    explicitConversionType.Name
                 )
                 return conversions.BindConversion(syntax.Arguments[0], explicitConversionType, allowExplicit: true)
             }
@@ -972,8 +972,8 @@ internal partial class OverloadResolver {
                 // is still a use of the named type.
                 reportObsoleteUseIfApplicable(
                     syntax.Identifier.Location,
-                    explicitConversionType!!,
-                    explicitConversionType!!.Name
+                    explicitConversionType,
+                    explicitConversionType.Name
                 )
                 return conversions.BindConversion(syntax.Arguments[0], explicitConversionType, allowExplicit: true)
             }
@@ -1583,7 +1583,7 @@ internal partial class OverloadResolver {
                     },
                     preArgumentsNarrowing
                 ) {
-                    return inheritedStaticCall!!
+                    return inheritedStaticCall
                 }
                 RestoreNarrowingBindSnapshot(preArgumentsNarrowing)
                 Diagnostics.ReportUndefinedFunction(syntax.Identifier.Location, syntax.Identifier.ValueText)
@@ -1937,6 +1937,7 @@ internal partial class OverloadResolver {
                         overloadSet,
                         boundArguments,
                         syntax.Arguments.Count,
+                        argumentNames,
                         explicitOverloadTypeArguments,
                         out var unconstrainedTypeParameter
                     ) {
@@ -1963,21 +1964,21 @@ internal partial class OverloadResolver {
             }
             function = selected
         }
-        reportObsoleteUseIfApplicable(syntax.Identifier.Location, function!!, function!!.Name)
-        let isVariadic = function!!
+        reportObsoleteUseIfApplicable(syntax.Identifier.Location, function, function.Name)
+        let isVariadic = function
             .Parameters
             .Length > 0 &&
-            function!!
-            .Parameters[function!!.Parameters.Length - 1]
+            function
+            .Parameters[function.Parameters.Length - 1]
             .IsVariadic
         let fixedParamCount = if isVariadic {
-            function!!.Parameters.Length - 1
+            function.Parameters.Length - 1
         } else {
-            function!!.Parameters.Length
+            function.Parameters.Length
         }
         var requiredFixedParamCount = fixedParamCount
         for var i = fixedParamCount - 1; i >= 0; i-- {
-            if function!!.Parameters[i].HasExplicitDefaultValue {
+            if function.Parameters[i].HasExplicitDefaultValue {
                 requiredFixedParamCount = i
             } else {
                 break
@@ -1991,9 +1992,9 @@ internal partial class OverloadResolver {
             .HasExplicitDefaultValue
         // ADR-0063: count of leading non-optional parameters (the minimum a
         // call must supply when there are no variadic parameters).
-        var requiredParamCount = function!!.Parameters.Length
-        for var i = function!!.Parameters.Length - 1; i >= 0; i-- {
-            if function!!.Parameters[i].HasExplicitDefaultValue {
+        var requiredParamCount = function.Parameters.Length
+        for var i = function.Parameters.Length - 1; i >= 0; i-- {
+            if function.Parameters[i].HasExplicitDefaultValue {
                 requiredParamCount = i
             } else {
                 break
@@ -2004,7 +2005,7 @@ internal partial class OverloadResolver {
             argumentNames,
             fixedParamCount,
             functionParameterNameAt,
-            function!!.Name,
+            function.Name,
             syntax
         ) {
             return BoundErrorExpression(nil)
@@ -2013,19 +2014,19 @@ internal partial class OverloadResolver {
             if syntax.Arguments.Count < requiredFixedParamCount {
                 Diagnostics.ReportTooFewArgumentsForVariadic(
                     syntax.Identifier.Location,
-                    function!!.Name,
+                    function.Name,
                     requiredFixedParamCount,
                     syntax.Arguments.Count
                 )
                 return BoundErrorExpression(nil)
             }
-        } else if syntax.Arguments.Count < requiredParamCount || syntax.Arguments.Count > function!!.Parameters.Length {
+        } else if syntax.Arguments.Count < requiredParamCount || syntax.Arguments.Count > function.Parameters.Length {
             var span TextSpan
-            if syntax.Arguments.Count > function!!.Parameters.Length {
+            if syntax.Arguments.Count > function.Parameters.Length {
                 var firstExceedingNode SyntaxNode
-                if function!!.Parameters.Length > 0 {
+                if function.Parameters.Length > 0 {
                     firstExceedingNode = Invariant.Required(
-                        syntax.Arguments.GetSeparator(function!!.Parameters.Length - 1),
+                        syntax.Arguments.GetSeparator(function.Parameters.Length - 1),
                         "an argument list with too many arguments has a separator before the excess arguments",
                         expression: "syntax.Arguments.GetSeparator(function.Parameters.Length - 1)"
                     )
@@ -2050,8 +2051,8 @@ internal partial class OverloadResolver {
                     ),
                     span
                 ),
-                function!!.Name,
-                function!!.Parameters.Length,
+                function.Name,
+                function.Parameters.Length,
                 syntax.Arguments.Count
             )
             return BoundErrorExpression(nil)
@@ -2065,26 +2066,26 @@ internal partial class OverloadResolver {
         // empty in the reorder output, then filled with default-value
         // BoundLiteralExpression here.
         var parameterSyntax[]ExpressionSyntax?
-        let hasOptional = function!!
+        let hasOptional = function
             .Parameters
             .Length > 0 &&
-            requiredParamCount < function!!
+            requiredParamCount < function
             .Parameters
             .Length &&
             !isVariadic
         if (!argumentNames.IsDefault && !isVariadic) ||
-            (hasOptional && syntax.Arguments.Count < function!!.Parameters.Length) {
+            (hasOptional && syntax.Arguments.Count < function.Parameters.Length) {
             if !TryReorderUserCallArguments(
                 syntax.Arguments,
                 boundArguments.ToImmutable(),
-                function!!.Parameters.Length,
+                function.Parameters.Length,
                 functionParameterNameAt,
                 if hasOptional {
                     functionParameterIsOptional
                 } else {
                     default(((int32) -> bool)?)
                 },
-                function!!.Name,
+                function.Name,
                 out parameterSyntax,
                 out var permutedBound
             ) {
@@ -2094,7 +2095,7 @@ internal partial class OverloadResolver {
             for var i = 0; i < permutedBound.Length; i++ {
                 if permutedBound[i] == nil {
                     // ADR-0063: fill the omitted optional slot with the parameter's default.
-                    boundArguments.Add(CreateOptionalUserDefaultArgument(function!!.Parameters[i]))
+                    boundArguments.Add(CreateOptionalUserDefaultArgument(function.Parameters[i]))
                 } else {
                     boundArguments.Add(permutedBound[i])
                 }
@@ -2110,7 +2111,7 @@ internal partial class OverloadResolver {
             Array.Copy(parameterSyntax, paddedSyntax, parameterSyntax.Length)
             parameterSyntax = paddedSyntax
             for var i = boundArguments.Count; i < fixedParamCount; i++ {
-                boundArguments.Add(CreateOptionalUserDefaultArgument(function!!.Parameters[i]))
+                boundArguments.Add(CreateOptionalUserDefaultArgument(function.Parameters[i]))
             }
         }
         var hasErrors = false
@@ -2119,16 +2120,16 @@ internal partial class OverloadResolver {
         // site or by left-to-right inference from argument types matched
         // against parameter types.
         var substitution Dictionary[TypeParameterSymbol, TypeSymbol]? = nil
-        if function!!.IsGeneric {
+        if function.IsGeneric {
             substitution = Dictionary[TypeParameterSymbol, TypeSymbol]()
-            SeedFixedOwnerTypeParameters(function!!.StaticOwnerType ?? function!!.ReceiverType, substitution)
+            SeedFixedOwnerTypeParameters(function.StaticOwnerType ?? function.ReceiverType, substitution)
             if syntax.TypeArgumentList is {} typeArgumentList {
                 let explicitArgs = typeArgumentList.Arguments
-                if explicitArgs.Count != function!!.TypeParameters.Length {
+                if explicitArgs.Count != function.TypeParameters.Length {
                     Diagnostics.ReportWrongTypeArgumentCount(
                         typeArgumentList.Location,
-                        function!!.Name,
-                        function!!.TypeParameters.Length,
+                        function.Name,
+                        function.TypeParameters.Length,
                         explicitArgs.Count
                     )
                     return BoundErrorExpression(nil)
@@ -2142,50 +2143,33 @@ internal partial class OverloadResolver {
                     if ta == nil {
                         return BoundErrorExpression(nil)
                     }
-                    substitution[function!!.TypeParameters[i]] = ta
+                    substitution[function.TypeParameters[i]] = ta
                 }
             } else {
-                for var i = 0; i < function!!.Parameters.Length && i < boundArguments.Count; i++ {
+                for var i = 0; i < function.Parameters.Length && i < boundArguments.Count; i++ {
                     if i >= parameterSyntax.Length || parameterSyntax[i] == nil {
                         continue
                     }
-                    let paramType = function!!.Parameters[i].Type
+                    let paramType = function.Parameters[i].Type
                     // ADR-0101 / issue #799: when the trailing parameter is
                     // variadic (`name ...T`), inference must consider every
                     // packed argument against the element type — *unless* the
                     // caller supplied a single trailing argument whose type
                     // already matches the slice (the C# `params` pass-through
                     // case), in which case the slice itself drives inference.
-                    if i == function!!
+                    if i == function
                         .Parameters
                         .Length - 1 &&
-                        function!!
+                        function
                         .Parameters[i]
                         .IsVariadic &&
-                        paramType is SliceTypeSymbol variadicSlice {
-                        let trailingCount = boundArguments.Count - i
-                        if trailingCount == 1 && RefCapabilities.GetValueArgumentInferenceType(
-                            boundArguments[i].Type
-                        ) is SliceTypeSymbol {
-                            inferTypeArguments(
-                                paramType,
-                                RefCapabilities.GetValueArgumentInferenceType(boundArguments[i].Type),
-                                substitution
-                            )
-                        } else {
-                            for var j = i; j < boundArguments.Count; j++ {
-                                inferTypeArguments(
-                                    variadicSlice.ElementType,
-                                    RefCapabilities.GetValueArgumentInferenceType(boundArguments[j].Type),
-                                    substitution
-                                )
-                            }
-                        }
+                        VariadicCarriers.GetElementType(paramType) != TypeSymbol.Error {
+                        InferVariadicArguments(paramType, boundArguments.ToImmutable(), i, substitution)
                         break
                     }
                     inferTypeArguments(
                         paramType,
-                        RefCapabilities.GetInferenceType(function!!.Parameters[i], boundArguments[i]),
+                        RefCapabilities.GetInferenceType(function.Parameters[i], boundArguments[i]),
                         substitution
                     )
                 }
@@ -2202,16 +2186,16 @@ internal partial class OverloadResolver {
                 // the resulting return type back in. Per #3756 this runs ONLY
                 // when the first pass left a type parameter unbound, so no
                 // call that already infers can change shape.
-                if HasUnboundTypeParameter(function!!.TypeParameters, substitution) {
-                    for var i = 0; i < function!!.Parameters.Length && i < boundArguments.Count; i++ {
-                        InferFromUserMethodGroupArgument(function!!.Parameters[i].Type, boundArguments[i], substitution)
+                if HasUnboundTypeParameter(function.TypeParameters, substitution) {
+                    for var i = 0; i < function.Parameters.Length && i < boundArguments.Count; i++ {
+                        InferFromUserMethodGroupArgument(function.Parameters[i].Type, boundArguments[i], substitution)
                     }
                 }
-                for tp in function!!.TypeParameters {
+                for tp in function.TypeParameters {
                     if !substitution.ContainsKey(tp) {
                         Diagnostics.ReportTypeArgumentInferenceFailed(
                             syntax.Identifier.Location,
-                            function!!.Name,
+                            function.Name,
                             tp.Name
                         )
                         return BoundErrorExpression(nil)
@@ -2225,10 +2209,10 @@ internal partial class OverloadResolver {
             } else {
                 syntax.Identifier.Location
             }
-            if TryReportByRefLikeTypeArgument(function!!.TypeParameters, substitution, constraintLocation) {
+            if TryReportByRefLikeTypeArgument(function.TypeParameters, substitution, constraintLocation) {
                 return BoundErrorExpression(nil)
             }
-            for tp in function!!.TypeParameters {
+            for tp in function.TypeParameters {
                 let typeArg = substitution[tp]
                 if !satisfiesConstraint(typeArg, tp, substitution) {
                     Diagnostics.ReportTypeArgumentDoesNotSatisfyConstraint(
@@ -2243,7 +2227,7 @@ internal partial class OverloadResolver {
         }
         for var i = 0; i < fixedParamCount; i++ {
             var argument = boundArguments[i]
-            let parameter = function!!.Parameters[i]
+            let parameter = function.Parameters[i]
             let expectedType TypeSymbol? = if substitution != nil {
                 substituteType(parameter.Type, substitution)
             } else {
@@ -2459,17 +2443,19 @@ internal partial class OverloadResolver {
                 // operand/pointee type must match the parameter's pointee type.
                 if argument is BoundAddressOfExpression addr {
                     let operandType = addr.Operand.Type
-                    // ADR-0060: an inline-decl `out var n` / `out let n` / `out _`
-                    // was bound with TypeSymbol.Error in the first pass because
-                    // the parameter was unknown. Re-bind now that overload
-                    // resolution has chosen the function and the parameter
-                    // pointee type is known.
-                    if operandType == TypeSymbol.Error &&
-                        i < parameterSyntax.Length &&
-                        parameterSyntax[i] is RefArgumentExpressionSyntax refArgFixup &&
-                        refArgFixup.IsInlineDeclaration &&
-                        refArgFixup.DeclaredType == nil {
-                        boundArguments[i] = bindRefArgumentExpression(refArgFixup, parameter)
+                    // Use the substituted pointee, as instance and qualified static calls do.
+                    if argSyntax is {} inlineOutSyntax &&
+                        tryRebindInlineOutVarPlaceholder(
+                        argument,
+                        inlineOutSyntax,
+                        parameter,
+                        Invariant.Required(
+                            expectedType,
+                            "a bound parameter has a target type",
+                            expression: "expectedType"
+                        )
+                    ) is {} reboundOutVar {
+                        boundArguments[i] = reboundOutVar
                         continue
                     }
                     let refArgumentLocation = Invariant.Required(
@@ -3036,7 +3022,7 @@ internal partial class OverloadResolver {
         // (parity with the C# `params T[]` call-site semantics so the
         // dogfooded `Sequences.Of` port accepts `Sequences.Of(arr)`).
         if isVariadic {
-            let variadicParam = function!!.Parameters[function!!.Parameters.Length - 1]
+            let variadicParam = function.Parameters[function.Parameters.Length - 1]
             let paramCarrierType = variadicParam.Type
             let sliceType = if substitution != nil {
                 substituteType(paramCarrierType, substitution)
@@ -3072,9 +3058,9 @@ internal partial class OverloadResolver {
         // it via structural unification (which can fail for uninformative
         // argument shapes like a bare `nil`).
         var methodTypeArguments = default(ImmutableArray[TypeSymbol])
-        if function!!.IsGeneric && substitution != nil {
-            let methodTypeArgsBuilder = ImmutableArray.CreateBuilder[TypeSymbol](function!!.TypeParameters.Length)
-            for tp in function!!.TypeParameters {
+        if function.IsGeneric && substitution != nil {
+            let methodTypeArgsBuilder = ImmutableArray.CreateBuilder[TypeSymbol](function.TypeParameters.Length)
+            for tp in function.TypeParameters {
                 methodTypeArgsBuilder.Add(substitution[tp])
             }
             methodTypeArguments = methodTypeArgsBuilder.MoveToImmutable()
@@ -3085,38 +3071,38 @@ internal partial class OverloadResolver {
             functionParameterNameAt
         )
         if substitution != nil {
-            var returnType = substituteType(function!!.Type, substitution)
-            if function!!.IsAsync && !function!!.IsAsyncVoid && !isAsyncIteratorReturnType(function!!.Type) {
-                returnType = wrapAsTask(returnType, function!!.AsyncReturnsValueTask)
+            var returnType = substituteType(function.Type, substitution)
+            if function.IsAsync && !function.IsAsyncVoid && !isAsyncIteratorReturnType(function.Type) {
+                returnType = wrapAsTask(returnType, function.AsyncReturnsValueTask)
             }
-            if function!!.IsSuspending {
+            if function.IsSuspending {
                 // ADR-0174 D4: the call is typed ValueTask[R]; the caller sees R.
                 let suspendingCall = CreatePossiblyElidedCall(
                     syntax,
-                    function!!,
+                    function,
                     finalBoundArguments,
                     wrapAsTask(returnType, true),
                     methodTypeArguments
                 )
-                return completeSuspendingCall(suspendingCall, returnType, syntax.Location, function!!.Name)
+                return completeSuspendingCall(suspendingCall, returnType, syntax.Location, function.Name)
             }
-            return CreatePossiblyElidedCall(syntax, function!!, finalBoundArguments, returnType, methodTypeArguments)
+            return CreatePossiblyElidedCall(syntax, function, finalBoundArguments, returnType, methodTypeArguments)
         }
-        if function!!.IsAsync && !function!!.IsAsyncVoid && !isAsyncIteratorReturnType(function!!.Type) {
-            let asyncReturn = wrapAsTask(function!!.Type, function!!.AsyncReturnsValueTask)
-            return CreatePossiblyElidedCall(syntax, function!!, finalBoundArguments, asyncReturn, methodTypeArguments)
+        if function.IsAsync && !function.IsAsyncVoid && !isAsyncIteratorReturnType(function.Type) {
+            let asyncReturn = wrapAsTask(function.Type, function.AsyncReturnsValueTask)
+            return CreatePossiblyElidedCall(syntax, function, finalBoundArguments, asyncReturn, methodTypeArguments)
         }
-        if function!!.IsSuspending {
+        if function.IsSuspending {
             let suspendingCall = CreatePossiblyElidedCall(
                 syntax,
-                function!!,
+                function,
                 finalBoundArguments,
-                wrapAsTask(function!!.Type, true),
+                wrapAsTask(function.Type, true),
                 methodTypeArguments
             )
-            return completeSuspendingCall(suspendingCall, function!!.Type, syntax.Location, function!!.Name)
+            return completeSuspendingCall(suspendingCall, function.Type, syntax.Location, function.Name)
         }
-        return CreatePossiblyElidedCall(syntax, function!!, finalBoundArguments, returnType: nil, methodTypeArguments)
+        return CreatePossiblyElidedCall(syntax, function, finalBoundArguments, returnType: nil, methodTypeArguments)
     }
 
     private func TryConstructConversionTarget(syntax CallExpressionSyntax, type TypeSymbol) TypeSymbol? {

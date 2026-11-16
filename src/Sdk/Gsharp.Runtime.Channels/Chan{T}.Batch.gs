@@ -174,8 +174,8 @@ partial class Chan[T] : Channel[T], ISelectable[T], ISendSelectableCore[T], IDis
         }
         // Rendezvous (or drained buffer with parked senders): sequential hand-offs.
         while taken < buffer.Length && senders.TryDequeue(out var node) {
-            completions.Add(node!!)
-            if node!!.TryCommitSend(out var handed) {
+            completions.Add(node)
+            if node.TryCommitSend(out var handed) {
                 buffer[taken] = handed
                 taken++
             }
@@ -186,8 +186,8 @@ partial class Chan[T] : Channel[T], ISelectable[T], ISendSelectableCore[T], IDis
     private func TrySendBatchLocked(items ReadOnlySpan[T], ref completions Completions) int32 {
         var sent = 0
         while sent < items.Length && receivers.TryDequeue(out var node) {
-            completions.Add(node!!)
-            if node!!.TryCommitReceive(items[sent]) {
+            completions.Add(node)
+            if node.TryCommitReceive(items[sent]) {
                 sent++
             }
         }

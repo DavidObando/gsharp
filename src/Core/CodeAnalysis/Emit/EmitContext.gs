@@ -301,7 +301,7 @@ internal class EmitContext {
         requireExternalVisibility: false,
         out var resolved
     ) {
-        resolved!!
+        resolved
     } else {
         fallback
     }
