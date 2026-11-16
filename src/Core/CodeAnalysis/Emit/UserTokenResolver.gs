@@ -337,7 +337,10 @@ internal class UserTokenResolver {
     /// arguments and substituted return type. Required because the
     /// post-R2 MethodDef carries MVAR slots; the call site must
     /// reference a MethodSpec naming the substituted instantiation.
-    internal func BuildMethodSpecForGenericCall(openMethod EntityHandle, call BoundCallExpression) EntityHandle {
+    internal func BuildMethodSpecForGenericCall(openMethod EntityHandle, call BoundCallExpression) EntityHandle ->
+    this.BuildMethodSpec(openMethod, this.ResolveGenericCallTypeArguments(call))
+
+    internal func ResolveGenericCallTypeArguments(call BoundCallExpression)[]TypeSymbol {
         let tps = call.Function.TypeParameters
         // Issue #4223: a generic local function promoted by
         // TryPromoteNonCapturingGenericLambda to ALSO carry cloned enclosing
@@ -378,14 +381,14 @@ internal class UserTokenResolver {
             }
         }
         if extras.IsDefaultOrEmpty {
-            return this.BuildMethodSpec(openMethod, ownArgs)
+            return ownArgs
         }
         let args = [tps.Length]TypeSymbol
         Array.Copy(ownArgs, args, ownCount)
         for var i = 0; i < extras.Length; i++ {
             args[ownCount + i] = extras[i]
         }
-        return this.BuildMethodSpec(openMethod, args)
+        return args
     }
 
     internal func BuildMethodSpecForGenericMethodGroup(
@@ -437,7 +440,9 @@ internal class UserTokenResolver {
     internal func BuildMethodSpecForGenericInstanceCall(
         openMethod EntityHandle,
         call BoundUserInstanceCallExpression
-    ) EntityHandle {
+    ) EntityHandle -> this.BuildMethodSpec(openMethod, this.ResolveGenericInstanceCallTypeArguments(call))
+
+    internal func ResolveGenericInstanceCallTypeArguments(call BoundUserInstanceCallExpression)[]TypeSymbol {
         let tps = call.Method.TypeParameters
         // Issue #1931: prefer the authoritative (explicit-or-inferred) method
         // type arguments the binder already resolved and stashed on the bound
@@ -447,7 +452,7 @@ internal class UserTokenResolver {
         // structurally mentions `T`, so re-deriving it here would fail even
         // though the call bound successfully.
         if !call.MethodTypeArguments.IsDefaultOrEmpty && call.MethodTypeArguments.Length == tps.Length {
-            return this.BuildMethodSpec(openMethod, call.MethodTypeArguments.ToArray())
+            return call.MethodTypeArguments.ToArray()
         }
         let args = [tps.Length]TypeSymbol
         let calleeParameterOffset = if call.Method.ExplicitReceiverParameter == nil {
@@ -467,7 +472,7 @@ internal class UserTokenResolver {
         for var i = 0; i < tps.Length; i++ {
             args[i] = InferMethodTypeArgument(userParams, call.Arguments, inferenceReturn, call.Method.Type, tps[i])
         }
-        return this.BuildMethodSpec(openMethod, args)
+        return args
     }
 
     private func BuildMethodSpec(openMethod EntityHandle, args[]TypeSymbol) EntityHandle {

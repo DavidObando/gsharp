@@ -122,13 +122,7 @@ internal partial class MethodBodyEmitter {
             }
             case call is BoundCallExpression {
                 this.EmitCallExpressionCore(call)
-                // ADR-0087 §3 R3+R4: after R2/R3, every G# call (MethodSpec'd
-                // or plain MethodDef) returns the method's reified signature.
-                // No erasure-widening is required at the call boundary; the
-                // surrounding code path (assignment, return, argument
-                // conversion) handles any further coercion.
-                //
-                // Issue #3879: except for the by-ref return, which is a
+                // Issue #3879: a by-ref return is a
                 // representation difference the call boundary DOES have to
                 // settle — a `ref`-returning function or static property
                 // accessor leaves `T&` where the bound tree says `T`.
@@ -2130,6 +2124,13 @@ internal partial class MethodBodyEmitter {
             }
             this.il.OpCode(ILOpCode.Call)
             this.il.Token(invokeToken)
+            if call.Function.IsGeneric {
+                this.EmitErasedGenericNullableReturnLift(
+                    call.Function,
+                    call.Type,
+                    nullableLift?.TypeArguments ?? this.outer.userTokens.ResolveGenericCallTypeArguments(call)
+                )
+            }
             return
         }
         for var i = 0; i < call.Arguments.Length; i++ {
@@ -2216,6 +2217,13 @@ internal partial class MethodBodyEmitter {
         // the X the bound tree types the call as.
         if nullableLift?.ReturnUnwrap is {} liftUnwrap {
             this.EmitUnconstrainedNullableLiftUnwrap(liftUnwrap)
+        }
+        if call.Function.IsGeneric {
+            this.EmitErasedGenericNullableReturnLift(
+                call.Function,
+                call.Type,
+                nullableLift?.TypeArguments ?? this.outer.userTokens.ResolveGenericCallTypeArguments(call)
+            )
         }
     }
 
