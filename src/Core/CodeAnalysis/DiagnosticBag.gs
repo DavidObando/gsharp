@@ -140,6 +140,14 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// #1238 target-typed conditional arguments).
     prop Count int32 -> diagnostics.Count
 
+    /// Gets the diagnostic added last, or `null` when the bag is empty.
+    /// (cref:TruncateTo) removes rolled-back entries, so this is never a speculative diagnostic.
+    internal prop LastAdded Diagnostic? -> if diagnostics.Count == 0 {
+        default(Diagnostic?)
+    } else {
+        diagnostics[diagnostics.Count - 1]
+    }
+
     /// Creates an immutable snapshot of the diagnostics currently held in the bag.
     /// @returns An immutable array of diagnostics in insertion order.
     func ToImmutableArray() ImmutableArray[Diagnostic] -> Visible().ToImmutableArray()

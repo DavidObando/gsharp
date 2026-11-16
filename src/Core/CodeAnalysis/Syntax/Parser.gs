@@ -610,8 +610,22 @@ open partial class Parser {
         if Current.Kind == kind {
             return NextToken()
         }
-        Diagnostics.ReportUnexpectedToken(TextLocation(syntaxTree.Text, Current.Span), Current.Kind, kind)
+        // Report GS0005 once for each token where the parser stops. A second
+        // expected-token error at the same token only repeats the first one.
+        if !IsRepeatedUnexpectedToken() {
+            Diagnostics.ReportUnexpectedToken(TextLocation(syntaxTree.Text, Current.Span), Current.Kind, kind)
+        }
         return SyntaxToken.Missing(syntaxTree, kind, Current.Position)
+    }
+
+    private func IsRepeatedUnexpectedToken() bool {
+        if Diagnostics.LastAdded is not{} last {
+            return false
+        }
+        let lastSpan = last.Location.Span
+        let currentSpan = Current.Span
+        let sameToken = lastSpan.Start == currentSpan.Start && lastSpan.Length == currentSpan.Length
+        return sameToken && last.Id == DiagnosticDescriptors.UnexpectedToken.Id
     }
 
     shared {

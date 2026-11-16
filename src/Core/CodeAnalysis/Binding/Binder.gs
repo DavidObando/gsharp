@@ -4840,7 +4840,9 @@ partial class Binder {
                 // that the type is undefined.
                 if ambiguousAcrossImportedPackages {
                     Diagnostics.ReportAmbiguousSourceType(identifierToken.Location, identifierToken.ValueText)
-                } else {
+                } else if !identifierToken.IsMissing {
+                    // The parser synthesized a missing type name token and
+                    // already reported GS0005 for it. GS0113 "Type ''" would repeat it.
                     Diagnostics.ReportUndefinedType(identifierToken.Location, identifierToken.ValueText)
                 }
                 return nil
