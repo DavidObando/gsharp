@@ -22438,8 +22438,10 @@ partial class CSharpToGSharpTranslator {
             symbol ISymbol?,
             start Microsoft.CodeAnalysis.SyntaxNode,
             use Microsoft.CodeAnalysis.SyntaxNode?,
-            $scope Microsoft.CodeAnalysis.SyntaxNode
+            $scope Microsoft.CodeAnalysis.SyntaxNode,
+            readPosition int32? = nil
         ) bool {
+            let readStart = readPosition ?? use?.SpanStart ?? 0
             let OutsideNestedFunctions = func (node Microsoft.CodeAnalysis.SyntaxNode) bool {
                 return object.ReferenceEquals(node, $scope) || !this.IsClosureBoundary(node)
             }
@@ -22470,11 +22472,17 @@ partial class CSharpToGSharpTranslator {
                                 .End &&
                                 node
                                 .Span
-                                .End <= use!!.SpanStart &&
+                                .End <= readStart &&
                                 !this.IsInSiblingBranchOfRead(node, use!!, $scope)
                         )
                     } else {
-                        this.EffectCompletesBetween(node, start, use!!, includeDirectStores: true) &&
+                        this.EffectCompletesBetween(
+                            node,
+                            start,
+                            use!!,
+                            includeDirectStores: true,
+                            readPosition: readStart
+                        ) &&
                             !this.IsInSiblingBranchOfRead(node, use!!, $scope)
                     }
                 ) &&
@@ -22522,7 +22530,8 @@ partial class CSharpToGSharpTranslator {
                                 node,
                                 exitedLoop ?? start,
                                 use!!,
-                                includeReferenceStorageWrites: true
+                                includeReferenceStorageWrites: true,
+                                readPosition: readStart
                             )
                         ) ||
                             (

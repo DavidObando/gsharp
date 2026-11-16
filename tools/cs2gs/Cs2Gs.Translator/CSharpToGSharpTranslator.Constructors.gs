@@ -4829,8 +4829,10 @@ partial class CSharpToGSharpTranslator {
                 case breakStatement is Microsoft.CodeAnalysis.CSharp.Syntax.BreakStatementSyntax {
                     return this.TranslateBreakStatement(breakStatement)
                 }
-                case Microsoft.CodeAnalysis.CSharp.Syntax.ContinueStatementSyntax {
-                    return []GStatement{cast[GStatement](ContinueStatement())}
+                case continuation is Microsoft.CodeAnalysis.CSharp.Syntax.ContinueStatementSyntax {
+                    let statement = ContinueStatement()
+                    this.continueSources[statement] = continuation
+                    return []GStatement{cast[GStatement](statement)}
                 }
                 case labeledStatement is Microsoft.CodeAnalysis.CSharp.Syntax.LabeledStatementSyntax {
                     return this.TranslateLabeledStatement(labeledStatement)

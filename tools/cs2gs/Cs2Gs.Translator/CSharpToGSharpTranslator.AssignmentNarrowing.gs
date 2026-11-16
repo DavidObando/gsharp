@@ -15,7 +15,7 @@ import System.Linq
 partial class CSharpToGSharpTranslator {
     private partial class DeclarationVisitor : CSharpSyntaxVisitor[GMember] {
         private var assignmentNarrowingQueries Dictionary[
-            (ExpressionSyntax, SyntaxNode, ISymbol, SyntaxNode, bool),
+            (ExpressionSyntax, SyntaxNode, ISymbol, SyntaxNode, bool, ContinueStatementSyntax?),
             bool
         ]?
 
@@ -43,9 +43,16 @@ partial class CSharpToGSharpTranslator {
             // Share completed queries only within one analysis pass. Emission state can change before the next pass.
             let rootQuery = this.assignmentNarrowingQueries == nil
             let queries = this.assignmentNarrowingQueries ??
-                Dictionary[(ExpressionSyntax, SyntaxNode, ISymbol, SyntaxNode, bool), bool]()
+                Dictionary[(ExpressionSyntax, SyntaxNode, ISymbol, SyntaxNode, bool, ContinueStatementSyntax?), bool]()
             this.assignmentNarrowingQueries = queries
-            let key = (expression, effectiveTarget, symbol, $scope, requireRuntimeNonNullProof)
+            let key = (
+                expression,
+                effectiveTarget,
+                symbol,
+                $scope,
+                requireRuntimeNonNullProof,
+                this.incrementorContinue
+            )
             try {
                 if queries.TryGetValue(key, out var cached) {
                     return cached
@@ -76,7 +83,32 @@ partial class CSharpToGSharpTranslator {
             $scope SyntaxNode,
             requireRuntimeNonNullProof bool
         ) bool {
-            var proof SyntaxNode? = nil
+            let proof = this.GetGSharpAssignmentPrefixProof(
+                expression,
+                effectiveTarget,
+                symbol,
+                $scope,
+                nil,
+                requireRuntimeNonNullProof
+            )
+            return proof != nil && this.AssignmentNarrowingSurvivesToRead(
+                symbol,
+                proof,
+                expression,
+                effectiveTarget,
+                $scope
+            )
+        }
+
+        private func GetGSharpAssignmentPrefixProof(
+            expression ExpressionSyntax,
+            effectiveTarget SyntaxNode,
+            symbol ISymbol,
+            $scope SyntaxNode,
+            inherited SyntaxNode?,
+            requireRuntimeNonNullProof bool
+        ) SyntaxNode? {
+            var proof = inherited
             let steps = this.GetStatementSteps(effectiveTarget, $scope)
             for step in steps {
                 let statements IEnumerable[StatementSyntax] = switch step.Owner {
@@ -101,6 +133,11 @@ partial class CSharpToGSharpTranslator {
                         requireRuntimeNonNullProof
                     )
                 }
+                var transferredLoopBody = false
+                let nativePost = step.Statement is ForStatementSyntax nativeLoop && nativeLoop.Incrementors.Any(
+                    (incrementor ExpressionSyntax) -> incrementor.Span.Contains(effectiveTarget.Span)
+                ) &&
+                    !this.ForRequiresWhileLowering(nativeLoop)
                 for child in step.Statement.ChildNodes() {
                     if child.SpanStart >= effectiveTarget.SpanStart {
                         break
@@ -108,15 +145,72 @@ partial class CSharpToGSharpTranslator {
                     if child is not ExpressionSyntax && child is not VariableDeclarationSyntax {
                         continue
                     }
+                    // Native for-post binding precedes the body and does not inherit condition-exit assignment facts.
+                    if nativePost && child is ExpressionSyntax condition && this.IsStatementCondition(condition) {
+                        if this.AssignmentRegionInvalidatesNarrowing(
+                            symbol,
+                            condition,
+                            condition.SpanStart,
+                            condition.Span.End
+                        ) {
+                            proof = nil
+                        }
+                        continue
+                    }
                     // Incrementors precede the body in source, but run only after an iteration.
-                    if step.Statement is ForStatementSyntax forLoop &&
+                    if !nativePost &&
+                        step.Statement is ForStatementSyntax forLoop &&
                         child is ExpressionSyntax clause &&
                         forLoop
                         .Incrementors
-                        .Contains(clause) && !forLoop.Incrementors.Any(
-                        (incrementor ExpressionSyntax) -> incrementor.Span.Contains(effectiveTarget.Span)
-                    ) {
-                        continue
+                        .Contains(clause) {
+                        if !forLoop.Incrementors.Any(
+                            (incrementor ExpressionSyntax) -> incrementor.Span.Contains(effectiveTarget.Span)
+                        ) {
+                            continue
+                        }
+                        if !transferredLoopBody {
+                            let bodyEntry = proof
+                            proof = if object.ReferenceEquals(this.incrementorLoop, forLoop) &&
+                                this.incrementorContinue is {} continuation {
+                                this.GetGSharpAssignmentPrefixProof(
+                                    expression,
+                                    continuation,
+                                    symbol,
+                                    forLoop.Statement,
+                                    proof,
+                                    requireRuntimeNonNullProof
+                                )
+                            } else {
+                                this.GetGSharpAssignmentNarrowingProof(
+                                    forLoop.Statement,
+                                    symbol,
+                                    expression,
+                                    $scope,
+                                    proof,
+                                    requireRuntimeNonNullProof
+                                )
+                            }
+                            if proof != nil && this.ForUsesSharedContinueIncrementors(forLoop) {
+                                for continuation in forLoop
+                                    .Statement
+                                    .DescendantNodesAndSelf((node SyntaxNode) -> !IsOwnLoopContinueBoundary(node))
+                                    .OfType[ContinueStatementSyntax]() {
+                                    if this.GetGSharpContinueExitAssignmentProof(
+                                        expression,
+                                        continuation,
+                                        symbol,
+                                        forLoop.Statement,
+                                        bodyEntry,
+                                        requireRuntimeNonNullProof
+                                    ) == nil {
+                                        proof = nil
+                                        break
+                                    }
+                                }
+                            }
+                            transferredLoopBody = true
+                        }
                     }
                     if child.Span.End <= effectiveTarget.SpanStart {
                         proof = this.GetGSharpAssignmentNarrowingProof(
@@ -127,8 +221,28 @@ partial class CSharpToGSharpTranslator {
                             proof,
                             requireRuntimeNonNullProof
                         )
-                    } else if this.ExpressionHasCoalescingAssignment(child) ||
-                        (child is ExpressionSyntax condition && this.IsStatementCondition(condition)) {
+                        if step.Statement is IfStatementSyntax conditional &&
+                            child is ExpressionSyntax condition &&
+                            object.ReferenceEquals(conditional.Condition, condition) &&
+                            (
+                            (
+                                conditional.Statement.Span.Contains(effectiveTarget.Span) && this.IsNonNullCheckOf(
+                                    condition,
+                                    symbol
+                                )
+                            ) ||
+                                (
+                                conditional
+                                    .Else
+                                    ?.Statement
+                                    .Span
+                                    .Contains(effectiveTarget.Span) == true &&
+                                    this.IsNullCheckOf(condition, symbol)
+                            )
+                        ) {
+                            proof = condition
+                        }
+                    } else {
                         proof = this.GetGSharpInitializerMutationProof(
                             child,
                             symbol,
@@ -168,13 +282,67 @@ partial class CSharpToGSharpTranslator {
                     body = parent
                 }
             }
-            return proof != nil && this.AssignmentNarrowingSurvivesToRead(
-                symbol,
-                proof,
+            return proof
+        }
+
+        private func GetGSharpContinueExitAssignmentProof(
+            expression ExpressionSyntax,
+            continuation ContinueStatementSyntax,
+            symbol ISymbol,
+            body StatementSyntax,
+            inherited SyntaxNode?,
+            requireRuntimeNonNullProof bool
+        ) SyntaxNode? {
+            var proof = this.GetGSharpAssignmentPrefixProof(
                 expression,
-                effectiveTarget,
-                $scope
+                continuation,
+                symbol,
+                body,
+                inherited,
+                requireRuntimeNonNullProof
             )
+            let closureAssigned = this.IsClosureAssignedVariable(symbol)
+            let byReference = this.IsByReferenceVariable(symbol)
+            // Continued paths reach shared incrementors only after their inner-to-outer scope exits.
+            for ancestor in continuation.AncestorsAndSelf() {
+                let cleanups IEnumerable[SyntaxNode] = if ancestor is BlockSyntax block {
+                    block.Statements.Cast[SyntaxNode]()
+                } else {
+                    []SyntaxNode{ancestor}
+                }
+                if cleanups.Any(
+                    (node SyntaxNode) -> node.SpanStart < continuation.SpanStart && this.CleanupCompletesAfterProof(
+                        node,
+                        continuation,
+                        continuation,
+                        readPosition: body.Span.End
+                    ) &&
+                        this.ExecutionEffectInvalidatesAssignmentNarrowing(node, closureAssigned, byReference)
+                ) ||
+                    (
+                    ancestor is LockStatementSyntax && this.ExecutionEffectInvalidatesAssignmentNarrowing(
+                        ancestor,
+                        closureAssigned,
+                        byReference
+                    )
+                ) {
+                    proof = nil
+                }
+                if ancestor is TryStatementSyntax guarded && guarded.Finally is {} finalization {
+                    proof = this.GetGSharpAssignmentNarrowingProof(
+                        finalization.Block,
+                        symbol,
+                        expression,
+                        body,
+                        proof,
+                        requireRuntimeNonNullProof
+                    )
+                }
+                if object.ReferenceEquals(ancestor, body) {
+                    break
+                }
+            }
+            return proof
         }
 
         private func GetGSharpAssignmentNarrowingProof(
@@ -214,7 +382,17 @@ partial class CSharpToGSharpTranslator {
                         proof,
                         use,
                         use,
-                        initializer
+                        initializer,
+                        readPosition: initializer.Span.End
+                    ) {
+                        proof = nil
+                    }
+                    if !this.ExpressionHasCoalescingAssignment(initializer.Value) &&
+                        this.AssignmentRegionInvalidatesNarrowing(
+                        symbol,
+                        initializer,
+                        initializer.SpanStart,
+                        initializer.Span.End
                     ) {
                         proof = nil
                     }
@@ -254,7 +432,14 @@ partial class CSharpToGSharpTranslator {
                         requireRuntimeNonNullProof
                     )
                 }
-                return if proof != nil && this.AssignmentNarrowingSurvivesToRead(symbol, proof, use, use, block) {
+                return if proof != nil && this.AssignmentNarrowingSurvivesToRead(
+                    symbol,
+                    proof,
+                    use,
+                    use,
+                    block,
+                    readPosition: System.Math.Max(use.SpanStart, block.Span.End)
+                ) {
                     proof
                 } else {
                     default(SyntaxNode?)
@@ -439,7 +624,8 @@ partial class CSharpToGSharpTranslator {
                         proof,
                         use,
                         use,
-                        statement
+                        statement,
+                        readPosition: System.Math.Max(use.SpanStart, statement.Span.End)
                     ) {
                         cast[SyntaxNode](statement)
                     } else {
@@ -448,12 +634,20 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             // Reuse guard invalidation for writes, escaped closures, by-reference storage and enclosing filters.
-            return if inherited != nil && this.AssignmentNarrowingSurvivesToRead(
+            return if inherited != nil && !this.AssignmentRegionInvalidatesNarrowing(
+                symbol,
+                statement,
+                statement.SpanStart,
+                statement.Span.End
+            ) &&
+                this
+                .AssignmentNarrowingSurvivesToRead(
                 symbol,
                 inherited,
                 use,
                 use,
-                statement
+                statement,
+                readPosition: System.Math.Max(use.SpanStart, statement.Span.End)
             ) {
                 inherited
             } else {
@@ -750,6 +944,9 @@ partial class CSharpToGSharpTranslator {
                 return proof
             }
             if node is AssignmentExpressionSyntax assignment && this.BindsTo(assignment.Left, symbol) {
+                if before != nil && assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) {
+                    return nil
+                }
                 return this.GetGSharpAssignmentStoreProof(
                     assignment,
                     symbol,
@@ -873,15 +1070,13 @@ partial class CSharpToGSharpTranslator {
             proof SyntaxNode,
             use ExpressionSyntax,
             effectiveTarget SyntaxNode,
-            $scope SyntaxNode
+            $scope SyntaxNode,
+            readPosition int32? = nil
         ) bool {
-            if this.SymbolIsWrittenBetween(symbol, proof, effectiveTarget, $scope) ||
-                this.ClosureAssignedLocalLosesNarrowing(symbol, proof, use, $scope) || this.HasLoopCarriedWrite(
-                use,
-                symbol,
-                $scope,
-                proof
-            ) {
+            let readStart = readPosition ?? effectiveTarget.SpanStart
+            if this.SymbolIsWrittenBetween(symbol, proof, effectiveTarget, $scope, readPosition: readStart) ||
+                this.ClosureAssignedLocalLosesNarrowing(symbol, proof, use, $scope, readPosition: readStart) ||
+                this.HasLoopCarriedWrite(use, symbol, $scope, proof) {
                 return false
             }
             for loop in proof.Ancestors().OfType[ForStatementSyntax]() {
@@ -903,21 +1098,28 @@ partial class CSharpToGSharpTranslator {
                 } else {
                     loop.Initializers.Last().Span.End
                 }
-                if effectiveTarget.SpanStart < headerEnd {
+                if readStart < headerEnd {
                     continue
                 }
                 if this.AssignmentRegionInvalidatesNarrowing(symbol, loop, headerEnd, loop.Span.End) {
                     return false
                 }
             }
-            return !this.JumpBypassesAssignmentNarrowing(symbol, proof, effectiveTarget, $scope)
+            return !this.JumpBypassesAssignmentNarrowing(
+                symbol,
+                proof,
+                effectiveTarget,
+                $scope,
+                readPosition: readStart
+            )
         }
 
         private func JumpBypassesAssignmentNarrowing(
             symbol ISymbol,
             proof SyntaxNode,
             use SyntaxNode,
-            $scope SyntaxNode
+            $scope SyntaxNode,
+            readPosition int32? = nil
         ) bool {
             // A jump can bypass the proof or return to a read after another iteration changed the variable.
             let index = this.GetScopeGotoIndex($scope)
@@ -926,14 +1128,13 @@ partial class CSharpToGSharpTranslator {
                     target.SpanStart >= proof
                     .Span
                     .End &&
-                    target.SpanStart <= use
-                    .SpanStart {
+                    target.SpanStart <= (readPosition ?? use.SpanStart) {
                     if entry.Jump.SpanStart < proof.SpanStart {
                         return true
                     }
                     if entry
                         .Jump
-                        .SpanStart > use.SpanStart &&
+                        .SpanStart > (readPosition ?? use.SpanStart) &&
                         index.BackwardSpan is {} span &&
                         this.AssignmentRegionInvalidatesNarrowing(symbol, $scope, span.Start, span.End) {
                         return true

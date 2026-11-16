@@ -29,6 +29,61 @@ import Xunit
 /// Each test also compares the translated program's output with C#.
 open class Issue5706NarrowedConditionalIndexTests {
     @Fact
+    func IncrementorEntry_AppliesBodyAndContinueEffectsBeforePrefixes() {
+        Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System;
+public static class Demo
+{
+    static string trace = "";
+    static Action? clear;
+    static int disposals;
+    sealed class Cleanup : IDisposable { readonly Action action; public Cleanup(Action action) { this.action = action; } public void Dispose() { disposals++; action(); } }
+    static void Record(char? value) { trace += value?.ToString() ?? "_"; }
+    static char? Second(string? first, char? second) => second;
+    static string? Call() { clear?.Invoke(); return null; }
+    static string? Maybe(int value) => value == 0 ? "g" : null;
+    static void Touch(out int value) { value = 0; }
+    static string Cleared() { trace = ""; string? s = null; for (int i = 0; (s ??= "a").Length > i; Record(s?[0]), i++) { s = null; } return trace; }
+    static string Restored() { trace = ""; string? s = null; for (int i = 0; (s ??= "a").Length > i; Record(s?[0]), i++) { s = null; s = "b"; } return trace; }
+    static string Continued() { trace = ""; string? s = null; for (int i = 0; (s ??= "ab").Length > i; Record(s?[0]), i++) { if (i == 0) { s = null; continue; } s = "z"; } return trace; }
+    static string ContinuedNonNull() { trace = ""; string? s = null; for (int i = 0; (s ??= "ab").Length > i; Record(s?[0]), i++) { if (i == 0) { s = "c"; continue; } s = "d"; } return trace; }
+    static string PrefixWritten() { trace = ""; string? s = null; for (int i = 0; (s ??= "a").Length > i; Record(Second(s = null, s?[0])), i++) { s = "b"; } return trace; }
+    static string PrefixCalled() { trace = ""; string? s = null; clear = () => s = null; for (int i = 0; (s ??= "a").Length > i; Record(Second(Call(), s?[0])), i++) { s = "b"; } return trace; }
+    static string GuardedContinue() { trace = ""; string? s = null; for (int i = 0; (s ??= "a").Length > i; Record(s?[0]), i++) { s = Maybe(i); if (s != null) { continue; } s = "n"; } return trace; }
+    static string Disposed() { trace = ""; disposals = 0; string? s = null; for (int i = 0; (s ??= "a").Length > i; Record(s?[0]), i++) { using var cleanup = new Cleanup(() => s = null); s = "b"; } return trace + ":" + disposals; }
+    static string OutContinued() { trace = ""; string? s = null; for (int i = 0; (s ??= "ab").Length > i; Touch(out var ignored), Record(s?[0]), i++) { if (i == 0) { s = null; continue; } s = "k"; } return trace; }
+    static string OutNonNull() { trace = ""; string? s = null; for (int i = 0; (s ??= "ab").Length > i; Touch(out var ignored), Record(s?[0]), i++) { if (i == 0) { s = "h"; continue; } s = "j"; } return trace; }
+    static string SharedRetained() { trace = ""; string? s = null; for (int i = 0; (s ??= "ab").Length > i; Record(s?[0]), i++) { if (i == 0) { try { continue; } catch (Exception) { throw; } } s = "k"; } return trace; }
+    static string SharedCleared() { trace = ""; string? s = null; for (int i = 0; (s ??= "ab").Length > i; Record(s?[0]), i++) { if (i == 0) { try { s = null; continue; } catch (Exception) { throw; } } s = "k"; } return trace; }
+    static string SharedDisposed() { trace = ""; disposals = 0; string? s = null; for (int i = 0; (s ??= "ab").Length > i; Record(s?[0]), i++) { using (var cleanup = new Cleanup(() => s = null)) { s = "h"; if (i == 0) { continue; } } s = "k"; } return trace + ":" + disposals; }
+    static string NativeCleared() { trace = ""; string? s = null; for (int i = 0; (s ??= "a").Length > i; Record(s?[0])) { i++; s = null; } return trace; }
+    static string NativeRestored() { trace = ""; string? s = null; for (int i = 0; (s ??= "a").Length > i; Record(s?[0])) { i++; s = "b"; } return trace; }
+    static string NativePrefix() { trace = ""; string? s = null; for (int i = 0; i < 1; Record(Second(s ??= "p", s?[0]))) { i++; s = null; } return trace; }
+    static string NativeIncoming() { trace = ""; string? s = null; s = "a"; for (int i = 0; i < 1; Record(s?[0])) { i++; } return trace; }
+    public static string Run() => Cleared() + "|" + Restored() + "|" + Continued() + "|" + ContinuedNonNull() + "|" +
+        PrefixWritten() + "|" + PrefixCalled() + "|" + GuardedContinue() + "|" + Disposed() + "|" + OutContinued() + "|" + OutNonNull() + "|" + SharedRetained() + "|" + SharedCleared() + "|" + SharedDisposed() + "|" +
+        NativeCleared() + "|" + NativeRestored() + "|" + NativePrefix() + "|" + NativeIncoming();
+}`, rejectConditionalIndexWarnings: true, strictIl: true, expectedOutput: "_|b|_z|c|_|_|g|_:1|_k|h|ak|_k|_k:2|_|b|p|a")
+    }
+
+    @Fact
+    func ConditionPrefixes_DoNotPublishCompletedPlainAssignmentFacts() {
+        Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+public static class Demo
+{
+    static bool Keep(string? first, char? second) => second.HasValue;
+    static bool Three(string? first, char? second, string third) => second.HasValue;
+    static string Plain() { string? s = null; if (Keep(s = "a", s?[0])) {} return s?[0] + ""; }
+    static string Incoming() { string? s = null; s = "b"; if (Keep(s = "c", s?[0])) {} return s?[0] + ""; }
+    static string Coalescing() { string? s = null; if (Keep(s ??= "d", s?[0])) {} return s?[0] + ""; }
+    static string Mixed() { string? s = null, other = null; if (Three(s = "e", s?[0], other ??= "x")) {} return s?[0] + ""; }
+    public static string Run() => Plain() + "|" + Incoming() + "|" + Coalescing() + "|" + Mixed();
+}`, rejectConditionalIndexWarnings: true, strictIl: true, expectedOutput: "a|c|d|e")
+    }
+
+    @Fact
     func ExpressionBodies_UseOrderedPrefixesWithoutCrossingCallables() {
         Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
 #nullable enable
