@@ -16,6 +16,7 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- **No GS0573 after an unresolved `catch` type** (Oats). A `catch` clause whose type does not resolve reports only `GS0113`. It no longer counts as `catch (System.Exception)` in the unreachable-clause check, and later clauses do not shadow it.
 - **No GS9002 for a redeclared inline `out` local** (Oats). A redeclared `out let name` or `out var name` at an imported call reports only `GS0102`. The by-reference argument check skips error arguments, which already have a diagnostic.
 - **Generic tuple reference returns** (Fixes #6039). Generic substitution preserves source tuple types inside nullable and nested generic containers. Reference aliases retain their original storage and nullability contracts.
 
