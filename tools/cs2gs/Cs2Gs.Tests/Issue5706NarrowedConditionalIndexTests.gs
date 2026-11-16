@@ -29,6 +29,22 @@ import Xunit
 /// Each test also compares the translated program's output with C#.
 open class Issue5706NarrowedConditionalIndexTests {
     @Fact
+    func ContinueEntry_IncludesBracedAndUnbracedRootConditions() {
+        Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+public static class Demo
+{
+    static string trace = "";
+    static string? Maybe(bool present) => present ? "g" : null;
+    static void Record(char? value) { trace += value?.ToString() ?? "_"; }
+    static string Unbraced(bool present) { trace = ""; string? s = Maybe(present); for (int i = 0; i < 1; Record(s?[0]), i++) if (s != null) continue; return trace; }
+    static string Braced(bool present) { trace = ""; string? s = Maybe(present); for (int i = 0; i < 1; Record(s?[0]), i++) { if (s != null) continue; } return trace; }
+    static string Coalesced() { trace = ""; string? s = null; for (int i = 0; i < 1; Record(s?[0]), i++) if ((s ??= "h").Length > 0) continue; return trace; }
+    public static string Run() => Unbraced(true) + "|" + Unbraced(false) + "|" + Braced(true) + "|" + Braced(false) + "|" + Coalesced();
+}`, rejectConditionalIndexWarnings: true, strictIl: true, expectedOutput: "g|_|g|_|h")
+    }
+
+    @Fact
     func IncrementorEntry_AppliesBodyAndContinueEffectsBeforePrefixes() {
         Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
 #nullable enable

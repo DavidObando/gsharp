@@ -110,6 +110,9 @@ partial class CSharpToGSharpTranslator {
         ) SyntaxNode? {
             var proof = inherited
             let steps = this.GetStatementSteps(effectiveTarget, $scope)
+            if $scope is StatementSyntax root && root is not BlockSyntax {
+                steps.Insert(0, ($scope, root))
+            }
             for step in steps {
                 let statements IEnumerable[StatementSyntax] = switch step.Owner {
                     case block is BlockSyntax: block.Statements
@@ -221,7 +224,8 @@ partial class CSharpToGSharpTranslator {
                             proof,
                             requireRuntimeNonNullProof
                         )
-                        if step.Statement is IfStatementSyntax conditional &&
+                        if effectiveTarget is ContinueStatementSyntax &&
+                            step.Statement is IfStatementSyntax conditional &&
                             child is ExpressionSyntax condition &&
                             object.ReferenceEquals(conditional.Condition, condition) &&
                             (
@@ -387,7 +391,7 @@ partial class CSharpToGSharpTranslator {
                     ) {
                         proof = nil
                     }
-                    if !this.ExpressionHasCoalescingAssignment(initializer.Value) &&
+                    if proof != nil && !this.ExpressionHasCoalescingAssignment(initializer.Value) &&
                         this.AssignmentRegionInvalidatesNarrowing(
                         symbol,
                         initializer,
