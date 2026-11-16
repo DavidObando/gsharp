@@ -626,6 +626,46 @@ public class Probe {
     }
 
     @Fact
+    func NativeManagedReferenceNullTestsPreserveCapturedAssignmentFacts() {
+        const source = `#nullable enable
+using System;
+using Gsharp.Values;
+namespace ManagedReferenceNullTestEffects;
+public class Probe {
+    private static Action? clear;
+    public static bool Run() {
+        string? text = null;
+        ManagedRef<int>? item = null;
+        clear = () => text = null;
+        text = "x";
+        var isNil = item == null;
+        return (text?[0]).HasValue && isNil;
+    }
+}`
+        let references = List[MetadataReference](
+            CSharpProjectLoader.RuntimeReferences()
+        ){MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location)}
+        let project = CSharpProjectLoader.LoadInMemory(
+            [](string, source string){("ManagedReferenceNullTestEffects.cs", source)},
+            references
+        )
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        let document = Assert.Single(project.Documents)
+        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+        let text = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+        Assert.Empty(context.Diagnostics)
+        Assert.DoesNotContain("text?[0]", text, StringComparison.Ordinal)
+        Assert.Contains("text[0]", text, StringComparison.Ordinal)
+        let result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            []string{typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location}
+        )
+        Assert.Empty(result.Diagnostics)
+        Assert.Null(result.UnhandledException)
+        Assert.Equal(true, result.Value)
+    }
+
+    @Fact
     func ManagedReferenceArrayProjectionUpdatesMethodGroupTarget() {
         const source = `#nullable enable
 using System.Linq;

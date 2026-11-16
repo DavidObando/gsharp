@@ -377,10 +377,10 @@ internal partial class ExpressionBinder {
             allowUnclosedEnclosingTypeParameters: true
         ) ||
             ambiguousAcrossImportedPackages ||
-            !IsOpenGenericOrGenericEnclosingDefinition(candidate!!) {
+            !IsOpenGenericOrGenericEnclosingDefinition(candidate) {
             return false
         }
-        reportObsoleteUseIfApplicable(location, candidate!!, candidate!!.Name)
+        reportObsoleteUseIfApplicable(location, candidate, candidate.Name)
         type = candidate
         return true
     }
@@ -438,7 +438,7 @@ internal partial class ExpressionBinder {
                     effectiveOwner = declaringContainer
                 }
                 current = if effectiveOwner != nil {
-                    $scope.ApplyEnclosingConstruction(nested!!, effectiveOwner)
+                    $scope.ApplyEnclosingConstruction(nested, effectiveOwner)
                 } else {
                     nested
                 }
@@ -565,8 +565,8 @@ internal partial class ExpressionBinder {
                 out _,
                 allowUnclosedEnclosingTypeParameters: true
             ) ||
-                !DeclaredSegmentShapeMatches(current!!, arities[head]) ||
-                !PrefixMatchesDeclaringPackage(current!!, names, head) {
+                !DeclaredSegmentShapeMatches(current, arities[head]) ||
+                !PrefixMatchesDeclaringPackage(current, names, head) {
                 continue
             }
             var resolved = true
@@ -585,7 +585,7 @@ internal partial class ExpressionBinder {
                     resolved = false
                     break
                 }
-                if !DeclaredSegmentShapeMatches(nested!!, arities[i]) {
+                if !DeclaredSegmentShapeMatches(nested, arities[i]) {
                     resolved = false
                     break
                 }
@@ -848,7 +848,7 @@ internal partial class ExpressionBinder {
         if syntax.TypeClause == nil {
             return BoundDefaultExpression(syntax, TypeSymbol.Error)
         }
-        let typeSymbol TypeSymbol? = bindTypeClause(syntax.TypeClause!!)
+        let typeSymbol TypeSymbol? = bindTypeClause(syntax.TypeClause)
         if typeSymbol == nil || typeSymbol == TypeSymbol.Error {
             return BoundErrorExpression(syntax)
         }
@@ -1136,7 +1136,7 @@ internal partial class ExpressionBinder {
         group BoundMethodGroupExpression,
         @NotNullWhen(true) out naturalType FunctionTypeSymbol?
     ) bool -> TryGetSymbolicUserMethodGroupType(group, out naturalType) &&
-        naturalType!!.ClrType != nil
+        naturalType.ClrType != nil
 
     /// Issue #3712: recovers the symbolic (pre-erasure) function type of a
     /// user-declared method group. When [`expectedParameterCount`](paramref)
@@ -1464,12 +1464,12 @@ internal partial class ExpressionBinder {
                 continue
             }
             refined ??= symbolicArgs.ToBuilder()
-            refined!![slot] = symbolicGroupType
+            refined[slot] = symbolicGroupType
             methodGroupSlotsBuilder ??= ImmutableArray.CreateBuilder[bool](symbolicArgs.Length)
-            while methodGroupSlotsBuilder!!.Count < symbolicArgs.Length {
-                methodGroupSlotsBuilder!!.Add(false)
+            while methodGroupSlotsBuilder.Count < symbolicArgs.Length {
+                methodGroupSlotsBuilder.Add(false)
             }
-            methodGroupSlotsBuilder!![slot] = true
+            methodGroupSlotsBuilder[slot] = true
         }
         methodGroupSlots = methodGroupSlotsBuilder?.MoveToImmutable() ?? default(ImmutableArray[bool])
         return refined?.ToImmutable() ?? symbolicArgs
@@ -1517,7 +1517,7 @@ internal partial class ExpressionBinder {
         return Diagnostics.ReplaceDiagnosticsIn(
             syntax.Location,
             () -> if rebindDeferredArgumentWithSnapshot != nil {
-                rebindDeferredArgumentWithSnapshot!!(syntax, bindCore)
+                rebindDeferredArgumentWithSnapshot(syntax, bindCore)
             } else {
                 bindCore()
             }
@@ -1576,7 +1576,7 @@ internal partial class ExpressionBinder {
                 ClrOverloadResolution
                 .IsFormattableStringTarget(targetType) {
                 builder ??= arguments.ToBuilder()
-                builder!![i] = BindInterpolatedStringAsFormattable(interpolated, targetType: nil)
+                builder[i] = BindInterpolatedStringAsFormattable(interpolated, targetType: nil)
             }
         }
         return builder?.ToImmutable() ?? arguments
@@ -2046,7 +2046,8 @@ internal partial class ExpressionBinder {
                         importedCandidate.ClassType,
                         clrTypeArguments,
                         literalSymbolicArguments,
-                        syntax.TypeIdentifier.Location
+                        syntax.TypeIdentifier.Location,
+                        bindingScope: $scope
                     ) {
                         return BoundErrorExpression(nil)
                     }
@@ -2841,7 +2842,7 @@ internal partial class ExpressionBinder {
                         BoundErrorExpression(nil)
                     )
                 }
-                deferredNonPrimaryInits!!.Add(
+                deferredNonPrimaryInits.Add(
                     (inits.Count, initSyntax, inputType, hasField, field, fieldDeclaringType, property)
                 )
                 inits.Add(placeholderInit)
@@ -3068,7 +3069,7 @@ internal partial class ExpressionBinder {
                 let argument = LocalVariableSymbol(name, isReadOnly: true, argumentType)
                 $scope.TryDeclareVariable(argument)
                 argumentStatements ??= ImmutableArray.CreateBuilder[BoundStatement]()
-                argumentStatements!!.Add(BoundVariableDeclaration(nil, argument, expression))
+                argumentStatements.Add(BoundVariableDeclaration(nil, argument, expression))
                 let value = BoundVariableExpression(nil, argument)
                 inits.Add(
                     if step.Field != nil {
@@ -3365,7 +3366,7 @@ internal partial class ExpressionBinder {
             resolvedTarget: resultTypeOverride ??
                 (
                 if ImportedTypeSymbol.TryCreateSemanticAggregate(clrType, $scope.References, out var aggregate) {
-                    cast[TypeSymbol](aggregate!!)
+                    cast[TypeSymbol](aggregate)
                 } else {
                     TypeSymbol.FromClrTypeWithoutNullability(clrType, NullabilityFreeReason.TypeStructure)
                 }
@@ -3600,10 +3601,10 @@ internal partial class ExpressionBinder {
         let argumentStatements = ImmutableArray.CreateBuilder[BoundStatement]()
         let constructorMembers = HashSet[string](StringComparer.Ordinal)
         if ImportedTypeSymbol.TryCreateSemanticAggregate(clrType, binderCtx.References, out var aggregate) &&
-            aggregate!!
+            aggregate
             .UsesConstructorOwnedDataConstruction {
             if !BoundStructLiteralExpression.ValidateDataConstructor(
-                aggregate!!,
+                aggregate,
                 Diagnostics,
                 syntax,
                 getCurrentFunction(),
@@ -3611,10 +3612,10 @@ internal partial class ExpressionBinder {
             ) {
                 return BoundErrorExpression(syntax)
             }
-            constructor = aggregate!!.GetDataConstructionConstructor()
+            constructor = aggregate.GetDataConstructionConstructor()
             let supplied = Dictionary[string, BoundExpression](StringComparer.Ordinal)
-            let parameters = if aggregate!!.HasDataConstructionPrimary {
-                aggregate!!.PrimaryConstructorParameters
+            let parameters = if aggregate.HasDataConstructionPrimary {
+                aggregate.PrimaryConstructorParameters
             } else {
                 ImmutableArray[ParameterSymbol].Empty
             }
@@ -3847,7 +3848,7 @@ internal partial class ExpressionBinder {
                 let _ = BindExpression(initSyntax.Value)
                 continue
             }
-            let converted = BindExpression(initSyntax.Value, targetSymbol!!)
+            let converted = BindExpression(initSyntax.Value, targetSymbol)
             let receiverExpr = BoundVariableExpression(initSyntax, tempVar)
             statements.Add(
                 BoundExpressionStatement(
@@ -3857,7 +3858,7 @@ internal partial class ExpressionBinder {
                         receiverExpr,
                         member,
                         converted,
-                        targetSymbol!!,
+                        targetSymbol,
                         staticContainerType: nil
                     )
                 )
@@ -3890,7 +3891,7 @@ internal partial class ExpressionBinder {
             return zero
         }
         // Imported declaration initializers are not mandatory collection zero values.
-        if ImportedAssemblySemantics.TryGetMagicCollectionFields(clrType, out var kinds) && kinds!!.TryGetValue(
+        if ImportedAssemblySemantics.TryGetMagicCollectionFields(clrType, out var kinds) && kinds.TryGetValue(
             field.Name,
             out var kind
         ) {
@@ -3953,7 +3954,7 @@ internal partial class ExpressionBinder {
                         BoundVariableExpression(syntax, receiver),
                         field,
                         converted,
-                        fieldType!!,
+                        fieldType,
                         staticContainerType: nil
                     )
                 )
@@ -4056,7 +4057,7 @@ internal partial class ExpressionBinder {
                 out var ifacePropCandidate,
                 out var ifaceOwner
             ) {
-                let ifaceProp = ifacePropCandidate!!
+                let ifaceProp = ifacePropCandidate
                 if !ifaceProp.HasSetter {
                     Diagnostics.ReportCannotAssign(initSyntax.FieldIdentifier.Location, memberName)
                     let _ = BindExpression(initSyntax.Value)
@@ -4462,7 +4463,7 @@ internal partial class ExpressionBinder {
                 let rebound = Diagnostics.ReplaceDiagnosticsIn(
                     interpSyntax.Location,
                     () -> if rebindDeferredArgumentWithSnapshot != nil {
-                        rebindDeferredArgumentWithSnapshot!!(
+                        rebindDeferredArgumentWithSnapshot(
                             interpSyntax,
                             () -> BindInterpolatedStringExpression(interpSyntax, newHandler)
                         )
@@ -4551,7 +4552,7 @@ internal partial class ExpressionBinder {
             }
         }
         if hasSpreadElement {
-            return BindSpreadArrayCreationExpression(syntax, elementType!!)
+            return BindSpreadArrayCreationExpression(syntax, elementType)
         }
         let elementSyntaxes = syntax.Elements ??
             GSharp
@@ -4573,7 +4574,7 @@ internal partial class ExpressionBinder {
             }
             let rectangularElements = ImmutableArray.CreateBuilder[BoundExpression](elementSyntaxes.Count)
             for elementSyntax in elementSyntaxes {
-                let boundElement = BindExpression(elementSyntax, elementType!!)
+                let boundElement = BindExpression(elementSyntax, elementType)
                 ApplySubExpressionNarrowingEffects(elementSyntax, boundElement)
                 rectangularElements.Add(boundElement)
             }
@@ -4615,7 +4616,7 @@ internal partial class ExpressionBinder {
             }
             return BoundArrayCreationExpression.CreateRectangular(
                 syntax,
-                RectangularArrayTypeSymbol.Get(elementType!!, dimensions.Count),
+                RectangularArrayTypeSymbol.Get(elementType, dimensions.Count),
                 boundDimensions.MoveToImmutable(),
                 rectangularElements.MoveToImmutable(),
                 rectangularLengths
@@ -4631,14 +4632,14 @@ internal partial class ExpressionBinder {
             return BoundArrayCreationExpression(syntax, SliceTypeSymbol.Get(elementType), boundLength)
         }
         for elementSyntax in elementSyntaxes {
-            let boundElement = BindExpression(elementSyntax, elementType!!)
+            let boundElement = BindExpression(elementSyntax, elementType)
             ApplySubExpressionNarrowingEffects(elementSyntax, boundElement)
             elements.Add(boundElement)
         }
         if syntax.LengthToken == nil {
             return BoundArrayCreationExpression(nil, SliceTypeSymbol.Get(elementType), elements.ToImmutable())
         }
-        if !int32.TryParse(syntax.LengthToken!!.Text, out var length) || length < 0 {
+        if !int32.TryParse(syntax.LengthToken.Text, out var length) || length < 0 {
             Diagnostics.ReportInvalidArrayLength(syntax.LengthToken!!.Location, syntax.LengthToken!!.Text)
             return BoundErrorExpression(nil)
         }
@@ -4701,7 +4702,7 @@ internal partial class ExpressionBinder {
         clrElementType ??= $scope.References!!.GetCoreType("System.Object")
         var closedListType Type
         try {
-            closedListType = openListType!!.MakeGenericType(clrElementType!!)
+            closedListType = openListType!!.MakeGenericType(clrElementType)
         } catch (ArgumentException) {
             closedListType = openListType!!.MakeGenericType($scope.References!!.GetCoreType("System.Object"))
         }
@@ -5031,10 +5032,10 @@ internal partial class ExpressionBinder {
                 } else {
                     ImmutableArray.CreateBuilder[bool](totalSlots)
                 }
-                while merged!!.Count < totalSlots {
-                    merged!!.Add(false)
+                while merged.Count < totalSlots {
+                    merged.Add(false)
                 }
-                merged!![slot] = true
+                merged[slot] = true
             }
             return merged?.MoveToImmutable() ?? refinedSlots
         }
@@ -5083,7 +5084,7 @@ internal partial class ExpressionBinder {
                 }
                 if argSyntax is InterpolatedStringExpressionSyntax {
                     flags ??= [count]bool
-                    flags!![i + receiverArgCount] = true
+                    flags[i + receiverArgCount] = true
                 }
             }
             return flags

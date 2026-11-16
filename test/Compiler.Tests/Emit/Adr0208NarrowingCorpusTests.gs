@@ -1549,7 +1549,7 @@ func Run() int32 {
     }
     return s.Length
 }
-func Main() { Console.WriteLine(Run()) }`, "GS0612@10:27 GS0158@12:14", "reject", "", "stays rejected (dispatch state threading)"}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@12:14", "reject", "", "stays rejected (dispatch state threading)"}
             yield []object{"g4_overload_ambiguity_after_join", `interface IA { }
 interface IB { }
 class Both : IA, IB { }
@@ -1602,7 +1602,7 @@ func Main() {
     var p P? = nil
     var t string? = nil
     Console.WriteLine(Find(frames, c, out p, out t))
-}`, "", "run", "True", "R12 amendment A3 (#5292)"}
+}`, "GS0155@11:34 GS0154@12:26 GS0158@12:39", "reject", "", "R12 amendment A3; unknown externally supplied comparer (#5326)"}
             yield []object{"h2_limitation_call_with_container_operand", `class C {
     var Value int32 = 1
 }
@@ -1615,7 +1615,7 @@ func Run(ref a C?, xs []C?) int32 {
 func Main() {
     var xs = []C?{C{}}
     Console.WriteLine(Run(ref xs[0], xs))
-}`, "", "nre", "", "R12 amendment A3 (#5292): documented limitation, see the follow-up issue"}
+}`, "GS0158@8:14", "reject", "", "R12 (#5326)"}
             yield []object{"h3_limitation_call_writes_global", `class C {
     var Value int32 = 1
 }
@@ -1626,7 +1626,7 @@ func Run(ref a C?) int32 {
     Clear()
     return a.Value
 }
-Console.WriteLine(Run(ref g))`, "GS0286@11:1", "nre", "", "R12 amendment A3 (#5292): documented limitation, see the follow-up issue"}
+Console.WriteLine(Run(ref g))`, "GS0158@9:14 GS0286@11:1", "reject", "", "R12 (#5326)"}
             yield []object{"h4_same_variable_two_ref_arguments", `class C {
     var Value int32 = 1
 }
@@ -1959,7 +1959,7 @@ func Run() int32 {
     }
     return 0
 }
-func Main() { Console.WriteLine(Run()) }`, "GS0612@9:14 GS0158@10:18", "reject", "", "R18 (#5534, #5249): header effects before the branches; threw NullReferenceException before"}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@10:18", "reject", "", "R18 (#5534, #5249): header effects before the branches; threw NullReferenceException before"}
             yield []object{"h7_getter_in_exiting_branch_kills_member_path", `open class Animal { var Name string = "a" }
 class Dog : Animal { func Bark() string { return "woof" } }
 class Box {
@@ -10714,7 +10714,10 @@ func Main() { Console.WriteLine(Run()) }`, "", "run", "4", "R6 (#5301)"}
             if string.IsNullOrEmpty(tpa) {
                 return Enumerable.Empty[string]()
             }
-            return tpa.Split(Path.PathSeparator).Where(File.Exists)
+            let framework = Path.GetDirectoryName(typeof(object).Assembly.Location)
+            return tpa.Split(Path.PathSeparator).Where(
+                (path string) -> File.Exists(path) && Path.GetDirectoryName(path) == framework
+            )
         }
     }
 }

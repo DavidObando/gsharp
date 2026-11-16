@@ -5,6 +5,7 @@ import Cs2Gs.Translator
 import Cs2Gs.Translator.Loading
 import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
+import Microsoft.CodeAnalysis.CSharp.Syntax
 import System
 import System.Diagnostics
 import System.IO
@@ -13,6 +14,186 @@ import System.Text
 import Xunit
 
 class Issue5951SourceMaybeNullReturnTests {
+    @Fact
+    func AttributedDelegateInvoke_PreservesSourceReturnContract() {
+        LiteralConstructionRuntimeParity.AssertMatches(`
+#nullable enable
+using System;
+using System.Diagnostics.CodeAnalysis;
+using System.Threading.Tasks;
+[return: MaybeNull] public delegate string Reader();
+[return: MaybeNull] public delegate Task<int> ContractOnly();
+public static class P
+{
+    static int calls;
+    [return: MaybeNull] static string Missing() { calls++; return null; }
+    public static void Main()
+    {
+        Reader first = Missing;
+        Reader second = () => { calls++; return null; };
+        Console.WriteLine(first() == null);
+        Console.WriteLine(second() == null);
+        Console.WriteLine(calls);
+    }
+}`, verifyTranslation: (
+                printed string
+            ) -> Assert.Contains(
+                "delegate ContractOnly() Task[int32]?",
+                printed
+            ), verifyIL: true, expectedOutput: string.Join(Environment.NewLine, []string{"True", "True", "2", ""}))
+    }
+
+    @Fact
+    func RefOutStorage_PreservesEnvelopeAndResultContracts() {
+        LiteralConstructionRuntimeParity.AssertMatches(`
+#nullable disable
+using System;
+using System.Diagnostics.CodeAnalysis;
+using System.Threading.Tasks;
+public static class P
+{
+    static int calls;
+    [return: MaybeNull] static Task<int> Empty() { calls++; return null; }
+    static void Supply(out Task<int> task) { task = Empty(); }
+    static Task<int> Forward() { Task<int> task; Supply(out task); return task; }
+    static async Task<string> Missing() { calls++; await Task.Yield(); return null; }
+    static void Replace(ref Task<string> task) { task = Missing(); }
+    public static void Main()
+    {
+        Console.WriteLine(Forward() == null);
+        Task<string> task = Task.FromResult("control");
+        Replace(ref task);
+        Console.WriteLine(task.GetAwaiter().GetResult() == null);
+        var inferred = Task.FromResult("control");
+        Replace(ref inferred);
+        Console.WriteLine(inferred.GetAwaiter().GetResult() == null);
+        Console.WriteLine(calls);
+    }
+}`, verifyIL: true, nullableContextOptions: NullableContextOptions.Disable, expectedOutput: string.Join(
+                Environment.NewLine,
+                []string{"True", "True", "True", "3", ""}
+            ))
+    }
+
+    @Fact
+    func DeconstructedStorage_PreservesEnvelopeWrites() {
+        LiteralConstructionRuntimeParity.AssertMatches(`
+#nullable disable
+using System;
+using System.Diagnostics.CodeAnalysis;
+using System.Threading.Tasks;
+public static class P
+{
+    static int calls;
+    [return: MaybeNull] static Task<int> Empty() { calls++; return null; }
+    static Task<int> Assigned()
+    {
+        Task<int> task = Task.FromResult(1); int unused;
+        (task, unused) = (Empty(), 0);
+        return task;
+    }
+    static Task<int> Declared() { var (task, unused) = (Empty(), 0); return task; }
+    public static void Main()
+    {
+        Console.WriteLine(Assigned() == null);
+        Console.WriteLine(Declared() == null);
+        Console.WriteLine(calls);
+    }
+}`, verifyIL: true, nullableContextOptions: NullableContextOptions.Disable, expectedOutput: string.Join(
+                Environment.NewLine,
+                []string{"True", "True", "2", ""}
+            ))
+    }
+
+    @Fact
+    func NullableParameterGroups_SynchronizeStoredResults() {
+        LiteralConstructionRuntimeParity.AssertMatches(`
+#nullable disable
+using System;
+using System.Threading.Tasks;
+public interface I { Task<string> Read(Task<string>? value); }
+public class Reader : I
+{
+    public Task<string> Read(Task<string>? value) => value;
+}
+public static class P
+{
+    static int calls;
+    static async Task<string> Missing() { calls++; await Task.Yield(); return null; }
+    public static void Main()
+    {
+        I reader = new Reader();
+        Console.WriteLine(reader.Read(Missing()).GetAwaiter().GetResult() == null);
+        Console.WriteLine(reader.Read(null) == null);
+        Console.WriteLine(calls);
+    }
+}`, verifyIL: true, nullableContextOptions: NullableContextOptions.Disable, expectedOutput: string.Join(
+                Environment.NewLine,
+                []string{"True", "True", "1", ""}
+            ))
+    }
+
+    @Fact
+    func ConstructedDelegateReturn_PreservesBoundEnvelope() {
+        LiteralConstructionRuntimeParity.AssertMatches(`
+#nullable disable
+using System;
+using System.Threading.Tasks;
+public static class P
+{
+    static int calls;
+    static Task<int> Forward(Func<Task<int>?> reader) => reader();
+    public static void Main()
+    {
+        Console.WriteLine(Forward(() => { calls++; return null; }) == null);
+        Console.WriteLine(Forward(() => { calls++; return Task.FromResult(7); }).Result);
+        Console.WriteLine(calls);
+    }
+}`, verifyIL: true, nullableContextOptions: NullableContextOptions.Disable, expectedOutput: string.Join(
+                Environment.NewLine,
+                []string{"True", "7", "2", ""}
+            ))
+    }
+
+    @Fact
+    func StoredAwaitProjection_DoesNotPromoteNestedPayload() {
+        const source = `
+#nullable disable
+using System;
+using System.Threading.Tasks;
+public static class P
+{
+    static int calls;
+    static async Task<Task<string>> Missing() { calls++; await Task.Yield(); return null; }
+    static async Task Read()
+    {
+        var saved = await Missing();
+        Task<string> copy = saved;
+        Console.WriteLine(copy == null);
+        Console.WriteLine(calls);
+    }
+    public static void Main() => Read().GetAwaiter().GetResult();
+}`
+        let project = CSharpProjectLoader.LoadInMemory([](string, string){("Probe.cs", source)})
+        let document = Assert.Single(project.Documents)
+        let saved = Assert.Single(
+            document
+                .SyntaxTree
+                .GetRoot()
+                .DescendantNodes()
+                .OfType[VariableDeclaratorSyntax]()
+                .Where((node VariableDeclaratorSyntax) -> node.Identifier.ValueText == "saved")
+        )
+        let savedSymbol = document.SemanticModel.GetDeclaredSymbol(saved)!!
+        Assert.False(ObliviousNullabilityAnalyzer.StoredAwaitedResultIsTainted(project.Compilation, savedSymbol, nil))
+        LiteralConstructionRuntimeParity.AssertMatches(
+            source,
+            verifyIL: true,
+            nullableContextOptions: NullableContextOptions.Disable,
+            expectedOutput: string.Join(Environment.NewLine, []string{"True", "1", ""})
+        )
+    }
+
     @Theory
     @InlineData(false)
     @InlineData(true)
@@ -191,7 +372,7 @@ public static class P
         catch (NullReferenceException) { Console.WriteLine("null"); }
         Console.WriteLine(calls);
     }
-}`, nullableContext: NullableContextOptions.Disable, expectedOutput: string.Join(
+}`, nullableContextOptions: NullableContextOptions.Disable, expectedOutput: string.Join(
                 Environment.NewLine,
                 []string{"null", "1"}
             ) +
@@ -223,7 +404,7 @@ public static class P
         catch (NullReferenceException) { Console.WriteLine("null"); }
         Console.WriteLine(calls);
     }
-}`, nullableContext: NullableContextOptions.Disable, expectedOutput: string.Join(
+}`, nullableContextOptions: NullableContextOptions.Disable, expectedOutput: string.Join(
                 Environment.NewLine,
                 []string{"True", "True", "null", "6"}
             ) +
@@ -255,7 +436,7 @@ public static class P
         Console.WriteLine(external() == null);
         Console.WriteLine(calls);
     }
-}`, nullableContext: NullableContextOptions.Disable, expectedOutput: string.Join(
+}`, nullableContextOptions: NullableContextOptions.Disable, expectedOutput: string.Join(
                 Environment.NewLine,
                 []string{"True", "True", "True", "3"}
             ) +
@@ -296,7 +477,7 @@ public static class P
         catch (NullReferenceException) { Console.WriteLine("null"); }
         Console.WriteLine(choices + ":" + calls);
     }
-}`, nullableContext: NullableContextOptions.Disable, expectedOutput: string.Join(
+}`, nullableContextOptions: NullableContextOptions.Disable, expectedOutput: string.Join(
                 Environment.NewLine,
                 []string{"null", "null", "2:2"}
             ) +
@@ -334,7 +515,7 @@ public static class P
         Console.WriteLine(Forward() == null);
         Console.WriteLine(calls);
     }
-}`, nullableContext: NullableContextOptions.Disable, expectedOutput: string.Join(
+}`, nullableContextOptions: NullableContextOptions.Disable, expectedOutput: string.Join(
                 Environment.NewLine,
                 []string{"True", "1"}
             ) +
@@ -361,7 +542,7 @@ public static class P
         Console.WriteLine(alias.GetAwaiter().GetResult() == null);
         Console.WriteLine(calls);
     }
-}`, nullableContext: NullableContextOptions.Disable, expectedOutput: string.Join(
+}`, nullableContextOptions: NullableContextOptions.Disable, expectedOutput: string.Join(
                 Environment.NewLine,
                 []string{"True", "2"}
             ) +
@@ -396,7 +577,7 @@ public static class P
         Console.WriteLine(Present.Result);
         Console.WriteLine(calls);
     }
-}`, nullableContext: NullableContextOptions.Disable, expectedOutput: string.Join(
+}`, nullableContextOptions: NullableContextOptions.Disable, expectedOutput: string.Join(
                 Environment.NewLine,
                 []string{"True", "True", "True", "7", "3"}
             ) +
@@ -436,7 +617,7 @@ public static class P
         Console.WriteLine(present.Read().Result);
         Console.WriteLine(Calls);
     }
-}`, nullableContext: NullableContextOptions.Disable, expectedOutput: string.Join(
+}`, nullableContextOptions: NullableContextOptions.Disable, expectedOutput: string.Join(
                 Environment.NewLine,
                 []string{"True", "True", "7", "2"}
             ) +
@@ -473,7 +654,7 @@ public static class P
         catch (NullReferenceException) { Console.WriteLine("null"); }
         Console.WriteLine(calls);
     }
-}`, nullableContext: NullableContextOptions.Disable, expectedOutput: string.Join(
+}`, nullableContextOptions: NullableContextOptions.Disable, expectedOutput: string.Join(
                 Environment.NewLine,
                 []string{"null", "null", "2"}
             ) +
@@ -544,7 +725,7 @@ public static class P
                     "Payload()!!",
                     printed
                 )
-            }, nullableContext: NullableContextOptions.Disable, expectedOutput: string.Join(
+            }, nullableContextOptions: NullableContextOptions.Disable, expectedOutput: string.Join(
                 Environment.NewLine,
                 []string{"null", "3", "3", "null", "True", "5"}
             ) +
@@ -594,7 +775,7 @@ public static class P
                     "ValueTask[string?]?",
                     printed
                 )
-            }, nullableContext: NullableContextOptions.Disable, expectedOutput: string.Join(
+            }, nullableContextOptions: NullableContextOptions.Disable, expectedOutput: string.Join(
                 Environment.NewLine,
                 []string{"True", "True", "True", "2"}
             ) +
@@ -642,7 +823,7 @@ public static class P
                     "func NonNull() Task[int32]?",
                     printed
                 )
-            }, nullableContext: NullableContextOptions.Disable, expectedOutput: string.Join(
+            }, nullableContextOptions: NullableContextOptions.Disable, expectedOutput: string.Join(
                 Environment.NewLine,
                 []string{"True", "2", "1"}
             ) +
@@ -873,7 +1054,7 @@ public static class P
                 } else {
                     source
                 },
-                nullableContext: mode,
+                nullableContextOptions: mode,
                 expectedOutput: string.Join(Environment.NewLine, []string{"7", "7", "null", "null", "9", "7", "5"}) +
                     Environment.NewLine
             )
@@ -939,7 +1120,7 @@ public static class P
                     "func Fallback() Task[int32]?",
                     printed
                 )
-            }, nullableContext: NullableContextOptions.Disable, expectedOutput: string.Join(
+            }, nullableContextOptions: NullableContextOptions.Disable, expectedOutput: string.Join(
                 Environment.NewLine,
                 []string{"True", "True", "True", "True", "True", "9", "5"}
             ) +
@@ -1045,7 +1226,7 @@ public static class P
                     "func ResultOnly() Task[string?]?",
                     printed
                 )
-            }, nullableContext: NullableContextOptions.Disable, expectedOutput: string.Join(
+            }, nullableContextOptions: NullableContextOptions.Disable, expectedOutput: string.Join(
                 Environment.NewLine,
                 []string{"True", "True", "True", "True", "4"}
             ) +

@@ -212,11 +212,11 @@ internal shared class SmartCastStability {
         } else if StatementBinder.IsNilLiteral(right) &&
             TryGetStableMemberPath(left, out var leftPath, out var leftType) {
             target = leftPath
-            targetType = MemberLookup.GetDeclaredAccessPathType(leftPath!!, leftType!!)
+            targetType = MemberLookup.GetDeclaredAccessPathType(leftPath, leftType)
         } else if StatementBinder.IsNilLiteral(left) &&
             TryGetStableMemberPath(right, out var rightPath, out var rightType) {
             target = rightPath
-            targetType = MemberLookup.GetDeclaredAccessPathType(rightPath!!, rightType!!)
+            targetType = MemberLookup.GetDeclaredAccessPathType(rightPath, rightType)
         }
         // ADR-0186 §6: a nil guard narrows a PLATFORM value exactly as it
         // narrows a nullable one — "inside `if x != nil { … }`, `x` has type

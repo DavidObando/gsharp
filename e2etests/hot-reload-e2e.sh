@@ -8,6 +8,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+ROOT_SDK_VERSION="$(dotnet --version)"
 
 SAMPLE="samples/HotReload"
 APP="$SAMPLE/App/App.gsproj"
@@ -149,13 +150,23 @@ NUPKG=$(ls -t out/bin/Release/nupkgs/Gsharp.NET.Sdk.[0-9]*.nupkg | head -1)
 VER="${NUPKG##*Gsharp.NET.Sdk.}"
 VER="${VER%.nupkg}"
 
-cat > "$SAMPLE/global.json" <<EOF
-{
-  "msbuild-sdks": {
-    "Gsharp.NET.Sdk": "$VER"
-  }
-}
-EOF
+# Keep the repository's SDK policy in every watch subprocess.
+python3 - "$ROOT/global.json" "$SAMPLE/global.json" "$VER" <<'PY'
+import json
+import pathlib
+import sys
+
+root, sample, version = sys.argv[1:]
+policy = json.loads(pathlib.Path(root).read_text())
+policy["msbuild-sdks"]["Gsharp.NET.Sdk"] = version
+pathlib.Path(sample).write_text(json.dumps(policy, indent=2) + "\n")
+PY
+
+SAMPLE_SDK_VERSION="$(cd "$SAMPLE" && dotnet --version)"
+if [[ "$SAMPLE_SDK_VERSION" != "$ROOT_SDK_VERSION" ]]; then
+    echo "FAIL: sample SDK $SAMPLE_SDK_VERSION differs from repository SDK $ROOT_SDK_VERSION"
+    exit 1
+fi
 
 if [[ "${GSHARP_E2E_SDK_PACKED:-}" != "1" ]]; then
     rm -rf "$HOME/.nuget/packages/gsharp.net.sdk/$VER"
@@ -169,7 +180,7 @@ dotnet restore "$APP" --nologo
 
 echo "==> Starting dotnet watch"
 : > "$LOG"
-dotnet watch --project "$APP" --no-restore --non-interactive >"$LOG" 2>&1 &
+dotnet watch --project "$APP" --no-restore --non-interactive --verbose >"$LOG" 2>&1 &
 WATCH_PID=$!
 
 wait_for "values=1,2,3" "initial application output"

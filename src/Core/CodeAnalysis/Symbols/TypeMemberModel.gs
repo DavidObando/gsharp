@@ -5,6 +5,7 @@
 package GSharp.Core.CodeAnalysis.Symbols
 
 import GSharp.Core.CodeAnalysis.Binding
+import GSharp.Core.CodeAnalysis.Syntax
 import System
 import System.Collections.Generic
 import System.Collections.Immutable
@@ -124,7 +125,7 @@ shared class TypeMemberModel {
                 name,
                 out var enumMember
             ) {
-                return enumMember!!
+                return enumMember
             }
             return nil
         }
@@ -259,7 +260,7 @@ shared class TypeMemberModel {
                 }
                 if query.IncludeStatic && c.TryGetStaticField(name, out var foundStaticField) {
                     if !object.ReferenceEquals(c, structSymbol) &&
-                        foundStaticField!!.Accessibility == Accessibility.Private {
+                        foundStaticField.Accessibility == Accessibility.Private {
                         break
                     }
                     field = foundStaticField
@@ -301,7 +302,7 @@ shared class TypeMemberModel {
     ) bool {
         for c in GetHierarchy(type) {
             if c.TryGetStaticField(name, out field) {
-                if !object.ReferenceEquals(c, type) && field!!.Accessibility == Accessibility.Private {
+                if !object.ReferenceEquals(c, type) && field.Accessibility == Accessibility.Private {
                     break
                 }
                 declaringType = ResolveStaticMemberOwner(type, c)
@@ -440,7 +441,7 @@ shared class TypeMemberModel {
         var visited HashSet[TypeParameterSymbol]? = nil
         while type is TypeParameterSymbol parameter && parameter.ConstraintReferenceType is {} constraint {
             visited ??= HashSet[TypeParameterSymbol]()
-            if !visited!!.Add(parameter) {
+            if !visited.Add(parameter) {
                 break
             }
             type = constraint
@@ -1302,6 +1303,40 @@ shared class TypeMemberModel {
                 return true
             }
         }
+        // Source headers expose declaration names before member contracts are bound.
+        let declaration = (type.Definition ?? type).Declaration
+        if declaration != nil && declaration.Fields.Any(
+            (field FieldDeclarationSyntax) -> field.IsConst && field.Identifier.ValueText == name
+        ) {
+            return true
+        }
+        if declaration?.SharedBlock is {} sharedBlock {
+            return sharedBlock.Fields.Any((field FieldDeclarationSyntax) -> field.Identifier.ValueText == name) ||
+                sharedBlock
+                .Properties
+                .Any(
+                (property PropertyDeclarationSyntax) -> !property.HasExplicitInterfaceClause &&
+                    property
+                    .Identifier
+                    .ValueText == name
+            ) ||
+                sharedBlock
+                .Events
+                .Any(
+                (event EventDeclarationSyntax) -> !event.HasExplicitInterfaceClause &&
+                    event
+                    .Identifier
+                    .ValueText == name
+            ) ||
+                sharedBlock
+                .Methods
+                .Any(
+                (method FunctionDeclarationSyntax) -> !method.HasExplicitInterfaceClause &&
+                    method
+                    .Identifier
+                    .ValueText == name
+            )
+        }
         return false
     }
 
@@ -1451,7 +1486,7 @@ shared class TypeMemberModel {
                 name,
                 out var property
             ) {
-                return property!!
+                return property
             }
             if (query.Kinds & MemberKinds.Field) != 0 &&
                 TryFirst(
@@ -1468,7 +1503,7 @@ shared class TypeMemberModel {
                 name,
                 out var field
             ) {
-                return field!!
+                return field
             }
             if (query.Kinds & MemberKinds.Event) != 0 &&
                 TryFirst(
@@ -1485,7 +1520,7 @@ shared class TypeMemberModel {
                 name,
                 out var event
             ) {
-                return event!!
+                return event
             }
             if (query.Kinds & MemberKinds.Method) != 0 &&
                 TryFirst(
@@ -1502,7 +1537,7 @@ shared class TypeMemberModel {
                 name,
                 out var method
             ) {
-                return method!!
+                return method
             }
             if !query.IncludeInherited {
                 break

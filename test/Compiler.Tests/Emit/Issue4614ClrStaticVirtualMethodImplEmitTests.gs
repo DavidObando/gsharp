@@ -2532,7 +2532,7 @@ Console.WriteLine(nestedFixedEq.Equals(List[[3]int32]{[3]int32{7, 8, 9}}))`), []
             return if string.IsNullOrEmpty(tpa) {
                 Enumerable.Empty[string]()
             } else {
-                tpa!!.Split(Path.PathSeparator).Where(File.Exists)
+                tpa.Split(Path.PathSeparator).Where(File.Exists)
             }
         }
     }

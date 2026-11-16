@@ -118,7 +118,9 @@ Object
         Assert.Contains("sequence[Type]", translated, StringComparison.Ordinal)
         Assert.Contains("yield KeyValuePair[string, Node]", translated, StringComparison.Ordinal)
         Assert.Contains("yield current", translated, StringComparison.Ordinal)
-        Assert.DoesNotContain("yield current!!", translated, StringComparison.Ordinal)
+        // Preserved System.Type inequality does not establish a native nil-check proof for the yielded value.
+        Assert.Contains("yield current!!", translated, StringComparison.Ordinal)
+        Assert.Contains("current != cast[Type?](nil)", translated, StringComparison.Ordinal)
         Assert.DoesNotContain("List[KeyValuePair[string, Node]]()", translated, StringComparison.Ordinal)
         Assert.True(
             appResult.Succeeded,

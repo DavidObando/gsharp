@@ -1,0 +1,63 @@
+package Demo
+
+open class Node {
+    func Read() int32 -> 7
+}
+
+struct Counter {
+    var Value int32
+    func Touch() int32 -> (Value += 1)
+
+    prop Next int32 {
+        get {
+            Value++
+            return Value
+        }
+    }
+
+    prop this[ignored int32] int32 {
+        get {
+            Value++
+            return Value
+        }
+    }
+}
+
+shared class P {
+    private func Bump(ref value int32) {
+        value++
+    }
+
+    func Run(flag bool) string {
+        var captured = 1
+        let Change = func () {
+            captured++
+        }
+        Change()
+        var ref alias int32 = captured
+        Bump(&alias)
+        var (left, right) = (0, 0)
+        left, right = 3, 4
+        var caller = Counter{}
+        let _ = caller.Touch()
+        var accessor = Counter{}
+        let _ = accessor.Next
+        var indexed = Counter{}
+        let _ = indexed[0]
+        var current Node? = if flag { Node() } else { default(Node?) }
+        let read () -> int32 = () -> {
+            if current is Node nested {
+                return nested.Read()
+            }
+            return 0
+        }
+        var result = read()
+        while current is Node outer {
+            result += outer.Read()
+            current = nil
+        }
+        goto Done
+        Done:
+        return captured.ToString() + ":" + left.ToString() + ":" + right.ToString() + ":" + (caller.Value + accessor.Value + indexed.Value).ToString() + ":" + result.ToString()
+    }
+}

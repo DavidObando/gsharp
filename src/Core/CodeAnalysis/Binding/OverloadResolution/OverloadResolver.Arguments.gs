@@ -291,7 +291,7 @@ internal partial class OverloadResolver {
         if expectedType == nil || MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(expectedType, out _) ||
             (argument.Type != nil && MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(argument.Type, out _)) ||
             !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(expectedType, out var targetFnType) ||
-            TypeSymbol.ContainsTypeParameter(targetFnType!!) {
+            TypeSymbol.ContainsTypeParameter(targetFnType) {
             return false
         }
         if lambda != nil && !IsLambdaReturnShapeCompatible(argument, expectedType, lambda) {
@@ -313,14 +313,14 @@ internal partial class OverloadResolver {
             ) {
                 cast[BoundExpression](naturalLiteral!!)
             } else {
-                bindLambdaWithTarget!!(lambda, targetFnType!!)
+                bindLambdaWithTarget!!(lambda, targetFnType)
             }
-        } else if targetFnType!!.ReturnType == TypeSymbol.Void &&
+        } else if targetFnType.ReturnType == TypeSymbol.Void &&
             tryGetFunctionLiteral(argument, out var literal) &&
             literal!!.FunctionType is FunctionTypeSymbol literalFunctionType &&
             literalFunctionType.ReturnType != TypeSymbol.Void &&
             literalFunctionType.ReturnType != TypeSymbol.Error &&
-            literalFunctionType.Arity == targetFnType!!.Arity {
+            literalFunctionType.Arity == targetFnType.Arity {
             candidate = literal!!
         } else {
             return false
@@ -447,7 +447,7 @@ internal partial class OverloadResolver {
                 bindExpression(resolvedBranchySyntax)
             }
             return if rebindDeferredArgumentWithSnapshot != nil {
-                rebindDeferredArgumentWithSnapshot!!(resolvedBranchySyntax, rebind)
+                rebindDeferredArgumentWithSnapshot(resolvedBranchySyntax, rebind)
             } else {
                 rebind()
             }
@@ -487,7 +487,7 @@ internal partial class OverloadResolver {
                     )
                 )
                 return if rebindDeferredArgumentWithSnapshot != nil {
-                    rebindDeferredArgumentWithSnapshot!!(nonNullInner, rebind)
+                    rebindDeferredArgumentWithSnapshot(nonNullInner, rebind)
                 } else {
                     rebind()
                 }
@@ -522,8 +522,8 @@ internal partial class OverloadResolver {
             if arguments[i] is NamedArgumentExpressionSyntax named {
                 names ??= [arguments.Count]string
                 seenNames ??= HashSet[string](StringComparer.Ordinal)
-                names!![i] = named.NameToken.ValueText
-                if !seenNames!!.Add(named.NameToken.ValueText) {
+                names[i] = named.NameToken.ValueText
+                if !seenNames.Add(named.NameToken.ValueText) {
                     Diagnostics.ReportDuplicateNamedArgument(named.NameToken.Location, named.NameToken.ValueText)
                     ok = false
                 }
@@ -555,7 +555,7 @@ internal partial class OverloadResolver {
             let resolved = conversions.ResolveReboundArgument(arg)
             if !object.ReferenceEquals(resolved, arg) {
                 reboundBuilder ??= parameterOrderedArguments.ToBuilder()
-                reboundBuilder!![i] = resolved
+                reboundBuilder[i] = resolved
             }
         }
         if reboundBuilder != nil {
@@ -841,7 +841,7 @@ internal partial class OverloadResolver {
                 continue
             }
             knownNames ??= MemberLookup.CollectClrParameterNames(receiverClrType, methodName, bindingFlags)
-            if !ContainsClrParameterName(knownNames!!, name) {
+            if !ContainsClrParameterName(knownNames, name) {
                 let location = if ce.Arguments[i] is NamedArgumentExpressionSyntax named {
                     named.NameToken.Location
                 } else {
@@ -875,7 +875,7 @@ internal partial class OverloadResolver {
                 continue
             }
             knownNames ??= MemberLookup.CollectClrConstructorParameterNames(clrType)
-            if !ContainsClrParameterName(knownNames!!, name) {
+            if !ContainsClrParameterName(knownNames, name) {
                 let location = if ce.Arguments[i] is NamedArgumentExpressionSyntax named {
                     named.NameToken.Location
                 } else {
@@ -1049,6 +1049,7 @@ internal partial class OverloadResolver {
                     }
                     continue
                 }
+                argument = CanonicalizeCapturedArgument(argument)
                 let temp = LocalVariableSymbol("<>expandedNamedArg$sourceIndex", isReadOnly: true, argument.Type)
                 evaluations.Add(BoundVariableDeclaration(argument.Syntax, temp, argument))
                 let tempLoad BoundExpression = BoundVariableExpression(argument.Syntax, temp)
@@ -1120,6 +1121,19 @@ internal partial class OverloadResolver {
             return false
         }
 
+        private func CanonicalizeCapturedArgument(argument BoundExpression) BoundExpression {
+            // Managed-reference declarations must use the address-of form consumed by RefInitializationHoister.
+            if argument.Type is ByRefTypeSymbol && argument is not BoundAddressOfExpression {
+                return BoundAddressOfExpression(
+                    argument.Syntax,
+                    BoundDereferenceExpression(argument.Syntax, argument),
+                    unmanaged: false,
+                    isReadOnly: RefCapabilities.IsReadOnlyStorage(argument)
+                )
+            }
+            return argument
+        }
+
         private func RewriteHandlerForwardedArguments(
             argument BoundExpression,
             sourceCaptures IReadOnlyDictionary[int32, BoundExpression]
@@ -1128,13 +1142,48 @@ internal partial class OverloadResolver {
                 return argument
             }
             var forwarded ImmutableArray[BoundExpression].Builder? = nil
+            let constructorParameters = handler.Constructor.GetParameters()
             for var i = 0; i < handler.ForwardedSourceIndices.Length; i++ {
                 let sourceIndex = handler.ForwardedSourceIndices[i]
                 if sourceIndex < 0 || !sourceCaptures.TryGetValue(sourceIndex, out var captured) {
                     continue
                 }
+                if !constructorParameters[2 + i].ParameterType.IsByRef {
+                    if captured.Type is ByRefTypeSymbol {
+                        captured = BoundDereferenceExpression(captured.Syntax, captured)
+                    }
+                    let parameterType = ClrNullability.GetParameterTypeSymbol(constructorParameters[2 + i])
+                    if !DeclarationBinder.TypeSignaturesEquivalent(captured.Type, parameterType) {
+                        captured = BoundConversionExpression(captured.Syntax, parameterType, captured)
+                    }
+                } else if RefCapabilities.GetParameterRefKind(constructorParameters[2 + i]) == RefKind.In {
+                    var parameterType = ClrNullability.GetParameterTypeSymbol(constructorParameters[2 + i])
+                    if TypeSymbol.TryGetPointeeType(parameterType, out var pointeeType) {
+                        parameterType = pointeeType
+                    }
+                    let storageType = ByRefStorageMatching.TryGetStorageType(captured, RefKind.In)
+                    if storageType == nil || !ByRefStorageMatching.AreSameStorageType(
+                        storageType,
+                        parameterType,
+                        out _,
+                        out _,
+                        out _
+                    ) {
+                        if captured.Type is ByRefTypeSymbol {
+                            captured = BoundDereferenceExpression(captured.Syntax, captured)
+                        }
+                        if !DeclarationBinder.TypeSignaturesEquivalent(captured.Type, parameterType) {
+                            captured = BoundConversionExpression(captured.Syntax, parameterType, captured)
+                        }
+                        captured = ConversionClassifier.CreateImplicitInTemporary(
+                            captured,
+                            parameterType,
+                            "<inArgumentHandler${sourceIndex}_$i>"
+                        )
+                    }
+                }
                 forwarded ??= handler.ForwardedArguments.ToBuilder()
-                forwarded!![i] = captured
+                forwarded[i] = captured
             }
             return interpolated.Update(
                 interpolated.Parts,
@@ -1287,11 +1336,8 @@ internal partial class OverloadResolver {
             ref hasErrors bool
         ) ImmutableArray[BoundExpression] {
             let trailingCount = boundArguments.Length - fixedCount
-            let passThrough = trailingCount == 1 && Conversion.Classify(
-                conversions.ResolveReboundSibling(boundArguments[fixedCount]).Type,
-                carrierType
-            )
-                .IsImplicit
+            let passThrough = trailingCount == 1 &&
+                IsVariadicCarrierPassThrough(conversions, boundArguments[fixedCount], carrierType)
             let result = ImmutableArray.CreateBuilder[BoundExpression](fixedCount + 1)
             for var i = 0; i < fixedCount; i++ {
                 result.Add(conversions.ResolveReboundSibling(boundArguments[i]))
@@ -1481,52 +1527,24 @@ internal partial class OverloadResolver {
             return false
         }
 
-        // Issue #4400: the value a reordered named `in` argument is captured as,
-        // in source order, when its storage can neither stay put (see
-        // IsFixedStorageAddress) nor be re-addressed from captured inputs (see
-        // TryGetAddressInputs). An implicit-`in` spill captures its spilled value;
-        // any other readonly (`in`) address — a ref-returning call's, a
-        // dereference's — captures the value it addresses, so it still runs in
-        // source order. The cost is that the callee sees a copy of that storage,
-        // which a readonly reference only reveals if the storage changes during
-        // the call. A by-ref local cannot hold the address instead, because a
-        // named-argument temp may have to survive an `await` in a later argument.
-        private func TryGetInArgumentCaptureValue(
-            argument BoundExpression,
-            @NotNullWhen(true) out value BoundExpression?
-        ) bool {
-            if TryGetImplicitInSpilledValue(argument, out value) {
-                return true
-            }
-            if argument is BoundAddressOfExpression{IsReadOnly: true, IsUnmanaged: false} readOnlyAddress &&
-                !IsFixedStorageAddress(readOnlyAddress) &&
-                !TryGetAddressInputs(readOnlyAddress, out _, out _) {
-                value = readOnlyAddress.Operand
-                return true
-            }
-            value = nil
-            return false
-        }
-
-        // Issue #4400: an address whose storage no later argument can redirect —
-        // a variable (reassigning it changes the value at that same storage,
-        // which the callee then sees exactly as in C#), a static field, or a
-        // value-type field chain rooted in such storage — may stay in its
-        // parameter slot when the arguments are reordered.
         internal func IsFixedStorageAddress(argument BoundExpression) bool -> argument is BoundAddressOfExpression{
             IsUnmanaged: false
         } address &&
-            IsFixedStorage(address.Operand)
+            IsFixedStorage(address.Operand, allowStaticFields: true)
 
-        private func IsFixedStorage(operand BoundExpression) bool -> switch operand {
+        // A fixed location is not effect-free: taking a static-field address can initialize its type.
+        internal func CanDeferAddressEvaluation(argument BoundExpression) bool -> argument is BoundAddressOfExpression{
+            IsUnmanaged: false
+        } address &&
+            IsFixedStorage(address.Operand, allowStaticFields: false)
+
+        private func IsFixedStorage(operand BoundExpression, allowStaticFields bool) bool -> switch operand {
             case _ is BoundVariableExpression: true
-            case boundFieldAccessExpression is BoundFieldAccessExpression when boundFieldAccessExpression.Receiver == nil: true
-            case BoundFieldAccessExpression{Receiver: {} receiver} when !GSharp
-                .Core
-                .CodeAnalysis
-                .Binding
-                .Binder
-                .IsReferenceTypeForConstraint(receiver.Type): IsFixedStorage(receiver)
+            case BoundFieldAccessExpression{Receiver: nil}: allowStaticFields
+            case BoundClrPropertyAccessExpression{Member: FieldInfo field} when field.IsStatic: allowStaticFields
+            case BoundFieldAccessExpression{Receiver: {} receiver} when !Binder.IsReferenceTypeForConstraint(
+                receiver.Type
+            ): IsFixedStorage(receiver, allowStaticFields)
             default: false
         }
 
@@ -1598,16 +1616,11 @@ internal partial class OverloadResolver {
                     return parameterOrderedArguments
                 }
                 reordered |= parameterIndex != sourceIndex
-                // Issue #4400: an address stays in its slot when its storage is
-                // fixed, is re-taken from inputs captured in source order when a
-                // receiver/index selects it, and an `in` one is otherwise captured
-                // by value. Only a remaining `ref`/`out` address still forgoes
-                // reordering, as before.
                 if !hasHandlerSourceForwarding &&
                     (
                     parameterOrderedArguments[slot] is BoundAddressOfExpression or BoundConditionalAddressExpression
                 ) &&
-                    !TryGetInArgumentCaptureValue(parameterOrderedArguments[slot], out _) &&
+                    !RefCapabilities.IsReadOnlyStorage(parameterOrderedArguments[slot]) &&
                     !IsFixedStorageAddress(parameterOrderedArguments[slot]) &&
                     !TryGetAddressInputs(parameterOrderedArguments[slot], out _, out _) {
                     return parameterOrderedArguments
@@ -1622,12 +1635,10 @@ internal partial class OverloadResolver {
             for var sourceIndex = 0; sourceIndex < sourceToParameterMapping.Length; sourceIndex++ {
                 let slot = parameterOffset + sourceToParameterMapping[sourceIndex]
                 var argument = parameterOrderedArguments[slot]
-                // Issue #4400: an `in` argument evaluates its VALUE here, in source
-                // order, into the named-argument temp whose address is passed; a
-                // plain variable's address needs no capture at all.
+                // Only implicit-in rvalues need value spills. Other references retain their original storage.
                 var implicitInSpill = false
                 var captureType TypeSymbol? = nil
-                if TryGetInArgumentCaptureValue(argument, out var spilledValue) {
+                if TryGetImplicitInSpilledValue(argument, out var spilledValue) {
                     // The capture temp takes the SLOT's pointee type, not the
                     // value's: an implicit-`in` spill may hold a narrower value
                     // (`FormattableString` at `in IFormattable`) whose own type
@@ -1639,8 +1650,9 @@ internal partial class OverloadResolver {
                     }
                     argument = spilledValue
                     implicitInSpill = true
-                } else if IsFixedStorageAddress(argument) {
+                } else if CanDeferAddressEvaluation(argument) {
                     replacements[slot] = argument
+                    sourceCaptures[sourceIndex] = argument
                     continue
                 } else if TryGetAddressInputs(argument, out var inputAddress, out var inputs) {
                     let inputTemps = Dictionary[BoundExpression, BoundExpression](ReferenceEqualityComparer.Instance)
@@ -1654,10 +1666,7 @@ internal partial class OverloadResolver {
                         evaluations.Add(BoundVariableDeclaration(input.Syntax, inputTemp, input))
                         inputTemps[input] = BoundVariableExpression(input.Syntax, inputTemp)
                     }
-                    replacements[slot] = inputAddress.Update(
-                        CapturedInputRewriter(inputTemps).Rewrite(inputAddress.Operand)
-                    )
-                    continue
+                    argument = inputAddress.Update(CapturedInputRewriter(inputTemps).Rewrite(inputAddress.Operand))
                 }
                 argument = RewriteHandlerForwardedArguments(argument, sourceCaptures)
                 var addressCapturedValue = implicitInSpill
@@ -1677,6 +1686,7 @@ internal partial class OverloadResolver {
                     } else {
                         argument
                     }
+                    sourceCaptures[sourceIndex] = replacements[slot]
                     continue
                 }
                 if argument.Type == TypeSymbol.Never {
@@ -1687,19 +1697,29 @@ internal partial class OverloadResolver {
                     )
                     continue
                 }
+                // Even a fixed field address can initialize a type or throw before the next argument.
+                argument = CanonicalizeCapturedArgument(argument)
                 let temp = LocalVariableSymbol("<>namedArg$sourceIndex", isReadOnly: true, captureType ?? argument.Type)
                 evaluations.Add(BoundVariableDeclaration(argument.Syntax, temp, argument))
                 let tempLoad BoundExpression = BoundVariableExpression(argument.Syntax, temp)
-                sourceCaptures[sourceIndex] = tempLoad
                 var replacement = tempLoad
                 if addressCapturedValue {
-                    replacement = BoundAddressOfExpression(argument.Syntax, replacement)
+                    replacement = BoundAddressOfExpression(
+                        argument.Syntax,
+                        replacement,
+                        unmanaged: false,
+                        isReadOnly: implicitInSpill
+                    )
                 } else if argument.Type is ByRefTypeSymbol {
                     replacement = BoundAddressOfExpression(
                         argument.Syntax,
-                        BoundDereferenceExpression(argument.Syntax, replacement)
+                        BoundDereferenceExpression(argument.Syntax, replacement),
+                        unmanaged: false,
+                        isReadOnly: RefCapabilities.IsReadOnlyStorage(argument)
                     )
                 }
+                // Handler forwarding must use the final argument, including any captured address.
+                sourceCaptures[sourceIndex] = replacement
                 replacements[slot] = replacement
             }
             let carrier = parameterOffset

@@ -411,7 +411,7 @@ internal shared class MemberTokenResolver {
             for initializer in creation.Initializers {
                 if MatchesToken(initializer.PropertyIdentifier, token) {
                     if creation.Target != nil {
-                        yield (creation.Target!!, initializer.PropertyIdentifier.Text)
+                        yield (creation.Target, initializer.PropertyIdentifier.Text)
                     }
                 }
             }
@@ -495,7 +495,8 @@ internal shared class MemberTokenResolver {
         while current != nil && !object.ReferenceEquals(current, enclosingDecl) {
             switch current {
                 case fn is FunctionDeclarationSyntax when fn.Body != nil &&
-                    fn.Body!!
+                    fn
+                    .Body
                     .Span
                     .Start <= token
                     .Span
@@ -522,7 +523,8 @@ internal shared class MemberTokenResolver {
                     return true
                 }
                 case accessor is PropertyAccessorSyntax when accessor.Body != nil &&
-                    accessor.Body!!
+                    accessor
+                    .Body
                     .Span
                     .Start <= token
                     .Span

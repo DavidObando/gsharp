@@ -40,9 +40,9 @@ internal shared class ConstantExpressionEvaluator {
         value = nil
         try {
             return TryBuild(expression, out var built) &&
-                TryConvert(built!!, targetType, isChecked: false, out var converted) &&
-                TryNormalizeFinalPayload(converted!!, targetType, out var payload) &&
-                TryInvoke(payload!!, out value) &&
+                TryConvert(built, targetType, isChecked: false, out var converted) &&
+                TryNormalizeFinalPayload(converted, targetType, out var payload) &&
+                TryInvoke(payload, out value) &&
                 (
                 value == nil || targetType.StripToBareShape() == TypeSymbol.String || !Conversion.IsReferenceLikeTarget(
                     targetType.StripToBareShape()
@@ -60,7 +60,7 @@ internal shared class ConstantExpressionEvaluator {
     func TryEvaluate(expression BoundExpression, out value object?) bool {
         value = nil
         try {
-            return TryBuild(expression, out var built) && TryInvoke(built!!, out value)
+            return TryBuild(expression, out var built) && TryInvoke(built, out value)
         } catch (ex Exception) when IsFoldFailure(ex) {
             return false
         }
@@ -283,21 +283,21 @@ internal shared class ConstantExpressionEvaluator {
             return false
         }
         if binary.Op.Kind == BoundBinaryOperatorKind.NullCoalesce {
-            return TryConvert(Expression.Coalesce(left!!, right!!), binary.Type, isChecked: false, out built)
+            return TryConvert(Expression.Coalesce(left, right), binary.Type, isChecked: false, out built)
         }
         if IsStringLike(binary.Op.LeftType) && IsStringLike(binary.Op.RightType) {
-            return TryBuildStringBinary(binary.Op.Kind, left!!, right!!, out built)
+            return TryBuildStringBinary(binary.Op.Kind, left, right, out built)
         }
         if binary.Op.Kind == BoundBinaryOperatorKind.LogicalAnd {
-            built = Expression.AndAlso(left!!, right!!)
+            built = Expression.AndAlso(left, right)
             return true
         }
         if binary.Op.Kind == BoundBinaryOperatorKind.LogicalOr {
-            built = Expression.OrElse(left!!, right!!)
+            built = Expression.OrElse(left, right)
             return true
         }
-        left = PromoteSubIntOperand(left!!, binary.Op.LeftType)
-        right = PromoteSubIntOperand(right!!, binary.Op.RightType)
+        left = PromoteSubIntOperand(left, binary.Op.LeftType)
+        right = PromoteSubIntOperand(right, binary.Op.RightType)
         if IsShift(binary.Op.Kind) && !right.Type.IsSameAs(typeof(int32)) {
             right = Expression.Convert(right, typeof(int32))
         }
@@ -306,69 +306,69 @@ internal shared class ConstantExpressionEvaluator {
         switch binary.Op.Kind {
             case BoundBinaryOperatorKind.Sum {
                 operation = if checkedArithmetic {
-                    Expression.AddChecked(left, right!!)
+                    Expression.AddChecked(left, right)
                 } else {
-                    Expression.Add(left, right!!)
+                    Expression.Add(left, right)
                 }
             }
             case BoundBinaryOperatorKind.Difference {
                 operation = if checkedArithmetic {
-                    Expression.SubtractChecked(left, right!!)
+                    Expression.SubtractChecked(left, right)
                 } else {
-                    Expression.Subtract(left, right!!)
+                    Expression.Subtract(left, right)
                 }
             }
             case BoundBinaryOperatorKind.Product {
                 operation = if checkedArithmetic {
-                    Expression.MultiplyChecked(left, right!!)
+                    Expression.MultiplyChecked(left, right)
                 } else {
-                    Expression.Multiply(left, right!!)
+                    Expression.Multiply(left, right)
                 }
             }
             case BoundBinaryOperatorKind.Quotient {
-                operation = Expression.Divide(left, right!!)
+                operation = Expression.Divide(left, right)
             }
             case BoundBinaryOperatorKind.Remainder {
-                operation = Expression.Modulo(left, right!!)
+                operation = Expression.Modulo(left, right)
             }
             case BoundBinaryOperatorKind.BitwiseAnd {
-                operation = Expression.And(left, right!!)
+                operation = Expression.And(left, right)
             }
             case BoundBinaryOperatorKind.BitwiseOr {
-                operation = Expression.Or(left, right!!)
+                operation = Expression.Or(left, right)
             }
             case BoundBinaryOperatorKind.BitwiseXor {
-                operation = Expression.ExclusiveOr(left, right!!)
+                operation = Expression.ExclusiveOr(left, right)
             }
             case BoundBinaryOperatorKind.BitClear {
-                operation = Expression.And(left, Expression.Not(right!!))
+                operation = Expression.And(left, Expression.Not(right))
             }
             case BoundBinaryOperatorKind.ShiftLeft {
-                operation = Expression.LeftShift(left, right!!)
+                operation = Expression.LeftShift(left, right)
             }
             case BoundBinaryOperatorKind.ShiftRight {
-                operation = BuildRightShift(left, right!!, IsUnsigned(binary.Op.LeftType))
+                operation = BuildRightShift(left, right, IsUnsigned(binary.Op.LeftType))
             }
             case BoundBinaryOperatorKind.UnsignedShiftRight {
-                operation = BuildRightShift(left, right!!, isUnsigned: true)
+                operation = BuildRightShift(left, right, isUnsigned: true)
             }
             case BoundBinaryOperatorKind.Equals {
-                operation = Expression.Equal(left, right!!)
+                operation = Expression.Equal(left, right)
             }
             case BoundBinaryOperatorKind.NotEquals {
-                operation = Expression.NotEqual(left, right!!)
+                operation = Expression.NotEqual(left, right)
             }
             case BoundBinaryOperatorKind.Less {
-                operation = Expression.LessThan(left, right!!)
+                operation = Expression.LessThan(left, right)
             }
             case BoundBinaryOperatorKind.LessOrEquals {
-                operation = Expression.LessThanOrEqual(left, right!!)
+                operation = Expression.LessThanOrEqual(left, right)
             }
             case BoundBinaryOperatorKind.Greater {
-                operation = Expression.GreaterThan(left, right!!)
+                operation = Expression.GreaterThan(left, right)
             }
             case BoundBinaryOperatorKind.GreaterOrEquals {
-                operation = Expression.GreaterThanOrEqual(left, right!!)
+                operation = Expression.GreaterThanOrEqual(left, right)
             }
             default {
                 return false
@@ -398,8 +398,8 @@ internal shared class ConstantExpressionEvaluator {
             !TryConvert(right, TypeSymbol.String, isChecked: false, out var convertedRight) {
             return false
         }
-        left = convertedLeft!!
-        right = convertedRight!!
+        left = convertedLeft
+        right = convertedRight
         switch kind {
             case BoundBinaryOperatorKind.Sum {
                 built = Expression.Call(StringConcat, left, right)
@@ -513,7 +513,7 @@ internal shared class ConstantExpressionEvaluator {
             return false
         }
         return TryGetRuntimeType(targetType, out var runtimeType) &&
-            TryConvert(source, runtimeType!!, isChecked, out converted)
+            TryConvert(source, runtimeType, isChecked, out converted)
     }
 
     private func TryNormalizeFinalPayload(

@@ -251,7 +251,7 @@ internal class ReaderAgreementHarness {
         let context = ClosingContext(
             declaringDefinition,
             openMember,
-            closedMember!!,
+            closedMember,
             argument,
             typeArguments,
             openMethod,
@@ -260,14 +260,14 @@ internal class ReaderAgreementHarness {
         )
         switch openMember {
             case open_ is MethodInfo {
-                let closed = cast[MethodInfo](closedMember!!)
+                let closed = cast[MethodInfo](closedMember)
                 if !IsVoid(open_.ReturnType) {
                     this.ComparePosition(context, "return", Position.Return(open_, closed))
                 }
                 this.CompareParameters(
                     context,
                     open_.GetParameters(),
-                    (cast[MethodBase](closedMember!!)).GetParameters(),
+                    (cast[MethodBase](closedMember)).GetParameters(),
                     open_
                 )
             }
@@ -275,12 +275,12 @@ internal class ReaderAgreementHarness {
                 this.CompareParameters(
                     context,
                     open_.GetParameters(),
-                    (cast[MethodBase](closedMember!!)).GetParameters(),
+                    (cast[MethodBase](closedMember)).GetParameters(),
                     open_
                 )
             }
             case open_ is PropertyInfo {
-                let closedProperty = cast[PropertyInfo](closedMember!!)
+                let closedProperty = cast[PropertyInfo](closedMember)
                 this.ComparePosition(context, "property", Position.Property(open_, closedProperty))
                 let openIndexParameters = open_.GetIndexParameters()
                 let closedIndexParameters = closedProperty.GetIndexParameters()
@@ -299,11 +299,11 @@ internal class ReaderAgreementHarness {
                 }
             }
             case open_ is FieldInfo {
-                this.ComparePosition(context, "field", Position.Field(open_, cast[FieldInfo](closedMember!!)))
+                this.ComparePosition(context, "field", Position.Field(open_, cast[FieldInfo](closedMember)))
             }
             case open_ is EventInfo when open_.EventHandlerType != nil &&
-                (cast[EventInfo](closedMember!!)).EventHandlerType != nil {
-                this.ComparePosition(context, "event", Position.Event(open_, cast[EventInfo](closedMember!!)))
+                (cast[EventInfo](closedMember)).EventHandlerType != nil {
+                this.ComparePosition(context, "event", Position.Event(open_, cast[EventInfo](closedMember)))
             }
         }
     }
@@ -505,8 +505,8 @@ internal class ReaderAgreementHarness {
             // field is always nullable), so the comparison does too.
             result = nullableRoot.UnderlyingType
         }
-        shapes.Add((reader, Shape(result!!), Describe(result!!)))
-        this.CrossCheckLazyAccessors(reader, result!!)
+        shapes.Add((reader, Shape(result), Describe(result)))
+        this.CrossCheckLazyAccessors(reader, result)
     }
 
     /// The lazy accessor's two entry points must agree wherever both can

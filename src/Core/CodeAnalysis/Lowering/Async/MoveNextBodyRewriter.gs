@@ -95,7 +95,7 @@ shared class MoveNextBodyRewriter {
             // T retVal = default; (only for Task<T>)
             if retValLocal != nil {
                 statements.Add(
-                    BoundVariableDeclaration(nil, retValLocal!!, BoundDefaultExpression(nil, retValLocal!!.Type))
+                    BoundVariableDeclaration(nil, retValLocal, BoundDefaultExpression(nil, retValLocal.Type))
                 )
             }
             // Pre-pass: locate each await within the user's try-statement nesting
@@ -214,7 +214,7 @@ shared class MoveNextBodyRewriter {
             let builderAddr = BoundAddressOfExpression(nil, builderAccess)
             var args ImmutableArray[BoundExpression]
             if retValLocal != nil {
-                args = ImmutableArray.Create[BoundExpression](BoundVariableExpression(nil, retValLocal!!))
+                args = ImmutableArray.Create[BoundExpression](BoundVariableExpression(nil, retValLocal))
             } else {
                 args = ImmutableArray[BoundExpression].Empty
             }
@@ -309,7 +309,7 @@ shared class MoveNextBodyRewriter {
                 }
                 if TryGetHoistedField(node.Variable, out var field) {
                     if rewrittenInit != nil {
-                        return RewriteContext.Stmt(ctx.WriteField(field!!, rewrittenInit), node.Syntax)
+                        return RewriteContext.Stmt(ctx.WriteField(field, rewrittenInit), node.Syntax)
                     }
                     return BoundBlockStatement(nil, ImmutableArray[BoundStatement].Empty)
                 }
@@ -321,7 +321,7 @@ shared class MoveNextBodyRewriter {
 
             protected override func RewriteVariableExpression(node BoundVariableExpression) BoundExpression {
                 if TryGetHoistedField(node.Variable, out var field) {
-                    return ctx.ReadField(field!!, node.NarrowedType)
+                    return ctx.ReadField(field, node.NarrowedType)
                 }
                 return node
             }
@@ -329,7 +329,7 @@ shared class MoveNextBodyRewriter {
             protected override func RewriteAssignmentExpression(node BoundAssignmentExpression) BoundExpression {
                 let rewrittenValue = RewriteExpression(node.Expression)
                 if TryGetHoistedField(node.Variable, out var field) {
-                    return ctx.WriteField(field!!, rewrittenValue)
+                    return ctx.WriteField(field, rewrittenValue)
                 }
                 if rewrittenValue != node.Expression {
                     return BoundAssignmentExpression(nil, node.Variable, rewrittenValue)
@@ -356,7 +356,7 @@ shared class MoveNextBodyRewriter {
                             isReadOnly: false,
                             receiver.Type
                         )
-                        let decl = BoundVariableDeclaration(nil, aliasLocal, ctx.ReadField(recvField!!))
+                        let decl = BoundVariableDeclaration(nil, aliasLocal, ctx.ReadField(recvField))
                         let newAssign = BoundFieldAssignmentExpression(
                             nil,
                             aliasLocal,
@@ -375,7 +375,7 @@ shared class MoveNextBodyRewriter {
                             isReadOnly: false,
                             receiver.Type
                         )
-                        let copyDecl = BoundVariableDeclaration(nil, copyLocal, ctx.ReadField(recvField!!))
+                        let copyDecl = BoundVariableDeclaration(nil, copyLocal, ctx.ReadField(recvField))
                         let innerAssign = BoundFieldAssignmentExpression(
                             nil,
                             copyLocal,
@@ -386,7 +386,7 @@ shared class MoveNextBodyRewriter {
                         )
                         let writeBack = BoundExpressionStatement(
                             nil,
-                            ctx.WriteField(recvField!!, BoundVariableExpression(nil, copyLocal))
+                            ctx.WriteField(recvField, BoundVariableExpression(nil, copyLocal))
                         )
                         let resultRead = BoundFieldAccessExpression(
                             nil,
@@ -431,7 +431,7 @@ shared class MoveNextBodyRewriter {
                         isReadOnly: false,
                         assignTarget.Type
                     )
-                    let decl = BoundVariableDeclaration(nil, aliasLocal, ctx.ReadField(targetField!!))
+                    let decl = BoundVariableDeclaration(nil, aliasLocal, ctx.ReadField(targetField))
                     let newAssign = BoundIndexAssignmentExpression(
                         nil,
                         aliasLocal,
@@ -503,7 +503,7 @@ shared class MoveNextBodyRewriter {
                 if node.Target != nil && TryGetHoistedField(node.Target, out var targetField) {
                     return BoundClrIndexAssignmentExpression.WithExpressionTarget(
                         nil,
-                        ctx.ReadField(targetField!!),
+                        ctx.ReadField(targetField),
                         node.Indexer,
                         rewrittenArgs,
                         rewrittenValue,
@@ -584,7 +584,7 @@ shared class MoveNextBodyRewriter {
                     for clause in result.CatchClauses {
                         if clause.Variable is {} variable && TryGetHoistedField(variable, out var field) {
                             let copyToField = RewriteContext.Stmt(
-                                ctx.WriteField(field!!, BoundVariableExpression(nil, variable))
+                                ctx.WriteField(field, BoundVariableExpression(nil, variable))
                             )
                             if clause.Filter is {} existingFilter {
                                 let patchedFilter = if existingFilter is BoundBlockExpression existingBlock {
@@ -876,7 +876,7 @@ shared class MoveNextBodyRewriter {
                 let hasResult = resultType != TypeSymbol.Void && !resultType.ClrType.IsSameAs(typeof(Void))
                 if resultTarget != nil && hasResult {
                     if TryGetHoistedField(resultTarget, out var targetField) {
-                        stmts.Add(RewriteContext.Stmt(ctx.WriteField(targetField!!, getResultCall)))
+                        stmts.Add(RewriteContext.Stmt(ctx.WriteField(targetField, getResultCall)))
                     } else {
                         stmts.Add(BoundVariableDeclaration(nil, resultTarget, getResultCall))
                     }

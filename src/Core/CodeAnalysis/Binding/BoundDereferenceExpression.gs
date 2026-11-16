@@ -16,7 +16,7 @@ class BoundDereferenceExpression : BoundExpression {
     init(syntax SyntaxNode?, operand BoundExpression) : base(syntax) {
         Operand = operand
         _type = if TypeSymbol.TryGetPointeeType(operand.Type, out var pointee) {
-            pointee!!
+            pointee
         } else {
             TypeSymbol.Error
         }

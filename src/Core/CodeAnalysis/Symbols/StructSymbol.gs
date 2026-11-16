@@ -959,7 +959,7 @@ class StructSymbol : TypeSymbol {
             HasDeclaredPrimaryConstructor
         } else {
             ImportedAssemblySemantics.TryGetTypeSemantics(ClrType, out var semantics) &&
-                !semantics!!
+                !semantics
                 .PrimaryConstructorParameterNames
                 .IsDefaultOrEmpty
         }
@@ -980,7 +980,7 @@ class StructSymbol : TypeSymbol {
             ImmutableArray[ParameterSymbol].Empty
         }
         if ImportedAssemblySemantics.TryGetTypeSemantics(importedType, out var semantics) &&
-            semantics!!
+            semantics
             .PrimaryConstructorParameterNames
             .Length != parameters.Length {
             return nil
@@ -1671,9 +1671,8 @@ class StructSymbol : TypeSymbol {
     func MarkCompleteReifiedTypeParameterVector() -> HasCompleteReifiedTypeParameterVector = true
 
     /// Marks this class as an `@Attribute`-sugar attribute type per
-    /// ADR-0047 §5. Intended to be called once by the binder after
-    /// (cref:Symbol.SetAttributes) when the bound annotation list
-    /// contains the `@Attribute` marker.
+    /// ADR-0047 §5. The binder consumes the marker before binding
+    /// attribute applications within this declaration.
     func SetIsAttributeClass() {
         IsAttributeClass = true
     }
@@ -1690,11 +1689,12 @@ class StructSymbol : TypeSymbol {
     /// @returns `true` when this class is or derives from (cref:System.Attribute).
     func DerivesFromSystemAttribute() bool {
         for current in GetHierarchy() {
-            if current.IsAttributeClass {
+            let definition = current.Definition ?? current
+            if definition.IsAttributeClass {
                 return true
             }
-            if current.ImportedBaseType != nil {
-                let clr = current.ImportedBaseType!!.ClrType
+            if definition.ImportedBaseType != nil {
+                let clr = definition.ImportedBaseType!!.ClrType
                 for var t Type? = clr; t != nil; t = t!!.BaseType {
                     if t.FullName == typeof(Attribute).FullName {
                         return true
@@ -1811,7 +1811,7 @@ class StructSymbol : TypeSymbol {
                     }
                 }
                 builder ??= ImmutableArray.CreateBuilder[FunctionSymbol]()
-                builder!!.Add(m)
+                builder.Add(m)
             }
         }
         return if builder == nil {
@@ -1864,7 +1864,7 @@ class StructSymbol : TypeSymbol {
                         arg = resolved
                     }
                     running ??= Dictionary[TypeParameterSymbol, TypeSymbol]()
-                    running!![defParams[i]] = arg
+                    running[defParams[i]] = arg
                 }
             }
             levels.Add(
@@ -1926,7 +1926,7 @@ class StructSymbol : TypeSymbol {
                 }
                 if !implemented {
                     builder ??= ImmutableArray.CreateBuilder[FunctionSymbol]()
-                    builder!!.Add(abstractMethod)
+                    builder.Add(abstractMethod)
                 }
             }
         }
@@ -2182,12 +2182,13 @@ class StructSymbol : TypeSymbol {
     /// that used to keep its own unguarded copy (`TypeMemberModel`,
     /// `ExternalClrOverrideResolver`) so a fix here cannot be
     /// independently missed by a sibling copy again.
+    /// Constructed ancestors are visited by definition because generic cycles can expand arguments indefinitely.
     /// @returns This class and its ancestors, most-derived first.
     internal func GetHierarchy() List[StructSymbol] {
         let hierarchy = List[StructSymbol]()
         let visited = HashSet[StructSymbol]()
         var current StructSymbol? = this
-        while current != nil && visited.Add(current) {
+        while current != nil && visited.Add(current.Definition ?? current) {
             hierarchy.Add(current)
             current = current.BaseClass
         }
@@ -2734,7 +2735,7 @@ class StructSymbol : TypeSymbol {
                 if !tps.IsDefaultOrEmpty {
                     levels ??= List[ImmutableArray[TypeParameterSymbol]]()
                     // Prepend so the outermost enclosing type's parameters come first.
-                    levels!!.Insert(0, tps)
+                    levels.Insert(0, tps)
                 }
             }
             if levels == nil {
@@ -3325,7 +3326,7 @@ class StructSymbol : TypeSymbol {
                 let resolvedClrArgs = [substitutedArgs.Count]Type
                 for var i = 0; i < substitutedArgs.Count; i++ {
                     let clr = if MemberLookup.TryProjectErasedClrType(substitutedArgs[i], out var projected) {
-                        projected!!
+                        projected
                     } else {
                         substitutedArgs[i].ClrType ?? typeof(object)
                     }

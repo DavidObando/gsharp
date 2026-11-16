@@ -2,6 +2,33 @@
 
 Every diagnostic emitted by `gsc` carries a stable `GS####` identifier, a severity level, a human-readable message, and a source location (file, line, column). This document enumerates all identifiers so that project files can suppress or promote them using standard MSBuild properties.
 
+## Imported attribute support gaps
+
+Attributes on referenced CLR types and members do not necessarily receive the same treatment as attributes on G# source declarations. For example, source `@Obsolete` can produce GS0204, but an imported `[Obsolete]` does not. Imported symbols do not populate the source-bound `Symbol.Attributes` collection; separate metadata readers provide selected attribute support.
+
+The following inventory accounts for the twelve families in [#5177](https://github.com/DavidObando/gsharp/issues/5177). These are acknowledged gaps, intentionally deferred during imported-metadata parity work, not new compatibility decisions. [ADR-0209 §15 and §20 decision Q4](adr/0209-handle-backed-imported-symbols.md#15-pre-existing-gaps-the-parity-stages-must-not-change-silently) defer behavior changes until after stage 7, in separate PRs. This documentation does not enable them.
+
+Attribute names below omit the `Attribute` suffix.
+
+| Imported attribute | Current support and gap |
+| --- | --- |
+| `Obsolete` | No imported obsolete-use warning or error, including the attribute's error form. Source obsolete-use diagnostics remain supported. |
+| `RequiredMember` | Imported required fields and properties do not cause missing-initialization diagnostics when constructing their type. |
+| `SetsRequiredMembers` | Imported constructor annotations do not participate in required-member validation; that imported validation is itself missing. |
+| `CompilerFeatureRequired` | Partial: G# native-protocol import reads its own feature and storage markers. General C# required-feature enforcement is missing. |
+| `Dynamic` | The imported marker does not enable C# dynamic binding; the underlying CLR signature remains available. |
+| `ParamCollection` | Partial: an overload-check guard recognizes the imported marker, but CLR variadic expansion still requires a one-dimensional array marked `ParamArray`. Imported non-array params collections do not gain element expansion. |
+| `InlineArray` | The imported marker does not supply C# inline-array indexing or conversions. Ordinary CLR member access is separate. |
+| `Experimental` | No imported experimental-use diagnostics are produced from this marker. |
+| `OverloadResolutionPriority` | The imported priority does not affect overload selection. Other overload rules still apply. |
+| `CallerMemberName`, `CallerFilePath`, `CallerLineNumber`, `CallerArgumentExpression` | Omitting an optional imported argument uses its declared default, not the caller's member, path, line, or argument expression. |
+| `CollectionBuilder` | The imported marker does not select a custom collection builder. Other collection construction paths are separate. |
+| `DefaultMember` | The imported name does not select indexers. Indexed CLR properties are discovered separately, so imported indexers are not generally unsupported. |
+
+Source variadic collection carriers can emit `ParamCollection`; their source-call packing support does not establish imported params-collection support. Likewise, importing an attribute class for use in a source annotation does not establish support for its semantics on imported declarations. This table does not mean that all CLR attributes are ignored.
+
+Implementation boundaries: [`KnownAttributes.TryGetObsolete`](../src/Core/CodeAnalysis/Binding/KnownAttributes.gs) reads bound attributes; [`ClrOverloadResolution.IsParamsArrayParameter`](../src/Core/CodeAnalysis/Binding/OverloadResolution/ClrOverloadResolution.gs) handles imported array params; [`StatementBinder`](../src/Core/CodeAnalysis/Binding/StatementBinder.NarrowingLoops.gs) contains the `ParamCollection` overload guard; [`NativeProtocolMetadata`](../src/Core/CodeAnalysis/Symbols/NativeProtocolMetadata.gs) reads G# feature markers; [`MemberLookup`](../src/Core/CodeAnalysis/Binding/MemberLookup.gs) discovers indexed properties.
+
 ## Fixed-array ABI imports (ADR-0210 F1)
 
 | Code | Severity | Meaning | Remedy |
@@ -936,14 +963,14 @@ parenthesized single element is an error because `(T)` is grouping, not a
 [ADR-0173](adr/0173-generalized-variadic-carriers.md) / issue #3627: a
 variadic COLLECTION carrier (`...List[T]`, `...ReadOnlySpan[T]`) packs its
 expanded call-site arguments via the carrier's CLR construction form
-(`new List<T>(T[])`, the span's `T[]` constructor). When the element type is
-a same-compilation type whose CLR shape is still erased at bind time, no
-closed construction exists; use the array carrier (`...T`) instead, or pass
-an existing collection directly.
+(`new List<T>(T[])`, the span's `T[]` constructor). Source-declared elements
+and generic type parameters use symbolic constructor emission.
+GS0544 reports an unavailable carrier representation or supported constructor.
+Use the array carrier (`...T`) instead, or pass an existing collection directly.
 
 | ID | Severity | Message | Example |
 |---|---|---|---|
-| GS0544 | Error | `Variadic carrier '<carrier>' cannot be constructed over element type '<element>' at this call site; use an array carrier ('...T') or pass the collection directly.` | `func F(xs ...List[MyLocalClass])` called expanded |
+| GS0544 | Error | `Variadic carrier '<carrier>' cannot be constructed over element type '<element>' at this call site; use an array carrier ('...T') or pass the collection directly.` | Expanded List/span carrier without a supported constructor |
 
 ## Interpolated-string handler missing from the target framework (GS0545)
 
@@ -1521,6 +1548,7 @@ ADR-0149 adds a dedicated qualifier clause for explicit interface implementation
 | GS0498 | Error | A `goto` enters a `catch` or `finally` handler from outside that handler.  | |
 | GS0636 | Error | A `goto` enters a nested block from outside that block.  | |
 | GS0638 | Error | Cannot take the pointer value of a fixed-size buffer in movable storage outside a `fixed` statement; pin it with `fixed` or index an element directly (`name[i]`).  | |
+| GS0639 | Error | Lazy declaration dependencies exceed the available execution stack. | Reduce or split cross-declaration attribute dependencies. The compiler reports this error instead of terminating the process. |
 | GS0499 | Error | A field assignment targets a temporary struct value rather than writable storage.  | |
 | GS0500 | Error | A user-defined compound-assignment operator is not an instance method with exactly one parameter and no return value.  | |
 | GS0501 | Error | Imported metadata exposes multiple public parameterless members with the same name, so reflection lookup is ambiguous.  | |

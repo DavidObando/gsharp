@@ -365,7 +365,7 @@ internal shared class ImplementingPartHeaders {
             CollectReferences(child, identifiers)
         }
         if declaration.TypeParameterList != nil {
-            for typeParameter in declaration.TypeParameterList!!.Parameters {
+            for typeParameter in declaration.TypeParameterList.Parameters {
                 identifiers.Remove(typeParameter.Identifier.ValueText)
             }
         }
@@ -404,7 +404,7 @@ internal shared class ImplementingPartHeaders {
                 } else {
                     AddName(typeParameter.Constraint, identifiers)
                     if typeParameter.ConstraintTypeArguments != nil {
-                        for argument in typeParameter.ConstraintTypeArguments!! {
+                        for argument in typeParameter.ConstraintTypeArguments {
                             CollectReferences(argument, identifiers)
                         }
                     }
@@ -416,7 +416,7 @@ internal shared class ImplementingPartHeaders {
                     AddName(annotation.NameSegments[0], identifiers)
                 }
                 if annotation.TypeArguments != nil {
-                    for argument in annotation.TypeArguments!! {
+                    for argument in annotation.TypeArguments {
                         CollectReferences(argument, identifiers)
                     }
                 }
@@ -534,8 +534,8 @@ internal shared class ImplementingPartHeaders {
             }
         }
         var end = declaration.CloseParenthesisToken.Span.End
-        if declaration.Type != nil && declaration.Type!!.Span.End > end {
-            end = declaration.Type!!.Span.End
+        if declaration.Type != nil && declaration.Type.Span.End > end {
+            end = declaration.Type.Span.End
         }
         return TextSpan.FromBounds(start, end)
     }

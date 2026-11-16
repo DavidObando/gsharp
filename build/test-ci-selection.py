@@ -508,7 +508,7 @@ class PublishJobTests(unittest.TestCase):
                                                    r"      id-token: write$", job(self.text, n))}
         self.assertEqual(oidc, {"publish-nuget-compiler", "publish-nuget-sdk"})
         for name, group, after in (("publish-nuget-compiler", "compiler", "--wait-minutes 30"),
-                                   ("publish-nuget-sdk", "sdk", "--wait-minutes 15 --require-sdk")):
+                                   ("publish-nuget-sdk", "sdk", "--wait-minutes 30 --require-sdk")):
             with self.subTest(job=name):
                 block = job(self.text, name)
                 self.assertRegex(block, r"(?m)^      contents: read$")
@@ -530,7 +530,7 @@ class PublishJobTests(unittest.TestCase):
         self.assertIn("--wait-minutes 30", job(self.text, "publish-nuget-compiler"))
         sdk = job(self.text, "publish-nuget-sdk")
         self.assertLess(sdk.index("check-rid-packages.py --packages ./nupkgs\n"), sdk.index("nuget-push --group sdk"))
-        self.assertIn("--wait-minutes 15 --require-sdk", sdk)
+        self.assertIn("--wait-minutes 30 --require-sdk", sdk)
         vscode = job(self.text, "publish-vscode-marketplace")
         self.assertIn("@vscode/vsce@3.9.2 publish", vscode)
         self.assertIn("--skip-duplicate", vscode)
@@ -548,8 +548,10 @@ class PublishJobTests(unittest.TestCase):
     def test_the_marketplace_query_not_the_publisher_exit_code_decides(self):
         # A lost answer after an accepted upload must not fail the job: only the final query may.
         vscode = job(self.text, "publish-vscode-marketplace")
+        self.assertIn("if query; then exit 0; else rc=$?; fi", vscode)
+        self.assertEqual(vscode.count("--wait-minutes"), 1)
         self.assertRegex(vscode, r"vsce@[\d.]+ publish [^\n]*\\\n\s*\|\| echo ")
-        self.assertTrue(vscode.rstrip().endswith("query --wait-minutes 5"))
+        self.assertTrue(vscode.rstrip().endswith("query --wait-minutes 10"))
         studio = job(self.text, "publish-visual-studio-marketplace")
         after = studio[studio.index("& $publisher publish"):]
         final = after.index("--wait-minutes 5")

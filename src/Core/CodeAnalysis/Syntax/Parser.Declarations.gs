@@ -807,8 +807,8 @@ open partial class Parser {
                 equalsToken
             )
         }
-        let aliasedIdentifier = MatchToken(SyntaxKind.IdentifierToken)
-        let aliasedType = TypeClauseSyntax(syntaxTree, aliasedIdentifier)
+        // ADR-0222: share named type parsing without adding nullable alias target suffixes.
+        let aliasedType = ParseNamedTypeClause(parseNullableSuffix: false)
         return TypeAliasDeclarationSyntax(
             syntaxTree,
             accessibilityModifier,

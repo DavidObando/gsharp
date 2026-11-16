@@ -652,7 +652,7 @@ class W2 : IF2[Shape] {
             return if string.IsNullOrEmpty(tpa) {
                 Enumerable.Empty[string]()
             } else {
-                tpa!!.Split(Path.PathSeparator).Where(File.Exists)
+                tpa.Split(Path.PathSeparator).Where(File.Exists)
             }
         }
     }

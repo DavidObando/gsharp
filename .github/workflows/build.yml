@@ -1369,7 +1369,7 @@ jobs:
         run: python3 build/release-publish.py nuget-push --group sdk --nupkgs ./nupkgs
 
       - name: Check that the SDK and all six RID compiler packages exist on NuGet
-        run: python3 build/check-rid-packages.py --packages ./nupkgs --wait-minutes 15 --require-sdk
+        run: python3 build/check-rid-packages.py --packages ./nupkgs --wait-minutes 30 --require-sdk
 
   publish-vscode-marketplace:
     needs: [publish-verify, publish-nuget-sdk]
@@ -1406,7 +1406,7 @@ jobs:
           if [ "$rc" != 1 ]; then exit "$rc"; fi
           npx --yes @vscode/vsce@3.9.2 publish --packagePath ./vsix/vscode-gsharp.vsix --skip-duplicate \
             || echo "vsce failed; the marketplace query below decides"
-          query --wait-minutes 5
+          query --wait-minutes 10
 
   publish-visual-studio-marketplace:
     needs: [publish-verify, publish-nuget-sdk]

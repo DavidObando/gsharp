@@ -1109,7 +1109,7 @@ internal class SignatureEncoder {
                 for var i = 0; i < hostArgs.Length; i++ {
                     refArgs[i] = this.MapToReferenceClrType(hostArgs[i]) ?? hostArgs[i]
                 }
-                return openRef!!.MakeGenericType(refArgs)
+                return openRef.MakeGenericType(refArgs)
             }
             return hostType
         }
@@ -1117,7 +1117,7 @@ internal class SignatureEncoder {
             .emitCtx
             .References
             .TryResolveType(hostType.FullName ?? hostType.Name, requireExternalVisibility: false, out var mapped) {
-            return mapped!!
+            return mapped
         }
         return hostType
     }

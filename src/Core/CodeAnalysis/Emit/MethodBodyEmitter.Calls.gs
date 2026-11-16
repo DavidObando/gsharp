@@ -633,7 +633,7 @@ internal partial class MethodBodyEmitter {
                 continue
             }
             liftedArgs ??= call.MethodTypeArguments.ToArray()
-            liftedArgs!![k] = NullableTypeSymbol.Get(x)
+            liftedArgs[k] = NullableTypeSymbol.Get(x)
             liftedTps[k] = true
         }
         if liftedArgs == nil {

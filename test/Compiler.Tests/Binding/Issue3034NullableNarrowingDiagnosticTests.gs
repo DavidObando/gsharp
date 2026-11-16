@@ -450,6 +450,11 @@ func Run() {
     var value S? = nil
     /*CALL*/
 }`, "value", "M()", true)
+            values.Add("struct-object-member", `struct S { }
+func Run() {
+    var value S? = nil
+    /*CALL*/
+}`, "value", "ToString()", true)
             values.Add("interface", `interface I { func M(); }
 func Run(value I?) {
     /*CALL*/
