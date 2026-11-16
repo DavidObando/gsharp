@@ -2411,7 +2411,9 @@ internal class MemberLookup {
                 // symbolic slice here the call's return would collapse to the
                 // erased `object[]` and fail to convert to `[]Foo` (GS0155). Mirror
                 // the generic-type branch below, which already honours #903.
-                if TypeSymbol.RequiresSymbolicProjection(mappedElement) ||
+                if TypeSymbol.RequiresSymbolicProjection(mappedElement) || TypeSymbol.ContainsTupleType(
+                    mappedElement
+                ) ||
                     (preserveReferenceTupleIdentity && ContainsReferenceTuple(mappedElement)) ||
                     ContainsRankOneNonSzArray(mappedElement) ||
                     ClrNullability.ContainsFunctionPointer(openClr) ||
@@ -2438,7 +2440,9 @@ internal class MemberLookup {
                     methodTypeArguments,
                     preserveReferenceTupleIdentity
                 )
-                if TypeSymbol.RequiresSymbolicProjection(mappedPointee) ||
+                if TypeSymbol.RequiresSymbolicProjection(mappedPointee) || TypeSymbol.ContainsTupleType(
+                    mappedPointee
+                ) ||
                     (preserveReferenceTupleIdentity && ContainsReferenceTuple(mappedPointee)) ||
                     ContainsRankOneNonSzArray(mappedPointee) ||
                     ClrNullability.ContainsFunctionPointer(openClr) ||
@@ -2510,7 +2514,7 @@ internal class MemberLookup {
                     // filled a `List[[3]int32]` slot. Measured accepted on `main`
                     // and on this branch until this line was added; the named-tuple
                     // sibling one line up already proved the path was live.
-                    if TypeSymbol.RequiresSymbolicProjection(mapped) || TypeSymbol.ContainsNamedTupleElements(mapped) ||
+                    if TypeSymbol.RequiresSymbolicProjection(mapped) || TypeSymbol.ContainsTupleType(mapped) ||
                         (preserveReferenceTupleIdentity && ContainsReferenceTuple(mapped)) ||
                         ContainsRankOneNonSzArray(mapped) ||
                         (a.ContainsGenericParameters && mapped.ClrType?.ContainsGenericParameters == false) {
@@ -2619,6 +2623,7 @@ internal class MemberLookup {
         /// symbolically inferred generic call loses its `!`. Both reach the
         /// door only through (cref:MapOpenSignatureWithoutDeclarationMerge),
         /// the one suppressed member, so the gap stays one call wide.
+        /// Managed-reference and async-container returns use the canonical merged reader to retain their nullable storage contracts.
         /// @param closed The closed generic method selected by overload resolution.
         /// @param symbolicMethodTypeArgs Per-MVar symbolic type arguments; entries may be `null`.
         /// @param receiverType The receiver's static type symbol (for type-level Var substitution); may be
@@ -2645,6 +2650,14 @@ internal class MemberLookup {
             if openReturn == nil || openReturn.IsSameAs(typeof(Void)) {
                 return nil
             }
+            if openReturn.IsByRef {
+                return GetClrOpenMethodReturnTypeSymbol(
+                    openMethod,
+                    receiverOpenDef,
+                    receiverTypeArgs,
+                    symbolicMethodTypeArgs
+                )
+            }
             if openReturn.IsGenericType && !openReturn.IsGenericTypeDefinition {
                 let openReturnDefinition = openReturn.GetGenericTypeDefinition()
                 let fullName = openReturnDefinition.FullName
@@ -2653,32 +2666,11 @@ internal class MemberLookup {
                         "System.Threading.Tasks.ValueTask`1" or
                         "System.Collections.Generic.IAsyncEnumerable`1"
                 ) {
-                    let openArguments = openReturn.GetGenericArguments()
-                    let projectedArguments = ImmutableArray.CreateBuilder[TypeSymbol](openArguments.Length)
-                    for argument in openArguments {
-                        projectedArguments.Add(
-                            MapOpenSignatureWithoutDeclarationMerge(
-                                argument,
-                                receiverOpenDef,
-                                receiverTypeArgs,
-                                openMethod,
-                                symbolicMethodTypeArgs
-                            )
-                        )
-                    }
-                    let symbolicArguments = projectedArguments.MoveToImmutable()
-                    let erasedObject = ResolveErasedObjectInContext(openReturnDefinition)
-                    let closedReturn = TryBuildErasedClosedGeneric(
-                        openReturnDefinition,
-                        openReturnDefinition.GetGenericArguments(),
-                        symbolicArguments,
-                        erasedObject
-                    ) ??
-                        openReturn
-                    return TupleElementNamesReader.ApplyNames(
-                        ImportedTypeSymbol.GetConstructed(closedReturn, openReturnDefinition, symbolicArguments),
-                        openMethod.ReturnParameter,
-                        openReturn
+                    return GetClrOpenMethodReturnTypeSymbol(
+                        openMethod,
+                        receiverOpenDef,
+                        receiverTypeArgs,
+                        symbolicMethodTypeArgs
                     )
                 }
             }
@@ -2718,7 +2710,7 @@ internal class MemberLookup {
             // parameter bound to `T!` (an explicit argument at an oblivious
             // declaration, or #4459's oblivious-slot inference) keeps it. The CLR
             // fallback reads the closed `string` and would drop the `!`.
-            return if TypeSymbol.RequiresSymbolicProjection(mapped) || TypeSymbol.ContainsNamedTupleElements(mapped) ||
+            return if TypeSymbol.RequiresSymbolicProjection(mapped) || TypeSymbol.ContainsTupleType(mapped) ||
                 TypeSymbol.ContainsSourceArrayShape(mapped) || mapped is PlatformTypeSymbol {
                 mapped
             } else {
@@ -2779,7 +2771,7 @@ internal class MemberLookup {
                 parameters[parameterIndex],
                 openType
             )
-            return if TypeSymbol.RequiresSymbolicProjection(mapped) || TypeSymbol.ContainsNamedTupleElements(mapped) {
+            return if TypeSymbol.RequiresSymbolicProjection(mapped) || TypeSymbol.ContainsTupleType(mapped) {
                 mapped
             } else {
                 default(TypeSymbol?)
@@ -3083,7 +3075,7 @@ internal class MemberLookup {
                 if inferred[i] is {} inferredType &&
                     (
                     IsSymbolicInferenceConflict(inferredType) || TypeSymbol.RequiresSymbolicProjection(inferredType) ||
-                        TypeSymbol.ContainsNamedTupleElements(inferredType) || TypeSymbol.ContainsSourceArrayShape(
+                        TypeSymbol.ContainsTupleType(inferredType) || TypeSymbol.ContainsSourceArrayShape(
                         inferredType
                     ) ||
                         symbolicArgTypes.Any(
