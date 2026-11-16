@@ -16423,7 +16423,7 @@ partial class CSharpToGSharpTranslator {
 
         private func IsDroppedStatementOrLoopClause(node Microsoft.CodeAnalysis.SyntaxNode) bool {
             if node is Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionStatementSyntax exprStmt {
-                return this.IsElidedPartialMethodInvocation(exprStmt.Expression) || this.IsDroppedDiscardedExpression(
+                return this.IsElidedInvocation(exprStmt.Expression) || this.IsDroppedDiscardedExpression(
                     exprStmt.Expression
                 )
             }
@@ -16434,7 +16434,7 @@ partial class CSharpToGSharpTranslator {
                 .ExpressionSyntax expr &&
                 expr.Parent is ForStatementSyntax forParent &&
                 (forParent.Initializers.Contains(expr) || forParent.Incrementors.Contains(expr)) {
-                return this.IsElidedPartialMethodInvocation(expr) || this.IsDroppedDiscardedExpression(expr)
+                return this.IsElidedInvocation(expr) || this.IsDroppedDiscardedExpression(expr)
             }
             return false
         }
@@ -21751,7 +21751,8 @@ partial class CSharpToGSharpTranslator {
                             node,
                             narrowingGuard,
                             use,
-                            includeReferenceStorageWrites: byReference
+                            includeReferenceStorageWrites: byReference,
+                            readPosition: readStart
                         ) &&
                             (RunsSourceCode(node) || WritesReferenceStorage(node)) &&
                             !this.IsInSiblingBranchOfRead(node, use, $scope)

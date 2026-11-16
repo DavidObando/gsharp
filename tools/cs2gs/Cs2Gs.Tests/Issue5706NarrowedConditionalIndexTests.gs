@@ -24,9 +24,135 @@ import Xunit
 /// On a6f5ff7fb, contextual conversions and enclosing compound calls leave stale initializer facts.
 /// On 74c10fcee, suppressed null comparisons and optional coalescing-assignment operands fail these runtime/binding oracles.
 /// On 36d50e65c, declaration-style for headers and argument mutations in expression statements leave GS0300.
+/// Elision and custom-handler traversal mutants cause GS0116 in both review regressions.
 /// The C# output oracle also rejects erased null guards and throwing bridges on nullable stores.
 /// Each test also compares the translated program's output with C#.
 open class Issue5706NarrowedConditionalIndexTests {
+    @Fact
+    func ElidedCalls_DoNotExportArgumentFactsOrEffects() {
+        let printed = Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#define UNUSED
+#define OMITTED
+#undef OMITTED
+#nullable enable
+using System;
+using System.Diagnostics;
+    public static partial class Demo
+    {
+        static int arguments, calls;
+        static string Touch(string value) { arguments++; return value; }
+        static void Keep(string value) { calls++; }
+        static partial void Skip(string? value);
+        static partial void Implemented(string value);
+        static partial void Implemented(string value) { calls++; }
+        [Conditional("OMITTED")] static void Trace(string value) { calls++; }
+        static void TraceOn(string value) { calls++; }
+        sealed partial class Receiver
+        {
+            partial void Skip(string value);
+            [Conditional("OMITTED")] void Trace(string value) { calls++; }
+            static Receiver Make() { arguments++; return new Receiver(); }
+            public static char? Check()
+            {
+                string? s = null;
+                Make()?.Skip(s ??= Touch("x"));
+                Make()?.Trace(s ??= Touch("x"));
+                return s?[0];
+            }
+        }
+        static char? Plain() { Receiver.Check(); string? s = null; Skip(s ??= Touch("x")); return s?[0]; }
+        static char? Header() { string? s = null; for (Skip("x"); false; Skip("x")) {} for (Skip(s ??= Touch("x"));;) { return s?[0]; } }
+        static char? Ordinary() { string? s = null; Keep(s ??= Touch("a")); return s?[0]; }
+        static char? Lowered() { string? s = null; int i = 0; for (; i < 1; Skip(s ??= Touch("x")), i++) { continue; } return s?[0]; }
+        static char? Incoming() { string? s = null; s = "h"; Skip(s = null); Implemented(Touch("z")); return s?[0]; }
+        static char? Captured() { string? s = null; Action clear = () => s = null; s = "i"; Skip(Reset(clear)); return s?[0]; }
+        static string Reset(Action clear) { clear(); return "x"; }
+        static char? Conditional() { string? s = null; Trace(s ??= Touch("x")); return s?[0]; }
+        static char? ConditionalHeader() { string? s = null; for (Trace(s ??= Touch("x"));;) { return s?[0]; } }
+        static char? Positive() { string? s = null; TraceOn(s ??= Touch("k")); Trace(s = null!); return s?[0]; }
+        public static string Run() => Plain() + "|" + Header() + "|" + Ordinary() + "|" + Lowered() + "|" +
+            Incoming() + "|" + Captured() + "|" + Conditional() + "|" + ConditionalHeader() + "|" +
+            Positive() + "|" + arguments + ":" + calls;
+    }
+`, rejectConditionalIndexWarnings: true, expectedOutput: "||a||h|i|||k|3:3")
+        Assert.Contains("cast[char?](s[0])", printed)
+        Assert.Contains("s?[0]", printed)
+        Assert.DoesNotContain("Skip(", printed)
+    }
+
+    @Fact
+    func HandlerHoles_PreserveConditionalEvaluationAndPossibleEffects() {
+        let printed = Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System;
+using HandlerLibrary;
+public static class Demo
+{
+    static int holes;
+    static string Touch(string value) { holes++; return value; }
+    static char? Construct(bool enabled)
+    {
+        string? s = null;
+        Api.Write(enabled, $"{s ??= Touch("a")}");
+        return s?[0];
+    }
+    static char? Append(bool append)
+    {
+        string? s = null;
+        Api.Write(true, append, $"p{s ??= Touch("b")}");
+        return s?[0];
+    }
+    static char? Clear(bool enabled)
+    {
+        string? s = null;
+        s = "c";
+        Api.Write(enabled, $"{s = null}");
+        return s?[0];
+    }
+    static char? Captured(bool enabled)
+    {
+        string? s = null;
+        s = "d";
+        Action clear = () => s = null;
+        Api.Write(enabled, $"{Reset(clear)}");
+        return s?[0];
+    }
+    static string Reset(Action clear) { clear(); return "x"; }
+    static char? Native()
+    {
+        string? s = null;
+        var text = $"{s ??= "n"}";
+        return s?[0];
+    }
+    public static string Run() => Construct(false) + "|" + Construct(true) + "|" + Append(false) + "|" + Append(true) +
+        "|" + Clear(false) + "|" + Clear(true) + "|" + Captured(false) + "|" + Captured(true) + "|" + Native() +
+        "|" + holes + ":" + Api.Constructors + ":" + Api.Appends + ":" + Api.Calls;
+}`, `
+#nullable enable
+using System.Runtime.CompilerServices;
+namespace HandlerLibrary;
+[InterpolatedStringHandler]
+public struct Handler {
+    private readonly bool append;
+    public Handler(int literalLength, int formattedCount, bool enabled, out bool shouldAppend)
+        : this(literalLength, formattedCount, enabled, true, out shouldAppend) {}
+    public Handler(int literalLength, int formattedCount, bool enabled, bool append, out bool shouldAppend) {
+        this.append = append;
+        shouldAppend = enabled;
+        Api.Constructors++;
+    }
+    public bool AppendLiteral(string value) { Api.Appends++; return append; }
+    public bool AppendFormatted(string? value) { Api.Appends++; return append; }
+}
+public static class Api {
+    public static int Constructors, Appends, Calls;
+    public static void Write(bool enabled, [InterpolatedStringHandlerArgument("enabled")] Handler handler) { Calls++; }
+    public static void Write(bool enabled, bool append, [InterpolatedStringHandlerArgument("enabled", "append")] Handler handler) { Calls++; }
+}`, rejectConditionalIndexWarnings: true, strictIl: true, expectedOutput: "|a||b|c||d||n|2:8:6:8")
+        Assert.Contains("s?[0]", printed)
+        Assert.Contains("cast[char?](s[0])", printed)
+    }
+
     @Fact
     func ForDeclarations_ApplyMutationsOnceAndRespectBackedges() {
         let printed = AssertRunsWithoutConditionalIndexWarning(`

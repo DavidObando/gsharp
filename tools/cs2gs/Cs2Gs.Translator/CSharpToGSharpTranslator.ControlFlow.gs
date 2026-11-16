@@ -2366,7 +2366,7 @@ partial class CSharpToGSharpTranslator {
                             ancestor = ancestor!!
                             .Parent {
                             CompilationMeasurements.Count("translation.scope_boundary_visits")
-                            if this.IsClosureBoundary(ancestor) {
+                            if this.IsClosureBoundary(ancestor) || this.IsDroppedStatementOrLoopClause(ancestor) {
                                 withinScope = false
                                 break
                             }

@@ -6172,7 +6172,9 @@ public class Demo
             inspect Action[TranslationContext]? = nil,
             cancellationToken CancellationToken = default(CancellationToken),
             runtimeOnlyLibrary bool = false,
-            rejectConditionalIndexWarnings bool = false
+            rejectConditionalIndexWarnings bool = false,
+            strictIl bool = false,
+            expectedOutput string? = nil
         ) string {
             let libraryImage = if library == nil {
                 Array.Empty[byte]()
@@ -6218,6 +6220,9 @@ public class Demo
                         "Run"
                     )!!.Invoke(nil, nil)
                 )
+                if expectedOutput != nil {
+                    Assert.Equal(expectedOutput, expected)
+                }
                 let model = compilation.GetSemanticModel(tree)
                 let document = LoadedDocument("Snippet.cs", tree, model)
                 let context = TranslationContext(
@@ -6228,12 +6233,16 @@ public class Demo
                 )
                 let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
                 inspect?.Invoke(context)
-                Assert.Equal(expected, CompileAndRun(
-                    printed,
-                    libraryImage,
-                    runtimeOnlyLibrary,
-                    rejectConditionalIndexWarnings: rejectConditionalIndexWarnings
-                ).Trim())
+                Assert.Equal(
+                    expected,
+                    CompileAndRun(
+                        printed,
+                        libraryImage,
+                        runtimeOnlyLibrary,
+                        strictIl,
+                        rejectConditionalIndexWarnings
+                    ).Trim()
+                )
                 return printed
             } finally {
                 loadContext.Unload()

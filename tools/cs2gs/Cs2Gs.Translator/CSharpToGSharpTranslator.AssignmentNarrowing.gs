@@ -143,7 +143,7 @@ partial class CSharpToGSharpTranslator {
             inherited SyntaxNode?,
             requireRuntimeNonNullProof bool
         ) SyntaxNode? {
-            if statement is LocalFunctionStatementSyntax {
+            if statement is LocalFunctionStatementSyntax || this.IsDroppedStatementOrLoopClause(statement) {
                 return inherited
             }
             let declaration VariableDeclarationSyntax? = switch statement {
@@ -476,7 +476,7 @@ partial class CSharpToGSharpTranslator {
             requireRuntimeNonNullProof bool
         ) SyntaxNode? {
             var inherited = inherited
-            if this.IsClosureBoundary(node) {
+            if this.IsClosureBoundary(node) || this.IsDroppedStatementOrLoopClause(node) {
                 return inherited
             }
             if node is ExpressionSyntax expression && !this.AssignmentNarrowingReachesEntry(
@@ -572,6 +572,24 @@ partial class CSharpToGSharpTranslator {
                     requireRuntimeNonNullProof
                 )
             }
+            if node is InterpolatedStringExpressionSyntax interpolation {
+                var operation = this.context.SemanticModel.GetOperation(interpolation)
+                while operation != nil && operation.Syntax.Span.Contains(interpolation.Span) {
+                    if operation is IInterpolatedStringHandlerCreationOperation {
+                        // gsc treats every custom-handler hole as optional, including handlers without explicit gates.
+                        return this.GetGSharpOptionalOperandMutationProof(
+                            nil,
+                            interpolation,
+                            symbol,
+                            use,
+                            $scope,
+                            inherited,
+                            requireRuntimeNonNullProof
+                        )
+                    }
+                    operation = operation.Parent
+                }
+            }
             if node is AssignmentExpressionSyntax coalescing && coalescing.IsKind(
                 SyntaxKind.CoalesceAssignmentExpression
             ) {
@@ -644,7 +662,7 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func GetGSharpOptionalOperandMutationProof(
-            first ExpressionSyntax,
+            first ExpressionSyntax?,
             conditionalOperand SyntaxNode,
             symbol ISymbol,
             use ExpressionSyntax,
@@ -652,14 +670,18 @@ partial class CSharpToGSharpTranslator {
             inherited SyntaxNode?,
             requireRuntimeNonNullProof bool
         ) SyntaxNode? {
-            let proof = this.GetGSharpInitializerMutationProof(
-                first,
-                symbol,
-                use,
-                $scope,
-                inherited,
-                requireRuntimeNonNullProof
-            )
+            let proof = if first == nil {
+                inherited
+            } else {
+                this.GetGSharpInitializerMutationProof(
+                    first,
+                    symbol,
+                    use,
+                    $scope,
+                    inherited,
+                    requireRuntimeNonNullProof
+                )
+            }
             // A skipped operand establishes no facts. A possible write or call can still invalidate an incoming fact.
             return if proof != nil && !this.AssignmentRegionInvalidatesNarrowing(
                 symbol,
@@ -751,6 +773,9 @@ partial class CSharpToGSharpTranslator {
             start int32,
             end int32
         ) bool {
+            if this.IsDroppedStatementOrLoopClause($scope) {
+                return false
+            }
             let closureAssigned = this.IsClosureAssignedVariable(symbol)
             let byReference = this.IsByReferenceVariable(symbol)
             return $scope.DescendantNodesAndSelf(
@@ -820,11 +845,12 @@ partial class CSharpToGSharpTranslator {
             proof SyntaxNode,
             use SyntaxNode,
             includeDirectStores bool = false,
-            includeReferenceStorageWrites bool = false
+            includeReferenceStorageWrites bool = false,
+            readPosition int32? = nil
         ) bool ->
         node
             .Span
-            .End <= use.SpanStart &&
+            .End <= (readPosition ?? use.SpanStart) &&
             (
             node.SpanStart >= proof
                 .Span
@@ -838,10 +864,15 @@ partial class CSharpToGSharpTranslator {
                     .Contains(proof.Span)
             ) ||
                 this.AssignmentStoreCompletesAfterProof(node, proof, includeReferenceStorageWrites) ||
-                this.CleanupCompletesAfterProof(node, proof, use)
+                this.CleanupCompletesAfterProof(node, proof, use, readPosition)
         )
 
-        private func CleanupCompletesAfterProof(node SyntaxNode, proof SyntaxNode, use SyntaxNode) bool {
+        private func CleanupCompletesAfterProof(
+            node SyntaxNode,
+            proof SyntaxNode,
+            use SyntaxNode,
+            readPosition int32? = nil
+        ) bool {
             let cleanupScope = switch node {
                 case declaration is LocalDeclarationStatementSyntax when declaration.UsingKeyword.RawKind != 0:
                 declaration.Parent
@@ -851,7 +882,7 @@ partial class CSharpToGSharpTranslator {
             return cleanupScope != nil && cleanupScope.Span.Contains(proof.Span) &&
                 cleanupScope
                 .Span
-                .End <= use.SpanStart
+                .End <= (readPosition ?? use.SpanStart)
         }
 
         private func AssignmentHasNullableTargetTypedRhs(assignment AssignmentExpressionSyntax) bool {

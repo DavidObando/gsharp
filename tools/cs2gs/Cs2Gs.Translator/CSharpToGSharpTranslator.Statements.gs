@@ -7636,7 +7636,63 @@ partial class CSharpToGSharpTranslator {
                 !CSharpToGSharpTranslator.IsGeneratedRegexDefinition(definition)
         }
 
+        private func IsElidedInvocation(expression ExpressionSyntax) bool {
+            var target = expression
+            while target is ConditionalAccessExpressionSyntax access {
+                target = access.WhenNotNull
+            }
+            if this.IsElidedPartialMethodInvocation(target) {
+                return true
+            }
+            if target is not InvocationExpressionSyntax invocation ||
+                this
+                .context
+                .GetSymbolInfo(invocation)
+                .Symbol is not IMethodSymbol method {
+                return false
+            }
+            let conditions = List[string]()
+            for var current IMethodSymbol? = method; current != nil; current = current?.OverriddenMethod {
+                for attribute in current.GetAttributes() {
+                    if attribute.AttributeClass?.ToDisplayString() == "System.Diagnostics.ConditionalAttribute" &&
+                        attribute
+                        .ConstructorArguments
+                        .Length == 1 &&
+                        attribute
+                        .ConstructorArguments[0]
+                        .Value is string name {
+                        conditions.Add(name)
+                    }
+                }
+            }
+            if conditions.Count == 0 {
+                return false
+            }
+            let tree = expression.SyntaxTree
+            let defined = HashSet[string](
+                cast[CSharpParseOptions](tree.Options).PreprocessorSymbolNames,
+                StringComparer.Ordinal
+            )
+            for trivia in tree.GetRoot().DescendantTrivia(descendIntoTrivia: true) {
+                if trivia.SpanStart >= expression.SpanStart {
+                    break
+                }
+                switch trivia.GetStructure() {
+                    case directive is DefineDirectiveTriviaSyntax when directive.IsActive {
+                        defined.Add(directive.Name.ValueText)
+                    }
+                    case directive is UndefDirectiveTriviaSyntax when directive.IsActive {
+                        defined.Remove(directive.Name.ValueText)
+                    }
+                }
+            }
+            return !conditions.Any(defined.Contains)
+        }
+
         private func TranslateExpressionStatement(expression ExpressionSyntax?) GStatement? {
+            if expression != nil && this.IsElidedInvocation(expression) {
+                return nil
+            }
             if expression is ConditionalAccessExpressionSyntax conditionalAccess &&
                 this
                 .TryTranslateNullConditionalStaticExtensionHelperStatement(
@@ -8084,6 +8140,9 @@ partial class CSharpToGSharpTranslator {
         private func TranslateExpressionStatements(expression ExpressionSyntax?, hoistPostfix bool = true) IEnumerable[
             GStatement
         ]? {
+            if expression != nil && this.IsElidedInvocation(expression) {
+                return Array.Empty[GStatement]()
+            }
             if expression is AssignmentExpressionSyntax assignment && assignment.IsKind(
                 SyntaxKind.SimpleAssignmentExpression
             ) {

@@ -4821,13 +4821,7 @@ partial class CSharpToGSharpTranslator {
                     )
                 }
                 case expressionStatement is Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionStatementSyntax {
-                    // ADR-0143 §D rule 1: an expression statement whose
-                    // invocation binds to an ELIDED unimplemented partial method
-                    // is dropped. A deletable C# partial method is necessarily
-                    // `void` with no `out` parameters and is only ever invoked in
-                    // statement position (MVVM's `OnFooChanged(...)`), so dropping
-                    // the whole statement is safe and complete.
-                    if this.IsElidedPartialMethodInvocation(expressionStatement.Expression) {
+                    if this.IsDroppedStatementOrLoopClause(expressionStatement) {
                         return Array.Empty[GStatement]()
                     }
                     return this.TranslateExpressionStatements(expressionStatement.Expression)
