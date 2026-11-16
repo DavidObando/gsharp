@@ -3608,13 +3608,16 @@ internal partial class ExpressionBinder {
                 if nominalTargetsAgree {
                     if nominalTarget == nil {
                         nominalTarget = nominalCandidate
-                    } else if MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(nominalTarget, out _) !=
-                    MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(nominalCandidate, out _) ||
-                        !SameDelegateIdentity(nominalTarget, nominalCandidate) {
-                        // Issue #3149: reached but not mutation-pinned. TryBindClrConstructorCall
-                        // is the sole constructor caller; BindAccessorCall also consumes this output.
-                        nominalTarget = nil
-                        nominalTargetsAgree = false
+                    } else {
+                        let previousNominalTarget = nominalTarget
+                        if MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(previousNominalTarget, out _) !=
+                        MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(nominalCandidate, out _) ||
+                            !SameDelegateIdentity(previousNominalTarget, nominalCandidate) {
+                            // Issue #3149: reached but not mutation-pinned. TryBindClrConstructorCall
+                            // is the sole constructor caller; BindAccessorCall also consumes this output.
+                            nominalTarget = nil
+                            nominalTargetsAgree = false
+                        }
                     }
                 }
             }
@@ -3693,12 +3696,18 @@ internal partial class ExpressionBinder {
                 }
                 if target == nil {
                     target = SymbolicDelegateTarget(mappedDelegate, candidate)
-                } else if !SameDelegateIdentity(target.DelegateType, mappedDelegate) ||
-                    (
-                    !object.ReferenceEquals(target.FunctionType, candidate) && !target.FunctionType.Equals(candidate)
-                ) {
-                    target = nil
-                    return false
+                } else {
+                    let previousTarget = target
+                    if !SameDelegateIdentity(previousTarget.DelegateType, mappedDelegate) ||
+                        (
+                        !object.ReferenceEquals(previousTarget.FunctionType, candidate) &&
+                            !previousTarget
+                            .FunctionType
+                            .Equals(candidate)
+                    ) {
+                        target = nil
+                        return false
+                    }
                 }
             }
             return target != nil && target.FunctionType != nil

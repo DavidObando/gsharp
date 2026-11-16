@@ -1687,7 +1687,7 @@ partial class CSharpToGSharpTranslator {
                 let model = if declaration.SyntaxTree == this.context.SemanticModel.SyntaxTree {
                     this.context.SemanticModel
                 } else {
-                    this.context.Compilation.GetSemanticModel(declaration.SyntaxTree)
+                    this.context.GetOwnedSemanticModel(declaration.SyntaxTree, this.context.Compilation)
                 }
                 let executable SyntaxNode? = declaration.Ancestors().FirstOrDefault(
                     (node SyntaxNode) -> node is BaseMethodDeclarationSyntax ||
@@ -3496,7 +3496,8 @@ partial class CSharpToGSharpTranslator {
             return currentStates
         }
 
-        private func DeclarationMaySuspendAsync(declaration SyntaxNode) bool {
+        private func DeclarationMaySuspendAsync(source SyntaxNode) bool {
+            let declaration = TranslationContext.GetEffectiveDeclaration(source, this.context.Compilation)
             let isAsync = switch declaration {
                 case localFn is LocalFunctionStatementSyntax: localFn.Modifiers.Any(SyntaxKind.AsyncKeyword)
                 case methodDecl is BaseMethodDeclarationSyntax: methodDecl.Modifiers.Any(SyntaxKind.AsyncKeyword)
@@ -6876,7 +6877,10 @@ partial class CSharpToGSharpTranslator {
             candidate string,
             isOriginalStem bool
         ) bool {
-            using let modelScope = this.context.UseSemanticModelFor(body.SyntaxTree)
+            using let modelScope = this.context.UseSemanticModelForSymbol(body.SyntaxTree, local)
+            if modelScope == nil {
+                return true
+            }
             for token in body.DescendantTokens() {
                 if !token.IsKind(SyntaxKind.IdentifierToken) {
                     continue

@@ -190,10 +190,7 @@ partial class CSharpToGSharpTranslator {
                 stem,
                 () -> this.AllocateSynthesizedLocalName(stem, site)
             )
-            let body = this.state.CurrentBodyScope ?? site.SyntaxTree.GetRoot()
-            if this.state.SynthesizedLocalOccupiedNamesByBody.TryGetValue(body, out var occupied) {
-                occupied.Add(name)
-            }
+            this.RecordSynthesizedLocalOccupancy(name, site)
             return name
         }
 
@@ -1373,11 +1370,14 @@ partial class CSharpToGSharpTranslator {
             emittedMethodName string,
             isOpen bool
         ) MethodDeclaration {
-            let syntax = slot.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() as MethodDeclarationSyntax
+            var syntax = slot.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() as MethodDeclarationSyntax
             using let modelScope = if syntax != nil {
-                this.context.UseSemanticModelFor(syntax.SyntaxTree)
+                this.context.UseSemanticModelForSymbol(syntax.SyntaxTree, slot)
             } else {
                 default(IDisposable?)
+            }
+            if modelScope == nil {
+                syntax = nil
             }
             let parameters = this.MapParameters(slot, syntax?.ParameterList, skipFirst: false)
             let statements = List[GStatement](parameters.Count)
@@ -1420,11 +1420,14 @@ partial class CSharpToGSharpTranslator {
             explicitInterfaceType GTypeReference? = nil
         ) MethodDeclaration {
             let signature = method.PartialImplementationPart ?? method
-            let syntax = signature.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() as MethodDeclarationSyntax
+            var syntax = signature.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() as MethodDeclarationSyntax
             using let modelScope = if syntax != nil {
-                this.context.UseSemanticModelFor(syntax.SyntaxTree)
+                this.context.UseSemanticModelForSymbol(syntax.SyntaxTree, signature)
             } else {
                 default(IDisposable?)
+            }
+            if modelScope == nil {
+                syntax = nil
             }
             var parameters = this.MapParameters(signature, syntax?.ParameterList, skipFirst: false)
             if signature.PartialDefinitionPart != nil {
@@ -1607,16 +1610,18 @@ partial class CSharpToGSharpTranslator {
                 if ctor.IsImplicitlyDeclared {
                     continue
                 }
+                let owner = this.context.SourceCompilation(ctor)
+                if owner == nil {
+                    return false
+                }
                 for reference in ctor.DeclaringSyntaxReferences {
                     if reference.GetSyntax() is ConstructorDeclarationSyntax{Initializer: {} initializer} &&
                         SymbolEqualityComparer
                         .Default
                         .Equals(
                         (
-                            this
-                                .context
-                                .Compilation
-                                .GetSemanticModel(reference.SyntaxTree)
+                            TranslationContext
+                                .GetEffectiveSemanticModel(owner, reference.SyntaxTree)
                                 .GetSymbolInfo(initializer)
                                 .Symbol as IMethodSymbol
                         )?.OriginalDefinition,
@@ -1690,14 +1695,17 @@ partial class CSharpToGSharpTranslator {
                         ) {
                             bridgeIsUnsafe = true
                         }
-                        let ctorSyntax = ctor
+                        var ctorSyntax = ctor
                             .DeclaringSyntaxReferences
                             .FirstOrDefault()
                             ?.GetSyntax() as ConstructorDeclarationSyntax
                         using let ctorModelScope = if ctorSyntax != nil {
-                            this.context.UseSemanticModelFor(ctorSyntax.SyntaxTree)
+                            this.context.UseSemanticModelForSymbol(ctorSyntax.SyntaxTree, ctor)
                         } else {
                             default(IDisposable?)
+                        }
+                        if ctorModelScope == nil {
+                            ctorSyntax = nil
                         }
                         let ctorParameters = this.MapParameters(ctor, ctorSyntax?.ParameterList, skipFirst: false)
                         let baseArguments = List[GExpression](ctorParameters.Count)

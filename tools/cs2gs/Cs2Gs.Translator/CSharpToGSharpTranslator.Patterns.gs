@@ -3778,7 +3778,12 @@ partial class CSharpToGSharpTranslator {
             var declaringPosition = pattern!!.SpanStart
             let declaringSyntax SyntaxReference? = deconstruct.DeclaringSyntaxReferences.FirstOrDefault()
             if declaringSyntax != nil {
-                declaringModel = this.context.SemanticModel.Compilation.GetSemanticModel(declaringSyntax.SyntaxTree)
+                let owner = this.context.SourceCompilation(deconstruct)
+                if owner == nil {
+                    failureReason = "the Deconstruct declaration's compilation owner is unknown"
+                    return nil
+                }
+                declaringModel = TranslationContext.GetEffectiveSemanticModel(owner, declaringSyntax.SyntaxTree)
                 declaringPosition = declaringSyntax.Span.Start
             }
             var match ISymbol? = nil
@@ -4336,6 +4341,27 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func ApplyMappedArrayElementShape(source ITypeSymbol?, mapped GTypeReference?) ITypeSymbol? {
+            var mapped = mapped
+            if source is INamedTypeSymbol native {
+                let element GTypeReference? = switch mapped {
+                    case managed is ManagedReferenceTypeReference when CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(
+                        native,
+                        this.context.Compilation
+                    ): managed.ElementType
+                    case slice is NativeSliceTypeReference when CSharpTypeMapper.IsRecognizedRuntimeConsumerType(
+                        native,
+                        this.context.Compilation,
+                        "Slice",
+                        "ReadOnlySlice"
+                    ): slice.ElementType
+                    default: default(GTypeReference?)
+                }
+                if element != nil {
+                    mapped = NamedTypeReference(native.Name, []GTypeReference{element}){
+                        IsNullable = mapped!!.IsNullable
+                    }
+                }
+            }
             if source is IArrayTypeSymbol sourceArray && mapped is ArrayTypeReference mappedArray {
                 let element ITypeSymbol? = this.ApplyMappedArrayElementShape(
                     sourceArray.ElementType,

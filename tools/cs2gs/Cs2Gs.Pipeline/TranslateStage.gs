@@ -518,7 +518,8 @@ class TranslateStage : IMigrationStage {
                         pending.Document.SemanticModel,
                         pending.Document.FilePath,
                         siblingCompilations,
-                        repositoryCompilations
+                        repositoryCompilations,
+                        cancellationToken
                     )
                     // ADR-0169 M5 / issue #3778: analyzer-test snippets are C#
                     // source embedded in the tests, and the migrated verifier
@@ -1642,7 +1643,8 @@ class TranslateStage : IMigrationStage {
                         document.SemanticModel,
                         document.FilePath,
                         siblingCompilations,
-                        repositoryCompilations
+                        repositoryCompilations,
+                        cancellationToken
                     )
                     translationContext.TranslateAnalyzerSnippet = SnippetTranslator.Translate
                     let unit = translator.TranslateDocument(document, translationContext)

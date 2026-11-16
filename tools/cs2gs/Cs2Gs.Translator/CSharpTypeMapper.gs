@@ -92,10 +92,10 @@ class CSharpTypeMapper {
     // of its shapes exactly once.
     private let declaredAnonymousShapes HashSet[string] = HashSet[string](StringComparer.Ordinal)
 
-    private let anonymousShapeContracts Dictionary[string, IReadOnlyList[GTypeReference]] = Dictionary[
-        string,
-        IReadOnlyList[GTypeReference]
-    ](StringComparer.Ordinal)
+    private let anonymousShapeContracts ObliviousNullabilityAnalyzer.ScopedCompilationCache[
+        Dictionary[(Shape string, Input string), IReadOnlyList[GTypeReference]]
+    ] = ObliviousNullabilityAnalyzer
+        .ScopedCompilationCache[Dictionary[(Shape string, Input string), IReadOnlyList[GTypeReference]]]()
     private let synthesizedTypeAliases Dictionary[string, string] = Dictionary[string, string](StringComparer.Ordinal)
     private let barePrintedMetadataTypes List[(SimpleName string, Symbol INamedTypeSymbol)] = List[
         (SimpleName string, Symbol INamedTypeSymbol)
@@ -276,6 +276,7 @@ class CSharpTypeMapper {
     /// @param location The originating C# source location for diagnostics.
     /// @returns The canonical G# type reference (never `null`).
     func Map(type ITypeSymbol?, context TranslationContext, location Location?) GTypeReference? {
+        using let modelScope = ObliviousNullabilityAnalyzer.UseCatalogScope(context)
         if type == nil || type.TypeKind == TypeKind.Error {
             context.Report(
                 TranslationDiagnostic(
@@ -425,6 +426,7 @@ class CSharpTypeMapper {
     /// @param location The originating C# source location for diagnostics.
     /// @returns The canonical G# type reference for the event's handler type.
     func MapEventType(type ITypeSymbol?, context TranslationContext, location Location?) GTypeReference? {
+        using let modelScope = ObliviousNullabilityAnalyzer.UseCatalogScope(context)
         // Issue #4127/#4129 (a #3841/#2835 self-hosting regression, #3501):
         // a property pattern containing an ENUM-constant sub-pattern
         // (`TypeKind: TypeKind.Delegate`) matched against a value whose
@@ -456,6 +458,7 @@ class CSharpTypeMapper {
     /// @param location The originating source location.
     /// @returns The canonical G# type reference.
     func MapExplicitType(type ITypeSymbol, context TranslationContext, location Location?) GTypeReference? {
+        using let modelScope = ObliviousNullabilityAnalyzer.UseCatalogScope(context)
         if type is INamedTypeSymbol named &&
             named.TypeKind == TypeKind.Delegate &&
             named.DelegateInvokeMethod != nil &&
@@ -590,8 +593,10 @@ class CSharpTypeMapper {
         anonymousType INamedTypeSymbol,
         context TranslationContext,
         location Location?
-    ) NamedTypeReference -> this
-        .GetOrCreateAnonymousDataClassShape(anonymousType, context, location).Type
+    ) NamedTypeReference {
+        using let modelScope = ObliviousNullabilityAnalyzer.UseCatalogScope(context)
+        return this.GetOrCreateAnonymousDataClassShape(anonymousType, context, location).Type
+    }
 
     /// Records the retained top-level-statements entry point whose source body
     /// is emitted outside its containing `Program` type.
@@ -610,6 +615,7 @@ class CSharpTypeMapper {
         contributingTrees IEnumerable[Microsoft.CodeAnalysis.SyntaxTree],
         context TranslationContext
     ) {
+        using let modelScope = ObliviousNullabilityAnalyzer.UseCatalogScope(context)
         let compilation = context.Compilation
         let names = this.nameAllocator ?? EmittedNameAllocator.For(compilation)
         let importedNamespaces = HashSet[INamespaceSymbol](SymbolEqualityComparer.Default)
@@ -751,7 +757,8 @@ class CSharpTypeMapper {
         // after translation. Calls and selected operation-bound expressions can
         // also map types absent from syntax. Pre-scan only those emitted shapes
         // so future bare names reserve alias candidates before first use.
-        for tree in contributingTrees {
+        for root in TranslationContext.GetEffectiveSyntaxRoots(compilation, contributingTrees) {
+            let tree = root.SyntaxTree
             let semanticModel = if tree == context
                 .SemanticModel
                 .SyntaxTree &&
@@ -761,9 +768,9 @@ class CSharpTypeMapper {
                 CompilationMeasurements.Count("translation.import_semantic_model_reuses")
                 context.SemanticModel
             } else {
-                TranslationContext.GetSemanticModel(compilation, tree)
+                TranslationContext.GetEffectiveSemanticModel(compilation, tree)
             }
-            for node in tree.GetRoot().DescendantNodes() {
+            for node in TranslationContext.GetEffectiveNodes(root, compilation) {
                 if node is Microsoft
                     .CodeAnalysis
                     .CSharp
@@ -937,7 +944,7 @@ class CSharpTypeMapper {
                 .IgnoresAccessibility {
                 context.SemanticModel
             } else {
-                TranslationContext.GetSemanticModel(context.Compilation, tree)
+                TranslationContext.GetEffectiveSemanticModel(context.Compilation, tree)
             }
             let root = tree.GetRoot()
             let usings = root
@@ -1027,7 +1034,7 @@ class CSharpTypeMapper {
         let semanticModel = if object.ReferenceEquals(context.SemanticModel.SyntaxTree, location!!.SourceTree) {
             context.SemanticModel
         } else {
-            TranslationContext.GetSemanticModel(context.Compilation, location!!.SourceTree!!)
+            TranslationContext.GetEffectiveSemanticModel(context.Compilation, location!!.SourceTree!!)
         }
         return semanticModel
             .LookupNamespacesAndTypes(position, name: name)
@@ -1048,7 +1055,7 @@ class CSharpTypeMapper {
         let semanticModel = if object.ReferenceEquals(context.SemanticModel.SyntaxTree, location!!.SourceTree) {
             context.SemanticModel
         } else {
-            TranslationContext.GetSemanticModel(context.Compilation, location!!.SourceTree!!)
+            TranslationContext.GetEffectiveSemanticModel(context.Compilation, location!!.SourceTree!!)
         }
         return semanticModel.LookupSymbols(position).Any(
             (symbol ISymbol) -> (
@@ -1473,7 +1480,27 @@ class CSharpTypeMapper {
         )
             .ToList()
         mappedPropertyTypes = this.MergeAnonymousShapeContracts(properties, mappedPropertyTypes, context)
-        let shapeKey = AnonymousShapeKey(properties)
+        // Different emitted contracts need different declarations, without exposing model-domain identity in names.
+        let nullability = string.Join(
+            "|",
+            mappedPropertyTypes.Select(
+                (type GTypeReference, index int32) -> AnonymousOutputContractKey(
+                    type,
+                    this.anonymousTypeRegistry,
+                    properties[index].Type,
+                    context.Compilation
+                )
+            )
+        )
+        let hasContractVariant = nullability.Contains('?') || nullability.Contains('@')
+        let shapeKey = AnonymousShapeKey(properties) +
+            (
+            if hasContractVariant {
+                "#nullable:" + nullability
+            } else {
+                ""
+            }
+        )
         // A shape synthesized by an earlier file in the same package is reused
         // without redeclaration. A new shape gets the same deterministic name
         // in every document or project that translates it (#2598).
@@ -1552,6 +1579,9 @@ class CSharpTypeMapper {
         )
         let reference = NamedTypeReference(syntheticName)
         this.anonymousTypeRegistry.Register(shapeKey, reference, context.FilePath)
+        if hasContractVariant {
+            this.anonymousTypeRegistry.RegisterContractVariant(reference)
+        }
         this.declaredAnonymousShapes.Add(shapeKey)
         this.pendingAnonymousDataClasses.Add(declaration)
         return (reference, properties, mappedPropertyTypes)
@@ -2742,7 +2772,7 @@ class CSharpTypeMapper {
             if object.ReferenceEquals(context.SemanticModel.SyntaxTree, tree) {
                 context.SemanticModel
             } else {
-                TranslationContext.GetSemanticModel(context.Compilation, tree!!)
+                TranslationContext.GetEffectiveSemanticModel(context.Compilation, tree!!)
             }
         }
         let path = tree!!.FilePath
@@ -2762,7 +2792,7 @@ class CSharpTypeMapper {
                 ) &&
                     linkedTree
                     .GetText().ContentEquals(text) {
-                    models.Add(TranslationContext.GetSemanticModel(compilation, linkedTree))
+                    models.Add(TranslationContext.GetEffectiveSemanticModel(compilation, linkedTree))
                 }
             }
         }
@@ -2943,8 +2973,22 @@ class CSharpTypeMapper {
         mappedPropertyTypes IReadOnlyList[GTypeReference]?,
         context TranslationContext
     ) IReadOnlyList[GTypeReference] {
+        using let analysis = ObliviousNullabilityAnalyzer.UseCatalogScope(context)
+        let contracts = this.anonymousShapeContracts.GetValue(
+            context.Compilation,
+            (owner Compilation) -> Dictionary[(Shape string, Input string), IReadOnlyList[GTypeReference]]()
+        )
         let shapeKey = AnonymousShapeKey(properties)
-        if this.anonymousShapeContracts.TryGetValue(shapeKey, out var existing) {
+        let inputKey = (
+            shapeKey,
+            string.Join(
+                "|",
+                mappedPropertyTypes!!.Select(
+                    (type GTypeReference) -> AnonymousIncomingContractKey(type, this.anonymousTypeRegistry)
+                )
+            )
+        )
+        if contracts.TryGetValue(inputKey, out var existing) {
             return existing
         }
         let merged = properties.Select(
@@ -2968,7 +3012,7 @@ class CSharpTypeMapper {
                 }
             }
         }
-        this.anonymousShapeContracts[shapeKey] = merged
+        contracts[inputKey] = merged
         return merged
     }
 
@@ -3046,13 +3090,11 @@ class CSharpTypeMapper {
             Dictionary[string, List[(Compilation CSharpCompilation, Tree Microsoft.CodeAnalysis.SyntaxTree)]]
         ]()
 
-        private let AnonymousShapeEvidenceIndexes ConditionalWeakTable[
-            Compilation,
+        private let AnonymousShapeEvidenceIndexes ObliviousNullabilityAnalyzer
+            .ScopedCompilationCache[
             Dictionary[string, List[(PropertyTypes[]ITypeSymbol, AcceptsNil[]bool)]]
-        ] = ConditionalWeakTable[
-            Compilation,
-            Dictionary[string, List[(PropertyTypes[]ITypeSymbol, AcceptsNil[]bool)]]
-        ]()
+        ] = ObliviousNullabilityAnalyzer
+            .ScopedCompilationCache[Dictionary[string, List[(PropertyTypes[]ITypeSymbol, AcceptsNil[]bool)]]]()
 
         private let SourceTopLevelSimpleNamesByCompilation ConditionalWeakTable[
             Compilation,
@@ -4053,9 +4095,11 @@ class CSharpTypeMapper {
             let result = Dictionary[string, List[(PropertyTypes[]ITypeSymbol, AcceptsNil[]bool)]](
                 StringComparer.Ordinal
             )
-            for tree in compilation.SyntaxTrees {
-                let model = TranslationContext.GetSemanticModel(compilation, tree)
-                for creation in tree.GetRoot().DescendantNodes().OfType[AnonymousObjectCreationExpressionSyntax]() {
+            for root in TranslationContext.GetEffectiveSyntaxRoots(compilation) {
+                let tree = root.SyntaxTree
+                let model = TranslationContext.GetEffectiveSemanticModel(compilation, tree)
+                for creation in TranslationContext.GetEffectiveNodes(root, compilation)
+                    .OfType[AnonymousObjectCreationExpressionSyntax]() {
                     if model.GetTypeInfo(creation).Type is not INamedTypeSymbol candidateType {
                         continue
                     }
@@ -4245,6 +4289,177 @@ class CSharpTypeMapper {
             )
         )
 
+        private func AnonymousIncomingContractKey(type GTypeReference, registry AnonymousTypeRegistry) string {
+            let spelling = GSharpPrinter.RenderTypeReference(type)
+            return "${spelling.Length}:$spelling" + AnonymousOutputContractKey(type, registry, nil, nil)
+        }
+
+        private func AnonymousOutputContractKey(
+            mapped GTypeReference,
+            registry AnonymousTypeRegistry,
+            sourceType ITypeSymbol?,
+            owner Compilation?
+        ) string {
+            var sourceType = sourceType
+            if sourceType is INamedTypeSymbol{
+                OriginalDefinition: {SpecialType: SpecialType.System_Nullable_T}
+            } nullable &&
+                nullable
+                .TypeArguments
+                .Length == 1 {
+                sourceType = nullable.TypeArguments[0]
+            }
+            var type = mapped
+            if owner != nil &&
+                type is NamedTypeReference qualified &&
+                qualified
+                .TypeArguments
+                .Count == 1 &&
+                sourceType is INamedTypeSymbol source {
+                if IsRecognizedManagedReferenceConsumerType(source, owner) {
+                    type = ManagedReferenceTypeReference(
+                        qualified.TypeArguments[0],
+                        source.Name == "ReadOnlyManagedRef"
+                    ){IsNullable = mapped.IsNullable}
+                } else if IsRecognizedRuntimeConsumerType(source, owner, "Slice", "ReadOnlySlice") {
+                    type = NativeSliceTypeReference(qualified.TypeArguments[0], source.Name == "ReadOnlySlice"){
+                        IsNullable = mapped.IsNullable
+                    }
+                }
+            }
+            let children IEnumerable[GTypeReference] = switch type {
+                case named is NamedTypeReference: (
+                    if named.ContainingType is {} containing {
+                        []GTypeReference{containing}
+                    } else {
+                        Array.Empty[GTypeReference]()
+                    }
+                ).Concat(named.TypeArguments)
+                case array is ArrayTypeReference: []GTypeReference{array.ElementType}
+                case slice is NativeSliceTypeReference: []GTypeReference{slice.ElementType}
+                case managed is ManagedReferenceTypeReference: []GTypeReference{managed.ElementType}
+                case pointer is PointerTypeReference: []GTypeReference{pointer.ElementType}
+                case tuple is TupleTypeReference: tuple.ElementTypes
+                case arrow is ArrowTypeReference: arrow.ParameterTypes.Concat(arrow.ReturnTypes)
+                case function is FunctionPointerTypeReference: function.ParameterTypes.Concat(
+                    if function.ReturnType is {} result {
+                        []GTypeReference{result}
+                    } else {
+                        Array.Empty[GTypeReference]()
+                    }
+                )
+                default: throw InvalidOperationException("Unknown anonymous storage type contract.")
+            }
+            let sourceChildren = AnonymousContractSourceChildren(type, sourceType)
+            let structure = switch type {
+                case named is NamedTypeReference: "named:${named.TypeArguments.Count}:${named.ContainingType != nil}"
+                case array is ArrayTypeReference: "array:${array.Rank}"
+                case slice is NativeSliceTypeReference: "slice:${slice.IsReadOnly}"
+                case managed is ManagedReferenceTypeReference: "managed:${managed.IsReadOnly}"
+                case _ is PointerTypeReference: "pointer"
+                case tuple is TupleTypeReference: "tuple:${tuple.ElementTypes.Count}:" + string.Join(
+                    "|",
+                    tuple.ElementNames ?? Array.Empty[string]()
+                )
+                case arrow is ArrowTypeReference: "arrow:${arrow.IsAsync}:${arrow.ParameterTypes.Count}:${arrow.ReturnTypes.Count}"
+                case function is FunctionPointerTypeReference: "function:${function.IsManaged}:${function.IsUnmanagedExtended}:${function.CallingConvention}:" +
+                    string.Join("|", function.UnmanagedConventions) +
+                    ":${function.ParameterTypes.Count}:${function.ReturnType != nil}"
+                default: throw InvalidOperationException("Unknown anonymous storage type contract.")
+            }
+            return (
+                if type.IsNullable {
+                    "?"
+                } else {
+                    ""
+                }
+            ) +
+                (
+                if type is NamedTypeReference named && registry.IsContractVariant(named.Name) {
+                    "@" + named.Name
+                } else {
+                    ""
+                }
+            ) +
+                structure +
+                "[" +
+                string
+                .Join(
+                ",",
+                children.Select(
+                    (child GTypeReference, index int32) -> AnonymousOutputContractKey(
+                        child,
+                        registry,
+                        if index < sourceChildren.Count {
+                            sourceChildren[index]
+                        } else {
+                            nil
+                        },
+                        owner
+                    )
+                )
+            ) +
+                "]"
+        }
+
+        private func AnonymousContractSourceChildren(mapped GTypeReference, source ITypeSymbol?) IReadOnlyList[
+            ITypeSymbol?
+        ] {
+            let children = List[ITypeSymbol?]()
+            switch mapped {
+                case named is NamedTypeReference when source is INamedTypeSymbol sourceNamed {
+                    if named.ContainingType != nil {
+                        children.Add(sourceNamed.ContainingType)
+                    }
+                    for argument in sourceNamed.TypeArguments {
+                        children.Add(argument)
+                    }
+                }
+                case _ is ManagedReferenceTypeReference or _ is NativeSliceTypeReference when
+                source is INamedTypeSymbol generic && generic.TypeArguments.Length == 1 {
+                    children.Add(generic.TypeArguments[0])
+                }
+                case _ is ArrayTypeReference when source is IArrayTypeSymbol array {
+                    children.Add(array.ElementType)
+                }
+                case _ is PointerTypeReference when source is IPointerTypeSymbol pointer {
+                    children.Add(pointer.PointedAtType)
+                }
+                case _ is TupleTypeReference when source is INamedTypeSymbol{IsTupleType: true} tuple {
+                    for element in tuple.TupleElements {
+                        children.Add(element.Type)
+                    }
+                }
+                case arrow is ArrowTypeReference when source is INamedTypeSymbol{DelegateInvokeMethod: {} invoke} {
+                    for parameter in invoke.Parameters {
+                        children.Add(parameter.Type)
+                    }
+                    if !invoke.ReturnsVoid {
+                        let result = if arrow.IsAsync &&
+                            invoke.ReturnType is INamedTypeSymbol envelope &&
+                            envelope
+                            .TypeArguments
+                            .Length == 1 {
+                            envelope.TypeArguments[0]
+                        } else {
+                            invoke.ReturnType
+                        }
+                        children.Add(result)
+                    }
+                }
+                case _ is FunctionPointerTypeReference when source is IFunctionPointerTypeSymbol pointer {
+                    for parameter in pointer.Signature.Parameters {
+                        children.Add(parameter.Type)
+                    }
+                    if !pointer.Signature.ReturnsVoid {
+                        children.Add(pointer.Signature.ReturnType)
+                    }
+                }
+                default { }
+            }
+            return children
+        }
+
         private func MergeAnonymousNullability(mapped GTypeReference, symbol ITypeSymbol?) GTypeReference {
             let nullable = mapped.IsNullable ||
                 symbol!!.NullableAnnotation == Microsoft
@@ -4432,6 +4647,14 @@ class AnonymousTypeRegistry {
 
     // The document (file path) that first declared each shape.
     private let ownerByShape Dictionary[string, string] = Dictionary[string, string](StringComparer.Ordinal)
+    // Outer shapes must retain the actual contracts of generated types they contain.
+    private let contractVariants HashSet[string] = HashSet[string](StringComparer.Ordinal)
+
+    internal func IsContractVariant(name string) bool -> this.contractVariants.Contains(name)
+
+    internal func RegisterContractVariant(reference NamedTypeReference) {
+        this.contractVariants.Add(reference.Name)
+    }
 
     /// Looks up an already-synthesized data-class reference for
     /// [`shapeKey`](paramref) (an anonymous type's ordered
