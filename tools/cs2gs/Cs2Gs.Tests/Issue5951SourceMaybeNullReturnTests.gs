@@ -1,6 +1,7 @@
 package Cs2Gs.Tests
 
 import Cs2Gs.CodeModel.Printing
+import Cs2Gs.Pipeline
 import Cs2Gs.Translator
 import Cs2Gs.Translator.Loading
 import Microsoft.CodeAnalysis
@@ -93,15 +94,60 @@ public static class P
         return task;
     }
     static Task<int> Declared() { var (task, unused) = (Empty(), 0); return task; }
+    static Task<int> StoredAssigned()
+    {
+        var pair = (Empty(), 0);
+        Task<int> task = Task.FromResult(1); int unused;
+        (task, unused) = pair;
+        return task;
+    }
+    static Task<int> StoredDeclared()
+    {
+        var pair = (Empty(), 0);
+        var alias = pair;
+        var (task, unused) = alias;
+        return task;
+    }
     public static void Main()
     {
         Console.WriteLine(Assigned() == null);
         Console.WriteLine(Declared() == null);
+        Console.WriteLine(StoredAssigned() == null);
+        Console.WriteLine(StoredDeclared() == null);
         Console.WriteLine(calls);
     }
 }`, verifyIL: true, nullableContextOptions: NullableContextOptions.Disable, expectedOutput: string.Join(
                 Environment.NewLine,
-                []string{"True", "True", "2", ""}
+                []string{"True", "True", "True", "True", "4", ""}
+            ))
+    }
+
+    @Fact
+    func GuardedTaskFlows_PreservePayloadContracts() {
+        LiteralConstructionRuntimeParity.AssertMatches(`
+#nullable disable
+using System;
+using System.Threading.Tasks;
+public static class P
+{
+    static int calls;
+    static async Task<string> Missing() { calls++; await Task.Yield(); return null; }
+    static async Task<string> Read(Task<string> value) => await value;
+    public static void Main()
+    {
+        Task<string> copy = Task.FromResult("control");
+        var task = Missing();
+        if (task != null)
+        {
+            copy = task;
+            Console.WriteLine(Read(task).GetAwaiter().GetResult() == null);
+        }
+        Console.WriteLine(copy.GetAwaiter().GetResult() == null);
+        Console.WriteLine(calls);
+    }
+}`, verifyIL: true, nullableContextOptions: NullableContextOptions.Disable, expectedOutput: string.Join(
+                Environment.NewLine,
+                []string{"True", "True", "1", ""}
             ))
     }
 
@@ -165,11 +211,13 @@ public static class P
 {
     static int calls;
     static async Task<Task<string>> Missing() { calls++; await Task.Yield(); return null; }
+    static Task<string> Id(Task<string> value) => value;
     static async Task Read()
     {
         var saved = await Missing();
         Task<string> copy = saved;
         Console.WriteLine(copy == null);
+        Console.WriteLine(Id(saved) == null);
         Console.WriteLine(calls);
     }
     public static void Main() => Read().GetAwaiter().GetResult();
@@ -190,8 +238,128 @@ public static class P
             source,
             verifyIL: true,
             nullableContextOptions: NullableContextOptions.Disable,
-            expectedOutput: string.Join(Environment.NewLine, []string{"True", "1", ""})
+            expectedOutput: string.Join(Environment.NewLine, []string{"True", "True", "1", ""})
         )
+    }
+
+    @Fact
+    func ReferencedSourceContract_PreservesEnvelopeAndLogicalResult() {
+        let tree = CSharpSyntaxTree.ParseText(`
+#nullable disable
+using System.Diagnostics.CodeAnalysis;
+using System.Threading.Tasks;
+public static class Lib
+{
+    public static int Calls;
+    static async Task<string> Missing() { Calls++; await Task.Yield(); return null; }
+    [return: MaybeNull] public static Task<string> Outer(bool empty)
+    { Calls++; return empty ? null : Missing(); }
+}`, path: "Library.cs")
+        let library = CSharpCompilation.Create(
+            "Library",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+                NullableContextOptions.Disable
+            )
+        )
+        using let image = MemoryStream()
+        Assert.True(library.Emit(image).Success)
+        let consumer = CSharpProjectLoader.LoadInMemory([](string, string){("Consumer.cs", `
+#nullable disable
+using System;
+using System.Threading.Tasks;
+public static class P
+{
+    static Task<string> Forward(bool empty) => Lib.Outer(empty);
+    public static void Main()
+    {
+        Console.WriteLine(Forward(true) == null);
+        Console.WriteLine(Forward(false).GetAwaiter().GetResult() == null);
+        Console.WriteLine(Lib.Calls);
+    }
+}`)}, CSharpProjectLoader
+                .RuntimeReferences()
+                .Append(MetadataReference.CreateFromImage(image.ToArray()))
+                .ToArray(), assemblyName: "Native", outputKind: OutputKind.ConsoleApplication)
+        Assert.True(consumer.BoundWithoutErrors, string.Join(Environment.NewLine, consumer.ErrorDiagnostics))
+        let compilations = []CSharpCompilation{library, consumer.Compilation}
+        let libraryModel = library.GetSemanticModel(tree)
+        let libraryPrinted = GSharpPrinter.Print(
+            CSharpToGSharpTranslator().TranslateDocument(
+                LoadedDocument("Library.cs", tree, libraryModel),
+                TranslationContext(library, libraryModel, "Library.cs", compilations, compilations)
+            )
+        )
+        let document = Assert.Single(consumer.Documents)
+        let printed = GSharpPrinter.Print(
+            CSharpToGSharpTranslator().TranslateDocument(
+                document,
+                TranslationContext(
+                    consumer.Compilation,
+                    document.SemanticModel,
+                    document.FilePath,
+                    compilations,
+                    compilations
+                )
+            )
+        )
+        let directory = Path.Combine(
+            AppContext.BaseDirectory,
+            "issue-5951-projected-owner",
+            Guid.NewGuid().ToString("N")
+        )
+        Directory.CreateDirectory(directory)
+        try {
+            let libraryPath = Path.Combine(directory, "Library.dll")
+            File.WriteAllBytes(libraryPath, image.ToArray())
+            let nativePath = Path.Combine(directory, "Native.dll")
+            {
+                using let native = File.Create(nativePath)
+                Assert.True(consumer.Compilation.Emit(native).Success)
+            }
+            File.WriteAllText(
+                Path.Combine(directory, "Native.runtimeconfig.json"),
+                `{"runtimeOptions":{"tfm":"net10.0","framework":{"name":"Microsoft.NETCore.App","version":"10.0.0"}}}`
+            )
+            let expected = Encoding.UTF8.GetBytes(string.Join(Environment.NewLine, []string{"True", "True", "3", ""}))
+            Assert.Equal(expected, LiteralConstructionRuntimeParity.RunDotnet([]string{nativePath}))
+            let compiler = LiteralConstructionRuntimeParity.FindCompiler()
+            let libraryGs = Path.Combine(directory, "Library.gs")
+            File.WriteAllText(libraryGs, libraryPrinted)
+            LiteralConstructionRuntimeParity.RunDotnet(
+                []string{
+                    compiler,
+                    "/target:library",
+                    "/targetframework:net10.0",
+                    "/assemblyname:Library",
+                    "/out:" + libraryPath,
+                    libraryGs
+                },
+                libraryPrinted
+            )
+            let source = Path.Combine(directory, "Translated.gs")
+            let binary = Path.Combine(directory, "Translated.dll")
+            File.WriteAllText(source, printed)
+            LiteralConstructionRuntimeParity.RunDotnet(
+                []string{
+                    compiler,
+                    "/target:exe",
+                    "/targetframework:net10.0",
+                    "/assemblyname:Translated",
+                    "/reference:" + libraryPath,
+                    "/out:" + binary,
+                    source
+                },
+                printed
+            )
+            let verified = IlVerifyRunner().Verify(binary)
+            Assert.True(verified.Status == IlVerifyStatus.Passed, verified.Output)
+            Assert.Empty(verified.Errors)
+            Assert.Equal(expected, LiteralConstructionRuntimeParity.RunDotnet([]string{binary}, printed))
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
     }
 
     @Theory

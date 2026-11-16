@@ -779,11 +779,16 @@ internal shared class ObliviousNullabilityAnalyzer {
     ]()
 
     private class ReturnContractGraph {
+        let Owners HashSet[Compilation] = HashSet[Compilation]()
         let Nullable HashSet[ISymbol] = HashSet[ISymbol](SymbolEqualityComparer.Default)
         let PromotedFlow HashSet[ISymbol] = HashSet[ISymbol](SymbolEqualityComparer.Default)
         let Nodes Dictionary[ISymbol, ReturnContractNode] = Dictionary[ISymbol, ReturnContractNode](
             SymbolEqualityComparer.Default
         )
+        let TupleNodes Dictionary[TupleElementKey, ReturnContractNode] = Dictionary[
+            TupleElementKey,
+            ReturnContractNode
+        ](TupleContractKeyComparer.Instance)
     }
 
     private class ReturnContractNode {
@@ -797,10 +802,15 @@ internal shared class ObliviousNullabilityAnalyzer {
         let Owner CSharpCompilation
         let Symbol ISymbol
         var Seed bool
+        var ResultSeed bool
+        var Nullable bool
+        var Promoted bool
+        var TuplePath string = ""
+        let TupleSources List[(Source TupleElementKey, Guarded bool)] = List[(Source TupleElementKey, Guarded bool)]()
         let CanBeNullable bool
         // AwaitDepth projects the source; async return edges subtract the construction envelope.
-        let Sources List[(Owner Compilation, Symbol ISymbol, Narrowed bool, AwaitDepth int32)] = List[
-            (Owner Compilation, Symbol ISymbol, Narrowed bool, AwaitDepth int32)
+        let Sources List[(Owner Compilation, Symbol ISymbol, Narrowed bool, AwaitDepth int32, Guarded bool)] = List[
+            (Owner Compilation, Symbol ISymbol, Narrowed bool, AwaitDepth int32, Guarded bool)
         ]()
     }
     private let RefArraySources ScopedCompilationCache[RefArraySourceIndex] = ScopedCompilationCache[
@@ -1513,19 +1523,19 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
         }
         let graph = ReturnContractGraph()
+        graph.Owners.UnionWith(owners)
         let nodes = graph.Nodes
+        let tupleEdges = List[(Target TupleElementKey, Source TupleElementKey)]()
         for owner in owners {
             for tree in owner.SyntaxTrees {
                 let model = TranslationContext.GetSemanticModel(owner, tree)
                 for syntax in TranslationContext.GetEffectiveNodes(tree.GetRoot(), owner) {
-                    for (parameter, value) in EnumerateArgumentValueFlows(syntax, model) {
-                        if GetValueContractNode(owner, parameter, graph) is {} parameterNode {
-                            AddValueContractFlow(parameterNode, value, model)
-                        }
+                    for (parameter, value) in EnumerateArgumentValueFlows(syntax, model, includeGuarded: true) {
+                        AddValueContractFlows(owner, parameter, value, model, graph, tupleEdges)
                     }
                     for (receiver, parameter) in EnumerateRefOutputFlows(syntax, model) {
                         if GetValueContractNode(owner, receiver, graph) is {} receiverNode {
-                            receiverNode.Sources.Add((owner, parameter, false, 0))
+                            receiverNode.Sources.Add((owner, parameter, false, 0, false))
                         }
                     }
                     let methodDeclaration = syntax is MethodDeclarationSyntax or
@@ -1537,19 +1547,23 @@ internal shared class ObliviousNullabilityAnalyzer {
                     if assignment != nil && assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
                         assignment.Left is TupleExpressionSyntax or
                         DeclarationExpressionSyntax {
+                        let tupleReads = List[(Target ISymbol?, Source TupleElementKey)]()
                         CollectDeconstructionFlow(
                             assignment.Left,
                             assignment.Right,
                             model,
                             HashSet[ISymbol](SymbolEqualityComparer.Default),
                             List[(Target ISymbol, Source ISymbol)](),
-                            List[(Target ISymbol, Source TupleElementKey)](),
+                            tupleReads,
                             valueFlow: (target ISymbol?, value ExpressionSyntax?) -> {
                                 if value != nil && GetValueContractNode(owner, target, graph) is {} storage {
                                     AddValueContractFlow(storage, value, model)
                                 }
                             }
                         )
+                        for (target, source) in tupleReads {
+                            GetValueContractNode(owner, target, graph)?.TupleSources.Add((source, false))
+                        }
                     }
                     if !methodDeclaration &&
                         !propertyDeclaration &&
@@ -1566,9 +1580,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                         case write is AssignmentExpressionSyntax: model.GetSymbolInfo(write.Left).Symbol
                         default: model.GetDeclaredSymbol(syntax)
                     }
-                    if GetValueContractNode(owner, declared, graph) is not{} node {
-                        continue
-                    }
+                    GetValueContractNode(owner, declared, graph)
                     let expressions = List[ExpressionSyntax]()
                     switch syntax {
                         case declaration is MethodDeclarationSyntax {
@@ -1610,10 +1622,26 @@ internal shared class ObliviousNullabilityAnalyzer {
                         }
                     }
                     for expression in expressions {
-                        AddValueContractFlow(node, expression, model)
+                        AddValueContractFlows(owner, declared, expression, model, graph, tupleEdges)
                     }
                 }
             }
+        }
+        for (target, source) in tupleEdges {
+            GetValueContractNode(
+                (compilation as CSharpCompilation)!!,
+                target.ContractSymbol,
+                graph,
+                target.ContractPath
+            )
+                ?.TupleSources
+                .Add((source, false))
+            GetValueContractNode(
+                (compilation as CSharpCompilation)!!,
+                source.ContractSymbol,
+                graph,
+                source.ContractPath
+            )
         }
         let contractEdges = List[(Target ISymbol, Source ISymbol)]()
         for owner in owners {
@@ -1643,26 +1671,34 @@ internal shared class ObliviousNullabilityAnalyzer {
             ) &&
                 object
                 .ReferenceEquals(targetNode.Owner, sourceNode.Owner) {
-                targetNode.Sources.Add((sourceNode.Owner, sourceNode.Symbol, false, 0))
+                targetNode.Sources.Add((sourceNode.Owner, sourceNode.Symbol, false, 0, false))
                 sourceContractEdges.Add((targetDeclaration, sourceDeclaration))
             }
         }
-        let fixedReturns = HashSet[ISymbol](SymbolEqualityComparer.Default)
-        for node in nodes.Values {
+        let valueNodes = nodes.Values.Concat(graph.TupleNodes.Values).ToList()
+        let fixedReturns = HashSet[ReturnContractNode]()
+        for node in valueNodes {
+            if node.TuplePath.Length != 0 {
+                if !IsDeclaredNullablePosition(TuplePositionType(node.Symbol, node.TuplePath)) &&
+                    !CanPromoteTuplePosition(node.Owner, node.Symbol, node.TuplePath) {
+                    fixedReturns.Add(node)
+                }
+                continue
+            }
             if TupleContractDeclarations(node.Owner, node.Symbol).Any(
                 (contract ISymbol?) -> contract != nil &&
-                    !TupleContractPositionAcceptsNil(node.Owner, contract, "", declaredReturn: true) &&
+                    !TupleContractPositionAcceptsNil(node.Owner, contract, node.TuplePath, declaredReturn: true) &&
                     !(SourceContractCanPromote(node.Owner, contract, graph))
             ) {
-                fixedReturns.Add(node.Symbol)
+                fixedReturns.Add(node)
             }
         }
         var fixedChanged bool
         do {
             fixedChanged = false
             for (target, source) in sourceContractEdges {
-                if fixedReturns.Contains(source) {
-                    fixedChanged |= fixedReturns.Add(target)
+                if fixedReturns.Contains(nodes[source]) {
+                    fixedChanged |= fixedReturns.Add(nodes[target])
                 }
             }
         } while fixedChanged
@@ -1670,36 +1706,122 @@ internal shared class ObliviousNullabilityAnalyzer {
         var changed bool
         do {
             changed = false
-            for node in nodes.Values {
-                if !node.CanBeNullable || fixedReturns.Contains(node.Symbol) {
+            for node in valueNodes {
+                if !node.CanBeNullable || fixedReturns.Contains(node) {
                     continue
                 }
                 let nullableSource = node.Sources.Any(
-                    (item(Owner Compilation, Symbol ISymbol, Narrowed bool, AwaitDepth int32)) ->
-                    ReturnSourceIsNullable(item.Owner, item.Symbol, graph, item.Narrowed, item.AwaitDepth)
+                    (item(Owner Compilation, Symbol ISymbol, Narrowed bool, AwaitDepth int32, Guarded bool)) ->
+                    !item.Guarded &&
+                        ReturnSourceIsNullable(item.Owner, item.Symbol, graph, item.Narrowed, item.AwaitDepth)
+                ) ||
+                    node
+                    .TupleSources
+                    .Any(
+                    (item(Source TupleElementKey, Guarded bool)) ->
+                    !item.Guarded && ReturnTupleSourceIsNullable(node.Owner, item.Source, graph)
                 )
                 if !node.Seed && !nullableSource {
                     continue
                 }
-                changed |= nullableReturns.Add(node.Symbol)
-                if (node.Symbol is IMethodSymbol && !IsDeclaredNullablePosition(SymbolDeclaredType(node.Symbol))) ||
+                if !node.Nullable {
+                    node.Nullable = true
+                    changed = true
+                }
+                if node.TuplePath.Length == 0 {
+                    nullableReturns.Add(node.Symbol)
+                }
+                if (
+                    node.Symbol is IMethodSymbol &&
+                        !IsDeclaredNullablePosition(
+                        if node.TuplePath.Length == 0 {
+                            SymbolDeclaredType(node.Symbol)
+                        } else {
+                            TuplePositionType(node.Symbol, node.TuplePath)
+                        }
+                    )
+                ) ||
                     node
                     .Sources
                     .Any(
-                    (item(Owner Compilation, Symbol ISymbol, Narrowed bool, AwaitDepth int32)) ->
-                    ReturnSourceIsNullable(
+                    (item(Owner Compilation, Symbol ISymbol, Narrowed bool, AwaitDepth int32, Guarded bool)) ->
+                    !item.Guarded &&
+                        ReturnSourceIsNullable(
                         item.Owner,
                         item.Symbol,
                         graph,
                         requirePromotion: true,
                         awaitDepth: item.AwaitDepth
                     )
+                ) ||
+                    node
+                    .TupleSources
+                    .Any(
+                    (item(Source TupleElementKey, Guarded bool)) -> !item.Guarded &&
+                        ReturnTupleSourceIsNullable(node.Owner, item.Source, graph, requirePromotion: true)
                 ) {
-                    changed |= graph.PromotedFlow.Add(node.Symbol)
+                    if !node.Promoted {
+                        node.Promoted = true
+                        changed = true
+                    }
+                    if node.TuplePath.Length == 0 {
+                        graph.PromotedFlow.Add(node.Symbol)
+                    }
                 }
             }
         } while changed
         return graph
+    }
+
+    private func AddValueContractFlows(
+        owner CSharpCompilation,
+        declared ISymbol?,
+        expression ExpressionSyntax,
+        model SemanticModel,
+        graph ReturnContractGraph,
+        tupleEdges List[(Target TupleElementKey, Source TupleElementKey)]
+    ) {
+        if GetValueContractNode(owner, declared, graph) is {} node {
+            AddValueContractFlow(node, expression, model)
+        }
+        if declared != nil && SymbolValueType(declared) is INamedTypeSymbol{IsTupleType: true} tuple {
+            let direct = HashSet[TupleElementKey](TupleContractKeyComparer.Instance)
+            CollectTupleValueFlow(
+                declared,
+                tuple,
+                expression,
+                model,
+                "",
+                direct,
+                tupleEdges,
+                List[(Target TupleElementKey, Source ISymbol)](),
+                valueFlow: (target TupleElementKey, value ExpressionSyntax) -> {
+                    if GetValueContractNode(owner, target.ContractSymbol, graph, target.ContractPath) is {} element {
+                        AddValueContractFlow(element, value, model)
+                    }
+                }
+            )
+            for key in direct {
+                if GetValueContractNode(owner, key.ContractSymbol, graph, key.ContractPath) is {} element {
+                    element.Seed = true
+                }
+            }
+        }
+    }
+
+    private func ReturnTupleSourceIsNullable(
+        compilation Compilation,
+        key TupleElementKey,
+        graph ReturnContractGraph,
+        requirePromotion bool = false
+    ) bool {
+        return ReturnSourceIsNullable(
+            compilation,
+            key.ContractSymbol!!,
+            graph,
+            requirePromotion,
+            tuplePath: key.ContractPath
+        )
     }
 
     private func SourceContractCanPromote(
@@ -1726,19 +1848,32 @@ internal shared class ObliviousNullabilityAnalyzer {
     private func GetValueContractNode(
         owner CSharpCompilation,
         declared ISymbol?,
-        graph ReturnContractGraph
+        graph ReturnContractGraph,
+        path string = ""
     ) ReturnContractNode? {
         if declared == nil || !TryGetSourceMember(owner, declared, out var sourceOwner, out var source) {
             return nil
         }
-        if graph.Nodes.TryGetValue(source!!, out var existing) {
+        let tupleKey = TupleElementKey(source, path)
+        if path.Length == 0 && graph.Nodes.TryGetValue(source!!, out var existing) {
             return existing
         }
-        let type = SymbolDeclaredType(source)
+        if path.Length != 0 && graph.TupleNodes.TryGetValue(tupleKey, out var existingTuple) {
+            return existingTuple
+        }
+        let type = if path.Length == 0 {
+            SymbolDeclaredType(source)
+        } else {
+            TuplePositionType(source, path)
+        }
         if type == nil {
             return nil
         }
-        let method = source as IMethodSymbol
+        let method = if path.Length == 0 {
+            source as IMethodSymbol
+        } else {
+            default(IMethodSymbol?)
+        }
         let annotated = method != nil && HasMaybeNullReturnContract(sourceOwner, method)
         let nullable = IsDeclaredNullablePosition(type)
         let canBeNullable = type.IsReferenceType &&
@@ -1753,7 +1888,12 @@ internal shared class ObliviousNullabilityAnalyzer {
             (nullable && !IsInferredStorage(source)) || annotated,
             canBeNullable
         )
-        graph.Nodes.Add(source, node)
+        node.TuplePath = path
+        if path.Length == 0 {
+            graph.Nodes.Add(source, node)
+        } else {
+            graph.TupleNodes.Add(tupleKey, node)
+        }
         return node
     }
 
@@ -1768,7 +1908,15 @@ internal shared class ObliviousNullabilityAnalyzer {
             .CodeAnalysis
             .NullableFlowState
             .NotNull
-        if node.Symbol is not IMethodSymbol &&
+        if node
+            .TuplePath
+            .Length == 0 &&
+            node.Symbol is IMethodSymbol{IsAsync: true} method &&
+            IsEligibleTupleLeaf(SymbolValueType(method)) &&
+            IsDirectlyNullable(expression, model) {
+            node.ResultSeed = true
+        }
+        if (node.Symbol is not IMethodSymbol || node.TuplePath.Length != 0) &&
             node.CanBeNullable &&
             !flowNotNull &&
             IsDirectlyNullable(expression, model) {
@@ -1777,12 +1925,16 @@ internal shared class ObliviousNullabilityAnalyzer {
         if node.Symbol is IPropertySymbol property && ImplementsBaseOrInterfaceMember(property) {
             return
         }
+        let guarded = IsNullGuardDominatedRead(expression, model) || IsNullGuardDominatedExpression(expression, model)
+        if TryResolveTupleElementSource(expression, model, out var tupleSource) {
+            node.TupleSources.Add((tupleSource, guarded))
+        }
         let sourceScope = if node.Symbol is IPropertySymbol {
             SourceScope.CallsAndNonPropertyDeclarations
         } else {
             SourceScope.AllSources
         }
-        for item in ResolveSourceFlows(expression, model, sourceScope, respectNullGuards: true) {
+        for item in ResolveSourceFlows(expression, model, sourceScope) {
             // Narrowed declared slots contribute only nullability from changed return contracts.
             node.Sources.Add(
                 (
@@ -1792,12 +1944,13 @@ internal shared class ObliviousNullabilityAnalyzer {
                         !IsInferredStorage(item.Symbol) &&
                         IsDeclaredNullablePosition(SymbolDeclaredType(item.Symbol)),
                     item.AwaitDepth - (
-                        if node.Symbol is IMethodSymbol{IsAsync: true} {
+                        if node.TuplePath.Length == 0 && node.Symbol is IMethodSymbol{IsAsync: true} {
                             1
                         } else {
                             0
                         }
-                    )
+                    ),
+                    guarded
                 )
             )
         }
@@ -1808,19 +1961,94 @@ internal shared class ObliviousNullabilityAnalyzer {
         symbol ISymbol,
         graph ReturnContractGraph,
         requirePromotion bool = false,
-        awaitDepth int32 = 0
+        awaitDepth int32 = 0,
+        visited HashSet[(Symbol ISymbol, Path string, Depth int32)]? = nil,
+        tuplePath string = ""
     ) bool {
         if awaitDepth != 0 {
-            return !requirePromotion && ProjectedSourceTypeIsNullable(symbol, awaitDepth)
+            if ProjectedSourceType(symbol, awaitDepth, tuplePath) == nil {
+                return false
+            }
+            if !requirePromotion && ProjectedSourceTypeIsNullable(symbol, awaitDepth, tuplePath) {
+                return true
+            }
+            let seen = visited ?? HashSet[(Symbol ISymbol, Path string, Depth int32)]()
+            if !seen.Add((symbol, tuplePath, awaitDepth)) {
+                return false
+            }
+            if !TryGetSourceMember(compilation, symbol, out var projectedOwner, out var projectedSource) {
+                return false
+            }
+            let sourceKey = TupleElementKey(projectedSource, tuplePath)
+            let projectedGraph = if graph.Owners.Contains(projectedOwner!!) {
+                graph
+            } else {
+                ReturnContracts.GetValue(projectedOwner!!, ComputeReturnContracts)
+            }
+            var projectedNode ReturnContractNode?
+            if !(
+                if tuplePath.Length == 0 {
+                    projectedGraph.Nodes.TryGetValue(projectedSource!!, out projectedNode)
+                } else {
+                    projectedGraph.TupleNodes.TryGetValue(sourceKey, out projectedNode)
+                }
+            ) {
+                return false
+            }
+            if projectedNode is not{} node {
+                return false
+            }
+            if awaitDepth == 1 && node.ResultSeed {
+                return true
+            }
+            let nullableSource = node.Sources.Any(
+                (item(Owner Compilation, Symbol ISymbol, Narrowed bool, AwaitDepth int32, Guarded bool)) ->
+                ReturnSourceIsNullable(
+                    item.Owner,
+                    item.Symbol,
+                    projectedGraph,
+                    requirePromotion,
+                    awaitDepth + item.AwaitDepth,
+                    seen
+                )
+            )
+            if nullableSource {
+                return true
+            }
+            return node.TupleSources.Any(
+                (item(Source TupleElementKey, Guarded bool)) -> ReturnSourceIsNullable(
+                    node.Owner,
+                    item.Source.ContractSymbol!!,
+                    projectedGraph,
+                    requirePromotion,
+                    awaitDepth,
+                    seen,
+                    item.Source.ContractPath
+                )
+            )
         }
-        if !requirePromotion && symbol is IMethodSymbol method && HasDeclaredNullableReferenceReturn(method) {
+        if tuplePath.Length == 0 &&
+            !requirePromotion &&
+            symbol is IMethodSymbol method &&
+            HasDeclaredNullableReferenceReturn(method) {
             return true
         }
         if TryGetSourceMember(compilation, symbol, out var owner, out var source) {
-            let emittedGraph = if object.ReferenceEquals(compilation, owner) {
+            let sourceKey = TupleElementKey(source, tuplePath)
+            let emittedGraph = if graph.Owners.Contains(owner!!) {
                 graph
             } else {
                 ReturnContracts.GetValue(owner!!, ComputeReturnContracts)
+            }
+            if tuplePath.Length != 0 {
+                return emittedGraph.TupleNodes.TryGetValue(sourceKey, out var tupleNode) &&
+                    (
+                    if requirePromotion {
+                        tupleNode.Promoted
+                    } else {
+                        tupleNode.Nullable
+                    }
+                )
             }
             if requirePromotion {
                 return emittedGraph.PromotedFlow.Contains(source!!)
@@ -1833,7 +2061,14 @@ internal shared class ObliviousNullabilityAnalyzer {
                     IsDeclaredNullablePosition(SymbolDeclaredType(source))
             )
         }
-        return !requirePromotion && IsImportedStatedNullablePosition(symbol, compilation)
+        return !requirePromotion &&
+            (
+            if tuplePath.Length == 0 {
+                IsImportedStatedNullablePosition(symbol, compilation)
+            } else {
+                IsDeclaredNullablePosition(TuplePositionType(symbol, tuplePath))
+            }
+        )
     }
 
     private func IsInferredStorage(symbol ISymbol?) bool -> symbol is ILocalSymbol &&
@@ -6856,9 +7091,11 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
     }
 
-    private func EnumerateArgumentValueFlows(call SyntaxNode, model SemanticModel) sequence[
-        (Parameter IParameterSymbol, Value ExpressionSyntax)
-    ] {
+    private func EnumerateArgumentValueFlows(
+        call SyntaxNode,
+        model SemanticModel,
+        includeGuarded bool = false
+    ) sequence[(Parameter IParameterSymbol, Value ExpressionSyntax)] {
         if call is not InvocationExpressionSyntax and
             not BaseObjectCreationExpressionSyntax and
             not ConstructorInitializerSyntax and
@@ -6887,7 +7124,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                     not ITypeParameterSymbol &&
                     (IsNullGuardDominatedRead(value, model) || IsNullGuardDominatedExpression(value, model))
             )
-            if !guarded &&
+            if (includeGuarded || !guarded) &&
                 !(parameter.RefKind != RefKind.None && IsSubstitutableMethodPosition(parameter, string.Empty)) {
                 yield (parameter, value)
             }
@@ -8126,7 +8363,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         tupleScalarEdges List[(Target TupleElementKey, Source ISymbol?)],
         respectNullGuards bool = false,
         isCallBoundary bool = false,
-        tupleContractEdges List[(Target TupleElementKey, Source TupleElementKey)]? = nil
+        tupleContractEdges List[(Target TupleElementKey, Source TupleElementKey)]? = nil,
+        valueFlow Action[TupleElementKey, ExpressionSyntax]? = nil
     ) {
         var value = value
         value = UnwrapTupleValue(value)
@@ -8146,7 +8384,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                     tupleScalarEdges,
                     respectNullGuards,
                     isCallBoundary,
-                    tupleContractEdges
+                    tupleContractEdges,
+                    valueFlow
                 )
                 CollectTupleValueFlow(
                     target,
@@ -8159,7 +8398,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                     tupleScalarEdges,
                     respectNullGuards,
                     isCallBoundary,
-                    tupleContractEdges
+                    tupleContractEdges,
+                    valueFlow
                 )
                 return
             }
@@ -8175,7 +8415,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                     tupleScalarEdges,
                     respectNullGuards,
                     isCallBoundary,
-                    tupleContractEdges
+                    tupleContractEdges,
+                    valueFlow
                 )
                 CollectTupleValueFlow(
                     target,
@@ -8188,7 +8429,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                     tupleScalarEdges,
                     respectNullGuards,
                     isCallBoundary,
-                    tupleContractEdges
+                    tupleContractEdges,
+                    valueFlow
                 )
                 return
             }
@@ -8205,7 +8447,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                         tupleScalarEdges,
                         respectNullGuards,
                         isCallBoundary,
-                        tupleContractEdges
+                        tupleContractEdges,
+                        valueFlow
                     )
                 }
                 return
@@ -8227,10 +8470,12 @@ internal shared class ObliviousNullabilityAnalyzer {
                             tupleScalarEdges,
                             respectNullGuards,
                             isCallBoundary,
-                            tupleContractEdges
+                            tupleContractEdges,
+                            valueFlow
                         )
                         continue
                     }
+                    valueFlow?.Invoke(TupleElementKey(target, path), elementValue)
                     if HasNestedTupleSlots(targetType) {
                         CollectDeclarationTupleFlow(
                             target,
@@ -8321,7 +8566,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                 tupleTainted,
                 tupleEdges,
                 tupleContractEdges,
-                isCallBoundary
+                isCallBoundary,
+                includeTaskLinks: valueFlow != nil
             )
         }
     }
@@ -8337,7 +8583,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         tupleEdges List[(Target TupleElementKey, Source TupleElementKey)],
         tupleContractEdges List[(Target TupleElementKey, Source TupleElementKey)]? = nil,
         isCallBoundary bool = false,
-        isContractBoundary bool = false
+        isContractBoundary bool = false,
+        includeTaskLinks bool = false
     ) {
         let count = Math.Min(targetTuple!!.TupleElements.Length, sourceTuple!!.TupleElements.Length)
         for var i = 0; i < count; i++ {
@@ -8361,7 +8608,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                     tupleEdges,
                     tupleContractEdges,
                     isCallBoundary,
-                    isContractBoundary
+                    isContractBoundary,
+                    includeTaskLinks
                 )
                 continue
             }
@@ -8396,7 +8644,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                                 activeEdges,
                                 tupleContractEdges,
                                 isCallBoundary,
-                                isContractBoundary || (sharedArray && !crossSubstitutable)
+                                isContractBoundary || (sharedArray && !crossSubstitutable),
+                                includeTaskLinks
                             )
                             if sharedArray && !crossSubstitutable {
                                 AddTupleReverseContractEdges(
@@ -8421,7 +8670,20 @@ internal shared class ObliviousNullabilityAnalyzer {
                 IsCrossMemberSubstitutablePosition(target, targetPath, source) {
                 continue
             }
-            AddTupleLeafEdge(target, targetPath, targetType, source, sourcePath, sourceType, tupleTainted, tupleEdges)
+            if includeTaskLinks && IsTaskLike(targetType) {
+                tupleEdges.Add((TupleElementKey(target, targetPath), TupleElementKey(source, sourcePath)))
+            } else {
+                AddTupleLeafEdge(
+                    target,
+                    targetPath,
+                    targetType,
+                    source,
+                    sourcePath,
+                    sourceType,
+                    tupleTainted,
+                    tupleEdges
+                )
+            }
         }
     }
 
@@ -11571,8 +11833,12 @@ internal shared class ObliviousNullabilityAnalyzer {
         CollectSourceEdges(target, pending, tainted, edges)
     }
 
-    private func ProjectedSourceType(source ISymbol, awaitDepth int32) ITypeSymbol? {
-        var type = SymbolDeclaredType(source)
+    private func ProjectedSourceType(source ISymbol, awaitDepth int32, tuplePath string = "") ITypeSymbol? {
+        var type = if tuplePath.Length == 0 {
+            SymbolDeclaredType(source)
+        } else {
+            TuplePositionType(source, tuplePath)
+        }
         if awaitDepth < 0 {
             return nil
         }
@@ -11585,8 +11851,9 @@ internal shared class ObliviousNullabilityAnalyzer {
         return type
     }
 
-    private func ProjectedSourceTypeIsNullable(source ISymbol, awaitDepth int32) bool ->
-    ProjectedSourceType(source, awaitDepth) is {IsReferenceType: true} type && IsDeclaredNullablePosition(type)
+    private func ProjectedSourceTypeIsNullable(source ISymbol, awaitDepth int32, tuplePath string = "") bool ->
+    ProjectedSourceType(source, awaitDepth, tuplePath) is {IsReferenceType: true} type &&
+        IsDeclaredNullablePosition(type)
 
     private func CollectSourceEdges(
         target ISymbol?,
@@ -11626,6 +11893,15 @@ internal shared class ObliviousNullabilityAnalyzer {
             if TryGetSourceMember(owner, source, out var sourceOwner, out var declaration) {
                 let signature = RemapMemberOwner(sourceOwner, source) ?? declaration
                 if ProjectedSourceTypeIsNullable(signature!!, depth) && target != nil {
+                    tainted.Add(target)
+                }
+                if target != nil &&
+                    ReturnSourceIsNullable(
+                    sourceOwner!!,
+                    signature!!,
+                    ReturnContracts.GetValue(sourceOwner!!, ComputeReturnContracts),
+                    awaitDepth: depth
+                ) {
                     tainted.Add(target)
                 }
             }
