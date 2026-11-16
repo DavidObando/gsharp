@@ -6099,9 +6099,20 @@ internal shared class ObliviousNullabilityAnalyzer {
         return false
     }
 
-    private func IsCrossMemberSubstitutablePosition(endpoint ISymbol?, endpointPath string, other ISymbol?) bool {
+    private func IsCrossMemberSubstitutablePosition(
+        endpoint ISymbol?,
+        endpointPath string,
+        other ISymbol?,
+        valuePosition bool = false
+    ) bool {
         if endpoint is not(IMethodSymbol or IParameterSymbol) ||
-            !TryGetMethodTypeParameterPosition(endpoint, endpointPath, out var parameter, out var isNestedLeaf) {
+            !TryGetMethodTypeParameterPosition(
+            endpoint,
+            endpointPath,
+            out var parameter,
+            out var isNestedLeaf,
+            valuePosition
+        ) {
             return false
         }
         if !isNestedLeaf && CSharpTypeMapper.TypeParameterForbidsNullableReferenceArgument(parameter!!) {
@@ -9169,8 +9180,18 @@ internal shared class ObliviousNullabilityAnalyzer {
                     if sourceType?.IsReferenceType != true {
                         continue
                     }
-                    if IsCrossMemberSubstitutablePosition(target, string.Empty, scalar) ||
-                        IsCrossMemberSubstitutablePosition(scalar, string.Empty, target) {
+                    if IsCrossMemberSubstitutablePosition(
+                        target,
+                        string.Empty,
+                        scalar,
+                        position == ScalarFlowPosition.Value
+                    ) ||
+                        IsCrossMemberSubstitutablePosition(
+                        scalar,
+                        string.Empty,
+                        target,
+                        position == ScalarFlowPosition.Value
+                    ) {
                         continue
                     }
                     let first = TupleElementKey(target, string.Empty)
@@ -9206,8 +9227,18 @@ internal shared class ObliviousNullabilityAnalyzer {
             if sourcePath.Length == 0 || targetType?.IsReferenceType != true {
                 continue
             }
-            if IsCrossMemberSubstitutablePosition(target, string.Empty, sourceSymbol) ||
-                IsCrossMemberSubstitutablePosition(sourceSymbol, sourcePath, target) {
+            if IsCrossMemberSubstitutablePosition(
+                target,
+                string.Empty,
+                sourceSymbol,
+                position == ScalarFlowPosition.Value
+            ) ||
+                IsCrossMemberSubstitutablePosition(
+                sourceSymbol,
+                sourcePath,
+                target,
+                position == ScalarFlowPosition.Value
+            ) {
                 continue
             }
             let canonicalTarget = Canonical(target)!!
@@ -10066,8 +10097,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         .NullableAnnotation
         .None
 
-    internal func IsSubstitutableMethodPosition(symbol ISymbol?, path string) bool {
-        if !TryGetMethodTypeParameterPosition(symbol, path, out var parameter, out var isNestedLeaf) {
+    internal func IsSubstitutableMethodPosition(symbol ISymbol?, path string, valuePosition bool = false) bool {
+        if !TryGetMethodTypeParameterPosition(symbol, path, out var parameter, out var isNestedLeaf, valuePosition) {
             return false
         }
         return isNestedLeaf || !CSharpTypeMapper.TypeParameterForbidsNullableReferenceArgument(parameter!!)
@@ -10077,11 +10108,16 @@ internal shared class ObliviousNullabilityAnalyzer {
         symbol ISymbol?,
         path string,
         out parameter ITypeParameterSymbol?,
-        out isNestedLeaf bool
+        out isNestedLeaf bool,
+        valuePosition bool = false
     ) bool {
         parameter = nil
         isNestedLeaf = false
-        var type ITypeSymbol? = SymbolValueType(symbol?.OriginalDefinition)
+        var type ITypeSymbol? = if valuePosition {
+            SymbolDeclaredType(symbol?.OriginalDefinition)
+        } else {
+            SymbolValueType(symbol?.OriginalDefinition)
+        }
         if type == nil {
             return false
         }

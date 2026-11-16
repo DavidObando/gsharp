@@ -2707,7 +2707,11 @@ partial class CSharpToGSharpTranslator {
                         this.ConnectRefStorage(target, forwardedArgument, model, activeVisited)
                     }
                 }
-                if forwarded && ObliviousNullabilityAnalyzer.IsSubstitutableMethodPosition(method, string.Empty) &&
+                if forwarded && ObliviousNullabilityAnalyzer.IsSubstitutableMethodPosition(
+                    method,
+                    string.Empty,
+                    valuePosition: true
+                ) &&
                     this
                     .RefStoragePositionType(source, depth)
                     ?.NullableAnnotation != Microsoft
@@ -2837,7 +2841,7 @@ partial class CSharpToGSharpTranslator {
                     if (argument.RefKindKeyword.IsKind(SyntaxKind.RefKeyword)) && model.GetOperation(
                         argument
                     ) is IArgumentOperation{Parameter: {RefKind: RefKind.Ref} parameter} {
-                        let storageType = ObliviousNullabilityAnalyzer.SymbolValueType(
+                        let storageType = ObliviousNullabilityAnalyzer.SymbolDeclaredType(
                             model.GetSymbolInfo(argument.Expression).Symbol
                         ) ??
                             model
@@ -2855,7 +2859,11 @@ partial class CSharpToGSharpTranslator {
                             .NotAnnotated {
                             continue
                         }
-                        if ObliviousNullabilityAnalyzer.IsSubstitutableMethodPosition(parameter, string.Empty) {
+                        if ObliviousNullabilityAnalyzer.IsSubstitutableMethodPosition(
+                            parameter,
+                            string.Empty,
+                            valuePosition: true
+                        ) {
                             continue
                         }
                         this.ConnectRefStorage(this.GetRefStorageSlot(parameter, 0), argument.Expression, model)
@@ -3112,7 +3120,8 @@ partial class CSharpToGSharpTranslator {
                     !(
                     slot.Depth == 0 && ObliviousNullabilityAnalyzer.IsSubstitutableMethodPosition(
                         slot.Symbol,
-                        string.Empty
+                        string.Empty,
+                        valuePosition: true
                     )
                 )
             ) {

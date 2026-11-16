@@ -31,6 +31,10 @@ class Issue5951SourceMaybeNullReturnTests {
         "value"
     )
     @InlineData(
+        "Task<int> value = Task.FromResult(1); ref Task<int> alias = ref GenericSlot(ref value); alias = Empty();",
+        "value"
+    )
+    @InlineData(
         "Task<int> value = Task.FromResult(1), other = Task.FromResult(2); ref Task<int> alias = ref (calls == 0 ? ref value : ref other); alias = Empty();",
         "value"
     )
@@ -45,6 +49,7 @@ public static class P
     static int calls;
     [return: MaybeNull] static Task<int> Empty() { calls++; return null; }
     static ref Task<int> Slot(ref Task<int> value) => ref value;
+    static ref Task<T> GenericSlot<T>(ref Task<T> value) => ref value;
     static Task<int> Read()
     {
         ` + write + `
