@@ -131,6 +131,54 @@ Console.Write(Captured("C"))
 `, "0:0:0:0:0:C0")
     }
 
+    @Fact
+    func ConstructedOwnerReturns_UseTheDeclaringTypeSubstitution() {
+        Check(`import System
+interface IOwner[T] {
+    func Missing[U]() T?;
+}
+open class Owner[T] : IOwner[T] {
+    func Missing[U]() T? -> default(T)
+    func Plain() T? -> default(T)
+    func Keep[U](value T) T? -> value
+    shared {
+        func SharedMissing[U]() T? -> default(T)
+        func SharedPlain() T? -> default(T)
+    }
+}
+class Child : Owner[int32] {
+    func Read() int32? -> base.Missing[string]()
+}
+class ValueOwner[T struct] {
+    func Missing[U]() T? -> nil
+}
+func Constrained[T IOwner[int32]](owner T) int32? -> owner.Missing[string]()
+let owner = Owner[int32]()
+Console.Write(owner.Missing[string]())
+Console.Write(":")
+Console.Write(owner.Plain())
+Console.Write(":")
+Console.Write(owner.Keep[string](19))
+Console.Write(":")
+Console.Write(Owner[int32].SharedMissing[string]())
+Console.Write(":")
+Console.Write(Owner[int32].SharedPlain())
+Console.Write(":")
+let contract IOwner[int32] = owner
+Console.Write(contract.Missing[string]())
+Console.Write(":")
+Console.Write(Constrained(owner))
+Console.Write(":")
+Console.Write(Child().Read())
+Console.Write(":")
+Console.Write(Owner[string]().Missing[int32]() == nil)
+Console.Write(":")
+Console.Write(Owner[int32?]().Missing[string]() == nil)
+Console.Write(":")
+Console.Write(ValueOwner[int32]().Missing[string]() == nil)
+`, "0:0:19:0:0:0:0:0:True:True:True")
+    }
+
     shared {
         private func Check(source string, expected string) {
             using let fixture = NativeSliceLanguageTests.Fixture()

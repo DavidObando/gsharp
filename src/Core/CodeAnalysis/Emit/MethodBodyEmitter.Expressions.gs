@@ -2124,11 +2124,20 @@ internal partial class MethodBodyEmitter {
             }
             this.il.OpCode(ILOpCode.Call)
             this.il.Token(invokeToken)
-            if call.Function.IsGeneric {
+            if call
+                .Function
+                .IsGeneric ||
+                call.StaticGenericOwnerType != nil ||
+                call.StaticGenericInterfaceOwnerType != nil {
                 this.EmitErasedGenericNullableReturnLift(
                     call.Function,
                     call.Type,
-                    nullableLift?.TypeArguments ?? this.outer.userTokens.ResolveGenericCallTypeArguments(call)
+                    if call.Function.IsGeneric {
+                        nullableLift?.TypeArguments ?? this.outer.userTokens.ResolveGenericCallTypeArguments(call)
+                    } else {
+                        Array.Empty[TypeSymbol]()
+                    },
+                    cast[TypeSymbol?](call.StaticGenericOwnerType) ?? call.StaticGenericInterfaceOwnerType
                 )
             }
             return
@@ -2218,11 +2227,20 @@ internal partial class MethodBodyEmitter {
         if nullableLift?.ReturnUnwrap is {} liftUnwrap {
             this.EmitUnconstrainedNullableLiftUnwrap(liftUnwrap)
         }
-        if call.Function.IsGeneric {
+        if call
+            .Function
+            .IsGeneric ||
+            call.StaticGenericOwnerType != nil ||
+            call.StaticGenericInterfaceOwnerType != nil {
             this.EmitErasedGenericNullableReturnLift(
                 call.Function,
                 call.Type,
-                nullableLift?.TypeArguments ?? this.outer.userTokens.ResolveGenericCallTypeArguments(call)
+                if call.Function.IsGeneric {
+                    nullableLift?.TypeArguments ?? this.outer.userTokens.ResolveGenericCallTypeArguments(call)
+                } else {
+                    Array.Empty[TypeSymbol]()
+                },
+                cast[TypeSymbol?](call.StaticGenericOwnerType) ?? call.StaticGenericInterfaceOwnerType
             )
         }
     }
