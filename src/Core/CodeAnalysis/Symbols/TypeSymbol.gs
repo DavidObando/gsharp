@@ -679,7 +679,7 @@ open partial class TypeSymbol : Symbol {
         /// Tests for source tuple identity, including unnamed tuples inside generic arguments.
         /// @param type The type to inspect.
         /// @returns Whether CLR reconstruction would discard a source tuple symbol.
-        func ContainsTupleType(type TypeSymbol?) bool {
+        internal func ContainsTupleType(type TypeSymbol?) bool {
             if type is TupleTypeSymbol {
                 return true
             }
