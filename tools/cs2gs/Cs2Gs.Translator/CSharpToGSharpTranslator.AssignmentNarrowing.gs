@@ -77,7 +77,8 @@ partial class CSharpToGSharpTranslator {
             requireRuntimeNonNullProof bool
         ) bool {
             var proof SyntaxNode? = nil
-            for step in this.GetStatementSteps(effectiveTarget, $scope) {
+            let steps = this.GetStatementSteps(effectiveTarget, $scope)
+            for step in steps {
                 let statements IEnumerable[StatementSyntax] = switch step.Owner {
                     case block is BlockSyntax: block.Statements
                     case section is SwitchSectionSyntax: section.Statements
@@ -117,7 +118,17 @@ partial class CSharpToGSharpTranslator {
                     ) {
                         continue
                     }
-                    if this.ExpressionHasCoalescingAssignment(child) {
+                    if child.Span.End <= effectiveTarget.SpanStart {
+                        proof = this.GetGSharpAssignmentNarrowingProof(
+                            child,
+                            symbol,
+                            expression,
+                            $scope,
+                            proof,
+                            requireRuntimeNonNullProof
+                        )
+                    } else if this.ExpressionHasCoalescingAssignment(child) ||
+                        (child is ExpressionSyntax condition && this.IsStatementCondition(condition)) {
                         proof = this.GetGSharpInitializerMutationProof(
                             child,
                             symbol,
@@ -128,6 +139,33 @@ partial class CSharpToGSharpTranslator {
                             before: effectiveTarget
                         )
                     }
+                }
+            }
+            if steps.Count == 0 {
+                var body SyntaxNode = effectiveTarget
+                while body.Parent is {} parent {
+                    if parent is ArrowExpressionClauseSyntax ||
+                        (parent is LambdaExpressionSyntax lambda && object.ReferenceEquals(lambda.Body, body)) {
+                        if this.ExpressionHasCoalescingAssignment(body) {
+                            proof = this.GetGSharpInitializerMutationProof(
+                                body,
+                                symbol,
+                                expression,
+                                $scope,
+                                proof,
+                                requireRuntimeNonNullProof,
+                                before: effectiveTarget
+                            )
+                        }
+                        break
+                    }
+                    if object.ReferenceEquals(body, $scope) || this.IsClosureBoundary(parent) ||
+                        parent is StatementSyntax or
+                        BaseMethodDeclarationSyntax or
+                        AccessorDeclarationSyntax {
+                        break
+                    }
+                    body = parent
                 }
             }
             return proof != nil && this.AssignmentNarrowingSurvivesToRead(
@@ -223,7 +261,7 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             if statement is IfStatementSyntax conditional {
-                let entry = this.GetGSharpAssignmentNarrowingProof(
+                let entry = this.GetGSharpInitializerMutationProof(
                     conditional.Condition,
                     symbol,
                     use,
@@ -277,7 +315,8 @@ partial class CSharpToGSharpTranslator {
                 case value is ExpressionSyntax: value
                 default: default(ExpressionSyntax?)
             }
-            if expression != nil && this.ExpressionHasCoalescingAssignment(expression) {
+            if expression != nil &&
+                (this.ExpressionHasCoalescingAssignment(expression) || this.IsStatementCondition(expression)) {
                 return this.GetGSharpInitializerMutationProof(
                     expression,
                     symbol,
@@ -301,6 +340,14 @@ partial class CSharpToGSharpTranslator {
         expression.DescendantNodesAndSelf((node SyntaxNode) -> !this.IsClosureBoundary(node)).Any(
             (node SyntaxNode) -> node.IsKind(SyntaxKind.CoalesceAssignmentExpression)
         )
+
+        private func IsStatementCondition(expression ExpressionSyntax) bool -> switch expression.Parent {
+            case conditional is IfStatementSyntax: object.ReferenceEquals(conditional.Condition, expression)
+            case loop is WhileStatementSyntax: object.ReferenceEquals(loop.Condition, expression)
+            case loop is DoStatementSyntax: object.ReferenceEquals(loop.Condition, expression)
+            case loop is ForStatementSyntax: object.ReferenceEquals(loop.Condition, expression)
+            default: false
+        }
 
         private func GetGSharpAssignmentStoreProof(
             statement SyntaxNode,
@@ -674,8 +721,21 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             var proof = inherited
+            var appliedEffect = false
+            let effectEnd = this.EvaluationEffectEnd(node)
             // Syntax children follow operand evaluation order. Apply each node's own effect after its operands.
             for child in node.ChildNodes() {
+                if !appliedEffect && effectEnd <= child.SpanStart && (before == nil || effectEnd <= before.SpanStart) {
+                    if proof != nil && this.NodeInvalidatesAssignmentNarrowing(
+                        node,
+                        symbol,
+                        this.IsClosureAssignedVariable(symbol),
+                        this.IsByReferenceVariable(symbol)
+                    ) {
+                        proof = nil
+                    }
+                    appliedEffect = true
+                }
                 proof = this.GetGSharpInitializerMutationProof(
                     child,
                     symbol,
@@ -699,7 +759,8 @@ partial class CSharpToGSharpTranslator {
                     requireRuntimeNonNullProof
                 )
             }
-            let completesEffect = proof != nil &&
+            let completesEffect = !appliedEffect &&
+                proof != nil &&
                 (
                 node is not AssignmentExpressionSyntax || this.AssignmentStoreCompletesAfterProof(
                     node,
@@ -842,6 +903,9 @@ partial class CSharpToGSharpTranslator {
                 } else {
                     loop.Initializers.Last().Span.End
                 }
+                if effectiveTarget.SpanStart < headerEnd {
+                    continue
+                }
                 if this.AssignmentRegionInvalidatesNarrowing(symbol, loop, headerEnd, loop.Span.End) {
                     return false
                 }
@@ -952,6 +1016,13 @@ partial class CSharpToGSharpTranslator {
         )
 
         // Spans are half-open. An effect at the exclusive proof end is the next effect, not part of the proof.
+        private func EvaluationEffectEnd(node SyntaxNode) int32 {
+            if node is BaseObjectCreationExpressionSyntax creation && creation.Initializer is {} initializer {
+                return creation.ArgumentList?.Span.End ?? initializer.SpanStart
+            }
+            return node.Span.End
+        }
+
         private func EffectCompletesBetween(
             node SyntaxNode,
             proof SyntaxNode,
@@ -960,13 +1031,12 @@ partial class CSharpToGSharpTranslator {
             includeReferenceStorageWrites bool = false,
             readPosition int32? = nil
         ) bool ->
-        node
-            .Span
-            .End <= (readPosition ?? use.SpanStart) &&
+        this.EvaluationEffectEnd(node) <= (readPosition ?? use.SpanStart) &&
             (
             node.SpanStart >= proof
                 .Span
                 .End ||
+                (node.Span.Contains(proof.Span) && this.EvaluationEffectEnd(node) > proof.Span.End) ||
                 (
                 includeDirectStores &&
                     node is AssignmentExpressionSyntax assignment &&

@@ -15258,7 +15258,9 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             for variable in namesakes {
-                if index.AddressNames.Contains(variable) {
+                if index.AddressNames.TryGetValue(variable, out var addresses) && addresses.Any(
+                    (node Microsoft.CodeAnalysis.SyntaxNode) -> this.IsEmittedScopeCandidate(node, declaringFunction)
+                ) {
                     return true
                 }
                 for node in this.ScopeSymbolWriteCandidates(declaringFunction, variable) {
@@ -15432,12 +15434,14 @@ partial class CSharpToGSharpTranslator {
             node Microsoft.CodeAnalysis.SyntaxNode,
             rootType ITypeSymbol? = nil
         ) bool {
-            if this.IsUnevaluatedNameOfOperand(node) ||
-                (this.IsErasedNameOf(node) && !this.NodeEmitsTypeConversionCall(node)) {
+            if this.IsUnevaluatedNameOfOperand(node) {
                 return false
             }
             if this.NodeOperatorCallbacksMayWrite(node, rootType) {
                 return true
+            }
+            if this.IsErasedNameOf(node) {
+                return false
             }
             switch node {
                 case assignment is Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax {
@@ -22630,7 +22634,16 @@ partial class CSharpToGSharpTranslator {
                     declaredType?.NullableAnnotation == Microsoft
                     .CodeAnalysis
                     .NullableAnnotation
-                    .Annotated
+                    .Annotated ||
+                    (
+                    Unparenthesize(value) is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .AssignmentExpressionSyntax assignment &&
+                        !this.AssignmentResultHasNonNullStaticType(assignment) &&
+                        !this.GSharpExpressionIsStaticallyNonNull(value)
+                )
             )
         }
 

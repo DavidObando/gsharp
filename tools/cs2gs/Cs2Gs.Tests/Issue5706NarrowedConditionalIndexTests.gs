@@ -29,6 +29,90 @@ import Xunit
 /// Each test also compares the translated program's output with C#.
 open class Issue5706NarrowedConditionalIndexTests {
     @Fact
+    func ExpressionBodies_UseOrderedPrefixesWithoutCrossingCallables() {
+        Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System;
+public static class Demo
+{
+    static char? Second(string first, char? second) => second;
+    static char? Read(string? s) => Second(s ??= "a", s?[0]);
+    static char? Lambda() { string? s = null; Func<char?> read = () => Second(s ??= "b", s?[0]); return read(); }
+    static char? Deferred() { string? s = null; Func<char?> read = () => Second(s ??= "x", s?[0]); return s?[0]; }
+    public static string Run() => Read(null) + "|" + Lambda() + "|" + Deferred();
+}`, rejectConditionalIndexWarnings: true, strictIl: true, expectedOutput: "a|b|")
+    }
+
+    @Fact
+    func ConditionExit_CollectsPlainAssignmentsAndLaterInvalidation() {
+        Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System;
+public static class Demo
+{
+    static bool Keep(string value, bool result) => result;
+    static bool Invoke(string value, Action action) { action(); return true; }
+    static char? Plain(bool result) { string? s = null; if (Keep(s = "a", result)) {} return s?[0]; }
+    static char? Changed(bool result) { string? s = null; if (Keep(s = "b", result)) { s = null; } return s?[0]; }
+    static char? Captured() { string? s = null; if (Invoke(s = "c", () => s = null)) {} return s?[0]; }
+    public static string Run() => Plain(false) + "|" + Plain(true) + "|" + Changed(false) + "|" + Changed(true) + "|" + Captured();
+}`, rejectConditionalIndexWarnings: true, strictIl: true, expectedOutput: "a|a|b||")
+    }
+
+    @Fact
+    func ConstructorEffects_CompleteBeforeInitializerReads() {
+        Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System;
+public static class Demo
+{
+    static Action? clear;
+    sealed class Box { public char? Value; public Box(string value) { clear?.Invoke(); } }
+    static char? Read(bool reset)
+    {
+        string? s = null;
+        clear = reset ? () => s = null : null;
+        var box = new Box(s ??= "a") { Value = s?[0] };
+        return box.Value;
+    }
+    public static string Run() => Read(true) + "|" + Read(false);
+}`, rejectConditionalIndexWarnings: true, strictIl: true, expectedOutput: "|a")
+    }
+
+    @Fact
+    func InitializerReads_PrecedeLoopRegionInvalidation() {
+        Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+public static class Demo
+{
+    static void Keep(string value) {}
+    static char? Declaration() { string? s = null; for (var pair = ((s ??= "a"), s?[0]);;) { s = null; return pair.Item2; } }
+    static char? Expressions() { string? s = null; char? result = null; for (Keep(s ??= "b"), result = s?[0];;) { s = null; return result; } }
+    public static string Run() => Declaration() + "|" + Expressions();
+}`, rejectConditionalIndexWarnings: true, strictIl: true, expectedOutput: "a|b")
+    }
+
+    @Fact
+    func DroppedAddressNames_DoNotMakeClosuresEscape() {
+        Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System;
+public static partial class Demo
+{
+    static partial void Skip(Action action);
+    static void Keep() {}
+    public static string Run()
+    {
+        string? s = null;
+        s = "a";
+        Skip(() => { ref string? alias = ref s; });
+        Keep();
+        return s?[0] + "";
+    }
+}`, rejectConditionalIndexWarnings: true, strictIl: true, expectedOutput: "a")
+    }
+
+    @Fact
     func CurrentStatementPrefix_PreservesOrderedAndConditionalEvaluation() {
         Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
 #nullable enable
@@ -120,6 +204,29 @@ public static class Demo
     static char? Plain() { string? s = null; Action reset = () => s = null; s = "a"; var name = nameof(s.Length); return s?[0]; }
     static char? Converted() { string? s = null; clear = () => s = null; s = "b"; Token name = nameof(s.Length); return s?[0]; }
     public static string Run() => Plain() + "|" + Converted();
+}`, rejectConditionalIndexWarnings: true, strictIl: true, expectedOutput: "a|")
+    }
+
+    @Fact
+    func NameOfConversions_InvalidateByReferenceStorage() {
+        Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+public static class Demo
+{
+    static string? stored;
+    sealed class Token { public static implicit operator Token(string value) { stored = null; return new Token(); } }
+    static char? Read(ref string? s, bool convert)
+    {
+        if (s != null)
+        {
+            var name = nameof(s.Length);
+            if (convert) { Token converted = nameof(s.Length); }
+            return s?[0];
+        }
+        return null;
+    }
+    static char? Call(bool convert) { stored = "a"; return Read(ref stored, convert); }
+    public static string Run() => Call(false) + "|" + Call(true);
 }`, rejectConditionalIndexWarnings: true, strictIl: true, expectedOutput: "a|")
     }
 

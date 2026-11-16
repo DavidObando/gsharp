@@ -2206,7 +2206,9 @@ partial class CSharpToGSharpTranslator {
             public let Declarations Dictionary[string, List[ISymbol]] = Dictionary[string, List[ISymbol]](
                 StringComparer.Ordinal
             )
-            public let AddressNames HashSet[ISymbol] = HashSet[ISymbol](SymbolEqualityComparer.Default)
+            public let AddressNames Dictionary[ISymbol, List[SyntaxNode]] = Dictionary[ISymbol, List[SyntaxNode]](
+                SymbolEqualityComparer.Default
+            )
         }
 
         private func GetScopeWriteIndex(scope_ SyntaxNode) ScopeWriteIndex {
@@ -2270,7 +2272,11 @@ partial class CSharpToGSharpTranslator {
                             bindings,
                             name
                         ) is {} addressed {
-                            index.AddressNames.Add(addressed)
+                            if !index.AddressNames.TryGetValue(addressed, out var addresses) {
+                                addresses = List[SyntaxNode]()
+                                index.AddressNames.Add(addressed, addresses)
+                            }
+                            addresses.Add(node)
                         }
                     }
                 }
@@ -2357,27 +2363,25 @@ partial class CSharpToGSharpTranslator {
                     if !includeSelf && object.ReferenceEquals(candidate, scope_) {
                         continue
                     }
-                    var withinScope = true
-                    for var ancestor SyntaxNode? = candidate; ancestor != nil; ancestor = ancestor!!.Parent {
-                        CompilationMeasurements.Count("translation.scope_boundary_visits")
-                        if this.IsDroppedStatementOrLoopClause(ancestor) ||
-                            (
-                            excludeNested && !object.ReferenceEquals(ancestor, scope_) && this.IsClosureBoundary(
-                                ancestor
-                            )
-                        ) {
-                            withinScope = false
-                            break
-                        }
-                        if object.ReferenceEquals(ancestor, scope_) {
-                            break
-                        }
-                    }
-                    if withinScope {
+                    if this.IsEmittedScopeCandidate(candidate, scope_, excludeNested) {
                         yield candidate
                     }
                 }
             }
+        }
+
+        private func IsEmittedScopeCandidate(candidate SyntaxNode, scope_ SyntaxNode, excludeNested bool = false) bool {
+            for var ancestor SyntaxNode? = candidate; ancestor != nil; ancestor = ancestor!!.Parent {
+                CompilationMeasurements.Count("translation.scope_boundary_visits")
+                if this.IsDroppedStatementOrLoopClause(ancestor) ||
+                    (excludeNested && !object.ReferenceEquals(ancestor, scope_) && this.IsClosureBoundary(ancestor)) {
+                    return false
+                }
+                if object.ReferenceEquals(ancestor, scope_) {
+                    break
+                }
+            }
+            return true
         }
 
         // Issue #4709: whether an uninitialized struct local is written through
