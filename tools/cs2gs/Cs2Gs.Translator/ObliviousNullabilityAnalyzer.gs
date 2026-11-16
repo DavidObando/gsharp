@@ -115,6 +115,16 @@ internal shared class ObliviousNullabilityAnalyzer {
     private func SharedAnalysisDomain(compilation Compilation, catalogScope AnalysisScope) AnalysisDomain {
         // Only source classifications reachable through this compilation affect its cached analysis.
         let sources = SourceAssemblySet(compilation, catalogScope.SourceNames)
+        let pending = Queue[CSharpCompilation](sources.Compilations.Values)
+        while pending.Count != 0 {
+            let dependencies = SourceAssemblySet(pending.Dequeue(), catalogScope.SourceNames)
+            sources.Names.UnionWith(dependencies.Names)
+            for dependency in dependencies.Compilations {
+                if sources.Compilations.TryAdd(dependency.Key, dependency.Value) {
+                    pending.Enqueue(dependency.Value)
+                }
+            }
+        }
         let domains = AnalysisDomains.GetOrCreateValue(compilation)
         lock domains {
             for var index = domains.Count - 1; index >= 0; index-- {
@@ -2012,6 +2022,9 @@ internal shared class ObliviousNullabilityAnalyzer {
                 .Length == 0 &&
                 node.Symbol is IMethodSymbol{IsAsync: true} &&
                 awaitDepth == 1
+            if atValueRoot && !IsEligibleTupleLeaf(SymbolValueType(node.Symbol)) {
+                return !requirePromotion && ProjectedSourceTypeIsNullable(node.Symbol, awaitDepth)
+            }
             let nullableSource = node.Sources.Any(
                 (item(Owner Compilation, Symbol ISymbol, Narrowed bool, AwaitDepth int32, Guarded bool)) -> {
                     if atValueRoot && item.Guarded {
@@ -3114,6 +3127,13 @@ internal shared class ObliviousNullabilityAnalyzer {
             return false
         }
         if result.TupleTainted.Contains(key) {
+            return true
+        }
+        if ReturnTupleSourceIsNullable(
+            compilation!!,
+            key,
+            ReturnContracts.GetValue(compilation!!, ComputeReturnContracts)
+        ) {
             return true
         }
         if result.TupleScalarEdgesByTarget.TryGetValue(key, out var tupleScalarSources) {
@@ -8524,12 +8544,22 @@ internal shared class ObliviousNullabilityAnalyzer {
                             TryResolveTupleElementSource(elementValue, model, out var tupleSource) {
                             tupleEdges.Add((targetKey, tupleSource))
                         } else {
-                            for scalarSource in ResolveSources(
+                            for flow in ResolveSourceFlows(
                                 elementValue,
                                 model,
                                 respectNullGuards: respectNullGuards,
                                 resultType: targetType
                             ) {
+                                if flow.RootGuarded ||
+                                    flow.RootNarrowed ||
+                                    (
+                                    flow.AwaitDepth == 0 &&
+                                        flow.Symbol is IMethodSymbol method &&
+                                        HasProjectedReturnResult(method)
+                                ) {
+                                    continue
+                                }
+                                let scalarSource = Canonical(flow.Symbol)
                                 // Issue #3615 (2026-08-28 nightly, Cs2Gs.Translator
                                 // wall): only SOURCE-declared symbols propagate
                                 // into a declaration's tuple element. An imported
@@ -12320,7 +12350,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             $scope != SourceScope.CallsOnly &&
                 $scope != SourceScope.CallsAndNonPropertyDeclarations &&
                 model
-                .GetSymbolInfo(access).Symbol is IPropertySymbol property && IsRefStorageSymbol(property) {
+                .GetSymbolInfo(access).Symbol is IPropertySymbol property {
                 yield (property, 0, false, false)
             }
             case access is ElementAccessExpressionSyntax when $scope != SourceScope.CallsOnly {

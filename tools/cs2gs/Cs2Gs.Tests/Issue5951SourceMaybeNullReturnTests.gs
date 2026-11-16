@@ -8,6 +8,7 @@ import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
 import Microsoft.CodeAnalysis.CSharp.Syntax
 import System
+import System.Collections.Generic
 import System.Diagnostics
 import System.IO
 import System.Linq
@@ -15,6 +16,296 @@ import System.Text
 import Xunit
 
 class Issue5951SourceMaybeNullReturnTests {
+    @Fact
+    func TransitiveSourceOwners_IsolateReturnContractCatalogs() {
+        let options = CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+            NullableContextOptions.Disable
+        )
+        let Source = (empty bool) -> `
+#nullable disable
+using System.Diagnostics.CodeAnalysis;
+using System.Threading.Tasks;
+public static class C
+{
+    public static int Calls;
+    ` + (
+            if empty {
+                "[return: MaybeNull]"
+            } else {
+                ""
+            }
+        ) + `
+    public static Task<int> Read() { Calls++; return ` + (
+            if empty {
+                "null"
+            } else {
+                "Task.FromResult(1)"
+            }
+        ) + `; }
+}`
+        let Build = (name string, source string, reference MetadataReference?) -> CSharpCompilation.Create(
+            name,
+            []SyntaxTree{CSharpSyntaxTree.ParseText(source, path: name + ".cs")},
+            if reference != nil {
+                CSharpProjectLoader.RuntimeReferences().Append(reference)
+            } else {
+                CSharpProjectLoader.RuntimeReferences()
+            },
+            options
+        )
+        let Image = (compilation CSharpCompilation) -> {
+            using let stream = MemoryStream()
+            let result = compilation.Emit(stream)
+            Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics))
+            return stream.ToArray()
+        }
+        let original = Build("C", Source(false), nil)
+        let replacement = Build("C", Source(true), nil)
+        let middle = Build("B", `
+#nullable disable
+using System.Threading.Tasks;
+public static class B
+{
+    public static Task<int> Read() => C.Read();
+    public static int Calls => C.Calls;
+}`, MetadataReference.CreateFromImage(Image(original)))
+        let root = Build("A", `
+#nullable disable
+using System;
+using System.Threading.Tasks;
+public static class P
+{
+    static Task<int> Forward() => B.Read();
+    public static void Main() { Console.WriteLine(Forward() == null); Console.WriteLine(B.Calls); }
+}`, MetadataReference.CreateFromImage(Image(middle))).WithOptions(options.WithOutputKind(OutputKind.ConsoleApplication))
+        let method = root.GetTypeByMetadataName("P")!!.GetMembers("Forward").OfType[IMethodSymbol]().Single()
+        let directory = Path.Combine(AppContext.BaseDirectory, "issue-5951-transitive", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            for empty in[]bool{false, true, false} {
+                let owner = if empty {
+                    replacement
+                } else {
+                    original
+                }
+                let catalog = []CSharpCompilation{root, middle, owner}
+                let emitted = List[string]()
+                for compilation in[]CSharpCompilation{owner, middle, root} {
+                    let tree = Assert.Single(compilation.SyntaxTrees)
+                    let model = compilation.GetSemanticModel(tree)
+                    let context = TranslationContext(compilation, model, tree.FilePath, catalog, catalog)
+                    using let analysis = ObliviousNullabilityAnalyzer.UseCatalogScope(context)
+                    if object.ReferenceEquals(compilation, root) {
+                        Assert.Equal(empty, ObliviousNullabilityAnalyzer.ReturnContractIsNullable(root, method))
+                    }
+                    emitted.Add(
+                        GSharpPrinter.Print(
+                            CSharpToGSharpTranslator().TranslateDocument(
+                                LoadedDocument(tree.FilePath, tree, model),
+                                context
+                            )
+                        )
+                    )
+                }
+                let expected = Encoding.UTF8.GetBytes(
+                    string.Join(
+                        Environment.NewLine,
+                        []string{
+                            if empty {
+                                "True"
+                            } else {
+                                "False"
+                            },
+                            "1",
+                            ""
+                        }
+                    )
+                )
+                let names = []string{"C", "B", "A"}
+                let native = []CSharpCompilation{owner, middle, root}
+                for var index = 0; index < names.Length; index++ {
+                    File.WriteAllBytes(Path.Combine(directory, names[index] + ".dll"), Image(native[index]))
+                }
+                let binary = Path.Combine(directory, "A.dll")
+                File.WriteAllText(
+                    Path.Combine(directory, "A.runtimeconfig.json"),
+                    `{"runtimeOptions":{"tfm":"net10.0","framework":{"name":"Microsoft.NETCore.App","version":"10.0.0"}}}`
+                )
+                Assert.Equal(expected, LiteralConstructionRuntimeParity.RunDotnet([]string{binary}))
+                for var index = 0; index < names.Length; index++ {
+                    let source = Path.Combine(directory, names[index] + ".gs")
+                    File.WriteAllText(source, emitted[index])
+                    let arguments = List[string]{
+                        LiteralConstructionRuntimeParity.FindCompiler(),
+                        if index == 2 {
+                            "/target:exe"
+                        } else {
+                            "/target:library"
+                        },
+                        "/targetframework:net10.0",
+                        "/assemblyname:" + names[index],
+                        "/out:" + Path.Combine(directory, names[index] + ".dll"),
+                        source
+                    }
+                    if index > 0 {
+                        arguments.Add("/reference:" + Path.Combine(directory, names[index - 1] + ".dll"))
+                    }
+                    LiteralConstructionRuntimeParity.RunDotnet(arguments.ToArray(), emitted[index])
+                }
+                let verified = IlVerifyRunner().Verify(binary)
+                Assert.True(verified.Status == IlVerifyStatus.Passed, verified.Output)
+                Assert.Empty(verified.Errors)
+                Assert.Equal(expected, LiteralConstructionRuntimeParity.RunDotnet([]string{binary}, emitted[2]))
+            }
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    @Fact
+    func ReassignedTupleStorage_UsesTaskEnvelopeContracts() {
+        const source = `
+#nullable disable
+using System;
+using System.Diagnostics.CodeAnalysis;
+using System.Threading.Tasks;
+public static class P
+{
+    static int calls;
+    [return: MaybeNull] static Task<int> Empty() { calls++; return null; }
+    static async Task<string> Missing() { await Task.Yield(); return null; }
+    public static void Main()
+    {
+        var pair = (Task.FromResult(1), 0);
+        pair = (Empty(), 0);
+        var alias = pair;
+        var (task, unused) = alias;
+        var present = (Missing(), 0);
+        Console.WriteLine(pair.Item1 == null);
+        Console.WriteLine(alias.Item1 == null);
+        Console.WriteLine(task == null);
+        Console.WriteLine(present.Item1 == null);
+        Console.WriteLine(calls);
+    }
+}`
+        let project = CSharpProjectLoader.LoadInMemory([](string, string){("Tuple.cs", source)})
+        let document = Assert.Single(project.Documents)
+        let pair = document
+            .SyntaxTree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[VariableDeclaratorSyntax]()
+            .Single((node VariableDeclaratorSyntax) -> node.Identifier.ValueText == "pair")
+        Assert.True(
+            ObliviousNullabilityAnalyzer.IsTupleElementTainted(
+                project.Compilation,
+                document.SemanticModel.GetDeclaredSymbol(pair)!!,
+                []int32{0},
+                nil
+            )
+        )
+        let present = document
+            .SyntaxTree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[VariableDeclaratorSyntax]()
+            .Single((node VariableDeclaratorSyntax) -> node.Identifier.ValueText == "present")
+        Assert.False(
+            ObliviousNullabilityAnalyzer.IsTupleElementTainted(
+                project.Compilation,
+                document.SemanticModel.GetDeclaredSymbol(present)!!,
+                []int32{0},
+                nil
+            )
+        )
+        LiteralConstructionRuntimeParity.AssertMatches(
+            source,
+            verifyIL: true,
+            nullableContextOptions: NullableContextOptions.Disable,
+            expectedOutput: string.Join(Environment.NewLine, []string{"True", "True", "True", "False", "1", ""})
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func FixedAsyncResults_DoNotImportNullableBodyContracts(useCall bool) {
+        let source = `
+#nullable enable
+using System;
+using System.Threading.Tasks;
+public static class Producer
+{
+    static string? Identity(string? value) => value;
+    public static async Task<string> Present(string? value)
+    {
+        await Task.Yield();
+        return ` + (
+            if useCall {
+                "Identity(value)"
+            } else {
+                "value"
+            }
+        ) + `;
+    }
+    public static Task<string> Forward(Task<string> value) => value;
+}
+#nullable disable
+public static class P
+{
+    static Task<string> Read()
+    {
+        Task<string> copy = Producer.Present("ok");
+        return Producer.Forward(copy);
+    }
+    public static void Main() => Console.WriteLine(Read().GetAwaiter().GetResult());
+}`
+        let project = CSharpProjectLoader.LoadInMemory([](string, string){("FixedResult.cs", source)})
+        let document = Assert.Single(project.Documents)
+        let copy = document
+            .SyntaxTree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[VariableDeclaratorSyntax]()
+            .Single((node VariableDeclaratorSyntax) -> node.Identifier.ValueText == "copy")
+        Assert.False(
+            ObliviousNullabilityAnalyzer.StoredAwaitedResultIsTainted(
+                project.Compilation,
+                document.SemanticModel.GetDeclaredSymbol(copy)!!,
+                nil
+            )
+        )
+        LiteralConstructionRuntimeParity.AssertMatches(
+            source,
+            verifyIL: true,
+            nullableContextOptions: NullableContextOptions.Disable,
+            expectedOutput: "ok" + Environment.NewLine
+        )
+    }
+
+    @Fact
+    func IndexerReturns_PreserveNullableTaskValues() {
+        LiteralConstructionRuntimeParity.AssertMatches(`
+#nullable disable
+using System;
+using System.Diagnostics.CodeAnalysis;
+using System.Threading.Tasks;
+public sealed class Box
+{
+    public static int Calls;
+    [return: MaybeNull] static Task<int> Empty() { Calls++; return null; }
+    public Task<int> this[int index] => Empty();
+}
+public static class P
+{
+    static Task<int> Forward(Box box) => box[0];
+    public static void Main() { Console.WriteLine(Forward(new Box()) == null); Console.WriteLine(Box.Calls); }
+}`, verifyIL: true, nullableContextOptions: NullableContextOptions.Disable, expectedOutput: string.Join(
+                Environment.NewLine,
+                []string{"True", "1", ""}
+            ))
+    }
+
     @Theory
     @InlineData(false, false)
     @InlineData(false, true)
