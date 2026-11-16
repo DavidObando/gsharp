@@ -6166,12 +6166,15 @@ public class Demo
     shared {
         /// Runs `Demo.Run()` of the C# and of its translation and compares the output. [`library`](paramref) is C#
         /// that both reference as a prebuilt assembly (`Lib5617`), so its types are imported in the G#.
-        private func AssertRunsLikeCSharp(
+        internal func AssertRunsLikeCSharp(
             source string,
             library string? = nil,
             inspect Action[TranslationContext]? = nil,
             cancellationToken CancellationToken = default(CancellationToken),
-            runtimeOnlyLibrary bool = false
+            runtimeOnlyLibrary bool = false,
+            rejectConditionalIndexWarnings bool = false,
+            strictIl bool = false,
+            expectedOutput string? = nil
         ) string {
             let libraryImage = if library == nil {
                 Array.Empty[byte]()
@@ -6217,6 +6220,9 @@ public class Demo
                         "Run"
                     )!!.Invoke(nil, nil)
                 )
+                if expectedOutput != nil {
+                    Assert.Equal(expectedOutput, expected)
+                }
                 let model = compilation.GetSemanticModel(tree)
                 let document = LoadedDocument("Snippet.cs", tree, model)
                 let context = TranslationContext(
@@ -6227,7 +6233,16 @@ public class Demo
                 )
                 let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
                 inspect?.Invoke(context)
-                Assert.Equal(expected, CompileAndRun(printed, libraryImage, runtimeOnlyLibrary).Trim())
+                Assert.Equal(
+                    expected,
+                    CompileAndRun(
+                        printed,
+                        libraryImage,
+                        runtimeOnlyLibrary,
+                        strictIl,
+                        rejectConditionalIndexWarnings
+                    ).Trim()
+                )
                 return printed
             } finally {
                 loadContext.Unload()
@@ -6270,7 +6285,8 @@ public class Demo
             printed string,
             libraryImage[]byte,
             runtimeOnlyLibrary bool = false,
-            strictIl bool = false
+            strictIl bool = false,
+            rejectConditionalIndexWarnings bool = false
         ) string {
             let compiler string? = FindCompiler()
             Assert.True(
@@ -6317,6 +6333,12 @@ public class Demo
                         "\n\nTranslated G#:\n" +
                         printed
                 )
+                if rejectConditionalIndexWarnings {
+                    Assert.True(
+                        !compileOutput.Contains("GS0300", StringComparison.Ordinal),
+                        compileOutput + "\n" + printed
+                    )
+                }
                 if strictIl {
                     let verify = List[string]{"tool", "run", "ilverify", dllPath, "-s", "System.Private.CoreLib"}
                     for reference in Directory.EnumerateFiles(

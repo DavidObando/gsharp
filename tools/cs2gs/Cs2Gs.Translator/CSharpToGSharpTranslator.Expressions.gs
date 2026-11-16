@@ -11630,7 +11630,8 @@ partial class CSharpToGSharpTranslator {
             if translated != nil && TranslatedExpressionIsStaticallyNonNull(translated) {
                 return true
             }
-            if this.IsGSharpFlowNarrowedReadonlyFieldRead(expression) {
+            if this.IsGSharpFlowNarrowedLocal(expression, requireRoslynFlowNotNull: false) ||
+                this.IsGSharpFlowNarrowedReadonlyFieldRead(expression) {
                 return true
             }
             // A checked cast sets its own top-level nullability, independently of nested nullable positions.
@@ -11675,7 +11676,7 @@ partial class CSharpToGSharpTranslator {
             let captureIsNonNull = this.VarCaptureIsNonNull(expression)
             if captureIsNonNull == true ||
                 (captureIsNonNull == nil && this.IsActivePatternBinding(expression)) ||
-                this.IsGSharpFlowNarrowedLocal(expression) || this.IsGuardCapturedFieldRead(expression) {
+                this.IsGuardCapturedFieldRead(expression) {
                 return true
             }
             if captureIsNonNull == false {
@@ -11807,7 +11808,8 @@ partial class CSharpToGSharpTranslator {
                 case assignment is Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax {
                     if assignment.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceAssignmentExpression) {
                         if UnwrapTranslatedValue(translated) is NonNullAssertionExpression ||
-                            this.CoalesceAssignmentTargetIsNonNullInGSharp(assignment) {
+                            this.CoalesceAssignmentTargetIsNonNullInGSharp(assignment) ||
+                            this.CoalesceAssignmentTargetIsFlowNarrowed(assignment) {
                             return true
                         }
                         let target ISymbol? = this.GetProjectedAssignmentTarget(
@@ -11826,6 +11828,9 @@ partial class CSharpToGSharpTranslator {
                         } else {
                             this.CoalesceAssignmentValueIsStaticallyNonNull(assignment.Right, targetType)
                         }
+                    }
+                    if this.AssignmentStoreUsesNarrowedReadType(assignment) {
+                        return this.GSharpExpressionIsStaticallyNonNull(assignment.Left)
                     }
                     if !this.AssignmentResultHasNonNullStaticType(assignment) {
                         return false
@@ -11899,7 +11904,8 @@ partial class CSharpToGSharpTranslator {
         private func CoalesceAssignmentResultIsStaticallyNonNull(
             coalesceAssignment Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax
         ) bool {
-            if this.CoalesceAssignmentTargetIsNonNullInGSharp(coalesceAssignment) {
+            if this.CoalesceAssignmentTargetIsNonNullInGSharp(coalesceAssignment) ||
+                this.CoalesceAssignmentTargetIsFlowNarrowed(coalesceAssignment) {
                 return true
             }
             let target ISymbol? = this.GetProjectedAssignmentTarget(
@@ -11908,6 +11914,21 @@ partial class CSharpToGSharpTranslator {
             )
             let targetType ITypeSymbol? = this.GetAssignmentTargetType(coalesceAssignment.Left, target)
             return this.CoalesceAssignmentValueIsStaticallyNonNull(coalesceAssignment.Right, targetType)
+        }
+
+        private func CoalesceAssignmentTargetIsFlowNarrowed(
+            assignment Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax
+        ) bool {
+            let left = Unparenthesize(assignment.Left)
+            if left == nil {
+                return false
+            }
+            let target = this.GetProjectedAssignmentTarget(left, this.context.GetSymbolInfo(left).Symbol)
+            return this.IsGSharpFlowNarrowedLocal(left, requireRoslynFlowNotNull: false) ||
+                this.IsGSharpFlowNarrowedFieldOrPropertyInSameCondition(left) ||
+                (
+                (target is ILocalSymbol || target is IParameterSymbol) && this.IsDominatedByNullCheckGuard(left, target)
+            )
         }
 
         // The operands that a composed value yields: both arms of a conditional, each arm of a switch expression
@@ -12066,7 +12087,7 @@ partial class CSharpToGSharpTranslator {
             if translated != nil && TranslatedExpressionIsStaticallyNonNull(translated) {
                 return true
             }
-            return this.GSharpExpressionIsStaticallyNonNull(unwrapped, translated)
+            return this.GSharpAssignmentRhsProvesNonNull(unwrapped, allowPlatform: false, recoverNullableArms: true)
         }
 
         // Whether a value of `symbol`, of C# type `type`, is non-null in the emitted G#.
@@ -14177,7 +14198,8 @@ partial class CSharpToGSharpTranslator {
 
         private func IsGSharpFlowNarrowedLocal(
             expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
-            requireRoslynFlowNotNull bool = true
+            requireRoslynFlowNotNull bool = true,
+            requireRuntimeNonNullProof bool = false
         ) bool {
             var expression = expression
             while expression is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax parenthesized {
@@ -14220,6 +14242,21 @@ partial class CSharpToGSharpTranslator {
             let isDeconstructedForEachLeaf = declaration is SingleVariableDesignationSyntax && declaration.Ancestors()
                 .Any((ancestor Microsoft.CodeAnalysis.SyntaxNode) -> ancestor is ForEachVariableStatementSyntax)
             let flowState = this.context.GetTypeInfo(expression).Nullability.FlowState
+            // Assignment facts come from emitted G#, including annotation-only C# without Roslyn flow analysis.
+            if requireRoslynFlowNotNull &&
+                flowState != Microsoft
+                .CodeAnalysis
+                .NullableFlowState
+                .NotNull &&
+                this.IsGSharpAssignmentNarrowedLocal(
+                expression,
+                expression,
+                symbol,
+                scope_,
+                requireRuntimeNonNullProof
+            ) {
+                return true
+            }
             // Issues #4190/#5645: oblivious mutable receivers keep their bridge; read-only locals can use native guard narrowing.
             if requireRoslynFlowNotNull &&
                 flowState != Microsoft
@@ -14246,7 +14283,14 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             let requireJumpFreeScope = flowState != Microsoft.CodeAnalysis.NullableFlowState.NotNull
-            if this.IsGSharpFlowNarrowedLocalInScope(expression, expression, symbol, scope_, requireJumpFreeScope) {
+            if this.IsGSharpFlowNarrowedLocalInScope(
+                expression,
+                expression,
+                symbol,
+                scope_,
+                requireJumpFreeScope,
+                requireRuntimeNonNullProof
+            ) {
                 return true
             }
             if !this.IsClosureBoundary(scope_) || declaringScope == nil || object.ReferenceEquals(
@@ -14276,7 +14320,8 @@ partial class CSharpToGSharpTranslator {
                     effectiveTarget,
                     symbol,
                     parentScope,
-                    requireJumpFreeScope
+                    requireJumpFreeScope,
+                    requireRuntimeNonNullProof
                 ) {
                     return true
                 }
@@ -14357,8 +14402,18 @@ partial class CSharpToGSharpTranslator {
             effectiveTarget Microsoft.CodeAnalysis.SyntaxNode,
             symbol ISymbol?,
             $scope Microsoft.CodeAnalysis.SyntaxNode,
-            requireJumpFreeScope bool
+            requireJumpFreeScope bool,
+            requireRuntimeNonNullProof bool
         ) bool {
+            if this.IsGSharpAssignmentNarrowedLocal(
+                expression,
+                effectiveTarget,
+                symbol,
+                $scope,
+                requireRuntimeNonNullProof
+            ) {
+                return true
+            }
             let index = this.GetScopeGotoIndex($scope)
             if requireJumpFreeScope &&
                 (
@@ -14724,7 +14779,7 @@ partial class CSharpToGSharpTranslator {
         /// and INSERTS `!!` (the opposite of this method), so the two are
         /// deliberately disjoint, not overlapping fallbacks.
         ///
-        /// Purely syntactic — not gated on Roslyn's flow state, unlike
+        /// Operator-aware, but not gated on Roslyn's flow state, unlike
         /// (cref:IsGSharpFlowNarrowedLocal) — because it must also
         /// suppress the oblivious-analysis promoted-nullable / obliviously-
         /// annotated rules below (issues #2506, #3683), which fire on ANY
@@ -14830,7 +14885,7 @@ partial class CSharpToGSharpTranslator {
             return false
         }
 
-        // The syntactic counterpart of IsNullCheckOf/IsNonNullCheckOf, but
+        // The operator-aware counterpart of IsNullCheckOf/IsNonNullCheckOf, but
         // returning the checked EXPRESSION rather than testing it against a
         // known symbol — used by IsGSharpFlowNarrowedFieldOrPropertyInSameCondition,
         // which needs to compare the full receiver PATH (not just the leaf
@@ -14852,12 +14907,14 @@ partial class CSharpToGSharpTranslator {
                     } else {
                         Microsoft.CodeAnalysis.CSharp.SyntaxKind.EqualsExpression
                     }
-                ) {
-                    if IsNullLiteral(binary.Right) {
+                ) &&
+                    !this
+                    .NullComparisonUsesUserOperator(binary) {
+                    if IsNullOrSuppressedNull(binary.Right) {
                         operand = binary.Left
                         return true
                     }
-                    if IsNullLiteral(binary.Left) {
+                    if IsNullOrSuppressedNull(binary.Left) {
                         operand = binary.Right
                         return true
                     }
@@ -14950,7 +15007,7 @@ partial class CSharpToGSharpTranslator {
             // remark above. `this` checkpoints are never asserted and are
             // not added to this list by the decomposer.
             for checkpoint in leftReceiverCheckpoints {
-                if this.IsGSharpFlowNarrowedLocal(checkpoint) {
+                if this.IsGSharpFlowNarrowedLocal(checkpoint, requireRoslynFlowNotNull: false) {
                     continue
                 }
                 if this.ReceiverNeedsNullForgiveness(checkpoint, isDereferenceReceiver: true) ||
@@ -15041,7 +15098,9 @@ partial class CSharpToGSharpTranslator {
         private func AssignmentResultHasNonNullStaticType(
             assignment Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax
         ) bool {
-            if this.PatternLocalUsesNullableStorage(assignment.Left) {
+            if this.PatternLocalUsesNullableStorage(assignment.Left) || this.IsNullableArrayElementAccess(
+                assignment.Left
+            ) {
                 return false
             }
             let target ISymbol? = this.GetProjectedAssignmentTarget(
@@ -15105,16 +15164,60 @@ partial class CSharpToGSharpTranslator {
         ) bool {
             if !comparison.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.EqualsExpression) && !comparison.IsKind(
                 Microsoft.CodeAnalysis.CSharp.SyntaxKind.NotEqualsExpression
-            ) {
+            ) ||
+                this.NullComparisonUsesUserOperator(comparison) {
                 whenTrue = false
                 return false
             }
             let comparesSymbolToNull = (
-                IsNullLiteral(comparison.Left) && this.BindsToGuardSymbol(comparison.Right, symbol)
+                IsNullOrSuppressedNull(comparison.Left) && this.BindsToGuardSymbol(comparison.Right, symbol)
             ) ||
-                (IsNullLiteral(comparison.Right) && this.BindsToGuardSymbol(comparison.Left, symbol))
+                (IsNullOrSuppressedNull(comparison.Right) && this.BindsToGuardSymbol(comparison.Left, symbol))
             whenTrue = comparison.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.NotEqualsExpression)
             return comparesSymbolToNull
+        }
+
+        // Native handles and retargeted analyzer types use emitted nil tests, not their source CLR operators.
+        private func NullComparisonUsesUserOperator(
+            comparison Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax
+        ) bool ->
+        (
+            comparison.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.EqualsExpression) || comparison.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.NotEqualsExpression
+            )
+        ) &&
+            this
+            .context
+            .SemanticModel
+            .GetOperation(comparison) is IBinaryOperation{IsLifted: false, OperatorMethod: {} method} &&
+            method
+            .ContainingType
+            .SpecialType != SpecialType.System_String &&
+            !CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(
+            method.ContainingType,
+            this.context.Compilation
+        ) &&
+            !(
+            this.InAnalyzerApiMode &&
+                RoslynTypeMetadataName(method.ContainingType) is {} roslynName &&
+                RoslynAnalyzerApiMap.TryMapType(roslynName, out _)
+        )
+
+        /// ADR-0208 R15 (#5237): gsc kills the narrowing of a local that a CLOSURE
+        /// assigns at every node that runs source code, because that code may run a
+        /// closure that escaped. C# flow analysis keeps the fact, so a read the C#
+        /// compiler proves non-null can be nilable in the emitted G#. This is the one
+        /// decision for it: the guard narrows the use in G# only when no such
+        /// call lies between them (and no loop that holds the use but not the
+        /// guard runs one), so callers fall back to the asserted read otherwise.
+        /// Whether a `ref` or address-of operand names the variable anywhere in its path
+        /// (`ref current`, `ref current[0]`, `&current.Field`): the compiler scans the names in
+        /// the operand the same way (CollectAddressTakenNames).
+        private func OperandNamesVariable(operand Microsoft.CodeAnalysis.SyntaxNode, symbol ISymbol?) bool {
+            return operand
+                .DescendantNodesAndSelf()
+                .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.IdentifierNameSyntax]()
+                .Any((name Microsoft.CodeAnalysis.CSharp.Syntax.IdentifierNameSyntax) -> this.BindsTo(name, symbol))
         }
 
         /// A local or parameter that a closure (lambda or local function) other than its declaring
@@ -15155,7 +15258,9 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             for variable in namesakes {
-                if index.AddressNames.Contains(variable) {
+                if index.AddressNames.TryGetValue(variable, out var addresses) && addresses.Any(
+                    (node Microsoft.CodeAnalysis.SyntaxNode) -> this.IsEmittedScopeCandidate(node, declaringFunction)
+                ) {
                     return true
                 }
                 for node in this.ScopeSymbolWriteCandidates(declaringFunction, variable) {
@@ -15193,6 +15298,9 @@ partial class CSharpToGSharpTranslator {
         /// yes (a redundant `!!` is removed by the polish pass; a missing one is GS0158). A constant has no
         /// initializer to run.
         private func NodeRunsStaticTypeInitializer(node Microsoft.CodeAnalysis.SyntaxNode) bool {
+            if this.IsUnevaluatedNameOfOperand(node) {
+                return false
+            }
             if node is not MemberAccessExpressionSyntax && node is not IdentifierNameSyntax {
                 return false
             }
@@ -15326,8 +15434,14 @@ partial class CSharpToGSharpTranslator {
             node Microsoft.CodeAnalysis.SyntaxNode,
             rootType ITypeSymbol? = nil
         ) bool {
+            if this.IsUnevaluatedNameOfOperand(node) {
+                return false
+            }
             if this.NodeOperatorCallbacksMayWrite(node, rootType) {
                 return true
+            }
+            if this.IsErasedNameOf(node) {
+                return false
             }
             switch node {
                 case assignment is Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax {
@@ -16320,7 +16434,7 @@ partial class CSharpToGSharpTranslator {
 
         private func IsDroppedStatementOrLoopClause(node Microsoft.CodeAnalysis.SyntaxNode) bool {
             if node is Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionStatementSyntax exprStmt {
-                return this.IsElidedPartialMethodInvocation(exprStmt.Expression) || this.IsDroppedDiscardedExpression(
+                return this.IsElidedInvocation(exprStmt.Expression) || this.IsDroppedDiscardedExpression(
                     exprStmt.Expression
                 )
             }
@@ -16331,7 +16445,7 @@ partial class CSharpToGSharpTranslator {
                 .ExpressionSyntax expr &&
                 expr.Parent is ForStatementSyntax forParent &&
                 (forParent.Initializers.Contains(expr) || forParent.Incrementors.Contains(expr)) {
-                return this.IsElidedPartialMethodInvocation(expr) || this.IsDroppedDiscardedExpression(expr)
+                return this.IsElidedInvocation(expr) || this.IsDroppedDiscardedExpression(expr)
             }
             return false
         }
@@ -21027,8 +21141,8 @@ partial class CSharpToGSharpTranslator {
                 ) ||
                     binary
                     .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.NotEqualsExpression) {
-                    let leftIsNull = IsNullLiteral(binary.Left)
-                    let rightIsNull = IsNullLiteral(binary.Right)
+                    let leftIsNull = IsNullOrSuppressedNull(binary.Left)
+                    let rightIsNull = IsNullOrSuppressedNull(binary.Right)
                     if !leftIsNull && !rightIsNull {
                         return false
                     }
@@ -21611,7 +21725,7 @@ partial class CSharpToGSharpTranslator {
             } else {
                 this.GetLoopCondition(exitedLoop)
             }
-            if $scope.DescendantNodes(OutsideNestedFunctions).Any(
+            if $scope.DescendantNodesAndSelf(OutsideNestedFunctions).Any(
                 (node Microsoft.CodeAnalysis.SyntaxNode) -> (
                     if exitedLoop != nil {
                         (
@@ -21644,12 +21758,13 @@ partial class CSharpToGSharpTranslator {
                                 !this.IsInSiblingBranchOfRead(node, use, $scope)
                         )
                     } else {
-                        node.SpanStart >= narrowingGuard
-                            .Span
-                            .End &&
-                            node
-                            .Span
-                            .End <= readStart &&
+                        this.EffectCompletesBetween(
+                            node,
+                            narrowingGuard,
+                            use,
+                            includeReferenceStorageWrites: byReference,
+                            readPosition: readStart
+                        ) &&
                             (RunsSourceCode(node) || WritesReferenceStorage(node)) &&
                             !this.IsInSiblingBranchOfRead(node, use, $scope)
                     }
@@ -21797,6 +21912,16 @@ partial class CSharpToGSharpTranslator {
             return !this.IsKnownCallFreeNode(node)
         }
 
+        private func IsErasedNameOf(node Microsoft.CodeAnalysis.SyntaxNode) bool ->
+        node is InvocationExpressionSyntax{Expression: IdentifierNameSyntax{Identifier: {ValueText: "nameof"}}} &&
+            this
+            .context
+            .SemanticModel
+            .GetOperation(node) is INameOfOperation
+
+        private func IsUnevaluatedNameOfOperand(node Microsoft.CodeAnalysis.SyntaxNode) bool ->
+        node.Ancestors().Any(this.IsErasedNameOf)
+
         private func ConstantPatternMayCallEquals(
             pattern Microsoft.CodeAnalysis.CSharp.Syntax.ConstantPatternSyntax
         ) bool {
@@ -21841,6 +21966,9 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func IsKnownCallFreeNode(node Microsoft.CodeAnalysis.SyntaxNode) bool {
+            if this.IsUnevaluatedNameOfOperand(node) {
+                return true
+            }
             // A contextual user-defined conversion (`int n = token;`) runs source code at any expression.
             if node is Microsoft
                 .CodeAnalysis
@@ -21868,6 +21996,9 @@ partial class CSharpToGSharpTranslator {
                 )
             ) {
                 return false
+            }
+            if this.IsErasedNameOf(node) {
+                return true
             }
             // ADR-0208 R19 (#5593): gsc emits a constant pattern on an `object` input, or on a nullable value input
             // whose underlying type is not a primitive, an enum or `decimal`, as `object.Equals`, which runs the input's
@@ -22202,8 +22333,8 @@ partial class CSharpToGSharpTranslator {
             // any value with `null`) is a plain operation; anything else may be an operator call.
             if node is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax binary {
                 return (
-                    IsNullLiteral(binary.Left) ||
-                        IsNullLiteral(binary.Right) ||
+                    IsNullOrSuppressedNull(binary.Left) ||
+                        IsNullOrSuppressedNull(binary.Right) ||
                         (this.IsBuiltInPrimitive(binary.Left) && this.IsBuiltInPrimitive(binary.Right))
                 ) &&
                     !this.IsLoweredToCall(binary)
@@ -22228,6 +22359,14 @@ partial class CSharpToGSharpTranslator {
         private func IsLoweredToCall(binary Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax) bool {
             if this.NodeEmitsConstantValueEquality(binary) {
                 return true
+            }
+            if (
+                binary.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.EqualsExpression) || binary.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.NotEqualsExpression
+                )
+            ) &&
+                (IsNullOrSuppressedNull(binary.Left) || IsNullOrSuppressedNull(binary.Right)) {
+                return this.NullComparisonUsesUserOperator(binary)
             }
             return this
                 .context
@@ -22299,8 +22438,10 @@ partial class CSharpToGSharpTranslator {
             symbol ISymbol?,
             start Microsoft.CodeAnalysis.SyntaxNode,
             use Microsoft.CodeAnalysis.SyntaxNode?,
-            $scope Microsoft.CodeAnalysis.SyntaxNode
+            $scope Microsoft.CodeAnalysis.SyntaxNode,
+            readPosition int32? = nil
         ) bool {
+            let readStart = readPosition ?? use?.SpanStart ?? 0
             let OutsideNestedFunctions = func (node Microsoft.CodeAnalysis.SyntaxNode) bool {
                 return object.ReferenceEquals(node, $scope) || !this.IsClosureBoundary(node)
             }
@@ -22331,16 +22472,17 @@ partial class CSharpToGSharpTranslator {
                                 .End &&
                                 node
                                 .Span
-                                .End <= use!!.SpanStart &&
+                                .End <= readStart &&
                                 !this.IsInSiblingBranchOfRead(node, use!!, $scope)
                         )
                     } else {
-                        node.SpanStart > start
-                            .Span
-                            .End &&
-                            node
-                            .Span
-                            .End <= use!!.SpanStart &&
+                        this.EffectCompletesBetween(
+                            node,
+                            start,
+                            use!!,
+                            includeDirectStores: true,
+                            readPosition: readStart
+                        ) &&
                             !this.IsInSiblingBranchOfRead(node, use!!, $scope)
                     }
                 ) &&
@@ -22383,7 +22525,15 @@ partial class CSharpToGSharpTranslator {
                     .DescendantNodes(OutsideNestedFunctions)
                     .Any(
                     (node Microsoft.CodeAnalysis.SyntaxNode) -> (
-                        (node.SpanStart >= effectiveStartEnd && node.Span.End <= use!!.SpanStart) ||
+                        (
+                            this.EffectCompletesBetween(
+                                node,
+                                exitedLoop ?? start,
+                                use!!,
+                                includeReferenceStorageWrites: true,
+                                readPosition: readStart
+                            )
+                        ) ||
                             (
                             node is Microsoft
                                 .CodeAnalysis
@@ -22493,7 +22643,16 @@ partial class CSharpToGSharpTranslator {
                     declaredType?.NullableAnnotation == Microsoft
                     .CodeAnalysis
                     .NullableAnnotation
-                    .Annotated
+                    .Annotated ||
+                    (
+                    Unparenthesize(value) is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .AssignmentExpressionSyntax assignment &&
+                        !this.AssignmentResultHasNonNullStaticType(assignment) &&
+                        !this.GSharpExpressionIsStaticallyNonNull(value)
+                )
             )
         }
 
@@ -24490,8 +24649,7 @@ partial class CSharpToGSharpTranslator {
                 case binary is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax when binary.IsKind(
                     Microsoft.CodeAnalysis.CSharp.SyntaxKind.EqualsExpression
                 ) {
-                    return (IsNullLiteral(binary.Right) && this.BindsToGuardSymbol(binary.Left, symbol)) ||
-                        (IsNullLiteral(binary.Left) && this.BindsToGuardSymbol(binary.Right, symbol))
+                    return this.TryGetNullComparisonNonNullPolarity(binary, symbol, out var whenTrue) && !whenTrue
                 }
                 case isPattern is IsPatternExpressionSyntax when this.BindsToGuardSymbol(isPattern.Expression, symbol) {
                     return IsNullConstantPattern(isPattern.Pattern) && !(isPattern.Pattern is UnaryPatternSyntax)
@@ -24514,8 +24672,7 @@ partial class CSharpToGSharpTranslator {
                 case binary is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax when binary.IsKind(
                     Microsoft.CodeAnalysis.CSharp.SyntaxKind.NotEqualsExpression
                 ) {
-                    return (IsNullLiteral(binary.Right) && this.BindsToGuardSymbol(binary.Left, symbol)) ||
-                        (IsNullLiteral(binary.Left) && this.BindsToGuardSymbol(binary.Right, symbol))
+                    return this.TryGetNullComparisonNonNullPolarity(binary, symbol, out var whenTrue) && whenTrue
                 }
                 case isPattern is IsPatternExpressionSyntax when this.BindsToGuardSymbol(isPattern.Expression, symbol) {
                     return IsNullConstantPattern(isPattern.Pattern) && isPattern.Pattern is UnaryPatternSyntax

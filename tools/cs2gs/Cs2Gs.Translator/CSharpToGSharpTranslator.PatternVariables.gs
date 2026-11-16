@@ -1588,31 +1588,7 @@ partial class CSharpToGSharpTranslator {
                     .Incrementors
                     .Count > 0 &&
                     BodyContainsOwnLoopContinue(forLoop.Statement) &&
-                    (
-                    (forLoop.Declaration?.Variables.Count ?? 0) > 1 ||
-                        forLoop
-                        .Initializers
-                        .Count > 1 ||
-                        forLoop
-                        .Incrementors
-                        .Count > 1 ||
-                        forLoop
-                        .Initializers
-                        .Concat(forLoop.Incrementors)
-                        .Any(
-                        (expr ExpressionSyntax) -> ClauseContainsAssignment(expr) ||
-                            this.ClauseRequiresOutPredeclaration(expr)
-                    ) ||
-                        this.ForConditionRequiresHoist(forLoop.Condition)
-                ) &&
-                    (
-                    this.ClauseRequiresOutPredeclaration(forLoop.Condition) ||
-                        forLoop
-                        .Initializers
-                        .Concat(forLoop.Incrementors)
-                        .Any(this.ClauseRequiresOutPredeclaration) ||
-                        OwnLoopContinueCrossesTryOrUsing(forLoop.Statement)
-                ) {
+                    this.ForRequiresWhileLowering(forLoop) && this.ForUsesSharedContinueIncrementors(forLoop) {
                     return true
                 }
             }
