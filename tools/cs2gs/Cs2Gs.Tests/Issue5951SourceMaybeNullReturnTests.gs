@@ -16,8 +16,10 @@ import System.Text
 import Xunit
 
 class Issue5951SourceMaybeNullReturnTests {
-    @Fact
-    func TransitiveSourceOwners_IsolateReturnContractCatalogs() {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func TransitiveSourceOwners_IsolateReturnContractCatalogs(throughInterface bool) {
         let options = CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
             NullableContextOptions.Disable
         )
@@ -35,13 +37,35 @@ public static class C
                 ""
             }
         ) + `
-    public static Task<int> Read() { Calls++; return ` + (
+    public static Task<int> Empty() { Calls++; return ` + (
             if empty {
                 "null"
             } else {
                 "Task.FromResult(1)"
             }
         ) + `; }
+    public static Task<int> Read()
+    {
+        ` + (
+            if throughInterface {
+                "CReaderContract"
+            } else {
+                "CReader"
+            }
+        ) + ` reader = new CReader();
+        return reader.Read();
+    }
+}
+public interface CReaderContract { Task<int> Read(); }
+public sealed class CReader : CReaderContract
+{
+    public Task<int> Read()
+    {
+        var pair = (C.Empty(), 0);
+        var alias = pair;
+        var (task, unused) = alias;
+        return task;
+    }
 }`
         let Build = (name string, source string, reference MetadataReference?) -> CSharpCompilation.Create(
             name,

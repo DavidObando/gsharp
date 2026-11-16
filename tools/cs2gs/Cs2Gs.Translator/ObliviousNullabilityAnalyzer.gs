@@ -1535,13 +1535,13 @@ internal shared class ObliviousNullabilityAnalyzer {
         let graph = ReturnContractGraph()
         graph.Owners.UnionWith(owners)
         let nodes = graph.Nodes
-        let tupleEdges = List[(Target TupleElementKey, Source TupleElementKey)]()
         for owner in owners {
+            let tupleEdges = List[(Target TupleElementKey, Source TupleElementKey)]()
             for root in TranslationContext.GetEffectiveSyntaxRoots(owner) {
                 for candidate in TranslationContext.GetEffectiveNodes(root, owner) {
                     let syntax = TranslationContext.GetEffectiveDeclaration(candidate, owner, out var model)
                     for (parameter, value) in EnumerateArgumentValueFlows(syntax, model, includeGuarded: true) {
-                        AddValueContractFlows(owner, parameter, value, model, graph, tupleEdges)
+                        AddValueContractFlows(owner, parameter, value, model, graph, tupleEdges, isCallBoundary: true)
                     }
                     for (receiver, parameter) in EnumerateRefOutputFlows(syntax, model) {
                         if GetValueContractNode(owner, receiver, graph) is {} receiverNode {
@@ -1636,25 +1636,16 @@ internal shared class ObliviousNullabilityAnalyzer {
                     }
                 }
             }
+            for (target, source) in tupleEdges {
+                GetValueContractNode(owner, target.ContractSymbol, graph, target.ContractPath)?.TupleSources.Add(
+                    (source, false)
+                )
+                GetValueContractNode(owner, source.ContractSymbol, graph, source.ContractPath)
+            }
         }
-        for (target, source) in tupleEdges {
-            GetValueContractNode(
-                (compilation as CSharpCompilation)!!,
-                target.ContractSymbol,
-                graph,
-                target.ContractPath
-            )
-                ?.TupleSources
-                .Add((source, false))
-            GetValueContractNode(
-                (compilation as CSharpCompilation)!!,
-                source.ContractSymbol,
-                graph,
-                source.ContractPath
-            )
-        }
-        let contractEdges = List[(Target ISymbol, Source ISymbol)]()
+        let sourceContractEdges = List[(Target ISymbol, Source ISymbol)]()
         for owner in owners {
+            let contractEdges = List[(Target ISymbol, Source ISymbol)]()
             CollectInterfaceImplementationEdges(owner, contractEdges, ScalarFlowPosition.Value)
             CollectOverrideContractEdges(owner, contractEdges, ScalarFlowPosition.Value)
             for root in TranslationContext.GetEffectiveSyntaxRoots(owner) {
@@ -1667,22 +1658,21 @@ internal shared class ObliviousNullabilityAnalyzer {
                     }
                 }
             }
-        }
-        let sourceContractEdges = List[(Target ISymbol, Source ISymbol)]()
-        for (target, source) in contractEdges {
-            if target is not IMethodSymbol and not IPropertySymbol and not IParameterSymbol {
-                continue
-            }
-            if TryGetSourceMember(compilation, target, out _, out var targetDeclaration) &&
-                TryGetSourceMember(compilation, source, out _, out var sourceDeclaration) &&
-                nodes.TryGetValue(targetDeclaration!!, out var targetNode) && nodes.TryGetValue(
-                sourceDeclaration!!,
-                out var sourceNode
-            ) &&
-                object
-                .ReferenceEquals(targetNode.Owner, sourceNode.Owner) {
-                targetNode.Sources.Add((sourceNode.Owner, sourceNode.Symbol, false, 0, false))
-                sourceContractEdges.Add((targetDeclaration, sourceDeclaration))
+            for (target, source) in contractEdges {
+                if target is not IMethodSymbol and not IPropertySymbol and not IParameterSymbol {
+                    continue
+                }
+                if TryGetSourceMember(owner, target, out _, out var targetDeclaration) &&
+                    TryGetSourceMember(owner, source, out _, out var sourceDeclaration) &&
+                    nodes.TryGetValue(targetDeclaration!!, out var targetNode) && nodes.TryGetValue(
+                    sourceDeclaration!!,
+                    out var sourceNode
+                ) &&
+                    object
+                    .ReferenceEquals(targetNode.Owner, sourceNode.Owner) {
+                    targetNode.Sources.Add((sourceNode.Owner, sourceNode.Symbol, false, 0, false))
+                    sourceContractEdges.Add((targetDeclaration, sourceDeclaration))
+                }
             }
         }
         let valueNodes = nodes.Values.Concat(graph.TupleNodes.Values).ToList()
@@ -1789,9 +1779,11 @@ internal shared class ObliviousNullabilityAnalyzer {
         expression ExpressionSyntax,
         model SemanticModel,
         graph ReturnContractGraph,
-        tupleEdges List[(Target TupleElementKey, Source TupleElementKey)]
+        tupleEdges List[(Target TupleElementKey, Source TupleElementKey)],
+        isCallBoundary bool = false
     ) {
-        if GetValueContractNode(owner, declared, graph) is {} node {
+        if !(isCallBoundary && declared is IParameterSymbol && IsSubstitutableMethodPosition(declared, "")) &&
+            GetValueContractNode(owner, declared, graph) is {} node {
             AddValueContractFlow(node, expression, model)
         }
         if declared != nil && SymbolValueType(declared) is INamedTypeSymbol{IsTupleType: true} tuple {
@@ -1805,7 +1797,13 @@ internal shared class ObliviousNullabilityAnalyzer {
                 direct,
                 tupleEdges,
                 List[(Target TupleElementKey, Source ISymbol)](),
+                isCallBoundary: isCallBoundary,
                 valueFlow: (target TupleElementKey, value ExpressionSyntax) -> {
+                    if isCallBoundary &&
+                        target.ContractSymbol is IParameterSymbol &&
+                        IsSubstitutableMethodPosition(target.ContractSymbol, target.ContractPath) {
+                        return
+                    }
                     if GetValueContractNode(owner, target.ContractSymbol, graph, target.ContractPath) is {} element {
                         AddValueContractFlow(element, value, model)
                     }
