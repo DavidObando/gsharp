@@ -6088,12 +6088,8 @@ partial class Binder {
         // `ContainsSourceArrayShape` is `ContainsFixedLengthArray` widened to
         // both spellings; see its remarks for why this is a representation
         // change and not a rule change.
-        if TypeSymbol.RequiresSymbolicProjection(type) ||
-            type.ClrType == nil ||
-            type is TupleTypeSymbol ||
-            TypeSymbol.ContainsNamedTupleElements(type) || TypeSymbol.ContainsSourceArrayShape(type) ||
-            MemberLookup
-            .ContainsReferenceTuple(type) {
+        if TypeSymbol.RequiresSymbolicProjection(type) || type.ClrType == nil || TypeSymbol.ContainsTupleType(type) ||
+            TypeSymbol.ContainsSourceArrayShape(type) || MemberLookup.ContainsReferenceTuple(type) {
             hasSymbolicArgument = true
             // Issue #2919 follow-up: a nullable source enum keeps the same
             // caller-selected leaf surrogate as the bare enum. A caller that
@@ -14136,13 +14132,14 @@ partial class Binder {
                     if allClr {
                         try {
                             let closed = it.OpenDefinition!!.MakeGenericType(clrArgs)
+                            // CLR reconstruction also loses unnamed tuple identity in reference slots (#6039).
                             if it.OpenDefinition!!.FullName?.StartsWith(
                                 "System.Tuple`",
                                 StringComparison.Ordinal
                             ) == true ||
                                 substitutedArgs
                                 .Any(
-                                (a TypeSymbol) -> TypeSymbol.ContainsNamedTupleElements(a) ||
+                                (a TypeSymbol) -> TypeSymbol.ContainsTupleType(a) ||
                                     TypeSymbol.ContainsSourceArrayShape(a)
                             ) {
                                 return ImportedTypeSymbol.GetConstructed(closed, it.OpenDefinition, substitutedArgs)
