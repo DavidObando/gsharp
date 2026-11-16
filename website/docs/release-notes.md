@@ -20,6 +20,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 - Renew the independently witnessed, explicitly approved finite runtime certificate for the new compiler output. Retain the old certificate and the same complete two `AsSpan` diagnostics. Full ILVerify still reports two known upstream errors; this is not strict-clean verification. Keep rejection controls and upstream tracking open. (Part of #5244)
 
+- Keep the repository's unchanged .NET SDK policy in the hot-reload E2E sample. Watch subprocesses no longer select SDK 11 on multi-SDK hosts. Check SDK selection before starting watch; retain all runtime assertions and wait thresholds. (Fixes #5976)
+
 - Check imported generic `class`, `struct`, and `new()` constraints before reading type-bound constraints. Missing type-bound dependencies no longer bypass known special flags. The older unreadable type-bound fallback remains unchanged pending ADR-0209's post-stage-7 follow-up (#5176). (Fixes #6023)
 
 - Document the twelve acknowledged imported-attribute support gaps, including partial marker readers and the distinction from source attributes. This changes documentation only; compiler behavior is unchanged. (Fixes #5177)
