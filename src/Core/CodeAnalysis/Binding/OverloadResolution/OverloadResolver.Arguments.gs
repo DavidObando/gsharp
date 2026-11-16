@@ -903,6 +903,11 @@ internal partial class OverloadResolver {
             if rk == RefKind.None {
                 continue
             }
+            // An error argument already has its own diagnostic, for example GS0102 for a
+            // redeclared `out let name`. Do not add GS9002 to it.
+            if arguments[i] is BoundErrorExpression {
+                continue
+            }
             if arguments[i].Syntax is RefArgumentExpressionSyntax refArgSyntax {
                 let explicitRefKind = getRefKindFromModifier(refArgSyntax.RefKindModifier)
                 let defersToReadOnlyDiagnostic = explicitRefKind == RefKind.In &&
