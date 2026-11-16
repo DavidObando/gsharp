@@ -233,6 +233,167 @@ public static class P {
         AssertParity(source, expected)
     }
 
+    @Theory
+    @InlineData("int", "7", "", "7|7")
+    @InlineData("Counter", "new Counter { Value = 7 }", "", "7|7")
+    @InlineData("int", "7", "x = 9;", "7|9")
+    @InlineData("Counter", "new Counter { Value = 7 }", "x.Value = 9;", "7|9")
+    func AddressedFallbackCaptures_RetainIndependentStorage(type string, value string, write string, expected string) {
+        AssertParity(`
+using System;
+public struct Counter {
+    public int Value;
+    public override string ToString() => Value.ToString();
+}
+public static class P {
+    static string Read() {
+        TYPE x = VALUE;
+        bool matched = x is var p;
+        ref readonly TYPE alias = ref p;
+        WRITE
+        return alias.ToString() + "|" + x.ToString();
+    }
+    public static void Main() { Console.Write(Read()); }
+}
+`.Replace("TYPE", type).Replace("VALUE", value).Replace("WRITE", write), expected)
+    }
+
+    @Theory
+    @InlineData("new Reset(out p)", "Value = p", "True|1")
+    @InlineData("new(out p)", "Value = p", "True|1")
+    @InlineData("new Reset(out p)", "p", "True|1")
+    @InlineData("new(out p)", "p", "True|1")
+    @InlineData("new Reset(out p, p.ToString())", "Value = p", "True|1")
+    @InlineData("new(out p, p.ToString())", "p", "True|1")
+    func ConstructorWrites_CompleteBeforeObjectAndCollectionInitializers(
+        creation string,
+        initializer string,
+        expected string
+    ) {
+        AssertParity(`
+#nullable disable
+using System;
+using System.Collections;
+public class Node { public override string ToString() => "ok"; }
+public class Holder { public Node Item; }
+public class Reset : IEnumerable {
+    public Node Value;
+    public Reset(out Node target, string before = "ok") {
+        if (before != "ok") throw new Exception("argument read changed");
+        P.calls++;
+        target = null;
+    }
+#nullable enable
+    public void Add(Node? value) { Value = value; }
+#nullable disable
+    public IEnumerator GetEnumerator() => Array.Empty<object>().GetEnumerator();
+}
+public static class P {
+    public static int calls;
+    public static void Main() {
+        var holder = new Holder { Item = new Node() };
+        if (holder is { Item: Node p }) {
+            Reset reset = CREATION { INITIALIZER };
+            Console.Write((reset.Value == null) + "|" + calls);
+        }
+    }
+}
+`.Replace("CREATION", creation).Replace("INITIALIZER", initializer), expected)
+    }
+
+    @Theory
+    @InlineData("case", "Remember", "p = \"new\";", "new|1")
+    @InlineData("arm", "Remember", "(p = \"new\")", "new|1")
+    @InlineData("discard", "Remember", "(p = \"new\")", "new|1")
+    @InlineData("case", "Immediate", "p = \"new\";", "old|1")
+    @InlineData("arm", "Immediate", "(p = \"new\")", "old|1")
+    @InlineData("discard", "Immediate", "(p = \"new\")", "old|1")
+    @InlineData("case", "Remember", "", "old|1")
+    @InlineData("arm", "Remember", "p", "old|1")
+    @InlineData("discard", "Remember", "p", "old|1")
+    func GuardClosures_SharePatternStorageWithTheSelectedBody(
+        form string,
+        callback string,
+        write string,
+        expected string
+    ) {
+        let body = switch form {
+            case "case": `switch (Input()) {
+            case string p when CALLBACK(() => p):
+                WRITE
+                break;
+        }`
+            case "arm": `string result = Input() switch {
+            string p when CALLBACK(() => p) => WRITE,
+            _ => "miss"
+        };`
+            default: `_ = Input() switch {
+            string p when CALLBACK(() => p) => WRITE,
+            _ => "miss"
+        };`
+        }
+        AssertParity(`
+using System;
+public static class P {
+    static int calls;
+    static Func<string> saved = () => "unset";
+    static object Input() { calls++; return "old"; }
+    static bool Remember(Func<string> read) { saved = read; return true; }
+    static bool Immediate(Func<string> read) {
+        string value = read();
+        saved = () => value;
+        return true;
+    }
+    public static void Main() {
+        BODY
+        Console.Write(saved() + "|" + calls);
+    }
+}
+`.Replace("BODY", body.Replace("CALLBACK", callback).Replace("WRITE", write)), expected)
+    }
+
+    @Theory
+    @InlineData("string p", "object", "\"v\" + i")
+    @InlineData("Box { Item: string p }", "Box", "new Box(\"v\" + i)")
+    @InlineData("{ Item: string p }", "Box", "new Box(\"v\" + i)")
+    @InlineData("Box(string p)", "Box", "new Box(\"v\" + i)")
+    func GuardClosures_KeepFalseMatchesDistinctAcrossArmsAndLoopEvaluations(
+        pattern string,
+        inputType string,
+        input string
+    ) {
+        AssertParity(`
+using System;
+using System.Collections.Generic;
+public record Box(string Item);
+public static class P {
+    static int calls, guards;
+    static List<Func<string>> saved = new();
+    static INPUTTYPE Input(int i) { calls++; return INPUT; }
+    static bool Remember(Func<string> read, bool accept) {
+        guards++;
+        saved.Add(read);
+        return accept;
+    }
+    static string Read() {
+        string result = "";
+        for (int i = 0; i < 2; i++) {
+            result += Input(i) switch {
+                PATTERN when Remember(() => p, false) => (p += "?"),
+                PATTERN when Remember(() => p, true) => (p += "!"),
+                _ => "miss"
+            };
+        }
+        return result;
+    }
+    public static void Main() {
+        Console.Write(Read() + "|" + saved[0]() + "|" + saved[1]() + "|" +
+            saved[2]() + "|" + saved[3]() + "|" + calls + ":" + guards);
+    }
+}
+`.Replace("INPUTTYPE", inputType).Replace("INPUT", input).Replace("PATTERN", pattern), "v0!v1!|v0|v0!|v1|v1!|2:4")
+    }
+
     shared {
         private func AssertParity(source string, expected string, verifyTranslation Action[string]? = nil) {
             let root = IlVerifyRunner().RepoRoot ?? throw DirectoryNotFoundException("Repository root not found.")

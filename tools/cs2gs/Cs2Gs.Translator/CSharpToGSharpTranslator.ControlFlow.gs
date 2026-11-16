@@ -2201,6 +2201,9 @@ partial class CSharpToGSharpTranslator {
             return this.IsSymbolReassigned(local, this.state.CurrentBodyScope)
         }
 
+        private func PatternBindingNeedsStorage(local ILocalSymbol) bool ->
+        this.IsLocalReassigned(local) || this.IsClosureAssignedVariable(local)
+
         private func BindsTo(expression ExpressionSyntax?, target ISymbol?) bool -> CSharpToGSharpTranslator.BindsTo(
             expression,
             target,

@@ -920,7 +920,7 @@ partial class CSharpToGSharpTranslator {
             }
             var proof = inherited
             var appliedEffect = false
-            let effectEnd = this.EvaluationEffectEnd(node)
+            let effectEnd = EvaluationEffectEnd(node)
             // Syntax children follow operand evaluation order. Apply each node's own effect after its operands.
             for child in node.ChildNodes() {
                 if !appliedEffect && effectEnd <= child.SpanStart && (before == nil || effectEnd <= before.SpanStart) {
@@ -1220,14 +1220,6 @@ partial class CSharpToGSharpTranslator {
                 (includeReferenceStorageWrites && this.NodeMayWriteReferenceStorage(assignment))
         )
 
-        // Spans are half-open. An effect at the exclusive proof end is the next effect, not part of the proof.
-        private func EvaluationEffectEnd(node SyntaxNode) int32 {
-            if node is BaseObjectCreationExpressionSyntax creation && creation.Initializer is {} initializer {
-                return creation.ArgumentList?.Span.End ?? initializer.SpanStart
-            }
-            return node.Span.End
-        }
-
         private func EffectCompletesBetween(
             node SyntaxNode,
             proof SyntaxNode,
@@ -1236,12 +1228,12 @@ partial class CSharpToGSharpTranslator {
             includeReferenceStorageWrites bool = false,
             readPosition int32? = nil
         ) bool ->
-        this.EvaluationEffectEnd(node) <= (readPosition ?? use.SpanStart) &&
+        EvaluationEffectEnd(node) <= (readPosition ?? use.SpanStart) &&
             (
             node.SpanStart >= proof
                 .Span
                 .End ||
-                (node.Span.Contains(proof.Span) && this.EvaluationEffectEnd(node) > proof.Span.End) ||
+                (node.Span.Contains(proof.Span) && EvaluationEffectEnd(node) > proof.Span.End) ||
                 (
                 includeDirectStores &&
                     node is AssignmentExpressionSyntax assignment &&

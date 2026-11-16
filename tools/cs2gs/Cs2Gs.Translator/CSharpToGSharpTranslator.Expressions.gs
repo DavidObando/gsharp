@@ -183,7 +183,6 @@ partial class CSharpToGSharpTranslator {
                 .state
                 .PatternBindings
                 .Count > 0 &&
-                !IsWriteTarget(identifier, includeAddress: true) &&
                 this
                 .context
                 .GetSymbolInfo(identifier)
@@ -192,6 +191,13 @@ partial class CSharpToGSharpTranslator {
                 .state
                 .PatternBindings
                 .TryGetValue(boundSymbol, out var replacement) {
+                if IsWriteTarget(identifier, includeAddress: true) {
+                    return if replacement is NonNullAssertionExpression asserted {
+                        asserted.Operand
+                    } else {
+                        replacement
+                    }
+                }
                 return this.ReadPatternBinding(identifier, boundSymbol, replacement)
             }
             // A C# bare sibling static field/property reference (`FfAc3ChannelsTab`)
@@ -21796,9 +21802,7 @@ partial class CSharpToGSharpTranslator {
                             node.SpanStart >= exitedLoop
                                 .Span
                                 .End &&
-                                node
-                                .Span
-                                .End <= readStart &&
+                                EvaluationEffectEnd(node) <= readStart &&
                                 (RunsSourceCode(node) || WritesReferenceStorage(node)) &&
                                 !this.IsInSiblingBranchOfRead(node, use, $scope)
                         )
@@ -22515,9 +22519,7 @@ partial class CSharpToGSharpTranslator {
                             node.SpanStart >= exitedLoop
                                 .Span
                                 .End &&
-                                node
-                                .Span
-                                .End <= readStart &&
+                                EvaluationEffectEnd(node) <= readStart &&
                                 !this.IsInSiblingBranchOfRead(node, use!!, $scope)
                         )
                     } else {

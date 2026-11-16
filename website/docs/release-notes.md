@@ -16,7 +16,7 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
-- Keep writable pattern destinations separate from narrowed reads in `cs2gs`. Invalidate matched-value read proofs after writes, preserve nullable stores, and materialize reassigned switch captures as mutable body locals. (Fixes #5991)
+- Keep writable pattern destinations separate from narrowed reads in `cs2gs`. Invalidate matched-value read proofs after writes, preserve nullable stores, and materialize reassigned or address-taken captures. Constructor writes complete before initializer reads. Guard closures and switch bodies share mutable capture storage. (Fixes #5991)
 
 - **Generic tuple reference returns** (Fixes #6039). Generic substitution preserves source tuple types inside nullable and nested generic containers. Reference aliases retain their original storage and nullability contracts.
 
