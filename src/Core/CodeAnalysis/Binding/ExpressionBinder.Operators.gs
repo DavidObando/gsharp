@@ -132,8 +132,8 @@ internal partial class ExpressionBinder {
                     nil,
                     syntax.OperatorToken.Kind,
                     boundOperand,
-                    clrMethod!!,
-                    ClrNullability.GetReturnTypeSymbol(clrMethod!!)
+                    clrMethod,
+                    ClrNullability.GetReturnTypeSymbol(clrMethod)
                 )
             } else if ambiguous {
                 Diagnostics.ReportAmbiguousOverload(
@@ -249,14 +249,14 @@ internal partial class ExpressionBinder {
                 return BoundErrorExpression(nil)
             }
             let target = methodGroup.Function
-            if methodGroup.Receiver != nil || target!!.IsInstanceMethod {
+            if methodGroup.Receiver != nil || target.IsInstanceMethod {
                 Diagnostics.ReportFunctionPointerAddressOfMismatch(
                     syntax.OperatorToken.Location,
                     "only a static or free function can be taken as a function pointer (instance methods are not supported)"
                 )
                 return BoundErrorExpression(nil)
             }
-            if target!!.IsGeneric {
+            if target.IsGeneric {
                 Diagnostics.ReportFunctionPointerAddressOfMismatch(
                     syntax.OperatorToken.Location,
                     "a generic method cannot be taken as a function pointer"
@@ -268,27 +268,27 @@ internal partial class ExpressionBinder {
             // struct's `protected`/`private` accessibility the same way
             // BindUserInstanceCall does for regular calls (issue #2058) —
             // this is a separate binder path (ldftn), so it needs its own gate.
-            if target!!.StaticOwnerType is StructSymbol methodDeclaringType && !AccessibilityChecker.IsAccessible(
-                target!!.Accessibility,
+            if target.StaticOwnerType is StructSymbol methodDeclaringType && !AccessibilityChecker.IsAccessible(
+                target.Accessibility,
                 methodDeclaringType,
                 getCurrentFunction()
             ) {
                 Diagnostics.ReportMemberInaccessible(
                     syntax.OperatorToken.Location,
-                    target!!.Name,
+                    target.Name,
                     methodDeclaringType.Name,
-                    target!!.Accessibility
+                    target.Accessibility
                 )
             }
-            let fpParamTypes = ImmutableArray.CreateBuilder[TypeSymbol](target!!.Parameters.Length)
-            for p in target!!.Parameters {
+            let fpParamTypes = ImmutableArray.CreateBuilder[TypeSymbol](target.Parameters.Length)
+            for p in target.Parameters {
                 fpParamTypes.Add(p.Type)
             }
             let fpType = FunctionPointerTypeSymbol.GetManaged(
                 fpParamTypes.MoveToImmutable(),
-                target!!.Type ?? TypeSymbol.Void
+                target.Type ?? TypeSymbol.Void
             )
-            return BoundFunctionPointerFromMethodExpression(nil, target!!, fpType)
+            return BoundFunctionPointerFromMethodExpression(nil, target, fpType)
         }
         // GS9005: cannot take address of a constant binding. General block
         // expressions preserve the trailing lvalue's mutability contract.
@@ -2499,7 +2499,7 @@ internal partial class ExpressionBinder {
         // Issue #1881: Sum/Difference/Product bound inside a `checked`
         // context trap on overflow; every other operator kind ignores the
         // flag (comparisons, bitwise ops, etc. never overflow-check).
-        return BoundBinaryExpression(nil, boundLeft, boundOperator!!, boundRight, binderCtx.IsCheckedContext)
+        return BoundBinaryExpression(nil, boundLeft, boundOperator, boundRight, binderCtx.IsCheckedContext)
     }
 
     /// Issue #2388: when a Stream C/D binary operator resolves against a
@@ -2798,11 +2798,11 @@ internal partial class ExpressionBinder {
             out var clrMethod,
             out ambiguous
         ) {
-            let clrParameters = clrMethod!!.GetParameters()
+            let clrParameters = clrMethod.GetParameters()
             let leftParameterType = ClrNullability.GetParameterTypeSymbol(clrParameters[0])
             let rightParameterType = ClrNullability.GetParameterTypeSymbol(clrParameters[1])
             let hasByRefSignature = clrParameters.Any((p ParameterInfo) -> p.ParameterType.IsByRef) ||
-                clrMethod!!
+                clrMethod
                 .ReturnType
                 .IsByRef
             // Issue #2388: `ClrOperatorResolution` matches on
@@ -2829,7 +2829,7 @@ internal partial class ExpressionBinder {
                 rightLocation,
                 leftParameterType,
                 rightParameterType,
-                ClrNullability.GetReturnTypeSymbol(clrMethod!!),
+                ClrNullability.GetReturnTypeSymbol(clrMethod),
                 hasByRefSignature,
                 out var liftedClrResultType
             ) {
@@ -2867,7 +2867,7 @@ internal partial class ExpressionBinder {
                 left,
                 right,
                 clrMethod,
-                ClrNullability.GetReturnTypeSymbol(clrMethod!!)
+                ClrNullability.GetReturnTypeSymbol(clrMethod)
             )
         }
         return nil
@@ -5167,7 +5167,7 @@ internal partial class ExpressionBinder {
                     erased,
                     typeof(object)
                 ) {
-                    surrogates.Add(erased!!)
+                    surrogates.Add(erased)
                     return
                 }
                 for inner in TypeSymbol.GetWrappedTypes(type) {

@@ -421,10 +421,10 @@ class ValidationManifest {
             let path string? = Normalize(original)
             if string.IsNullOrEmpty(root) ||
                 !(
-                root!!.StartsWith("/", StringComparison.Ordinal) ||
-                    (root!!.Length > 2 && char.IsLetter(root!![0]) && root!![1] == ':' && root!![2] == '/')
+                root.StartsWith("/", StringComparison.Ordinal) ||
+                    (root.Length > 2 && char.IsLetter(root[0]) && root[1] == ':' && root[2] == '/')
             ) ||
-                root!!.Contains('\u0000', StringComparison.Ordinal) || root!!.Split('/').Any(
+                root.Contains('\u0000', StringComparison.Ordinal) || root.Split('/').Any(
                 (segment string) -> segment == "." || segment == ".."
             ) ||
                 !path!!
@@ -449,8 +449,8 @@ class ValidationManifest {
         }
 
         private func ValidateRelativePath(relative string?) {
-            if string.IsNullOrEmpty(relative) || relative!!.StartsWith("/", StringComparison.Ordinal) ||
-                relative!!.Contains(':', StringComparison.Ordinal) || relative!!.Split('/').Any(
+            if string.IsNullOrEmpty(relative) || relative.StartsWith("/", StringComparison.Ordinal) ||
+                relative.Contains(':', StringComparison.Ordinal) || relative.Split('/').Any(
                 (segment string) -> segment == "" || segment == "." || segment == ".."
             ) {
                 throw InvalidOperationException("Invalid corpus-relative validation path '$relative'.")

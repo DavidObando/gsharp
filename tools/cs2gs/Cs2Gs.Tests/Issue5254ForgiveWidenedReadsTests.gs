@@ -17,8 +17,8 @@ import Xunit
 
 /// Issue #5254: one rule for every declaration the translator widens to `T?`
 /// (a parameter, an `out` or `ref` parameter, and the locals that `out var`
-/// declares for it). A read whose C# flow state is non-null gets `!!` and the
-/// declaration stays widened, so the null write still binds.
+/// declares for it). Reads that G# cannot narrow keep `!!`; assignment-proven reads remain bare.
+/// Declarations stay widened, so null writes still bind.
 ///
 /// Each row runs in two nullable contexts. `Annotations` is the shape the
 /// generator host gives a source-generated file (`#nullable enable
@@ -37,8 +37,8 @@ import Xunit
 /// | 8 | `out T x` local read in a local function | `x!!` |
 /// | 9 | assignment into a widened `out` local | `w = p`, no `!!` (the sink accepts null) |
 /// | 10 | argument whose parameter type G# infers | `Id(p)`, no `!!` |
-/// | 11 | argument to a non-null parameter | `Use(p!!)` |
-/// | 12 | argument to a receiver-fixed generic parameter (`Box[C].Use`) | `Use(p!!)` |
+/// | 11 | assignment-normalized argument to a non-null parameter | `Use(p)` |
+/// | 12 | assignment-normalized receiver-fixed generic argument (`Box[C].Use`) | `Use(p)` |
 /// | 13 | widened `out` local returned in a nil-accepting method, full flow | no `!!` |
 /// | 16 | inferred generic argument whose result is consumed as non-null, full flow | `Id(p!!)` |
 /// | 17 | argument to a constrained generic parameter | `Use(p!!)` |
@@ -226,7 +226,7 @@ public static class K {
     }
 
     @Fact
-    func Row11_ArgumentToNonNullParameter_IsForgiven() {
+    func Row11_AssignmentNormalizedArgumentToNonNullParameter_NeedsNoAssertion() {
         for annotationsOnly in[](bool){true, false} {
             let printed = Translate(annotationsOnly, `public class C { public int N; }
 public static class K {
@@ -234,7 +234,8 @@ public static class K {
   static int Use(C x) => x.N;
   public static int Pass(C p) { p = Maybe(); if (p == null) { p = new C(); } return Use(p); }
 }`)
-            Assert.Equal(1, Count(printed, "Use(p!!)"))
+            Assert.Equal(1, Count(printed, "Use(p)"))
+            Assert.DoesNotContain("Use(p!!)", printed, StringComparison.Ordinal)
         }
     }
 
@@ -254,14 +255,15 @@ public static class K {
     }
 
     @Fact
-    func Row12_ReceiverFixedGenericParameter_IsForgiven() {
+    func Row12_AssignmentNormalizedReceiverFixedGenericArgument_NeedsNoAssertion() {
         let printed = Translate(true, `public class C { public int N; }
 public class Box<T> where T : class { public static int Use(T x) => 1; }
 public static class K {
   static C? Maybe() => null;
   public static int Pass(C p) { p = Maybe(); if (p == null) { p = new C(); } return Box<C>.Use(p); }
 }`)
-        Assert.Equal(1, Count(printed, "Use(p!!)"))
+        Assert.Equal(1, Count(printed, "Use(p)"))
+        Assert.DoesNotContain("Use(p!!)", printed, StringComparison.Ordinal)
     }
 
     @Fact

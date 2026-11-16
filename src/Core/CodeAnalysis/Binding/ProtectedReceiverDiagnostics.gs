@@ -385,7 +385,7 @@ internal shared class ProtectedReceiverDiagnostics {
                     return fieldInitializer.FieldIdentifier.Location
                 }
                 default {
-                    return current!!.Location
+                    return current.Location
                 }
             }
         }

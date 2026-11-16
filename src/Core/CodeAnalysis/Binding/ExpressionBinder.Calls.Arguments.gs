@@ -715,13 +715,13 @@ internal partial class ExpressionBinder {
             // `b.Named[k](",", "a", "b", "c")` against a variadic named
             // delegate.
             if !TryBindAmbiguousBracketAsIndex(ce, memberLoad, out var indexedValue) ||
-                indexedValue!!.Type is not{} indexedType {
+                indexedValue.Type is not{} indexedType {
                 return false
             }
             if !MemberLookup.TryGetDelegateFunctionTypeFromSymbol(indexedType, out functionType) {
                 return false
             }
-            memberLoad = indexedValue!!
+            memberLoad = indexedValue
             lastSelectedCallablePropertyLoad = memberLoad
             callableType = indexedType
         }
@@ -840,7 +840,7 @@ internal partial class ExpressionBinder {
                     out var importedCall,
                     argumentNames: argumentNames
                 ) {
-                    return importedCall!!
+                    return importedCall
                 }
                 Diagnostics.ReportNotAFunction(syntax.Location, delegateType.Name)
                 return BoundErrorExpression(syntax)
@@ -1016,13 +1016,13 @@ internal partial class ExpressionBinder {
             // below, which already owns named arguments, ref/in/out and
             // variadic packing.
             if !TryBindAmbiguousBracketAsIndex(ce, delegateLoad, out var indexedValue) ||
-                indexedValue!!.Type is not{} indexedType {
+                indexedValue.Type is not{} indexedType {
                 return false
             }
             if indexedType is FunctionPointerTypeSymbol indexedFpType {
                 result = overloads.BindFunctionPointerInvocation(
                     ce,
-                    indexedValue!!,
+                    indexedValue,
                     indexedFpType,
                     methodName,
                     ce.Identifier.Location,
@@ -1034,7 +1034,7 @@ internal partial class ExpressionBinder {
             if indexedType.ClrType is not{} indexedClrType || !ClrTypeUtilities.IsDelegateType(indexedClrType) {
                 return false
             }
-            delegateLoad = indexedValue!!
+            delegateLoad = indexedValue
             memberClrType = indexedClrType
         }
         let effectiveMemberType = delegateLoad.Type
@@ -1087,7 +1087,7 @@ internal partial class ExpressionBinder {
             result = if capture == nil {
                 invokeCall
             } else {
-                BuildNullConditionalDelegateInvocation(ce, delegateLoad, capture, invokeCall!!)
+                BuildNullConditionalDelegateInvocation(ce, delegateLoad, capture, invokeCall)
             }
             return true
         }
@@ -1143,10 +1143,10 @@ internal partial class ExpressionBinder {
             switch member {
                 case property is PropertyInfo: MemberLookup.GetClrPropertyTypeSymbol(staticOwnerType, property)
                 case field is FieldInfo: MemberLookup.GetClrFieldTypeSymbol(staticOwnerType, field)
-                default: MemberLookup.GetClrMemberValueTypeSymbol(member!!)
+                default: MemberLookup.GetClrMemberValueTypeSymbol(member)
             }
         } else {
-            MemberLookup.GetClrMemberValueTypeSymbol(member!!)
+            MemberLookup.GetClrMemberValueTypeSymbol(member)
         }
         if member is PropertyInfo readProperty &&
             !TryRequireVisibleStaticGetter(classSymbol, readProperty, ce.Identifier.Location) {
@@ -1154,7 +1154,7 @@ internal partial class ExpressionBinder {
             return true
         }
         var delegateLoad = ApplyCallableMemberNarrowing(
-            BoundClrPropertyAccessExpression(nil, nil, member!!, memberTypeSymbol, classSymbol.SymbolicReceiver)
+            BoundClrPropertyAccessExpression(nil, nil, member, memberTypeSymbol, classSymbol.SymbolicReceiver)
         )
         if member is PropertyInfo {
             lastSelectedCallablePropertyLoad = delegateLoad
@@ -1206,13 +1206,13 @@ internal partial class ExpressionBinder {
             // Static imports have the same Member[index](args) ambiguity as
             // instance members; reuse their index recovery before Invoke.
             if !TryBindAmbiguousBracketAsIndex(ce, delegateLoad, out var indexedValue) ||
-                indexedValue!!.Type is not{} indexedType {
+                indexedValue.Type is not{} indexedType {
                 return false
             }
             if indexedType is FunctionPointerTypeSymbol indexedFpType {
                 result = overloads.BindFunctionPointerInvocation(
                     ce,
-                    indexedValue!!,
+                    indexedValue,
                     indexedFpType,
                     methodName,
                     ce.Identifier.Location,
@@ -1224,7 +1224,7 @@ internal partial class ExpressionBinder {
             if indexedType.ClrType is not{} indexedClrType || !ClrTypeUtilities.IsDelegateType(indexedClrType) {
                 return false
             }
-            delegateLoad = indexedValue!!
+            delegateLoad = indexedValue
             memberClrType = indexedClrType
         }
         let effectiveMemberType = delegateLoad.Type
@@ -1267,7 +1267,7 @@ internal partial class ExpressionBinder {
             result = if capture == nil {
                 invokeCall
             } else {
-                BuildNullConditionalDelegateInvocation(ce, delegateLoad, capture, invokeCall!!)
+                BuildNullConditionalDelegateInvocation(ce, delegateLoad, capture, invokeCall)
             }
             return true
         }
@@ -2604,10 +2604,10 @@ internal partial class ExpressionBinder {
                     paramIndex,
                     call
                 )
-                rebound = BindExpression(runtimeLambdaSyntax!!, validationTarget)
+                rebound = BindExpression(runtimeLambdaSyntax, validationTarget)
             } else if paramIndex < parameters.Length && LambdaBinder.TryGetFunctionLiteral(argument, out var literal) &&
                 hasTargetFunctionType &&
-                literal!!.FunctionType != targetFunctionType {
+                literal.FunctionType != targetFunctionType {
                 targetFunctionType = Invariant.Required(
                     targetFunctionType,
                     "successful delegate target lookup returns a function type",
@@ -2630,9 +2630,9 @@ internal partial class ExpressionBinder {
                     out var symbolicTarget
                 ) {
                     targetFunctionType = symbolicTarget
-                } else if TypeSymbol.ContainsTypeParameter(literal!!.FunctionType) ||
+                } else if TypeSymbol.ContainsTypeParameter(literal.FunctionType) ||
                     TypeSymbol
-                    .ContainsSameCompilationUserType(literal!!.FunctionType) {
+                    .ContainsSameCompilationUserType(literal.FunctionType) {
                     // Issue #1502 (ctor path): no method-generic recovery applies
                     // (this is a constructor call, or a non-generic/erasure-free
                     // method), yet the literal's bound function type already
@@ -2646,10 +2646,10 @@ internal partial class ExpressionBinder {
                     // `Func<T>` back to `Func<object>` and produce an
                     // unverifiable delegate. Keep the literal's existing
                     // (already symbolic) function type instead of erasing it.
-                    targetFunctionType = literal!!.FunctionType
+                    targetFunctionType = literal.FunctionType
                 }
-                if literal!!.FunctionType != targetFunctionType {
-                    rebound = lambdas.CreateErasedFunctionLiteralAdapter(literal!!, targetFunctionType!!)
+                if literal.FunctionType != targetFunctionType {
+                    rebound = lambdas.CreateErasedFunctionLiteralAdapter(literal, targetFunctionType)
                 }
             }
             if rebound != argument && builder == nil {
@@ -2705,7 +2705,7 @@ internal partial class ExpressionBinder {
             let argument = arguments[i]
             var rebound = argument
             if paramIndex < parameters.Length && LambdaBinder.TryGetFunctionLiteral(argument, out var literal) {
-                let literalFnType FunctionTypeSymbol? = literal!!.FunctionType as FunctionTypeSymbol
+                let literalFnType FunctionTypeSymbol? = literal.FunctionType as FunctionTypeSymbol
                 if literalFnType != nil &&
                     literalFnType.ReturnType != TypeSymbol.Void &&
                     literalFnType.ReturnType != TypeSymbol.Error &&
@@ -2714,13 +2714,13 @@ internal partial class ExpressionBinder {
                     ConversionClassifier.GetPlainValueClrParameterType(parameters[paramIndex]),
                     out var targetFunctionType
                 ) &&
-                    targetFunctionType!!.ReturnType != TypeSymbol.Void &&
-                    targetFunctionType!!.ReturnType != TypeSymbol.Error &&
-                    targetFunctionType!!.Arity == literalFnType.Arity &&
-                    !object.ReferenceEquals(literalFnType.ReturnType, targetFunctionType!!.ReturnType) &&
+                    targetFunctionType.ReturnType != TypeSymbol.Void &&
+                    targetFunctionType.ReturnType != TypeSymbol.Error &&
+                    targetFunctionType.Arity == literalFnType.Arity &&
+                    !object.ReferenceEquals(literalFnType.ReturnType, targetFunctionType.ReturnType) &&
                     ConversionClassifier
-                    .IsNumericReturnWidening(literalFnType.ReturnType, targetFunctionType!!.ReturnType) {
-                    rebound = lambdas.CreateErasedFunctionLiteralAdapter(literal!!, targetFunctionType!!)
+                    .IsNumericReturnWidening(literalFnType.ReturnType, targetFunctionType.ReturnType) {
+                    rebound = lambdas.CreateErasedFunctionLiteralAdapter(literal, targetFunctionType)
                 }
             }
             if rebound != argument && builder == nil {
@@ -3038,7 +3038,7 @@ internal partial class ExpressionBinder {
         try {
             var bound = BindBaseClassCallCore(ce, baseLocation, explicitBaseType, selectorLocation, callSyntax)
             if verifyCallArgumentsAfterConversions != nil {
-                bound = verifyCallArgumentsAfterConversions!!(
+                bound = verifyCallArgumentsAfterConversions(
                     ce.Arguments,
                     bound,
                     () -> BindBaseClassCallCore(ce, baseLocation, explicitBaseType, selectorLocation, callSyntax)
@@ -3083,7 +3083,7 @@ internal partial class ExpressionBinder {
             // it). Fall back to the imported/BCL base type so `base.Dispose(...)`,
             // `base.ToString()`, etc. resolve and emit a non-virtual `call`.
             if TryBindBaseClrInstanceCall(ce, methodName, clrBaseFallback, out var bclResult, callSyntax) {
-                return bclResult!!
+                return bclResult
             }
             Diagnostics.ReportBaseClassCallMemberNotFound(
                 ce.Identifier.Location,
@@ -3401,12 +3401,12 @@ internal partial class ExpressionBinder {
             out var baseFieldDeclaringType
         ) &&
             GetEffectiveThisParameter() is {} fieldReadThisParameter {
-            if !AccessibilityChecker.IsAccessible(baseField!!.Accessibility, baseFieldDeclaringType, this.function) {
+            if !AccessibilityChecker.IsAccessible(baseField.Accessibility, baseFieldDeclaringType, this.function) {
                 Diagnostics.ReportMemberInaccessible(
                     member.IdentifierToken.Location,
-                    baseField!!.Name,
-                    baseFieldDeclaringType!!.Name,
-                    baseField!!.Accessibility
+                    baseField.Name,
+                    baseFieldDeclaringType.Name,
+                    baseField.Accessibility
                 )
             }
             return ApplyMemberNarrowing(
@@ -3414,7 +3414,7 @@ internal partial class ExpressionBinder {
                     member,
                     BoundVariableExpression(nil, fieldReadThisParameter),
                     baseFieldDeclaringType,
-                    baseField!!
+                    baseField
                 )
             )
         }
@@ -3445,14 +3445,14 @@ internal partial class ExpressionBinder {
             // imported/BCL base type so `base.Prop` reads the inherited member
             // non-virtually (e.g. a virtual/overridable BCL property).
             if TryBindBaseClrPropertyRead(member, clrBaseFallback, out var bclRead) {
-                return bclRead!!
+                return bclRead
             }
             // Issue #4331: no GSharp/CLR base PROPERTY declares this name —
             // fall back to an inherited/imported CLR base FIELD (e.g.
             // RegexRunner.runtextpos), matching TryBindBaseClrPropertyRead's
             // sibling shape for fields.
             if TryBindBaseClrFieldRead(member, clrBaseFallback, out var bclFieldRead) {
-                return bclFieldRead!!
+                return bclFieldRead
             }
             Diagnostics.ReportBaseClassCallMemberNotFound(
                 member.IdentifierToken.Location,
@@ -3466,18 +3466,18 @@ internal partial class ExpressionBinder {
             "a base-class property has a declaring type",
             expression: "declaringType"
         )
-        if !prop!!.HasGetter {
+        if !prop.HasGetter {
             Diagnostics.ReportCannotAssign(member.IdentifierToken.Location, memberName)
             return BoundErrorExpression(nil)
         }
         // Issue #950 / #2044: enforce `protected`/`private` property access
         // against the declaring type.
-        if !AccessibilityChecker.IsAccessible(prop!!.GetterAccessibility, declaringType, this.function) {
+        if !AccessibilityChecker.IsAccessible(prop.GetterAccessibility, declaringType, this.function) {
             Diagnostics.ReportMemberInaccessible(
                 member.IdentifierToken.Location,
-                prop!!.Name,
+                prop.Name,
                 declaringType.Name,
-                prop!!.GetterAccessibility
+                prop.GetterAccessibility
             )
         }
         if GetBaseAccessThisParameter() is not{} thisParameter {
@@ -3489,14 +3489,14 @@ internal partial class ExpressionBinder {
         // access through the property so the emitter resolves the synthesized
         // `get_Prop` MethodDef and the interpreter reads the backing field,
         // rather than mis-binding the read as a write (GS0127).
-        if prop!!.GetterSymbol == nil {
+        if prop.GetterSymbol == nil {
             return BoundBaseClassCallExpression(
                 member,
                 receiver,
                 declaringType,
                 method: nil,
                 ImmutableArray[BoundExpression].Empty,
-                prop!!.Type,
+                prop.Type,
                 property: prop,
                 isSetterAccessor: false
             )
@@ -3505,9 +3505,9 @@ internal partial class ExpressionBinder {
             member,
             receiver,
             declaringType,
-            prop!!.GetterSymbol,
+            prop.GetterSymbol,
             ImmutableArray[BoundExpression].Empty,
-            prop!!.Type
+            prop.Type
         )
     }
 
@@ -3562,27 +3562,27 @@ internal partial class ExpressionBinder {
             out var baseField,
             out var baseFieldDeclaringType
         ) {
-            if !AccessibilityChecker.IsAccessible(baseField!!.Accessibility, baseFieldDeclaringType, this.function) {
+            if !AccessibilityChecker.IsAccessible(baseField.Accessibility, baseFieldDeclaringType, this.function) {
                 Diagnostics.ReportMemberInaccessible(
                     memberLocation,
-                    baseField!!.Name,
-                    baseFieldDeclaringType!!.Name,
-                    baseField!!.Accessibility
+                    baseField.Name,
+                    baseFieldDeclaringType.Name,
+                    baseField.Accessibility
                 )
             }
-            if baseField!!.IsReadOnly {
+            if baseField.IsReadOnly {
                 Diagnostics.ReportCannotAssign(equalsLocation, memberName)
                 return BoundErrorExpression(nil)
             }
-            let baseFieldConverted = conversions.BindConversion(valueLocation, value, baseField!!.Type)
+            let baseFieldConverted = conversions.BindConversion(valueLocation, value, baseField.Type)
             if GetEffectiveThisParameter() is not{} fieldWriteThisParameter {
                 return BoundErrorExpression(nil)
             }
             return BoundFieldAssignmentExpression(
                 value.Syntax,
                 fieldWriteThisParameter,
-                baseFieldDeclaringType!!,
-                baseField!!,
+                baseFieldDeclaringType,
+                baseField,
                 baseFieldConverted
             )
         }
@@ -3604,7 +3604,7 @@ internal partial class ExpressionBinder {
                 clrBaseFallback,
                 out var bclWrite
             ) {
-                return bclWrite!!
+                return bclWrite
             }
             // Issue #4331: no GSharp/CLR base PROPERTY declares this name —
             // fall back to an inherited/imported CLR base FIELD write.
@@ -3617,7 +3617,7 @@ internal partial class ExpressionBinder {
                 clrBaseFallback,
                 out var bclFieldWrite
             ) {
-                return bclFieldWrite!!
+                return bclFieldWrite
             }
             Diagnostics.ReportBaseClassCallMemberNotFound(
                 memberLocation,
@@ -3631,21 +3631,21 @@ internal partial class ExpressionBinder {
             "a base-class property has a declaring type",
             expression: "declaringType"
         )
-        if !prop!!.HasSetter {
+        if !prop.HasSetter {
             Diagnostics.ReportCannotAssign(equalsLocation, memberName)
             return BoundErrorExpression(nil)
         }
         // Issue #950 / #2044: enforce `protected`/`private` property
         // assignment against the declaring type.
-        if !AccessibilityChecker.IsAccessible(prop!!.SetterAccessibility, declaringType, this.function) {
+        if !AccessibilityChecker.IsAccessible(prop.SetterAccessibility, declaringType, this.function) {
             Diagnostics.ReportMemberInaccessible(
                 memberLocation,
-                prop!!.Name,
+                prop.Name,
                 declaringType.Name,
-                prop!!.SetterAccessibility
+                prop.SetterAccessibility
             )
         }
-        let converted = conversions.BindConversion(valueLocation, value, prop!!.Type)
+        let converted = conversions.BindConversion(valueLocation, value, prop.Type)
         if GetBaseAccessThisParameter() is not{} thisParameter {
             return BoundErrorExpression(nil)
         }
@@ -3655,7 +3655,7 @@ internal partial class ExpressionBinder {
         // assignment through the property so the emitter resolves the
         // synthesized `set_Prop` MethodDef and the interpreter writes the
         // backing field.
-        if prop!!.SetterSymbol == nil {
+        if prop.SetterSymbol == nil {
             return BoundBaseClassCallExpression(
                 value.Syntax,
                 receiver,
@@ -3671,7 +3671,7 @@ internal partial class ExpressionBinder {
             value.Syntax,
             receiver,
             declaringType,
-            prop!!.SetterSymbol,
+            prop.SetterSymbol,
             ImmutableArray.Create(converted)
         )
     }
@@ -4230,7 +4230,7 @@ internal partial class ExpressionBinder {
             let argument = conversions.ResolveReboundSibling(arguments[i])
             if !object.ReferenceEquals(argument, arguments[i]) {
                 builder ??= arguments.ToBuilder()
-                builder!![i] = argument
+                builder[i] = argument
             }
             let parameterIndex = if parameterMapping.IsDefault {
                 i
@@ -4267,7 +4267,7 @@ internal partial class ExpressionBinder {
                 continue
             }
             builder ??= arguments.ToBuilder()
-            builder!![i] = converted
+            builder[i] = converted
         }
         return builder?.MoveToImmutable() ?? arguments
     }

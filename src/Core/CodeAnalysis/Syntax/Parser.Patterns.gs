@@ -613,7 +613,7 @@ open partial class Parser {
                     valueDesignation
                 )
             }
-            return TypeOrConstantPatternSyntax(syntaxTree, expression!!, candidateType, propertyPattern)
+            return TypeOrConstantPatternSyntax(syntaxTree, expression, candidateType, propertyPattern)
         }
         if position > candidateEnd &&
             Diagnostics.Count == expressionDiagnosticCount &&

@@ -30,13 +30,13 @@ internal shared class SolutionGenerator {
         let fullSourceRoot string? = if string.IsNullOrEmpty(sourceRoot) {
             CommonDirectory(generatedProjectPaths.Keys)
         } else {
-            Path.GetFullPath(sourceRoot!!)
+            Path.GetFullPath(sourceRoot)
         }
         let sourceSolutions IReadOnlyList[string] = if Directory.Exists(fullSourceRoot) {
             cast[IReadOnlyList[string]](
                 Directory
-                    .EnumerateFiles(fullSourceRoot!!, "*.sln", SearchOption.TopDirectoryOnly)
-                    .Concat(Directory.EnumerateFiles(fullSourceRoot!!, "*.slnx", SearchOption.TopDirectoryOnly))
+                    .EnumerateFiles(fullSourceRoot, "*.sln", SearchOption.TopDirectoryOnly)
+                    .Concat(Directory.EnumerateFiles(fullSourceRoot, "*.slnx", SearchOption.TopDirectoryOnly))
                     .OrderBy((path string) -> path, StringComparer.Ordinal)
                     .ToList()
             )

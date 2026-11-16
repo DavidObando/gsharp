@@ -152,7 +152,7 @@ class InterpolatedStringHandlerInfo {
                 }
             }
             try {
-                for attribute in type!!.GetCustomAttributesData() {
+                for attribute in type.GetCustomAttributesData() {
                     if string.Equals(
                         attribute.AttributeType?.FullName,
                         HandlerAttributeName,
@@ -590,7 +590,7 @@ class InterpolatedStringHandlerInfo {
         private func IsBoolean(t Type?) bool {
             var t = t
             if t?.IsByRef == true {
-                t = t!!.GetElementType()
+                t = t.GetElementType()
             }
             return string.Equals(t?.FullName, "System.Boolean", StringComparison.Ordinal)
         }

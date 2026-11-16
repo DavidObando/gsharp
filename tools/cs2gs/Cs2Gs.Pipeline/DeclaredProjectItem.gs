@@ -76,7 +76,7 @@ internal shared class DeclaredProjectItems {
                 if itemName.Equals("ProjectReference", StringComparison.OrdinalIgnoreCase) {
                     let include = item.Attribute(XName?("Include")!!)?.Value
                     if !string.IsNullOrEmpty(include) && !IsMsbuildExpression(include) {
-                        let normalizedInclude = include!!.Replace('\\', Path.DirectorySeparatorChar).Replace(
+                        let normalizedInclude = include.Replace('\\', Path.DirectorySeparatorChar).Replace(
                             '/',
                             Path.DirectorySeparatorChar
                         )
@@ -217,7 +217,7 @@ internal shared class DeclaredProjectItems {
             rewritten ??= List[DeclaredProjectItem](items.Take(i))
             let element = XElement(item.Element)
             element.SetAttributeValue(XName?("Version")!!, bumped)
-            rewritten!!.Add(
+            rewritten.Add(
                 DeclaredProjectItem(item.ItemGroupCondition, element, item.SourceInclude, item.SourceAssemblyName)
             )
         }

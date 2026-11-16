@@ -364,7 +364,7 @@ class ImportedClassSymbol : Symbol {
         for var i = 0; i < arguments.Length; i++ {
             if TypeSymbol.ContainsNullLiteralType(arguments[i].Type) {
                 deferredInferenceArgs ??= [arguments.Length]bool
-                deferredInferenceArgs!![i] = true
+                deferredInferenceArgs[i] = true
             }
             // Issue #1391: the untyped `default` literal (bound as a
             // BoundDefaultExpression whose type is the Error sentinel until a
@@ -440,9 +440,9 @@ class ImportedClassSymbol : Symbol {
                 IsSameCompilationUserReferencePointee(refPointee) {
                 argTypes[i] = ClrOverloadResolution.SymbolicByRefArgumentType
                 symbolicByRefArgs ??= [arguments.Length]bool
-                symbolicByRefArgs!![i] = true
+                symbolicByRefArgs[i] = true
                 deferredInferenceArgs ??= [arguments.Length]bool
-                deferredInferenceArgs!![i] = true
+                deferredInferenceArgs[i] = true
                 continue
             }
             // Issue #530: use effective CLR type so nullable value types
@@ -769,7 +769,7 @@ class ImportedClassSymbol : Symbol {
         if FamilyAccessBase == nil || declaringType == nil {
             return false
         }
-        let familyAccessBase = FamilyAccessBase!!
+        let familyAccessBase = FamilyAccessBase
         let declaringDefinition = if declaringType.IsGenericType {
             declaringType.GetGenericTypeDefinition()
         } else {

@@ -314,7 +314,7 @@ class BoundStructLiteralExpression : BoundExpression {
                     zero ?? BoundDefaultExpression(syntax, parameter.Type)
                 }
                 builder ??= initializers.ToBuilder()
-                builder!!.Add(
+                builder.Add(
                     if member is FieldSymbol field {
                         BoundFieldInitializer(field, value)
                     } else {

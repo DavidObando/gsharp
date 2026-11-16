@@ -1633,7 +1633,7 @@ partial class CSharpToGSharpTranslator {
             let typeInfo = this.context.GetTypeInfo(node.Expression)
             let declaredType ITypeSymbol? = this.GetDeclaredValueType(node.Expression)
             if declaredType?.IsReferenceType == true &&
-                declaredType!!.NullableAnnotation == Microsoft
+                declaredType.NullableAnnotation == Microsoft
                 .CodeAnalysis
                 .NullableAnnotation
                 .Annotated &&
@@ -3525,13 +3525,7 @@ partial class CSharpToGSharpTranslator {
                 occupied.Contains
             )
             usedDesignators!!.Add(designator)
-            if body != nil &&
-                this
-                .state
-                .SynthesizedLocalOccupiedNamesByBody
-                .TryGetValue(body, out var updatedOccupied) {
-                updatedOccupied.Add(designator)
-            }
+            this.RecordSynthesizedLocalOccupancy(designator, recursive)
             return designator
         }
 

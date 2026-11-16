@@ -40,7 +40,7 @@ namespace Demo
     }
 }`)
         let holder = unit.Members.OfType[TypeDeclaration]().Single((t TypeDeclaration) -> t.Name == "Holder")
-        Assert.True(holder.PrimaryConstructorParameters == nil || holder.PrimaryConstructorParameters!!.Count == 0)
+        Assert.True(holder.PrimaryConstructorParameters == nil || holder.PrimaryConstructorParameters.Count == 0)
         Assert.Equal("value", Assert.Single(holder.Members.OfType[ConstructorDeclaration]()).Parameters.Single().Name)
         let forwarder = Assert.Single(
             holder.Members.OfType[PropertyDeclaration](),
@@ -85,7 +85,7 @@ namespace Demo
     }
 }`)
         let holder = unit.Members.OfType[TypeDeclaration]().Single((t TypeDeclaration) -> t.Name == "MutableHolder")
-        Assert.True(holder.PrimaryConstructorParameters == nil || holder.PrimaryConstructorParameters!!.Count == 0)
+        Assert.True(holder.PrimaryConstructorParameters == nil || holder.PrimaryConstructorParameters.Count == 0)
         Assert.Equal("value", Assert.Single(holder.Members.OfType[ConstructorDeclaration]()).Parameters.Single().Name)
         let forwarder = Assert.Single(
             holder.Members.OfType[PropertyDeclaration](),
@@ -119,7 +119,7 @@ namespace Demo
     }
 }`)
         let holder = unit.Members.OfType[TypeDeclaration]().Single((t TypeDeclaration) -> t.Name == "Holder")
-        Assert.True(holder.PrimaryConstructorParameters == nil || holder.PrimaryConstructorParameters!!.Count == 0)
+        Assert.True(holder.PrimaryConstructorParameters == nil || holder.PrimaryConstructorParameters.Count == 0)
         Assert.Contains(
             holder.Members.OfType[PropertyDeclaration](),
             (property PropertyDeclaration) -> property.Name == "Value" && property.ExplicitInterfaceType == nil

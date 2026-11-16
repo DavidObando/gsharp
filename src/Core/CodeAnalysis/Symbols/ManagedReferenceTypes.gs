@@ -79,7 +79,7 @@ internal shared class ManagedReferenceTypes {
     }
 
     internal func IsCompatible(@NotNullWhen(true) type Type?) bool -> IsDefinition(type, out _) && Contracts.GetValue(
-        type!!.GetGenericTypeDefinition().Assembly,
+        type.GetGenericTypeDefinition().Assembly,
         (assembly Assembly) -> StrongBox[bool](ValidateContract(assembly))
     )
         .Value
@@ -131,8 +131,8 @@ internal shared class ManagedReferenceTypes {
         return TryGetElement(from, out var left, out _) &&
             TryGetElement(to, out var right, out _) &&
             (
-            !Conversion.ClassifyNonStructural(left!!, right!!).IsIdentity || !NullableFlagsBuilder.Build(left!!)
-                .SequenceEqual(NullableFlagsBuilder.Build(right!!))
+            !Conversion.ClassifyNonStructural(left, right).IsIdentity || !NullableFlagsBuilder.Build(left)
+                .SequenceEqual(NullableFlagsBuilder.Build(right))
         )
     }
 
@@ -157,23 +157,23 @@ internal shared class ManagedReferenceTypes {
             }
             let objectFactory = UniqueMethod(key, "Object")
             let fieldPath = UniqueMethod(key, "Field")
-            let sameLocation = UniqueMethod(location!!, "SameLocation")
-            let locationSelf = location!!.MakeGenericType(location!!.GetGenericArguments())
+            let sameLocation = UniqueMethod(location, "SameLocation")
+            let locationSelf = location.MakeGenericType(location.GetGenericArguments())
             return Matches(objectFactory, isStatic: true, key, typeof(object)) &&
                 Matches(fieldPath, isStatic: false, key, typeof(RuntimeFieldHandle), typeof(RuntimeTypeHandle)) &&
                 Matches(sameLocation, false, typeof(bool), locationSelf) &&
-                ValidateHandle(writable!!, readOnly!!, location!!, key, readOnlyBorrow: false) &&
-                ValidateHandle(readOnly!!, readOnly!!, location!!, key, readOnlyBorrow: true) &&
+                ValidateHandle(writable, readOnly, location, key, readOnlyBorrow: false) &&
+                ValidateHandle(readOnly, readOnly, location, key, readOnlyBorrow: true) &&
                 ValidateSliceFactories(
                 assembly.GetType("Gsharp.Values.Slice`1"),
-                writable!!,
-                readOnly!!,
+                writable,
+                readOnly,
                 readOnlySlice: false
             ) &&
                 ValidateSliceFactories(
                 assembly.GetType("Gsharp.Values.ReadOnlySlice`1"),
-                writable!!,
-                readOnly!!,
+                writable,
+                readOnly,
                 readOnlySlice: true
             )
         } catch (FileNotFoundException) {

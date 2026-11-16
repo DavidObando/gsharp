@@ -43,8 +43,8 @@ shared class GeneratedSourceDetection {
             return false
         }
         let normalized = filePath.Replace('\\', '/')
-        let objPrefix = Path.Combine(projectDirectory!!, "obj").Replace('\\', '/').TrimEnd('/') + "/"
-        let binPrefix = Path.Combine(projectDirectory!!, "bin").Replace('\\', '/').TrimEnd('/') + "/"
+        let objPrefix = Path.Combine(projectDirectory, "obj").Replace('\\', '/').TrimEnd('/') + "/"
+        let binPrefix = Path.Combine(projectDirectory, "bin").Replace('\\', '/').TrimEnd('/') + "/"
         return normalized.StartsWith(objPrefix, StringComparison.OrdinalIgnoreCase) || normalized.StartsWith(
             binPrefix,
             StringComparison.OrdinalIgnoreCase

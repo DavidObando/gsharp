@@ -77,7 +77,7 @@ class ImportedFunctionSymbol : Symbol {
         Type,
         out var awaited
     ) {
-        awaited!!
+        awaited
     } else {
         Type
     }

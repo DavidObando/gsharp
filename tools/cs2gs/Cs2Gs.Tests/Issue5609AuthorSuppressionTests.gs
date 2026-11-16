@@ -264,14 +264,15 @@ public static class Host {
     }
 
     shared {
-        private func AssertRuns(
+        internal func AssertRuns(
             source string,
             host string,
             expected string,
             verifyTranslation Action[string],
             nativeExpected string? = nil,
             legacySource string? = nil,
-            analyzerApiMode bool = false
+            analyzerApiMode bool = false,
+            actualCli bool = false
         ) {
             let directory = Path.Combine(AppContext.BaseDirectory, "issue-5609", Guid.NewGuid().ToString("N"))
             Directory.CreateDirectory(directory)
@@ -294,9 +295,13 @@ public static class Host {
                 Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics))
                 let document = Assert.Single(project.Documents)
                 let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
-                let printed = GSharpPrinter.Print(
-                    CSharpToGSharpTranslator(analyzerApiMode: analyzerApiMode).TranslateDocument(document, context)
-                )
+                let printed = if actualCli {
+                    TranslateWithCli(source, directory)
+                } else {
+                    GSharpPrinter.Print(
+                        CSharpToGSharpTranslator(analyzerApiMode: analyzerApiMode).TranslateDocument(document, context)
+                    )
+                }
                 Assert.Empty(
                     context.Diagnostics.Where(
                         (d TranslationDiagnostic) -> d.Severity == TranslationSeverity.Unsupported
@@ -330,7 +335,7 @@ public static class Host {
                 Assert.False(compiled.TimedOut, compiled.Output)
                 Assert.True(compiled.ExitCode == 0, compiled.Output + "\n" + printed)
                 Assert.True(
-                    !compiled.Output.Contains("GS0536", StringComparison.Ordinal),
+                    !compiled.Output.Contains(": warning ", StringComparison.Ordinal),
                     compiled.Output + "\n" + printed
                 )
                 if analyzerApiMode {
@@ -349,6 +354,61 @@ public static class Host {
             } finally {
                 Directory.Delete(directory, recursive: true)
             }
+        }
+
+        private func TranslateWithCli(source string, directory string) string {
+            let root = Path.Combine(directory, "source")
+            Directory.CreateDirectory(root)
+            File.WriteAllText(Path.Combine(root, "Directory.Build.props"), "<Project />")
+            File.WriteAllText(Path.Combine(root, "Directory.Build.targets"), "<Project />")
+            File.WriteAllText(
+                Path.Combine(root, "Probe.csproj"),
+                `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><Nullable>disable</Nullable></PropertyGroup></Project>`
+            )
+            File.WriteAllText(Path.Combine(root, "Probe.cs"), source)
+            let initialized = ProcessRunner.Run("git", []string{"init", "-q", root})
+            Assert.Equal(0, initialized.ExitCode)
+            let compiler = LocalFunctionHoistTranslationTests.FindCompiler()
+            Assert.NotNull(compiler)
+            let sdk = SdkPin.ReadGlobalJsonPinFile(Path.Combine(IlVerifyRunner().RepoRoot, "global.json"))
+            Assert.NotNull(sdk)
+            let originalOut = Console.Out
+            let originalError = Console.Error
+            let output = StringWriter()
+            let errors = StringWriter()
+            var exit int32
+            try {
+                Console.SetOut(output)
+                Console.SetError(errors)
+                exit = Cs2Gs
+                    .Cli
+                    .Program
+                    .Main(
+                    []string{
+                        "migrate",
+                        "--corpus",
+                        root,
+                        "--out",
+                        Path.Combine(directory, "migrated"),
+                        "--artifacts",
+                        Path.Combine(directory, "runs"),
+                        "--gsc",
+                        compiler!!,
+                        "--sdk-version",
+                        sdk!!,
+                        "--no-format",
+                        "--stop-after",
+                        "translate"
+                    }
+                )
+                    .GetAwaiter()
+                    .GetResult()
+            } finally {
+                Console.SetOut(originalOut)
+                Console.SetError(originalError)
+            }
+            Assert.True(exit == 0, output.ToString() + errors.ToString())
+            return File.ReadAllText(Path.Combine(directory, "migrated", "Probe.gs"))
         }
 
         private func EmitCSharp(

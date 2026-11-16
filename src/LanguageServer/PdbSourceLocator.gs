@@ -85,7 +85,7 @@ shared class PdbSourceLocator {
         /// Releases the per-path lock acquired for this lease, if any.
         func Dispose() {
             if pathLock != nil {
-                Monitor.Exit(pathLock!!)
+                Monitor.Exit(pathLock)
             }
         }
 
@@ -181,7 +181,7 @@ shared class PdbSourceLocator {
             var best SourceLocation? = nil
             for methodToken in methodTokens {
                 if TryReadFirstSequencePoint(lease.Reader, methodToken, out var candidate) {
-                    if best == nil || IsEarlier(candidate, best!!) {
+                    if best == nil || IsEarlier(candidate, best) {
                         best = candidate
                     }
                 }

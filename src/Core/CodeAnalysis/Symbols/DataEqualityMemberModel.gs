@@ -124,7 +124,7 @@ internal shared class DataEqualityMemberModel {
                 !ImportedAssemblySemantics.TryGetTypeSemantics(clrBase, out var semantics) &&
                     !ImportedAssemblySemantics.TryDetectCSharpRecordSemantics(clrBase, out semantics)
             ) ||
-                !semantics!!.IsData
+                !semantics.IsData
         ) {
             return nil
         }
