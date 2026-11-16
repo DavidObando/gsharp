@@ -367,8 +367,8 @@ class Conversion {
                 return HaveCompatibleCallableContracts(
                     sourceShape,
                     targetShape,
-                    sourceSignature!!,
-                    targetSignature!!,
+                    sourceSignature,
+                    targetSignature,
                     invariant
                 )
             }
@@ -1625,7 +1625,7 @@ class Conversion {
             if to == TypeSymbol.String {
                 let fromCharArray = from?.ClrType
                 if fromCharArray?.IsArray == true {
-                    let fromCharElement = fromCharArray!!.GetElementType()
+                    let fromCharElement = fromCharArray.GetElementType()
                     if fromCharElement?.IsSameAs(typeof(char)) == true {
                         return Conversion.Explicit
                     }
@@ -1907,7 +1907,7 @@ class Conversion {
                 if targetArray?.IsSZArray == true &&
                     !(to is ImportedTypeSymbol{TypeArguments: {IsDefaultOrEmpty: false}}) &&
                     sourceElement != nil {
-                    let targetElement Type? = targetArray!!.GetElementType()
+                    let targetElement Type? = targetArray.GetElementType()
                     if targetElement != nil && string.Equals(
                         targetElement.FullName,
                         sourceElement.FullName,
@@ -2510,7 +2510,7 @@ class Conversion {
                 targetArguments.Length != 1 {
                 return false
             }
-            let openName string? = openDefinition!!.FullName
+            let openName string? = openDefinition.FullName
             if openName == nil {
                 return false
             }
@@ -2546,7 +2546,7 @@ class Conversion {
             if AreTypeArgumentsEquivalent(targetElement, sourceElement) {
                 return true
             }
-            let genericParameters = openDefinition!!.GetGenericArguments()
+            let genericParameters = openDefinition.GetGenericArguments()
             if genericParameters.Length != 1 ||
                 (
                 genericParameters[0].GenericParameterAttributes & GenericParameterAttributes.VarianceMask
@@ -2899,7 +2899,7 @@ class Conversion {
                     AreConstructedReferenceArgumentsCompatible(
                     sourceDelegateArguments,
                     targetDelegateArguments,
-                    targetDelegate!!,
+                    targetDelegate,
                     clrArgumentBoundary: false,
                     nominalOnly: true
                 )
@@ -4039,7 +4039,7 @@ class Conversion {
                 // Project their real hierarchy; symbolic sources must
                 // keep the owner-aware path and never fall back to erased probes.
                 if TryGetConstructedGenericShape(from, out var sourceOpen, out var sourceTypeArguments) &&
-                    (!sourceOpen!!.IsValueType || targetOpen.IsInterface) &&
+                    (!sourceOpen.IsValueType || targetOpen.IsInterface) &&
                     ClrTypeUtilities
                     .AreSame(sourceOpen, targetOpen) {
                     return AreConstructedReferenceArgumentsCompatible(
@@ -6854,7 +6854,7 @@ class Conversion {
                 return false
             }
             if !IsCrossContextIdenticalElement(fromElement, toElement) &&
-                !AreSameRuntimeChannelElement(fromElement!!, toElement!!) {
+                !AreSameRuntimeChannelElement(fromElement, toElement) {
                 return false
             }
             // Nothing converts TO the runtime class except itself (it is a subtype).

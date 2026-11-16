@@ -5723,7 +5723,7 @@ partial class CSharpToGSharpTranslator {
             if elementType?.IsNullable != true &&
                 IsNullOrSuppressedNull(element) &&
                 targetElementSymbol?.IsReferenceType == true &&
-                targetElementSymbol!!.NullableAnnotation != Microsoft
+                targetElementSymbol.NullableAnnotation != Microsoft
                 .CodeAnalysis
                 .NullableAnnotation
                 .Annotated &&
@@ -5737,7 +5737,7 @@ partial class CSharpToGSharpTranslator {
                 !IsNullOrSuppressedNull(element) &&
                 !this.IsWithinExpressionTreeLambda(element) &&
                 targetElementSymbol?.IsReferenceType == true &&
-                targetElementSymbol!!.NullableAnnotation != Microsoft
+                targetElementSymbol.NullableAnnotation != Microsoft
                 .CodeAnalysis
                 .NullableAnnotation
                 .Annotated &&

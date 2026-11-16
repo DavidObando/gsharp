@@ -706,7 +706,7 @@ open class WaikikiHoverAuditTests {
         }
         let explicitOut = Environment.GetEnvironmentVariable("GSHARP_WAIKIKI_AUDIT_OUT")
         let artifactsDir = if !string.IsNullOrWhiteSpace(explicitOut) {
-            explicitOut!!
+            explicitOut
         } else {
             Path.Combine(Directory.GetCurrentDirectory(), "out", "waikiki-hover-audit-" + Guid.NewGuid().ToString("N"))
         }

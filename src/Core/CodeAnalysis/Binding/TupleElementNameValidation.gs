@@ -29,7 +29,7 @@ internal shared class TupleElementNameValidation {
                 continue
             }
             seen ??= HashSet[string](StringComparer.Ordinal)
-            if !seen!!.Add(name) {
+            if !seen.Add(name) {
                 diagnostics.ReportDuplicateTupleElementName(locationOf(i), name)
                 continue
             }

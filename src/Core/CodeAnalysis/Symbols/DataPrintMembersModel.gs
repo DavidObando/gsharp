@@ -156,7 +156,7 @@ internal shared class DataPrintMembersModel {
                 ImportedAssemblySemantics.TryGetTypeSemantics(current, out var semantics) ||
                     ImportedAssemblySemantics.TryDetectCSharpRecordSemantics(current, out semantics)
             ) &&
-                semantics!!.IsData {
+                semantics.IsData {
                 return true
             }
             try {

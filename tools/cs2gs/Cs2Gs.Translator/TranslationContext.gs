@@ -877,7 +877,7 @@ class TranslationContext {
                 return nil
             }
             return SpeculativeBodies.GetValue(
-                model!!,
+                model,
                 (current SemanticModel) -> {
                     if current.ParentModel is not{} parent || current.SyntaxTree.GetRoot() is not Microsoft
                         .CodeAnalysis

@@ -1464,7 +1464,7 @@ partial class CSharpToGSharpTranslator {
                 // A qualified generic type is a MemberAccessExpressionSyntax;
                 // translate its bound type so its type arguments are retained.
                 target = TypeExpression(
-                    this.typeMapper.Map(receiverNamedType!!, this.context, member.Expression.GetLocation())
+                    this.typeMapper.Map(receiverNamedType, this.context, member.Expression.GetLocation())
                 )
             } else {
                 target = if this.MemberBindsToNullableThisExtension(member) || receiverIsAnonymousType {
@@ -11567,7 +11567,7 @@ partial class CSharpToGSharpTranslator {
             let declaredValueType ITypeSymbol? = this.GetDeclaredValueType(value)
             return !this.GSharpExpressionIsStaticallyNonNull(value, translated) &&
                 declaredValueType?.IsReferenceType == true &&
-                declaredValueType!!.NullableAnnotation == Microsoft
+                declaredValueType.NullableAnnotation == Microsoft
                 .CodeAnalysis
                 .NullableAnnotation
                 .Annotated &&
@@ -14116,7 +14116,7 @@ partial class CSharpToGSharpTranslator {
                     elementType.OriginalDefinition?.SpecialType != SpecialType.System_Nullable_T
                 } else {
                     elementType?.IsReferenceType == true &&
-                        elementType!!.NullableAnnotation == Microsoft
+                        elementType.NullableAnnotation == Microsoft
                         .CodeAnalysis
                         .NullableAnnotation
                         .NotAnnotated
@@ -16968,7 +16968,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 var activeVisited = visitedLocals
                 activeVisited ??= HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
-                if !activeVisited!!.Add(local) {
+                if !activeVisited.Add(local) {
                     return nil
                 }
                 let declaringSyntax = local.DeclaringSyntaxReferences[0].GetSyntax()
@@ -17309,7 +17309,7 @@ partial class CSharpToGSharpTranslator {
             }
             return local.DeclaringSyntaxReferences.Any(
                 (reference SyntaxReference) -> regionScope.Span.Contains(reference.Span) &&
-                    (topForDeclarationSpan == nil || !topForDeclarationSpan!!.Contains(reference.Span))
+                    (topForDeclarationSpan == nil || !topForDeclarationSpan.Contains(reference.Span))
             )
         }
 
@@ -18968,8 +18968,8 @@ partial class CSharpToGSharpTranslator {
         ) bool {
             if armType?.IsReferenceType != true ||
                 targetType?.IsReferenceType != true ||
-                armType!!.TypeKind == TypeKind.Error ||
-                targetType!!.TypeKind == TypeKind.Error ||
+                armType.TypeKind == TypeKind.Error ||
+                targetType.TypeKind == TypeKind.Error ||
                 SymbolEqualityComparer
                 .Default
                 .Equals(armType, targetType) {
@@ -21230,7 +21230,7 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return false
             }
-            if IsSignedIntegerSpecialType(info.Type!!.SpecialType) &&
+            if IsSignedIntegerSpecialType(info.Type.SpecialType) &&
                 IsUnsignedIntegerSpecialType(info.ConvertedType!!.SpecialType) {
                 return true
             }

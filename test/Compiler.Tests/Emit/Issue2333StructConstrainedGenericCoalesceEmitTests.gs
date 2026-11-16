@@ -374,7 +374,7 @@ stderr:
                     return Array.Empty[string]()
                 }
                 return Directory
-                    .EnumerateFiles(runtimeDir!!, "*.dll", SearchOption.TopDirectoryOnly)
+                    .EnumerateFiles(runtimeDir, "*.dll", SearchOption.TopDirectoryOnly)
                     .Where(
                     (p string) -> {
                         let name = Path.GetFileName(p)

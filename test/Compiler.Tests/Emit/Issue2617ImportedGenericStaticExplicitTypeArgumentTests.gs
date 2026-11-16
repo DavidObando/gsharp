@@ -248,7 +248,7 @@ stderr:
             return if string.IsNullOrEmpty(value) {
                 Enumerable.Empty[string]()
             } else {
-                cast[IEnumerable[string]](value!!.Split(Path.PathSeparator))
+                cast[IEnumerable[string]](value.Split(Path.PathSeparator))
             }
         }
     }

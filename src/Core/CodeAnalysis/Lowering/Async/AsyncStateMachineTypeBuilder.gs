@@ -334,7 +334,7 @@ shared class AsyncStateMachineTypeBuilder {
             }
         }
         return if references.TryResolveType(wrapperOpenName, requireExternalVisibility: false, out var open_) {
-            open_!!.MakeGenericType(inner!!)
+            open_.MakeGenericType(inner!!)
         } else {
             default(Type?)
         }

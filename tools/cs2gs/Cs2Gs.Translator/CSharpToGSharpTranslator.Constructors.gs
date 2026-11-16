@@ -221,7 +221,7 @@ partial class CSharpToGSharpTranslator {
                 accessors = List[PropertyAccessor]()
             }
             let isOverride = symbol != nil && symbol.IsOverride
-            let isAbstract = symbol?.IsAbstract == true && symbol!!.ContainingType.TypeKind != TypeKind.Interface
+            let isAbstract = symbol?.IsAbstract == true && symbol.ContainingType.TypeKind != TypeKind.Interface
             let isOpen = !isAbstract && this.IsMemberEmittedOpen(symbol, isOverride)
             // ADR-0149: see the matching visibility comment in
             // TranslatePropertyDeclaration for the full rationale — a G#
@@ -1041,7 +1041,7 @@ partial class CSharpToGSharpTranslator {
                     ?.ToDisplayString() == "System.Runtime.InteropServices.MarshalAsAttribute"
             ) {
                 attributes ??= List[AttributeUse]()
-                attributes!!.Add(
+                attributes.Add(
                     AttributeUse(
                         "System.Runtime.InteropServices.MarshalAs",
                         []AttributeArgument{
@@ -3054,7 +3054,7 @@ partial class CSharpToGSharpTranslator {
             if parent is SimpleNameSyntax simpleName {
                 let info = this.context.GetSymbolInfo(simpleName)
                 if info.Symbol != nil {
-                    symbols.Add(info.Symbol!!)
+                    symbols.Add(info.Symbol)
                 } else {
                     symbols.AddRange(info.CandidateSymbols)
                 }
@@ -5490,16 +5490,16 @@ partial class CSharpToGSharpTranslator {
                 // a doc comment and its declaration; gsc requires the `///` block
                 // to be adjacent. Partition so regular comments print first and
                 // the doc block hugs the declaration.
-                if lines!!.Any((l string) -> l.StartsWith("///", StringComparison.Ordinal)) && lines!!.Any(
+                if lines.Any((l string) -> l.StartsWith("///", StringComparison.Ordinal)) && lines.Any(
                     (l string) -> !l.StartsWith("///", StringComparison.Ordinal)
                 ) {
-                    lines = lines!!
+                    lines = lines
                         .Where((l string) -> !l.StartsWith("///", StringComparison.Ordinal))
-                        .Concat(lines!!.Where((l string) -> l.StartsWith("///", StringComparison.Ordinal)))
+                        .Concat(lines.Where((l string) -> l.StartsWith("///", StringComparison.Ordinal)))
                         .ToList()
                 }
                 node.AttachedComments = if node.AttachedComments is {Count: > 0} existing {
-                    lines!!.Concat(existing).ToList()
+                    lines.Concat(existing).ToList()
                 } else {
                     lines
                 }

@@ -172,7 +172,7 @@ class EmittedOracleResult {
         }
         var types[]Type?
         try {
-            types = Assembly!!.GetTypes()
+            types = Assembly.GetTypes()
         } catch (ex ReflectionTypeLoadException) {
             types = ex.Types
         }

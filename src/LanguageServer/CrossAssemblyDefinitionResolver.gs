@@ -47,7 +47,7 @@ internal shared class CrossAssemblyDefinitionResolver {
             return false
         }
         if workspace != nil && workspace.TryGetProjectByOutputAssembly(assemblyPath, out var siblingProject) &&
-            TryResolveTypeInSiblingProject(siblingProject!!, type, out location) {
+            TryResolveTypeInSiblingProject(siblingProject, type, out location) {
             return true
         }
         // Tier 3 — source-text search. Preferred over the PDB for workspace-local assemblies
@@ -84,7 +84,7 @@ internal shared class CrossAssemblyDefinitionResolver {
             assemblyPath,
             out var siblingProject
         ) &&
-            TryResolveMethodInSiblingProject(siblingProject!!, declaringType, method, out location) {
+            TryResolveMethodInSiblingProject(siblingProject, declaringType, method, out location) {
             return true
         }
         // Tier 3 — source-text search (preferred over the PDB for workspace-local assemblies; the
@@ -122,7 +122,7 @@ internal shared class CrossAssemblyDefinitionResolver {
             assemblyPath,
             out var siblingProject
         ) &&
-            TryResolvePropertyInSiblingProject(siblingProject!!, declaringType, property.Name, out location) {
+            TryResolvePropertyInSiblingProject(siblingProject, declaringType, property.Name, out location) {
             return true
         }
         if TryResolveMemberBySourceSearch(assemblyPath, declaringType, property.Name, out location) {
@@ -161,7 +161,7 @@ internal shared class CrossAssemblyDefinitionResolver {
             assemblyPath,
             out var siblingProject
         ) &&
-            TryResolveFieldInSiblingProject(siblingProject!!, declaringType, field.Name, out location) {
+            TryResolveFieldInSiblingProject(siblingProject, declaringType, field.Name, out location) {
             return true
         }
         if TryResolveMemberBySourceSearch(assemblyPath, declaringType, field.Name, out location) {
@@ -189,7 +189,7 @@ internal shared class CrossAssemblyDefinitionResolver {
             assemblyPath,
             out var siblingProject
         ) &&
-            TryResolveEventInSiblingProject(siblingProject!!, declaringType, evt.Name, out location) {
+            TryResolveEventInSiblingProject(siblingProject, declaringType, evt.Name, out location) {
             return true
         }
         if TryResolveMemberBySourceSearch(assemblyPath, declaringType, evt.Name, out location) {

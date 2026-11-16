@@ -12,6 +12,31 @@ This page mirrors the authoritative diagnostic catalogue in [`docs/diagnostics.m
 
 Every diagnostic emitted by `gsc` carries a stable `GS####` identifier, a severity level, a human-readable message, and a source location (file, line, column). This document enumerates all identifiers so that project files can suppress or promote them using standard MSBuild properties.
 
+## Imported attribute support gaps
+
+Attributes on referenced CLR types and members do not necessarily receive the same treatment as attributes on G# source declarations. For example, source `@Obsolete` can produce GS0204, but an imported `[Obsolete]` does not. Imported symbols do not populate the source-bound `Symbol.Attributes` collection; separate metadata readers provide selected attribute support.
+
+The following inventory accounts for the twelve families in [#5177](https://github.com/DavidObando/gsharp/issues/5177). These are acknowledged gaps, intentionally deferred during imported-metadata parity work, not new compatibility decisions. See the [canonical support inventory](https://github.com/DavidObando/gsharp/blob/main/docs/diagnostics.md#imported-attribute-support-gaps) for the accepted deferral and implementation references. This documentation does not enable them.
+
+Attribute names below omit the `Attribute` suffix.
+
+| Imported attribute | Current support and gap |
+| --- | --- |
+| `Obsolete` | No imported obsolete-use warning or error, including the attribute's error form. Source obsolete-use diagnostics remain supported. |
+| `RequiredMember` | Imported required fields and properties do not cause missing-initialization diagnostics when constructing their type. |
+| `SetsRequiredMembers` | Imported constructor annotations do not participate in required-member validation; that imported validation is itself missing. |
+| `CompilerFeatureRequired` | Partial: G# native-protocol import reads its own feature and storage markers. General C# required-feature enforcement is missing. |
+| `Dynamic` | The imported marker does not enable C# dynamic binding; the underlying CLR signature remains available. |
+| `ParamCollection` | Partial: an overload-check guard recognizes the imported marker, but CLR variadic expansion still requires a one-dimensional array marked `ParamArray`. Imported non-array params collections do not gain element expansion. |
+| `InlineArray` | The imported marker does not supply C# inline-array indexing or conversions. Ordinary CLR member access is separate. |
+| `Experimental` | No imported experimental-use diagnostics are produced from this marker. |
+| `OverloadResolutionPriority` | The imported priority does not affect overload selection. Other overload rules still apply. |
+| `CallerMemberName`, `CallerFilePath`, `CallerLineNumber`, `CallerArgumentExpression` | Omitting an optional imported argument uses its declared default, not the caller's member, path, line, or argument expression. |
+| `CollectionBuilder` | The imported marker does not select a custom collection builder. Other collection construction paths are separate. |
+| `DefaultMember` | The imported name does not select indexers. Indexed CLR properties are discovered separately, so imported indexers are not generally unsupported. |
+
+Source variadic collection carriers can emit `ParamCollection`; their source-call packing support does not establish imported params-collection support. Likewise, importing an attribute class for use in a source annotation does not establish support for its semantics on imported declarations. This table does not mean that all CLR attributes are ignored.
+
 <span id="persistent-managed-references-adr-0188"></span>
 
 ## Persistent managed references

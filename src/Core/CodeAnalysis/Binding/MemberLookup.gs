@@ -1804,17 +1804,17 @@ internal class MemberLookup {
             ) {
                 return nil
             }
-            if field!!.Accessibility != Accessibility.Public {
+            if field.Accessibility != Accessibility.Public {
                 return nil
             }
-            if !ParameterTypeMatchesSubstituted(field!!.Type, clrProp.PropertyType, symbolicArgs) {
+            if !ParameterTypeMatchesSubstituted(field.Type, clrProp.PropertyType, symbolicArgs) {
                 return nil
             }
             // A read-only field cannot satisfy a read-write property contract.
-            if clrProp.SetMethod != nil && field!!.IsReadOnly {
+            if clrProp.SetMethod != nil && field.IsReadOnly {
                 return nil
             }
-            return field!!
+            return field
         }
 
         /// Probes [`type`](paramref) for an
@@ -3507,7 +3507,7 @@ internal class MemberLookup {
                     continue
                 }
                 for var i = 0; i < vector.Length; i++ {
-                    if !object.Equals(agreedVector!![i], vector[i]) {
+                    if !object.Equals(agreedVector[i], vector[i]) {
                         // Two own members disagree about what to convert to. That
                         // is a genuine ambiguity, not an erasure to repair.
                         return default(ImmutableArray[TypeSymbol?])
@@ -3621,7 +3621,7 @@ internal class MemberLookup {
                     }
                 }
                 if openParameterType.IsArray && openParameterType.GetArrayRank() == 1 {
-                    let symbolicElement TypeSymbol? = TryGetElementType(symbolicArgumentType!!)
+                    let symbolicElement TypeSymbol? = TryGetElementType(symbolicArgumentType)
                     return symbolicElement != nil &&
                         IsErasureOnlyEnumMatch(openParameterType.GetElementType(), symbolicElement)
                 }
@@ -3649,7 +3649,7 @@ internal class MemberLookup {
                         return false
                     }
                     if openArguments.Length == 1 {
-                        let symbolicElement TypeSymbol? = TryGetElementType(symbolicArgumentType!!)
+                        let symbolicElement TypeSymbol? = TryGetElementType(symbolicArgumentType)
                         if symbolicElement != nil {
                             return IsErasureOnlyEnumMatch(openArguments[0], symbolicElement)
                         }
@@ -3689,7 +3689,7 @@ internal class MemberLookup {
                 if declaringType?.IsConstructedGenericType == true &&
                     symbolicReceiverType is ImportedTypeSymbol symbolicReceiver &&
                     symbolicReceiver.OpenDefinition != nil {
-                    let declaringDefinition = declaringType!!.GetGenericTypeDefinition()
+                    let declaringDefinition = declaringType.GetGenericTypeDefinition()
                     var receiverCarriesSymbolicType = ClrTypeUtilities.AreSame(
                         symbolicReceiver.OpenDefinition,
                         declaringDefinition
@@ -4217,25 +4217,25 @@ internal class MemberLookup {
         func TryGetUserPatternEnumerableElementType(type StructSymbol, out elementType TypeSymbol?) bool {
             elementType = nil
             if !TypeMemberModel.TryGetMethodIncludingInherited(type, "GetEnumerator", out var getEnumerator) ||
-                getEnumerator!!
+                getEnumerator
                 .Parameters
                 .Length != 0 ||
-                getEnumerator!!.Type == nil {
+                getEnumerator.Type == nil {
                 return false
             }
             // ADR-0186 §9: a GetEnumerator declared in an oblivious scope returns
             // a platform enumerator (`IEnumerator[Item]!`); its shape — and so the
             // element type — is the underlying enumerator's.
-            var effectiveEnumeratorType TypeSymbol? = type.SubstituteMemberType(getEnumerator!!.Type)
+            var effectiveEnumeratorType TypeSymbol? = type.SubstituteMemberType(getEnumerator.Type)
             if effectiveEnumeratorType != nil {
                 effectiveEnumeratorType = PlatformTypeSymbol.StripTopLevel(effectiveEnumeratorType)
             }
             if effectiveEnumeratorType is StructSymbol enumeratorType {
                 if TypeMemberModel.TryGetMethodIncludingInherited(enumeratorType, "MoveNext", out var moveNext) &&
-                    moveNext!!
+                    moveNext
                     .Parameters
                     .Length == 0 &&
-                    moveNext!!.Type == TypeSymbol.Bool &&
+                    moveNext.Type == TypeSymbol.Bool &&
                     TryGetUserEnumeratorCurrent(enumeratorType, out _, out elementType) {
                     return true
                 }
@@ -4256,10 +4256,10 @@ internal class MemberLookup {
             for owner in type.GetHierarchy() {
                 if owner.TryGetField("Current", out var field) {
                     current = field
-                    if field!!.Accessibility != Accessibility.Public {
+                    if field.Accessibility != Accessibility.Public {
                         return false
                     }
-                    elementType = field!!.Type
+                    elementType = field.Type
                     return true
                 }
                 for property in owner.Properties {
@@ -5422,7 +5422,7 @@ internal class MemberLookup {
                 let openDef = imported.OpenDefinition ??
                     (
                     if imported.ClrType?.IsGenericType == true {
-                        imported.ClrType!!.GetGenericTypeDefinition()
+                        imported.ClrType.GetGenericTypeDefinition()
                     } else {
                         default(Type?)
                     }
@@ -9476,11 +9476,11 @@ internal class MemberLookup {
                 // `ImportedTypeSymbol` already and reached Pattern A on its own.
                 if actual is MapTypeSymbol mapActual &&
                     TryProjectErasedClrType(mapActual, out var erasedMapClr) &&
-                    erasedMapClr!!
+                    erasedMapClr
                     .IsGenericType {
                     actual = ImportedTypeSymbol.GetConstructed(
                         erasedMapClr,
-                        erasedMapClr!!.GetGenericTypeDefinition(),
+                        erasedMapClr.GetGenericTypeDefinition(),
                         ImmutableArray.Create(mapActual.KeyType, mapActual.ValueType)
                     )
                 }

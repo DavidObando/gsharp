@@ -292,7 +292,7 @@ internal partial class ExpressionBinder {
     private func BindAssignmentRhs(syntax ExpressionSyntax, targetType TypeSymbol?) BoundExpression {
         if targetType is {} nonNullTargetTypeForLambda &&
             TryBindLambdaExpressionWithTargetType(syntax, nonNullTargetTypeForLambda, out var targetTypedLambda) {
-            return targetTypedLambda!!
+            return targetTypedLambda
         }
         if targetType is {} nonNullTargetType &&
             (
@@ -760,14 +760,14 @@ internal partial class ExpressionBinder {
                 let _ = BindExpression(valueSyntax)
                 return nil
             }
-            let converted = BindExpression(valueSyntax, instTargetSymbol!!)
+            let converted = BindExpression(valueSyntax, instTargetSymbol)
             let receiverExpr = BoundVariableExpression(anchor, receiverLocal)
             return BoundClrPropertyAssignmentExpression(
                 anchor,
                 receiverExpr,
                 instanceMember,
                 converted,
-                instTargetSymbol!!,
+                instTargetSymbol,
                 staticContainerType: nil
             )
         }
@@ -904,13 +904,13 @@ internal partial class ExpressionBinder {
                         let _ = BindExpression(valueSyntax)
                         return nil
                     }
-                    let converted = BindExpression(valueSyntax, inhTargetSymbol!!)
+                    let converted = BindExpression(valueSyntax, inhTargetSymbol)
                     return BoundClrPropertyAssignmentExpression(
                         anchor,
                         receiverExpr,
                         inhMember,
                         converted,
-                        inhTargetSymbol!!,
+                        inhTargetSymbol,
                         staticContainerType: nil
                     )
                 }
@@ -1024,12 +1024,12 @@ internal partial class ExpressionBinder {
                     return BoundClrPropertyAssignmentExpression(
                         nil,
                         receiver: nil,
-                        inheritedStaticMember!!,
+                        inheritedStaticMember,
                         inheritedConverted,
-                        inheritedTarget!!,
+                        inheritedTarget,
                         staticContainerType: MemberLookup.GetClrMemberDeclaringTypeSymbol(
                             userStruct,
-                            inheritedStaticMember!!
+                            inheritedStaticMember
                         )
                     )
                 }
@@ -1072,7 +1072,7 @@ internal partial class ExpressionBinder {
         if importedClass != nil || $scope.TryLookupImportedClass(receiverName, declaration: nil, out importedClass) {
             // A derived class may write an inherited `protected` static member
             // through the declaring type's name, as in C#.
-            importedClass = WithFamilyAccess(importedClass!!)
+            importedClass = WithFamilyAccess(importedClass)
             if !importedClass.TryLookupMember(syntax.FieldIdentifier.ValueText, ne: nil, out var staticMember) {
                 Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.ValueText)
                 return BoundErrorExpression(nil)
@@ -1082,7 +1082,7 @@ internal partial class ExpressionBinder {
                 out var staticTargetType,
                 out var staticTargetSymbol,
                 out var staticWritable,
-                fromDerivedType: importedClass.IsFamilyAccessible(staticMember!!.DeclaringType)
+                fromDerivedType: importedClass.IsFamilyAccessible(staticMember.DeclaringType)
             ) {
                 Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.ValueText)
                 return BoundErrorExpression(nil)
@@ -1092,9 +1092,9 @@ internal partial class ExpressionBinder {
             return BoundClrPropertyAssignmentExpression(
                 nil,
                 receiver: nil,
-                staticMember!!,
+                staticMember,
                 staticConverted,
-                staticTargetSymbol!!,
+                staticTargetSymbol,
                 staticContainerType: nil
             )
         }
@@ -1288,7 +1288,7 @@ internal partial class ExpressionBinder {
             )
             let instConverted = conversions.BindConversion(
                 syntax.Value.Location,
-                BindValue(instTargetSymbol!!),
+                BindValue(instTargetSymbol),
                 instTargetSymbol
             )
             return BoundClrPropertyAssignmentExpression(
@@ -1296,7 +1296,7 @@ internal partial class ExpressionBinder {
                 assignmentReceiver,
                 instanceMember!!,
                 instConverted,
-                instTargetSymbol!!,
+                instTargetSymbol,
                 staticContainerType: nil
             )
         }
@@ -1516,7 +1516,7 @@ internal partial class ExpressionBinder {
                 out var tpIfacePropCandidate,
                 out var tpIfaceOwner
             ) {
-                let tpIfaceProp = tpIfacePropCandidate!!
+                let tpIfaceProp = tpIfacePropCandidate
                 if !tpIfaceProp.HasSetter {
                     Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.ValueText)
                     return BoundErrorExpression(nil)
@@ -1756,7 +1756,7 @@ internal partial class ExpressionBinder {
                     )
                     let inhConverted = conversions.BindConversion(
                         syntax.Value.Location,
-                        BindValue(inhTargetSymbol!!),
+                        BindValue(inhTargetSymbol),
                         inhTargetSymbol
                     )
                     return BoundClrPropertyAssignmentExpression(
@@ -1764,7 +1764,7 @@ internal partial class ExpressionBinder {
                         assignmentReceiver,
                         clrMember!!,
                         inhConverted,
-                        inhTargetSymbol!!,
+                        inhTargetSymbol,
                         staticContainerType: nil
                     )
                 }
@@ -1984,13 +1984,13 @@ internal partial class ExpressionBinder {
             !SourceValueMemberPrecedesInheritedEvent(receiverStruct, name) &&
             TypeMemberModel
             .TryGetEvent(receiverStruct, name, out var ev, out var eventOwner) {
-            if ReportInaccessibleSourceEvent(ev!!, eventOwner!!, bareName, syntax.Value) {
+            if ReportInaccessibleSourceEvent(ev, eventOwner, bareName, syntax.Value) {
                 return BoundErrorExpression(nil)
             }
             let receiver = BoundVariableExpression(nil, function!!.ThisParameter!!)
-            let eventType = eventOwner!!.SubstituteMemberType(ev!!.Type) ?? ev!!.Type
+            let eventType = eventOwner.SubstituteMemberType(ev.Type) ?? ev.Type
             let handler = BindEventSubscriptionHandler(syntax.Value, eventType)
-            return BoundEventSubscriptionExpression(nil, receiver, eventOwner!!, ev!!, handler, isAdd, eventType)
+            return BoundEventSubscriptionExpression(nil, receiver, eventOwner, ev, handler, isAdd, eventType)
         }
         // Issue #3907 / #3911: the STATIC counterpart of the walk above — a
         // bare `Ticked += handler` inside the declaring type's own members,
@@ -2022,16 +2022,16 @@ internal partial class ExpressionBinder {
                 !SourceStaticValueMemberPrecedesInheritedEvent(staticOwner, name) &&
                 TypeMemberModel
                 .TryGetStaticEventIncludingInherited(staticOwner, name, out var staticEv, out var staticEventOwner) {
-                if ReportInaccessibleSourceEvent(staticEv!!, staticEventOwner!!, bareName, syntax.Value) {
+                if ReportInaccessibleSourceEvent(staticEv, staticEventOwner, bareName, syntax.Value) {
                     return BoundErrorExpression(nil)
                 }
-                let staticEventType = staticEventOwner!!.SubstituteMemberType(staticEv!!.Type)
+                let staticEventType = staticEventOwner.SubstituteMemberType(staticEv.Type)
                 let staticHandler = BindEventSubscriptionHandler(syntax.Value, staticEventType!!)
                 return BoundEventSubscriptionExpression(
                     nil,
                     receiver: nil,
-                    staticEventOwner!!,
-                    staticEv!!,
+                    staticEventOwner,
+                    staticEv,
                     staticHandler,
                     isAdd,
                     staticEventType
@@ -2125,8 +2125,8 @@ internal partial class ExpressionBinder {
             if TryResolveInterfaceInstancePropertyByBareName(name, out var ifaceReceiver, out var ifaceThis) {
                 SyntaxFacts.TryGetCompoundAssignmentBaseOperator(syntax.OperatorToken.Kind, out var ifaceBaseOperator)
                 let ifaceCompound BoundExpression? = TryBindInterfaceCompoundAssignment(
-                    ifaceThis!!,
-                    ifaceReceiver!!,
+                    ifaceThis,
+                    ifaceReceiver,
                     name,
                     bareName,
                     syntax,
@@ -2779,10 +2779,10 @@ internal partial class ExpressionBinder {
         if !TryResolveInterfaceInstancePropertyByBareName(name, out var receiver, out var thisInterface) {
             return nil
         }
-        if !TypeMemberModel.TryGetPropertyWithOwner(thisInterface!!, name, out var property, out var propertyOwner) {
+        if !TypeMemberModel.TryGetPropertyWithOwner(thisInterface, name, out var property, out var propertyOwner) {
             return TryBindInterfaceImportedPropertyWrite(
-                thisInterface!!,
-                receiver!!,
+                thisInterface,
+                receiver,
                 name,
                 nameLocation,
                 assignLocation,
@@ -2852,14 +2852,14 @@ internal partial class ExpressionBinder {
             EnforceImportedInitOnlyAssignment(property, receiver, assignLocation)
         }
         let importedReceiver = conversions.BindConversion(nameLocation, receiver, importedReceiverType!!)
-        let value = BindAssignmentRhs(valueSyntax, propertyType!!)
+        let value = BindAssignmentRhs(valueSyntax, propertyType)
         let converted = conversions.BindConversion(valueSyntax.Location, value, propertyType)
         return BoundClrPropertyAssignmentExpression(
             nil,
             importedReceiver,
             property,
             converted,
-            propertyType!!,
+            propertyType,
             staticContainerType: nil
         )
     }
@@ -2895,7 +2895,7 @@ internal partial class ExpressionBinder {
             !hasCompoundProperty ||
                 IsFieldAtLeastAsNearAsProperty(
                 structSym,
-                declaringType!!,
+                declaringType,
                 Invariant.Required(
                     compoundProperty,
                     "a resolved property has a symbol",
@@ -3439,7 +3439,7 @@ internal partial class ExpressionBinder {
             nil,
             boundReceiver,
             instanceMember,
-            targetSymbol!!
+            targetSymbol
         )
         ApplySubExpressionNarrowingEffects(memberNameSyntax, leftRead)
         let boundRhs = BindExpression(syntax.Value)
@@ -3459,7 +3459,7 @@ internal partial class ExpressionBinder {
             Diagnostics.ReportUndefinedBinaryOperator(
                 syntax.OperatorToken.Location,
                 syntax.OperatorToken.Text,
-                targetSymbol!!,
+                targetSymbol,
                 boundRhs.Type
             )
             return BoundErrorExpression(nil)
@@ -3470,7 +3470,7 @@ internal partial class ExpressionBinder {
             boundReceiver,
             instanceMember,
             converted,
-            targetSymbol!!,
+            targetSymbol,
             staticContainerType: nil
         )
         return FinishPostfixCompoundAssignment(syntax, previousDeclaration, previousValue, assignment)
@@ -3510,7 +3510,7 @@ internal partial class ExpressionBinder {
             out _,
             out var targetSymbol,
             out _,
-            fromDerivedType: importedClass.IsFamilyAccessible(staticMember!!.DeclaringType)
+            fromDerivedType: importedClass.IsFamilyAccessible(staticMember.DeclaringType)
         ) {
             Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName)
             return BoundErrorExpression(nil)
@@ -3527,8 +3527,8 @@ internal partial class ExpressionBinder {
         var leftRead BoundExpression = BoundClrPropertyAccessExpression(
             nil,
             receiver: nil,
-            staticMember!!,
-            targetSymbol!!,
+            staticMember,
+            targetSymbol,
             staticContainerType: symbolicContainerType
         )
         ApplySubExpressionNarrowingEffects(memberNameSyntax, leftRead)
@@ -3549,7 +3549,7 @@ internal partial class ExpressionBinder {
             Diagnostics.ReportUndefinedBinaryOperator(
                 syntax.OperatorToken.Location,
                 syntax.OperatorToken.Text,
-                targetSymbol!!,
+                targetSymbol,
                 boundRhs.Type
             )
             return BoundErrorExpression(nil)
@@ -3558,9 +3558,9 @@ internal partial class ExpressionBinder {
         let assignment = BoundClrPropertyAssignmentExpression(
             nil,
             receiver: nil,
-            staticMember!!,
+            staticMember,
             converted,
-            targetSymbol!!,
+            targetSymbol,
             staticContainerType: symbolicContainerType
         )
         return FinishPostfixCompoundAssignment(syntax, previousDeclaration, previousValue, assignment)
@@ -3616,7 +3616,7 @@ internal partial class ExpressionBinder {
             boundRhs,
             out var userCompoundResult
         ) {
-            return userCompoundResult!!
+            return userCompoundResult
         }
         let previousValue BoundVariableExpression? = CapturePostfixCompoundValue(
             syntax.ReturnsPreviousValue,
@@ -3909,7 +3909,7 @@ internal partial class ExpressionBinder {
             }
             combined = BoundConversionExpression(nil, pointeeType, combined)
         }
-        let assignment = BoundIndirectAssignmentExpression(syntax, tempRef, combined!!)
+        let assignment = BoundIndirectAssignmentExpression(syntax, tempRef, combined)
         if syntax.ReturnsPreviousValue {
             return BoundBlockExpression(
                 syntax,
@@ -4827,7 +4827,7 @@ internal partial class ExpressionBinder {
                     )
                     let inhConverted = conversions.BindConversion(
                         syntax.Value.Location,
-                        BindValue(inhTargetSymbol!!),
+                        BindValue(inhTargetSymbol),
                         inhTargetSymbol
                     )
                     return BoundClrPropertyAssignmentExpression(
@@ -4835,7 +4835,7 @@ internal partial class ExpressionBinder {
                         receiver,
                         clrMember!!,
                         inhConverted,
-                        inhTargetSymbol!!,
+                        inhTargetSymbol,
                         staticContainerType: nil
                     )
                 }
@@ -5042,7 +5042,7 @@ internal partial class ExpressionBinder {
                 out var tpIfacePropCandidate,
                 out var tpIfaceOwner
             ) {
-                let tpIfaceProp = tpIfacePropCandidate!!
+                let tpIfaceProp = tpIfacePropCandidate
                 if !tpIfaceProp.HasSetter {
                     Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName)
                     return BoundErrorExpression(nil)
@@ -5193,7 +5193,7 @@ internal partial class ExpressionBinder {
             }
             let instConverted = conversions.BindConversion(
                 syntax.Value.Location,
-                BindValue(instTargetSymbol!!),
+                BindValue(instTargetSymbol),
                 instTargetSymbol
             )
             return BoundClrPropertyAssignmentExpression(
@@ -5201,7 +5201,7 @@ internal partial class ExpressionBinder {
                 receiver,
                 instanceMember!!,
                 instConverted,
-                instTargetSymbol!!,
+                instTargetSymbol,
                 staticContainerType: nil
             )
         }
@@ -5221,14 +5221,14 @@ internal partial class ExpressionBinder {
         receiverLocation TextLocation? = nil
     ) BoundExpression {
         if !binderCtx.TryGetNarrowedAccessPath(receiver, out var path, out _) ||
-            path!!.HasMembers ||
-            path!!
+            path.HasMembers ||
+            path
             .Root
             .Type is NullableTypeSymbol ||
-            !CanRecoverDeclaredMemberWriteReceiver(path!!.Root.Type, requiredType) {
+            !CanRecoverDeclaredMemberWriteReceiver(path.Root.Type, requiredType) {
             return receiver
         }
-        return DeclaredReceiver(path!!.Root, receiver.Syntax)
+        return DeclaredReceiver(path.Root, receiver.Syntax)
     }
 
     private func BindPropertyAssignmentWithDeclaredReceiver(
@@ -5243,23 +5243,23 @@ internal partial class ExpressionBinder {
             return BoundPropertyAssignmentExpression(nil, receiver, selectedOwner, selectedProperty, value)
         }
         if TryResolveDeclaredPropertyWriteSlot(
-            path!!.Root.Type,
+            path.Root.Type,
             receiver.Type,
             selectedProperty,
             out var declaredProperty,
             out var declaredStructOwner,
             out var declaredInterfaceOwner
         ) {
-            let recoveredReceiver = RecoverDeclaredWriteReceiver(receiver, path!!, location, receiverLocation)
+            let recoveredReceiver = RecoverDeclaredWriteReceiver(receiver, path, location, receiverLocation)
             if declaredInterfaceOwner != nil {
-                let substitutedType = declaredInterfaceOwner.SubstituteMemberType(declaredProperty!!.Type)
+                let substitutedType = declaredInterfaceOwner.SubstituteMemberType(declaredProperty.Type)
                 return BoundPropertyAssignmentExpression(
                     nil,
                     recoveredReceiver,
                     nil,
-                    declaredProperty!!,
+                    declaredProperty,
                     value,
-                    if object.ReferenceEquals(substitutedType, declaredProperty!!.Type) {
+                    if object.ReferenceEquals(substitutedType, declaredProperty.Type) {
                         default(TypeSymbol?)
                     } else {
                         substitutedType
@@ -5271,7 +5271,7 @@ internal partial class ExpressionBinder {
                 nil,
                 recoveredReceiver,
                 declaredStructOwner,
-                declaredProperty!!,
+                declaredProperty,
                 value
             )
         }
@@ -5285,17 +5285,10 @@ internal partial class ExpressionBinder {
         receiverLocation TextLocation? = nil
     ) BoundExpression {
         if !TryGetDeclaredWriteReceiver(receiver, out var path) ||
-            !TryResolveDeclaredPropertyWriteSlot(
-            path!!.Root.Type,
-            receiver.Type,
-            selectedProperty,
-            out _,
-            out _,
-            out _
-        ) {
+            !TryResolveDeclaredPropertyWriteSlot(path.Root.Type, receiver.Type, selectedProperty, out _, out _, out _) {
             return receiver
         }
-        return RecoverDeclaredWriteReceiver(receiver, path!!, location, receiverLocation)
+        return RecoverDeclaredWriteReceiver(receiver, path, location, receiverLocation)
     }
 
     private func TryResolveDeclaredPropertyWriteSlot(
@@ -5312,8 +5305,8 @@ internal partial class ExpressionBinder {
             out declaredProperty,
             out declaredStructOwner
         ) &&
-            SamePropertySlot(selectedProperty, declaredProperty!!, MemberOperation.Write, receiverType) &&
-            object.Equals(declaredProperty!!.Type, selectedProperty.Type) {
+            SamePropertySlot(selectedProperty, declaredProperty, MemberOperation.Write, receiverType) &&
+            object.Equals(declaredProperty.Type, selectedProperty.Type) {
             declaredInterfaceOwner = nil
             return true
         }
@@ -5324,13 +5317,7 @@ internal partial class ExpressionBinder {
             out var declaredOwner
         ) &&
             declaredOwner is InterfaceSymbol interfaceOwner &&
-            SamePropertySlot(
-            selectedProperty,
-            declaredProperty!!,
-            MemberOperation.Write,
-            receiverType,
-            interfaceOwner
-        ) {
+            SamePropertySlot(selectedProperty, declaredProperty, MemberOperation.Write, receiverType, interfaceOwner) {
             declaredStructOwner = nil
             declaredInterfaceOwner = interfaceOwner
             return true
@@ -5350,7 +5337,7 @@ internal partial class ExpressionBinder {
         if !TryGetDeclaredWriteReceiver(receiver, out var path) {
             return (receiver, selectedMember)
         }
-        let declaredType = path!!.Root.Type
+        let declaredType = path.Root.Type
         let clrType Type? = declaredType.ClrType ??
             (
             if declaredType is StructSymbol structType {
@@ -5368,7 +5355,7 @@ internal partial class ExpressionBinder {
             (SafeGetVisibleInstanceField(clrType, selectedMember.Name) as MemberInfo?)
         }
         return if declaredMember != nil && SameClrMemberSlot(selectedMember, declaredMember, MemberOperation.Write) {
-            (RecoverDeclaredWriteReceiver(receiver, path!!, location, receiverLocation), declaredMember)
+            (RecoverDeclaredWriteReceiver(receiver, path, location, receiverLocation), declaredMember)
         } else {
             (receiver, selectedMember)
         }
@@ -5378,7 +5365,7 @@ internal partial class ExpressionBinder {
         receiver BoundExpression,
         @NotNullWhen(true) out path AccessPath?
     ) bool -> binderCtx.TryGetNarrowedAccessPath(receiver, out path, out _) &&
-        !path!!.HasMembers &&
+        !path.HasMembers &&
         !(path!!.Root.Type is NullableTypeSymbol)
 
     private func RecoverDeclaredWriteReceiver(
@@ -5538,15 +5525,15 @@ internal partial class ExpressionBinder {
             TryGetWritableClrMember(staticMember, out _, out var staticTargetSymbol, out _) {
             let staticConverted = conversions.BindConversion(
                 syntax.Value.Location,
-                BindValue(staticTargetSymbol!!),
+                BindValue(staticTargetSymbol),
                 staticTargetSymbol
             )
             return BoundClrPropertyAssignmentExpression(
                 nil,
                 receiver: nil,
-                staticMember!!,
+                staticMember,
                 staticConverted,
-                staticTargetSymbol!!,
+                staticTargetSymbol,
                 staticContainerType: constructedImported.SymbolicReceiver
             )
         }

@@ -67,7 +67,7 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
             ImmutableArray.Create[BoundExpression](
                 CreateTypeOf(
                     if MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(targetType, out var delegateType) {
-                        delegateType!!
+                        delegateType
                     } else {
                         TypeSymbol.Error
                     }
@@ -1574,7 +1574,7 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
             if !this.TryBuildObjectInitializerExpression(construction, scopedMap, out var result) {
                 return false
             }
-            expressions.Add(result!!)
+            expressions.Add(result)
             expression = BoundBlockExpression(
                 block.Syntax,
                 declarations.MoveToImmutable(),
@@ -1622,7 +1622,7 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
                     out expression
                 )
             }
-            bindings.Add(binding!!)
+            bindings.Add(binding)
         }
         expression = BoundClrStaticCallExpression(
             block.Syntax,

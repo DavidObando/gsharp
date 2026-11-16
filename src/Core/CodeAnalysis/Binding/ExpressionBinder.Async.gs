@@ -443,7 +443,7 @@ internal partial class ExpressionBinder {
         ) {
             let _ = TryResolveImportedTypeOverride(
                 staticLeftName.IdentifierToken.ValueText,
-                staticSourceType!!,
+                staticSourceType,
                 requestedArity: 0,
                 staticLeftName,
                 out staticImportedOverride
@@ -463,21 +463,21 @@ internal partial class ExpressionBinder {
                 !SourceStaticValueMemberPrecedesInheritedEvent(staticStruct, eventName) &&
                 TypeMemberModel
                 .TryGetStaticEventIncludingInherited(staticStruct, eventName, out var ev, out var eventOwner) {
-                if !AccessibilityChecker.IsAccessible(ev!!.Accessibility, eventOwner, function) {
+                if !AccessibilityChecker.IsAccessible(ev.Accessibility, eventOwner, function) {
                     Diagnostics.ReportMemberInaccessible(
                         eventNameSyntax.Location,
-                        ev!!.Name,
-                        eventOwner!!.Name,
-                        ev!!.Accessibility
+                        ev.Name,
+                        eventOwner.Name,
+                        ev.Accessibility
                     )
                 }
-                let eventType = eventOwner!!.SubstituteMemberType(ev!!.Type)
+                let eventType = eventOwner.SubstituteMemberType(ev.Type)
                 let userHandler = BindEventSubscriptionHandler(syntax.Value, eventType!!)
                 return BoundEventSubscriptionExpression(
                     nil,
                     receiver: nil,
-                    eventOwner!!,
-                    ev!!,
+                    eventOwner,
+                    ev,
                     userHandler,
                     isAdd,
                     eventType
@@ -529,7 +529,7 @@ internal partial class ExpressionBinder {
                 out staticImportedOverride
             )
         ) {
-            receiverClrType = staticImportedOverride!!.ClassType
+            receiverClrType = staticImportedOverride.ClassType
             flags = BindingFlags.Public | BindingFlags.Static
         } else if TryResolveConstructedGenericTypeReceiver(
             accessor.LeftPart,
@@ -550,21 +550,21 @@ internal partial class ExpressionBinder {
                 !SourceStaticValueMemberPrecedesInheritedEvent(ctorStruct, eventName) &&
                 TypeMemberModel
                 .TryGetStaticEventIncludingInherited(ctorStruct, eventName, out var ctorEvent, out var ctorEventOwner) {
-                if !AccessibilityChecker.IsAccessible(ctorEvent!!.Accessibility, ctorEventOwner, function) {
+                if !AccessibilityChecker.IsAccessible(ctorEvent.Accessibility, ctorEventOwner, function) {
                     Diagnostics.ReportMemberInaccessible(
                         eventNameSyntax.Location,
-                        ctorEvent!!.Name,
-                        ctorEventOwner!!.Name,
-                        ctorEvent!!.Accessibility
+                        ctorEvent.Name,
+                        ctorEventOwner.Name,
+                        ctorEvent.Accessibility
                     )
                 }
-                let eventType = ctorEventOwner!!.SubstituteMemberType(ctorEvent!!.Type)
+                let eventType = ctorEventOwner.SubstituteMemberType(ctorEvent.Type)
                 let handler = BindEventSubscriptionHandler(syntax.Value, eventType!!)
                 return BoundEventSubscriptionExpression(
                     nil,
                     receiver: nil,
-                    ctorEventOwner!!,
-                    ctorEvent!!,
+                    ctorEventOwner,
+                    ctorEvent,
                     handler,
                     isAdd,
                     eventType
@@ -689,16 +689,16 @@ internal partial class ExpressionBinder {
                 out var ev,
                 out var eventOwner
             ) {
-                if ReportInaccessibleSourceEvent(ev!!, eventOwner!!, eventNameSyntax, syntax.Value) {
+                if ReportInaccessibleSourceEvent(ev, eventOwner, eventNameSyntax, syntax.Value) {
                     return BoundErrorExpression(nil)
                 }
-                let eventType = eventOwner!!.SubstituteMemberType(ev!!.Type) ?? ev!!.Type
+                let eventType = eventOwner.SubstituteMemberType(ev.Type) ?? ev.Type
                 let userHandler = BindEventSubscriptionHandler(syntax.Value, eventType)
                 return BoundEventSubscriptionExpression(
                     nil,
                     boundReceiver,
-                    eventOwner!!,
-                    ev!!,
+                    eventOwner,
+                    ev,
                     userHandler,
                     isAdd,
                     eventType
@@ -713,8 +713,8 @@ internal partial class ExpressionBinder {
                 TypeMemberModel
                 .TryGetEvent(classConstraint, eventName, out var constrainedUserEvent, out var constrainedEventOwner) {
                 if ReportInaccessibleSourceEvent(
-                    constrainedUserEvent!!,
-                    constrainedEventOwner!!,
+                    constrainedUserEvent,
+                    constrainedEventOwner,
                     eventNameSyntax,
                     syntax.Value
                 ) {
@@ -723,14 +723,14 @@ internal partial class ExpressionBinder {
                 // As on the `obj.E` path: the declaring construction supplies
                 // the handler type (`EventHandler[string]` for a `GB[string]`
                 // constraint, issue #4391) and parents the accessor call.
-                let constrainedEventType = constrainedEventOwner!!.SubstituteMemberType(constrainedUserEvent!!.Type) ??
-                    constrainedUserEvent!!.Type
+                let constrainedEventType = constrainedEventOwner.SubstituteMemberType(constrainedUserEvent.Type) ??
+                    constrainedUserEvent.Type
                 let constrainedHandler = BindEventSubscriptionHandler(syntax.Value, constrainedEventType)
                 return BoundEventSubscriptionExpression(
                     nil,
                     boundReceiver,
-                    constrainedEventOwner!!,
-                    constrainedUserEvent!!,
+                    constrainedEventOwner,
+                    constrainedUserEvent,
                     constrainedHandler,
                     isAdd,
                     constrainedEventType
@@ -752,8 +752,8 @@ internal partial class ExpressionBinder {
                 eventName,
                 out var ifaceEv
             ) {
-                let ifaceHandler = BindEventSubscriptionHandler(syntax.Value, ifaceEv!!.Type)
-                return BoundEventSubscriptionExpression(nil, boundReceiver, userIface, ifaceEv!!, ifaceHandler, isAdd)
+                let ifaceHandler = BindEventSubscriptionHandler(syntax.Value, ifaceEv.Type)
+                return BoundEventSubscriptionExpression(nil, boundReceiver, userIface, ifaceEv, ifaceHandler, isAdd)
             }
             if isEventCapableOperator &&
                 boundReceiver.Type is TypeParameterSymbol tpReceiver &&
@@ -1162,7 +1162,7 @@ internal partial class ExpressionBinder {
         // `TickHandler`) is expected, producing invalid IL. Route it (and any
         // other not-yet-matching handler shape) through the same conversion
         // the method-group branches above already apply.
-        return ConvertEventSubscriptionHandler(handlerSyntax, bound!!, targetDelegateType)
+        return ConvertEventSubscriptionHandler(handlerSyntax, bound, targetDelegateType)
     }
 
     private func ConvertEventSubscriptionHandler(
@@ -1541,7 +1541,7 @@ internal partial class ExpressionBinder {
             return call
         }
         let logicalType = if AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(call.Type, out var awaited) {
-            awaited!!
+            awaited
         } else {
             TypeSymbol.Void
         }

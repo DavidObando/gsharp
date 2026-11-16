@@ -78,7 +78,7 @@ internal class AssemblyAttributeEmitter {
             requireExternalVisibility: false,
             out var resolved
         ) {
-            resolved!!
+            resolved
         } else {
             throw InvalidOperationException(
                 "Reference assembly emit requires System.Runtime.CompilerServices.ReferenceAssemblyAttribute to be resolvable from the supplied references."
@@ -141,9 +141,9 @@ internal class AssemblyAttributeEmitter {
         if dashIdx >= 0 {
             versionStr = versionStr.Substring(0, dashIdx)
         }
-        let plusIdx = versionStr!!.IndexOf('+')
+        let plusIdx = versionStr.IndexOf('+')
         if plusIdx >= 0 {
-            versionStr = versionStr!!.Substring(0, plusIdx)
+            versionStr = versionStr.Substring(0, plusIdx)
         }
         if Version.TryParse(versionStr, out var v) {
             // Pad to four components for ECMA-335 assembly identity.
@@ -554,7 +554,7 @@ internal class AssemblyAttributeEmitter {
             requireExternalVisibility: false,
             out var resolved
         ) {
-            resolved!!
+            resolved
         } else {
             typeof(DebuggableAttribute)
         }

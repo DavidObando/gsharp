@@ -1190,7 +1190,7 @@ open class Compilation {
         if References == nil {
             return
         }
-        let references = References!!
+        let references = References
         this.References.CurrentAssemblyName = assemblyName ?? references.CurrentAssemblyName
     }
 

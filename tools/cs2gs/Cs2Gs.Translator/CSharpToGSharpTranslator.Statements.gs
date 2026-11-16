@@ -1158,7 +1158,7 @@ partial class CSharpToGSharpTranslator {
             var usePosition = expression!!.SpanStart
             expression = this.UnwrapTuplePreservingCasts(expression)
             while this.context.GetSymbolInfo(expression).Symbol is ILocalSymbol local {
-                if !visited!!.Add(local) {
+                if !visited.Add(local) {
                     break
                 }
                 let reaching = this.GetReachingLocalValues(local, usePosition, visited)
@@ -1325,7 +1325,7 @@ partial class CSharpToGSharpTranslator {
                 return Array.Empty[ExpressionSyntax]()
             }
             // Backedges retain the read's block; acyclic reads evaluate only its prefix below.
-            let predecessorBlocks = GetPredecessorClosure(graph!!, useBlock!!)
+            let predecessorBlocks = GetPredecessorClosure(graph!!, useBlock)
             let outputs = Dictionary[BasicBlock, HashSet[ExpressionSyntax]]()
             let assignedValues = Dictionary[AssignmentExpressionSyntax, ExpressionSyntax]()
             let elementAssignedValues = Dictionary[(Write string, Previous string), ExpressionSyntax]()
@@ -1383,14 +1383,14 @@ partial class CSharpToGSharpTranslator {
                 }
             } while changed
             let reaching = HashSet[ExpressionSyntax]()
-            for predecessor in useBlock!!.Predecessors {
+            for predecessor in useBlock.Predecessors {
                 if outputs.TryGetValue(predecessor.Source, out var predecessorValues) {
                     reaching.UnionWith(predecessorValues)
                 }
             }
             for var i = 0; i < useOperationIndex; i++ {
                 this.ApplyReachingOperation(
-                    useBlock!!.Operations[i],
+                    useBlock.Operations[i],
                     declaration,
                     initializer,
                     local,
@@ -1403,9 +1403,9 @@ partial class CSharpToGSharpTranslator {
                     preserveProvenance: preserveProvenance
                 )
             }
-            if useOperationIndex < useBlock!!.Operations.Length {
+            if useOperationIndex < useBlock.Operations.Length {
                 this.ApplyReachingOperation(
-                    useBlock!!.Operations[useOperationIndex],
+                    useBlock.Operations[useOperationIndex],
                     declaration,
                     initializer,
                     local,
@@ -1418,7 +1418,7 @@ partial class CSharpToGSharpTranslator {
                     usePosition,
                     preserveProvenance
                 )
-            } else if useBlock!!.BranchValue is {} branchValue {
+            } else if useBlock.BranchValue is {} branchValue {
                 this.ApplyReachingOperation(
                     branchValue,
                     declaration,
@@ -1583,7 +1583,7 @@ partial class CSharpToGSharpTranslator {
                 let reachesCallable = if anonymousFunction != nil {
                     this.DelegateExpressionReachesAnonymousFunction(
                         value,
-                        value!!.SpanStart,
+                        value.SpanStart,
                         anonymousFunction,
                         enclosingExecutable,
                         HashSet[ISymbol](SymbolEqualityComparer.Default),
@@ -1592,7 +1592,7 @@ partial class CSharpToGSharpTranslator {
                 } else {
                     callable is IMethodSymbol escapedLocalFunction && this.DelegateExpressionReachesLocalFunction(
                         value,
-                        value!!.SpanStart,
+                        value.SpanStart,
                         escapedLocalFunction,
                         HashSet[ISymbol](SymbolEqualityComparer.Default),
                         enclosingExecutable,
@@ -2300,8 +2300,8 @@ partial class CSharpToGSharpTranslator {
             if useBlock?.IsReachable != true {
                 return HashSet[int32]{0}
             }
-            let predecessorBlocks = GetPredecessorClosure(graph!!, useBlock!!)
-            let cycleStorageKey = if predecessorBlocks.Contains(useBlock!!) || scopedStorageKey.Length == 0 {
+            let predecessorBlocks = GetPredecessorClosure(graph!!, useBlock)
+            let cycleStorageKey = if predecessorBlocks.Contains(useBlock) || scopedStorageKey.Length == 0 {
                 scopedStorageKey
             } else {
                 "$scopedStorageKey@$usePosition"
@@ -2326,7 +2326,7 @@ partial class CSharpToGSharpTranslator {
             }
             let cycleCountBefore = activeCycleFlags.Count
             let blockCachePosition = if this.CanShareDelegateBlockOutputsAcrossPositions(storage, receiverOverride) {
-                -1 - useBlock!!.Ordinal
+                -1 - useBlock.Ordinal
             } else {
                 usePosition
             }
@@ -2433,7 +2433,7 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             var reaching = HashSet[int32]()
-            let useEntryStates = if useBlock!!.Kind == BasicBlockKind.Entry {
+            let useEntryStates = if useBlock.Kind == BasicBlockKind.Entry {
                 if callerChain == nil || callerChain.Count == 0 {
                     HashSet[int32]{0}
                 } else {
@@ -2470,10 +2470,10 @@ partial class CSharpToGSharpTranslator {
             } else {
                 HashSet[int32]()
             }
-            reaching.UnionWith(AccumulateBlockInputStates(graph!!, useBlock!!, useEntryStates, outputs))
+            reaching.UnionWith(AccumulateBlockInputStates(graph!!, useBlock, useEntryStates, outputs))
             for var i = 0; i < useOperationIndex; i++ {
                 reaching = this.ApplyDelegateReachingOperation(
-                    useBlock!!.Operations[i],
+                    useBlock.Operations[i],
                     storage,
                     reaching,
                     anonymousFunction,
@@ -2488,9 +2488,9 @@ partial class CSharpToGSharpTranslator {
                     cycleFlags: activeCycleFlags
                 )
             }
-            if useOperationIndex < useBlock!!.Operations.Length {
+            if useOperationIndex < useBlock.Operations.Length {
                 reaching = this.ApplyDelegateReachingOperation(
-                    useBlock!!.Operations[useOperationIndex],
+                    useBlock.Operations[useOperationIndex],
                     storage,
                     reaching,
                     anonymousFunction,
@@ -2505,7 +2505,7 @@ partial class CSharpToGSharpTranslator {
                     activeCompleted,
                     activeCycleFlags
                 )
-            } else if useBlock!!.BranchValue is {} branchValue {
+            } else if useBlock.BranchValue is {} branchValue {
                 reaching = this.ApplyDelegateReachingOperation(
                     branchValue,
                     storage,
@@ -2649,7 +2649,7 @@ partial class CSharpToGSharpTranslator {
             if useBlock?.IsReachable != true {
                 return HashSet[int32]{0}
             }
-            let predecessorBlocks = GetPredecessorClosure(graph!!, useBlock!!)
+            let predecessorBlocks = GetPredecessorClosure(graph!!, useBlock)
             let entryStates = if callerChain == nil || callerChain.Count == 0 {
                 HashSet[int32]{0}
             } else {
@@ -2720,10 +2720,10 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
             } while changed
-            var reaching = AccumulateBlockInputStates(graph!!, useBlock!!, entryStates, outputs)
+            var reaching = AccumulateBlockInputStates(graph!!, useBlock, entryStates, outputs)
             for var i = 0; i < useOperationIndex; i++ {
                 reaching = this.ApplyLocalDelegateReachingOperation(
-                    useBlock!!.Operations[i],
+                    useBlock.Operations[i],
                     local,
                     reaching,
                     anonymousFunction,
@@ -2737,9 +2737,9 @@ partial class CSharpToGSharpTranslator {
                     cycleFlags: activeCycleFlags
                 )
             }
-            if useOperationIndex < useBlock!!.Operations.Length {
+            if useOperationIndex < useBlock.Operations.Length {
                 reaching = this.ApplyLocalDelegateReachingOperation(
-                    useBlock!!.Operations[useOperationIndex],
+                    useBlock.Operations[useOperationIndex],
                     local,
                     reaching,
                     anonymousFunction,
@@ -2753,7 +2753,7 @@ partial class CSharpToGSharpTranslator {
                     activeCompleted,
                     activeCycleFlags
                 )
-            } else if useBlock!!.BranchValue is {} branchValue {
+            } else if useBlock.BranchValue is {} branchValue {
                 reaching = this.ApplyLocalDelegateReachingOperation(
                     branchValue,
                     local,
@@ -7119,16 +7119,16 @@ partial class CSharpToGSharpTranslator {
             // more than a nullable annotation, spell the upcast (`arm as T`).
             // Mirrors CoerceSwitchArmValue's reference rule for switch
             // arms; each arm is coerced independently.
-            if resultType?.IsReferenceType == true && resultType!!.TypeKind != TypeKind.Error {
+            if resultType?.IsReferenceType == true && resultType.TypeKind != TypeKind.Error {
                 if trueType?.IsReferenceType == true &&
-                    trueType!!.TypeKind != TypeKind.Error &&
+                    trueType.TypeKind != TypeKind.Error &&
                     !SymbolEqualityComparer
                     .Default
                     .Equals(trueType, resultType) {
                     whenTrue = this.CoerceReferenceValueTo(conditional.WhenTrue, whenTrue, resultType)
                 }
                 if falseType?.IsReferenceType == true &&
-                    falseType!!.TypeKind != TypeKind.Error &&
+                    falseType.TypeKind != TypeKind.Error &&
                     !SymbolEqualityComparer
                     .Default
                     .Equals(falseType, resultType) {
@@ -8717,7 +8717,7 @@ partial class CSharpToGSharpTranslator {
                     .Length == 1 {
                     type = named.TypeArguments[0]
                 }
-                switch type!!.SpecialType {
+                switch type.SpecialType {
                     case SpecialType.System_Char,
                     SpecialType.System_SByte,
                     SpecialType.System_Byte,
@@ -8730,7 +8730,7 @@ partial class CSharpToGSharpTranslator {
                     SpecialType.System_Single,
                     SpecialType.System_Double,
                     SpecialType.System_Decimal {
-                        underlying = type!!.SpecialType
+                        underlying = type.SpecialType
                         return true
                     }
                     default {

@@ -117,7 +117,7 @@ shared class EmittedOracle {
             throw ArgumentException("At least one non-null source is required.", "sources")
         }
         options ??= EmittedOracleOptions()
-        let referencePaths = options!!
+        let referencePaths = options
             .References
             ?.Where((r string) -> !string.IsNullOrWhiteSpace(r))
             .ToArray() ??

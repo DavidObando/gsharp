@@ -18,6 +18,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import warnings
 import zipfile
 from pathlib import Path
 
@@ -64,11 +65,12 @@ METADATA = {
 def write_package(folder: Path, name: str, version: str, drop: tuple[str, ...] = (),
                   files: dict[str, str | bytes] | None = None, replace: dict[str, str] | None = None) -> None:
     """A .nupkg with a nuspec in the layout that `dotnet pack` writes, and the readme and icon files it names."""
-    fields = {**METADATA, **(replace or {})}
+    fields = {"id": f"<id>{name}</id>", "version": f"<version>{version}</version>",
+              **METADATA, **(replace or {})}
     metadata = "".join(text for field, text in fields.items() if field not in drop)
     nuspec = ('<?xml version="1.0" encoding="utf-8"?>'
               '<package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd">'
-              f"<metadata><id>{name}</id><version>{version}</version>{metadata}</metadata></package>")
+              f"<metadata>{metadata}</metadata></package>")
     contents: dict[str, str | bytes] = {f"{name}.nuspec": nuspec, "README.md": "# readme", "icon.png": b"png"}
     contents.update(files or {})
     write_zip(folder / f"{name}.{version}.nupkg", contents)
@@ -156,6 +158,69 @@ class VerifyNugetTests(unittest.TestCase):
     def test_prerelease_version_passes(self) -> None:
         make_packages(self.nupkgs, version="0.5.300-g1a2b3c4")
         self.assertEqual(self.verify().returncode, 0)
+
+    def test_embedded_identity_must_match_each_package_filename(self) -> None:
+        names = [f"Gsharp.NET.Sdk.Compiler.{rid}" for rid in RIDS] + list(OTHERS)
+        self.assertTrue(names)
+        for field, actual in (("id", "Other.Package"), ("version", "0.5.211")):
+            for name in names:
+                with self.subTest(field=field, package=name):
+                    make_packages(self.nupkgs)
+                    files = {"build/Gsharp.NET.Sdk.props": PROPS} if name == SDK else None
+                    write_package(self.nupkgs, name, "0.5.212", files=files,
+                                  replace={field: f"<{field}>{actual}</{field}>"})
+                    result = self.verify()
+                    expected = name if field == "id" else "0.5.212"
+                    self.assertEqual(result.returncode, 1, result.stdout)
+                    self.assertIn(f"error: {name}.0.5.212.nupkg: <{field}> is {actual!r}, expected {expected!r}",
+                                  result.stderr)
+
+    def test_embedded_identity_requires_one_nonempty_value(self) -> None:
+        name = "Gsharp.Templates"
+        for field, value in (("id", name), ("version", "0.5.212")):
+            for contents in ("", f"<{field}> </{field}>", f"<{field}>{value}</{field}>" * 2):
+                with self.subTest(field=field, contents=contents):
+                    make_packages(self.nupkgs)
+                    write_package(self.nupkgs, name, "0.5.212", replace={field: contents})
+                    result = self.verify()
+                    self.assertEqual(result.returncode, 1, result.stdout)
+                    self.assertIn(f"error: {name}.0.5.212.nupkg: expected one nonempty <{field}> in the .nuspec",
+                                  result.stderr)
+
+    def test_ambiguous_nuspec_metadata_fails(self) -> None:
+        name = "Gsharp.Templates"
+        path = self.nupkgs / f"{name}.0.5.212.nupkg"
+        nuspec = f"{name}.nuspec"
+        for duplicate in ("nuspec", "metadata"):
+            with self.subTest(duplicate=duplicate):
+                make_packages(self.nupkgs)
+                with zipfile.ZipFile(path) as archive:
+                    files = {entry: archive.read(entry) for entry in archive.namelist()}
+                if duplicate == "nuspec":
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore", UserWarning)
+                        with zipfile.ZipFile(path, "a") as archive:
+                            archive.writestr(nuspec, files[nuspec])
+                    error = "expected one .nuspec at the package root, found 2"
+                else:
+                    files[nuspec] = files[nuspec].replace(b"</metadata>", b"</metadata><metadata/>")
+                    write_zip(path, files)
+                    error = "expected one metadata element in the .nuspec, found 2"
+                result = self.verify()
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn(f"error: {path.name}: {error}", result.stderr)
+
+    def test_unreadable_nuspec_encoding_reports_a_verification_error(self) -> None:
+        name = "Gsharp.Templates"
+        for encoding in ("unknown", "utf-32"):
+            with self.subTest(encoding=encoding):
+                make_packages(self.nupkgs)
+                write_package(self.nupkgs, name, "0.5.212",
+                              files={f"{name}.nuspec": f'<?xml version="1.0" encoding="{encoding}"?><package/>'})
+                result = self.verify()
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(f"error: {name}.0.5.212.nupkg: cannot read the .nuspec:", result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
 
     def test_five_rid_packages_fail(self) -> None:
         make_packages(self.nupkgs, skip=("Gsharp.NET.Sdk.Compiler.osx-x64",))

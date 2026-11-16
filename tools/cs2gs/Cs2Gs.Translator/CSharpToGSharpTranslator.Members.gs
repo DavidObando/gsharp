@@ -880,7 +880,7 @@ partial class CSharpToGSharpTranslator {
                     symbol
                     ?.Type
                     ?.IsReferenceType == true &&
-                    symbol!!
+                    symbol
                     .Type
                     .NullableAnnotation == Microsoft
                     .CodeAnalysis
@@ -2074,11 +2074,11 @@ partial class CSharpToGSharpTranslator {
         private func IsPreservedOwnedExtension(method IMethodSymbol?) bool {
             let original IMethodSymbol? = method?.ReducedFrom ?? method
             if original?.IsExtensionMethod == true && !SymbolEqualityComparer.Default.Equals(
-                original!!.ContainingAssembly,
+                original.ContainingAssembly,
                 this.context.Compilation.Assembly
             ) {
-                let owner = this.context.SourceCompilation(original!!)
-                let declared = original!!.OriginalDefinition
+                let owner = this.context.SourceCompilation(original)
+                let declared = original.OriginalDefinition
                 if owner != nil && declared.DeclaringSyntaxReferences.FirstOrDefault() is SyntaxReference reference {
                     // Ask the declaring project's registry and eligibility reader,
                     // including its body-based suspension/nullability context.
@@ -2692,7 +2692,7 @@ partial class CSharpToGSharpTranslator {
             }
             // Interface members are implicitly abstract; canonical G# interface
             // members carry no `open` modifier (ADR-0115 §B.6).
-            let isAbstract = symbol?.IsAbstract == true && symbol!!.ContainingType.TypeKind != TypeKind.Interface
+            let isAbstract = symbol?.IsAbstract == true && symbol.ContainingType.TypeKind != TypeKind.Interface
             let isOpen = !isAbstract && this.IsMemberEmittedOpen(symbol, isOverride)
             // Issue #2362, ADR-0149: see the matching visibility comment in
             // TranslateMethod for the full rationale — a G# user-interface

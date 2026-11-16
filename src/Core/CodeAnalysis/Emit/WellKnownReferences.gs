@@ -329,7 +329,7 @@ internal class WellKnownReferences {
             }
             return embeddedType
         }
-        let typeRef = EntityHandle(this.getTypeReference(attrType!!))
+        let typeRef = EntityHandle(this.getTypeReference(attrType))
         this.isReadOnlyAttributeTypeRef = typeRef
         return typeRef
     }
@@ -359,7 +359,7 @@ internal class WellKnownReferences {
             requireExternalVisibility: false,
             out var resolved
         ) {
-            resolved!!
+            resolved
         } else {
             typeof(InAttribute)
         }
@@ -387,7 +387,7 @@ internal class WellKnownReferences {
             }
             return embeddedType
         }
-        let typeRef = EntityHandle(this.getTypeReference(attrType!!))
+        let typeRef = EntityHandle(this.getTypeReference(attrType))
         this.isExternalInitTypeRef = typeRef
         return typeRef
     }
@@ -423,7 +423,7 @@ internal class WellKnownReferences {
             }
             return embeddedCtor
         }
-        let attrTypeRef = this.getTypeReference(attrType!!)
+        let attrTypeRef = this.getTypeReference(attrType)
         let ctorSig = BlobBuilder()
         BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true).Parameters(
             0,
@@ -456,7 +456,7 @@ internal class WellKnownReferences {
             .emitCtx
             .References
             .TryResolveType("System.ParamArrayAttribute", requireExternalVisibility: false, out var resolved) {
-            resolved!!
+            resolved
         } else {
             typeof(ParamArrayAttribute)
         }
@@ -490,7 +490,7 @@ internal class WellKnownReferences {
             requireExternalVisibility: false,
             out var resolved
         ) {
-            resolved!!
+            resolved
         } else {
             typeof(IsByRefLikeAttribute)
         }
@@ -613,7 +613,7 @@ internal class WellKnownReferences {
             requireExternalVisibility: false,
             out var resolved
         ) {
-            resolved!!
+            resolved
         } else {
             typeof(AsyncStateMachineAttribute)
         }
@@ -621,7 +621,7 @@ internal class WellKnownReferences {
             .emitCtx
             .References
             .TryResolveType("System.Type", requireExternalVisibility: false, out var resolvedSystemType) {
-            resolvedSystemType!!
+            resolvedSystemType
         } else {
             typeof(Type)
         }
@@ -661,7 +661,7 @@ internal class WellKnownReferences {
             requireExternalVisibility: false,
             out var resolved
         ) {
-            resolved!!
+            resolved
         } else {
             typeof(DebuggerStepThroughAttribute)
         }
@@ -700,7 +700,7 @@ internal class WellKnownReferences {
             requireExternalVisibility: false,
             out var resolved
         ) {
-            resolved!!
+            resolved
         } else {
             typeof(CompilerGeneratedAttribute)
         }
@@ -739,7 +739,7 @@ internal class WellKnownReferences {
             requireExternalVisibility: false,
             out var resolved
         ) {
-            resolved!!
+            resolved
         } else {
             typeof(PreserveBaseOverridesAttribute)
         }
@@ -778,7 +778,7 @@ internal class WellKnownReferences {
             requireExternalVisibility: false,
             out var resolved
         ) {
-            resolved!!
+            resolved
         } else {
             typeof(UnsafeValueTypeAttribute)
         }
@@ -816,7 +816,7 @@ internal class WellKnownReferences {
             requireExternalVisibility: false,
             out var resolved
         ) {
-            resolved!!
+            resolved
         } else {
             typeof(FixedBufferAttribute)
         }
@@ -867,7 +867,7 @@ internal class WellKnownReferences {
             }
             return embeddedCtor
         }
-        let attrTypeRef = this.getTypeReference(attrType!!)
+        let attrTypeRef = this.getTypeReference(attrType)
         let ctorSig = BlobBuilder()
         BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true).Parameters(
             1,
@@ -907,7 +907,7 @@ internal class WellKnownReferences {
             }
             return embeddedCtor
         }
-        let attrTypeRef = this.getTypeReference(attrType!!)
+        let attrTypeRef = this.getTypeReference(attrType)
         let ctorSig = BlobBuilder()
         BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true).Parameters(
             1,
@@ -948,7 +948,7 @@ internal class WellKnownReferences {
         ) {
             return default(MemberReferenceHandle)
         }
-        let attrTypeRef = this.getTypeReference(attrType!!)
+        let attrTypeRef = this.getTypeReference(attrType)
         let ctorSig = BlobBuilder()
         BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true).Parameters(
             0,
@@ -987,7 +987,7 @@ internal class WellKnownReferences {
         ) {
             return default(MemberReferenceHandle)
         }
-        let attrTypeRef = this.getTypeReference(attrType!!)
+        let attrTypeRef = this.getTypeReference(attrType)
         let ctorSig = BlobBuilder()
         BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true).Parameters(
             1,
@@ -1031,7 +1031,7 @@ internal class WellKnownReferences {
             }
             return embeddedCtor
         }
-        let attrTypeRef = this.getTypeReference(attrType!!)
+        let attrTypeRef = this.getTypeReference(attrType)
         let ctorSig = BlobBuilder()
         BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true).Parameters(
             1,
@@ -1057,7 +1057,7 @@ internal class WellKnownReferences {
             .emitCtx
             .References
             .TryResolveType("System.ObsoleteAttribute", requireExternalVisibility: false, out var obsoleteResolved) {
-            obsoleteResolved!!
+            obsoleteResolved
         } else {
             typeof(ObsoleteAttribute)
         }
@@ -1088,7 +1088,7 @@ internal class WellKnownReferences {
                 .emitCtx
                 .References
                 .TryResolveType("System.Attribute", requireExternalVisibility: false, out var resolved) {
-                resolved!!
+                resolved
             } else {
                 typeof(Attribute)
             }
@@ -1128,7 +1128,7 @@ internal class WellKnownReferences {
             .emitCtx
             .References
             .TryResolveType("System.NullReferenceException", requireExternalVisibility: false, out var resolved) {
-            resolved!!
+            resolved
         } else {
             typeof(NullReferenceException)
         }
@@ -1169,7 +1169,7 @@ internal class WellKnownReferences {
             .emitCtx
             .References
             .TryResolveType("System.NullReferenceException", requireExternalVisibility: false, out var resolved) {
-            resolved!!
+            resolved
         } else {
             typeof(NullReferenceException)
         }
@@ -1552,7 +1552,7 @@ internal class WellKnownReferences {
             return this.hashCodeTypeRef
         }
         let hashCodeType = if this.TryResolveEmbeddableAttribute("System.HashCode", out var resolved) {
-            resolved!!
+            resolved
         } else {
             typeof(HashCode)
         }

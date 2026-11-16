@@ -57,7 +57,7 @@ open class IlVerifyRunner {
         }
         this.EnsureToolAvailable()
         let references = BuildReferenceSet(assemblyPath, additionalReferences)
-        let verifierArgs = List[string]{assemblyPath!!, "-s", "System.Private.CoreLib", "--verbose"}
+        let verifierArgs = List[string]{assemblyPath, "-s", "System.Private.CoreLib", "--verbose"}
         for reference in references {
             verifierArgs.Add("-r")
             verifierArgs.Add(reference)
@@ -108,12 +108,12 @@ open class IlVerifyRunner {
         while exit != 0 && exit != 2 {
             let crashingMember string? = FindLastVerifyingMember(output)
             if string.IsNullOrEmpty(crashingMember) || excludedMembers.Contains(
-                crashingMember!!,
+                crashingMember,
                 StringComparer.Ordinal
             ) {
                 break
             }
-            excludedMembers.Add(crashingMember!!)
+            excludedMembers.Add(crashingMember)
             if usedGlobalTool {
                 let retryVerifierArgs = List[string](verifierArgs)
                 for member in excludedMembers {
@@ -137,7 +137,7 @@ open class IlVerifyRunner {
         var shadowOutput = string.Empty
         if droppedFilterInFinally {
             shadowVerified = this.VerifyShadowFilterInFinally(
-                assemblyPath!!,
+                assemblyPath,
                 verifierArgs,
                 excludedMembers,
                 usedGlobalTool,
@@ -519,7 +519,7 @@ open class IlVerifyRunner {
             ) {
                 return false
             }
-            let generatedContextMethod = error.Method!!.StartsWith(
+            let generatedContextMethod = error.Method.StartsWith(
                 "CompiledAvaloniaXaml.XamlIlContext+Context`1::",
                 StringComparison.Ordinal
             )
@@ -563,7 +563,7 @@ open class IlVerifyRunner {
             }
             let outputDirectory string? = Path.GetDirectoryName(fullAssembly)
             if !string.IsNullOrEmpty(outputDirectory) && Directory.Exists(outputDirectory) {
-                for reference in Directory.EnumerateFiles(outputDirectory!!, "*.dll", SearchOption.TopDirectoryOnly)
+                for reference in Directory.EnumerateFiles(outputDirectory, "*.dll", SearchOption.TopDirectoryOnly)
                     .OrderBy((path string) -> path, StringComparer.Ordinal) {
                     Add(reference)
                 }
@@ -594,7 +594,7 @@ open class IlVerifyRunner {
                 return Array.Empty[string]()
             }
             let refs = List[string]()
-            for path in Directory.EnumerateFiles(runtimeDir!!, "*.dll", SearchOption.TopDirectoryOnly) {
+            for path in Directory.EnumerateFiles(runtimeDir, "*.dll", SearchOption.TopDirectoryOnly) {
                 let name = Path.GetFileName(path)
                 if name.StartsWith("System.", StringComparison.OrdinalIgnoreCase) || string.Equals(
                     name,

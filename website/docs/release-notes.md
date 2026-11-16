@@ -30,7 +30,21 @@ The published **0.5** documentation snapshot and all current installation/downlo
 - **Bind effect trust and catalogs to immutable provenance** (#5326). Do not trust loaded assemblies through replaceable `Assembly.Location` files. Require captured load images or exact canonical compiler framework bindings. Retain the original one-argument `UseSemanticModelFor` CLR overload. Capture one shared immutable catalog version per translation context, so caller list changes cannot mix old ownership/effect indexes with live projection inputs; new contexts observe new versions.
 - **Use selected execution and ownership contracts in call effects** (#5326). Keep immediate LINQ callbacks immediate when their result type is an enumerable type argument. Share deferred-method decisions across region analysis, bound summaries, and translation. Carry selected owners through projection and initializer queries, retain owned projection-consumer contexts, and isolate corrupt file references without suppressing Roslyn diagnostics. Snapshot tests exercise actual file inputs, shared immutable images, and continued healthy reads. Preserve the five-argument `TranslationContext` constructor ABI for compiled consumers while retaining cancellation support.
 - **Preserve actual reference images and semantic owners in call effects** (#5326). Do not rebind arbitrary Roslyn images through supplied file paths. Carry selected method and caller-callback compilation ownership across shared syntax trees. Share immutable ownership indexes across document contexts with cancellation-safe publication and an active-model fast path.
+- Specify the released `Gsharp.NET.Sdk` `0.5.698` instead of `0.5.460-g21e3f30fa3` for repository builds. Remove diagnosed redundant null assertions, use explicit byte conversions in nullable-metadata checks, declare the common compilation type for reassignment, and match readonly-reference call modifiers. Keep required runtime null checks and the .NET SDK policy unchanged. (Fixes #6028)
+
+- Renew the independently witnessed, explicitly approved finite runtime certificate for the new compiler output. Retain the old certificate and the same complete two `AsSpan` diagnostics. Full ILVerify still reports two known upstream errors; this is not strict-clean verification. Keep rejection controls and upstream tracking open. (Part of #5244)
+
+- Keep the repository's unchanged .NET SDK policy in the hot-reload E2E sample. Watch subprocesses no longer select SDK 11 on multi-SDK hosts. Check SDK selection before starting watch; retain all runtime assertions and wait thresholds. (Fixes #5976)
+
+- Check imported generic `class`, `struct`, and `new()` constraints before reading type-bound constraints. Missing type-bound dependencies no longer bypass known special flags. The older unreadable type-bound fallback remains unchanged pending ADR-0209's post-stage-7 follow-up (#5176). (Fixes #6023)
+
+- Document the twelve acknowledged imported-attribute support gaps, including partial marker readers and the distinction from source attributes. This changes documentation only; compiler behavior is unchanged. (Fixes #5177)
+
+- Clarify ADR-0209's existing public-copy preference for well-known types, nonpublic fallback, and searched/dependency module partition. Consumer-specific access remains compilation-owned. This changes documentation only. (Fixes #5204)
+
 - Construct expanded List and span variadic carriers over source-declared elements and generic type parameters. Preserve symbolic element types through ordinary constructor emission, including nullable elements and nested collections. Normal-form arguments retain their carrier identity. (Fixes #6010)
+
+- Reject release packages whose embedded nuspec ID or version differs from the filename. Reuse package metadata verification before publishing. (Fixes #5550)
 
 - Preserve nullable scalar storage in oblivious `cs2gs` jagged-array allocations. Reuse depth-aware storage contracts for allocations, declarations, aliases, and element reads. Keep nullable array references separate from nullable elements. Range slices keep the array depth; scalar indices consume an element position. Preserve allocation, copy, and row-assignment order. (Fixes #6006)
 

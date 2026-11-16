@@ -2187,7 +2187,7 @@ partial class CSharpToGSharpTranslator {
             }
             var targetSymbol = symbol
             var targetAllocated = allocated
-            var targetCompilation = this.context.Compilation
+            var targetCompilation Compilation = this.context.Compilation
             if targetSymbol.DeclaringSyntaxReferences.IsDefaultOrEmpty {
                 let sourceDeclaration = ObliviousNullabilityAnalyzer.RunSourceDeclarations(
                     targetSymbol.OriginalDefinition,

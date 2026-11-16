@@ -23,7 +23,7 @@ internal shared class ExpressionTreeRestrictionValidator {
         }
         if !MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(targetType, out var delegateType) ||
             !MemberLookup
-            .TryGetDelegateFunctionTypeFromSymbol(delegateType!!, out _) {
+            .TryGetDelegateFunctionTypeFromSymbol(delegateType, out _) {
             diagnostics.ReportExpressionTreeTargetMustBeDelegate(
                 if literal.Syntax != nil {
                     literal.Syntax!!.Location

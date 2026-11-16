@@ -213,7 +213,7 @@ class TranslateStage : IMigrationStage {
                 if string.IsNullOrEmpty(referencedProject.ProjectPath) {
                     continue
                 }
-                let referencedPath = Path.GetFullPath(referencedProject.ProjectPath!!)
+                let referencedPath = Path.GetFullPath(referencedProject.ProjectPath)
                 let referencedAssemblyName string? = referencedProject.Compilation.AssemblyName
                 if knownProjectReferences.TryGetValue(referencedPath, out var existingIndex) {
                     let existing = context.ProjectReferences[existingIndex]
@@ -244,14 +244,14 @@ class TranslateStage : IMigrationStage {
         context.EvaluatedProjectReferencesResolved = true
         for referencedProject in(sdkReferencedProjects ?? projects).Skip(1) {
             if !string.IsNullOrEmpty(referencedProject.ProjectPath) {
-                let referencedPath = Path.GetFullPath(referencedProject.ProjectPath!!)
+                let referencedPath = Path.GetFullPath(referencedProject.ProjectPath)
                 if !context.EvaluatedProjectReferencePaths.Contains(referencedPath, StringComparer.OrdinalIgnoreCase) {
                     context.EvaluatedProjectReferencePaths.Add(referencedPath)
                 }
             }
         }
         if project.EvaluatedProjectReferencePaths != nil {
-            for evaluatedReferencePath in project.EvaluatedProjectReferencePaths!! {
+            for evaluatedReferencePath in project.EvaluatedProjectReferencePaths {
                 if !string.IsNullOrEmpty(evaluatedReferencePath) {
                     let fullEvaluatedPath = Path.GetFullPath(evaluatedReferencePath)
                     if !context.EvaluatedProjectReferencePaths.Contains(
@@ -309,7 +309,7 @@ class TranslateStage : IMigrationStage {
             for peReference in currentProject.Compilation.References.OfType[PortableExecutableReference]() {
                 let referencePath string? = peReference.FilePath
                 if !string.IsNullOrEmpty(referencePath) && File.Exists(referencePath) {
-                    context.ExternalReferencePaths.Add(referencePath!!)
+                    context.ExternalReferencePaths.Add(referencePath)
                 }
             }
             // Issue #2215: only the app's OWN analyzer/generator references
@@ -898,7 +898,7 @@ class TranslateStage : IMigrationStage {
                 if string.IsNullOrEmpty(referencedProject.ProjectPath) {
                     continue
                 }
-                let referencedPath = Path.GetFullPath(referencedProject.ProjectPath!!)
+                let referencedPath = Path.GetFullPath(referencedProject.ProjectPath)
                 if IsExcludedOrPassthroughProject(referencedPath, context.Options) {
                     continue
                 }
@@ -1491,7 +1491,7 @@ class TranslateStage : IMigrationStage {
             relativePath = if string.IsNullOrEmpty(directory) {
                 fileName
             } else {
-                Path.Combine(directory!!, fileName)
+                Path.Combine(directory, fileName)
             }
             return UniqueOutputPath(
                 PrefixReferencedProject(relativePath, project, isReferencedProject),
@@ -1535,7 +1535,7 @@ class TranslateStage : IMigrationStage {
                 let candidate = if string.IsNullOrEmpty(directory) {
                     fileName
                 } else {
-                    Path.Combine(directory!!, fileName)
+                    Path.Combine(directory, fileName)
                 }
                 if usedOutputPaths.Add(candidate) {
                     return candidate
