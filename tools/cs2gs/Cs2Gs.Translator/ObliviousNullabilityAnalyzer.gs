@@ -2808,7 +2808,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 nil
             }
             if source != nil &&
-                SameParamsElement(source, parameter!!) &&
+                SameParamsElement(source, parameter) &&
                 IsNullArgumentCandidate(source.OriginalDefinition) &&
                 IsEmittedByRun(source, run.Members) &&
                 NullArgumentKeys(source) is {Count: > 0} sourceKeys {
@@ -2816,7 +2816,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             } else {
                 // Do not rely on unchecked invariant C[T] -> C[T?] conversions.
                 let element = if value != nil {
-                    ParamsArgumentElementType(model.GetTypeInfo(value).Type, parameter!!.Type)
+                    ParamsArgumentElementType(model.GetTypeInfo(value).Type, parameter.Type)
                 } else {
                     nil
                 }
@@ -3390,7 +3390,7 @@ internal shared class ObliviousNullabilityAnalyzer {
     /// @param parameter The params parameter.
     /// @returns Its element type, or nil for another parameter shape.
     func ParamsElementType(parameter IParameterSymbol?) ITypeSymbol? -> if parameter?.IsParams == true {
-        ParamsCollectionElementType(parameter!!.Type)
+        ParamsCollectionElementType(parameter.Type)
     } else {
         nil
     }

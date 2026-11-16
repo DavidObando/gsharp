@@ -558,7 +558,7 @@ open partial class TypeSymbol : Symbol {
                         let boundParameters = Math.Min(definition.TypeParameters.Length, del.TypeArguments.Length)
                         // An unbound definition can still expose used formal slots.
                         visitedDelegates ??= HashSet[(DelegateTypeSymbol, int32)]()
-                        if !visitedDelegates!!.Add((definition, boundParameters)) {
+                        if !visitedDelegates.Add((definition, boundParameters)) {
                             return false
                         }
                         let MatchSignatureParameter = func (parameter TypeParameterSymbol) bool {

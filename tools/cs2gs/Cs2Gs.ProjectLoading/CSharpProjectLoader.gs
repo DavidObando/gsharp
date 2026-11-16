@@ -1733,11 +1733,11 @@ shared class CSharpProjectLoader {
                     continue
                 }
                 let rawPath = element.Attribute(XName?("Project")!!)?.Value
-                if string.IsNullOrWhiteSpace(rawPath) || rawPath!!.Contains("$$(", StringComparison.Ordinal) ||
-                    rawPath!!.Contains("@(", StringComparison.Ordinal) {
+                if string.IsNullOrWhiteSpace(rawPath) || rawPath.Contains("$$(", StringComparison.Ordinal) ||
+                    rawPath.Contains("@(", StringComparison.Ordinal) {
                     continue
                 }
-                let normalized = rawPath!!.Replace('\\', Path.DirectorySeparatorChar).Replace(
+                let normalized = rawPath.Replace('\\', Path.DirectorySeparatorChar).Replace(
                     '/',
                     Path.DirectorySeparatorChar
                 )
@@ -1818,7 +1818,7 @@ shared class CSharpProjectLoader {
             if string.IsNullOrEmpty(path) || !File.Exists(path) {
                 return
             }
-            let full = Path.GetFullPath(path!!)
+            let full = Path.GetFullPath(path)
             if IsUnderObjOrBin(full, projectDirectory) {
                 return
             }
@@ -1830,7 +1830,7 @@ shared class CSharpProjectLoader {
             Add(additional.FilePath)
         }
         if !string.IsNullOrEmpty(projectDirectory) && Directory.Exists(projectDirectory) {
-            for axaml in Directory.EnumerateFiles(projectDirectory!!, "*.axaml", SearchOption.AllDirectories) {
+            for axaml in Directory.EnumerateFiles(projectDirectory, "*.axaml", SearchOption.AllDirectories) {
                 Add(axaml)
             }
         }
@@ -1891,10 +1891,10 @@ shared class CSharpProjectLoader {
         if string.IsNullOrEmpty(projectDirectory) || !Directory.Exists(projectDirectory) {
             return ImmutableArray[string].Empty
         }
-        let objPrefix = Path.Combine(projectDirectory!!, "obj").Replace('\\', '/').TrimEnd('/') + "/"
-        let binPrefix = Path.Combine(projectDirectory!!, "bin").Replace('\\', '/').TrimEnd('/') + "/"
+        let objPrefix = Path.Combine(projectDirectory, "obj").Replace('\\', '/').TrimEnd('/') + "/"
+        let binPrefix = Path.Combine(projectDirectory, "bin").Replace('\\', '/').TrimEnd('/') + "/"
         return Directory
-            .EnumerateFiles(projectDirectory!!, "*.resx", SearchOption.AllDirectories)
+            .EnumerateFiles(projectDirectory, "*.resx", SearchOption.AllDirectories)
             .Where(
             (path string) -> {
                 let normalized = path.Replace('\\', '/')

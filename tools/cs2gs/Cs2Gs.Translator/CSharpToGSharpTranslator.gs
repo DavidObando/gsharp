@@ -1799,7 +1799,7 @@ partial class CSharpToGSharpTranslator {
             // be named) leaves off only the attributes that name it, in any position (see
             // TranslateOwnerScopedCompanion).
             return original?.IsExtensionMethod == true &&
-                HasPrivateNestedAggregate(original!!.ContainingType) &&
+                HasPrivateNestedAggregate(original.ContainingType) &&
                 (
                 TryGetOwnedExtensionReceiver(original, out _) ||
                     SignatureTypesNamePrivateNestedType(original) ||

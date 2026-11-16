@@ -1521,7 +1521,7 @@ shared class GSharpPrinter {
         if next.IsHole || string.IsNullOrEmpty(next.Text) {
             return false
         }
-        let first = next.Text!![0]
+        let first = next.Text[0]
         return char.IsLetterOrDigit(first) || first == '_'
     }
 

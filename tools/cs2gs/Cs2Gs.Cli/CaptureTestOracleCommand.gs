@@ -89,7 +89,7 @@ internal shared class CaptureTestOracleCommand {
             return 1
         }
         let root string? = CanonicalRootPath.Resolve(corpus)
-        outDir = Path.GetFullPath(outDir!!)
+        outDir = Path.GetFullPath(outDir)
         Directory.CreateDirectory(outDir)
         let apps = ValidateCommand.ApplyExclusions(RepositoryDiscovery.Discover(root), options)
         for appId in appIds {

@@ -880,7 +880,7 @@ partial class CSharpToGSharpTranslator {
                     symbol
                     ?.Type
                     ?.IsReferenceType == true &&
-                    symbol!!
+                    symbol
                     .Type
                     .NullableAnnotation == Microsoft
                     .CodeAnalysis
@@ -2082,7 +2082,7 @@ partial class CSharpToGSharpTranslator {
         private func IsPreservedOwnedExtension(method IMethodSymbol?) bool {
             let original IMethodSymbol? = method?.ReducedFrom ?? method
             if original?.IsExtensionMethod == true && !SymbolEqualityComparer.Default.Equals(
-                original!!.ContainingAssembly,
+                original.ContainingAssembly,
                 this.context.Compilation.Assembly
             ) {
                 let owner CSharpCompilation? = this
@@ -2097,9 +2097,9 @@ partial class CSharpToGSharpTranslator {
                         .OfType[CSharpCompilation]()
                 )
                     .FirstOrDefault(
-                    (compilation CSharpCompilation) -> SameAssembly(compilation.Assembly, original!!.ContainingAssembly)
+                    (compilation CSharpCompilation) -> SameAssembly(compilation.Assembly, original.ContainingAssembly)
                 )
-                let id string? = original!!.OriginalDefinition.GetDocumentationCommentId()
+                let id string? = original.OriginalDefinition.GetDocumentationCommentId()
                 if owner != nil && id != nil && DocumentationCommentId.GetFirstSymbolForDeclarationId(
                     id,
                     owner
@@ -2720,7 +2720,7 @@ partial class CSharpToGSharpTranslator {
             }
             // Interface members are implicitly abstract; canonical G# interface
             // members carry no `open` modifier (ADR-0115 §B.6).
-            let isAbstract = symbol?.IsAbstract == true && symbol!!.ContainingType.TypeKind != TypeKind.Interface
+            let isAbstract = symbol?.IsAbstract == true && symbol.ContainingType.TypeKind != TypeKind.Interface
             let isOpen = !isAbstract && this.IsMemberEmittedOpen(symbol, isOverride)
             // Issue #2362, ADR-0149: see the matching visibility comment in
             // TranslateMethod for the full rationale — a G# user-interface

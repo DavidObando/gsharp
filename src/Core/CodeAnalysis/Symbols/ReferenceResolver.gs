@@ -465,7 +465,7 @@ class ReferenceResolver : IDisposable {
             // mapped through `emittedTypeNameIndex` to reach `resolved`;
             // `Assembly.GetType(fullName)` on that canonical spelling finds no
             // duplicate at all, silently skipping this whole preference.
-            let scanName = resolved!!.FullName ?? fullName
+            let scanName = resolved.FullName ?? fullName
             for assembly in this.assemblies {
                 let candidate Type? = SafeGetType(assembly, scanName)
                 if candidate != nil && IsExternallyResolvable(candidate) {
@@ -508,7 +508,7 @@ class ReferenceResolver : IDisposable {
         if !TryResolveType("System.Object", out var objectType) {
             return false
         }
-        let name string? = objectType!!.Assembly.GetName().Name
+        let name string? = objectType.Assembly.GetName().Name
         return string.Equals(name, "netstandard", StringComparison.OrdinalIgnoreCase) || string.Equals(
             name,
             "mscorlib",
@@ -655,7 +655,7 @@ class ReferenceResolver : IDisposable {
         }
         if type.GetType() == typeof(object).GetType() {
             if TryMapClrTypeToReferences(type, out var projected) {
-                lookupType = projected!!
+                lookupType = projected
                 return true
             }
         } else if !IsHostFallback(
@@ -811,7 +811,7 @@ class ReferenceResolver : IDisposable {
         }
         let fullName = hostType.FullName
         if !string.IsNullOrEmpty(fullName) &&
-            TryResolveType(fullName!!, requireExternalVisibility: false, out var mapped) &&
+            TryResolveType(fullName, requireExternalVisibility: false, out var mapped) &&
             mapped != nil {
             return mapped
         }
@@ -838,7 +838,7 @@ class ReferenceResolver : IDisposable {
     /// @exception InvalidOperationException Thrown when no referenced assembly defines the requested type.
     func GetCoreType(fullName string) Type {
         if TryResolveType(fullName, out var t) {
-            return t!!
+            return t
         }
         throw InvalidOperationException("Core type '$fullName' could not be resolved from the supplied references.")
     }
@@ -1010,13 +1010,13 @@ class ReferenceResolver : IDisposable {
         let nameIndex = CurrentNameIndex()
         if nameIndex.TryGetValue(fullName, out var assemblyIndex) &&
             TryMaterializeIndexedType(fullName, assemblyIndex, out var indexed) {
-            resolveCache.TryAdd(fullName, indexed!!)
+            resolveCache.TryAdd(fullName, indexed)
             type = indexed
             return true
         }
-        if TryFindRawTypeName(fullName, out var rawName) && nameIndex.TryGetValue(rawName!!, out assemblyIndex) &&
-            TryMaterializeIndexedType(rawName!!, assemblyIndex, out indexed) {
-            resolveCache.TryAdd(fullName, indexed!!)
+        if TryFindRawTypeName(fullName, out var rawName) && nameIndex.TryGetValue(rawName, out assemblyIndex) &&
+            TryMaterializeIndexedType(rawName, assemblyIndex, out indexed) {
+            resolveCache.TryAdd(fullName, indexed)
             type = indexed
             return true
         }
@@ -1230,11 +1230,11 @@ class ReferenceResolver : IDisposable {
 
         override func Resolve(context MetadataLoadContext, assemblyName AssemblyName) Assembly? {
             let simpleName = assemblyName?.Name
-            if !string.IsNullOrEmpty(simpleName) && assemblyBytes.TryGetValue(simpleName!!, out var bytes) {
+            if !string.IsNullOrEmpty(simpleName) && assemblyBytes.TryGetValue(simpleName, out var bytes) {
                 try {
                     let asm = context.LoadFromByteArray(bytes)
                     ReferenceResolver.RegisterAssemblyContentFingerprint(asm, bytes, GetImage)
-                    if assemblyPaths.TryGetValue(simpleName!!, out var originalPath) {
+                    if assemblyPaths.TryGetValue(simpleName, out var originalPath) {
                         ReferenceResolver.RegisterAssemblyOriginalPath(asm, originalPath)
                     }
                     return asm
@@ -2039,7 +2039,7 @@ class ReferenceResolver : IDisposable {
 
         private func GetOrBuildTypeNameIndex(assemblies ImmutableArray[Assembly]) ReferenceTypeNameIndex {
             if TryGetAssemblySetFingerprintKey(assemblies, out var key) && ImageTypeNameIndexes.TryGetValue(
-                key!!,
+                key,
                 out var cached
             ) {
                 return cached

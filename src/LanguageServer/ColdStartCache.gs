@@ -402,10 +402,10 @@ internal shared class ColdStartCache {
         let fields = Dictionary[string, string](StringComparer.Ordinal)
         for raw in lines {
             let line = raw?.Trim()
-            if string.IsNullOrEmpty(line) || line!![0] == '#' {
+            if string.IsNullOrEmpty(line) || line[0] == '#' {
                 continue
             }
-            if line!![0] == '[' {
+            if line[0] == '[' {
                 if string.Equals(line, "[references]", StringComparison.Ordinal) || string.Equals(
                     line,
                     ReferenceMetadataIndex.SectionHeader,
@@ -415,12 +415,12 @@ internal shared class ColdStartCache {
                 }
                 continue
             }
-            let eq = line!!.IndexOf('=')
+            let eq = line.IndexOf('=')
             if eq <= 0 {
                 continue
             }
-            let key = line!!.Substring(0, eq).Trim()
-            let value = line!!.Substring(eq + 1).Trim()
+            let key = line.Substring(0, eq).Trim()
+            let value = line.Substring(eq + 1).Trim()
             if !fields.ContainsKey(key) {
                 fields[key] = value
             }

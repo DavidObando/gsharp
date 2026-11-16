@@ -71,7 +71,7 @@ shared class ResxCodeGenerator {
         var rootNamespace = rootNamespace
         rootNamespace ??= string.Empty
         if string.IsNullOrEmpty(projectDirectory) {
-            return rootNamespace!!
+            return rootNamespace
         }
         let fullResxDir = Path.GetDirectoryName(Path.GetFullPath(resxPath)) ?? string.Empty
         let fullProjectDir = Path.GetFullPath(projectDirectory).TrimEnd(
@@ -79,14 +79,14 @@ shared class ResxCodeGenerator {
             Path.AltDirectorySeparatorChar
         )
         if !fullResxDir.StartsWith(fullProjectDir, StringComparison.OrdinalIgnoreCase) {
-            return rootNamespace!!
+            return rootNamespace
         }
         let relative = fullResxDir.Substring(fullProjectDir.Length).TrimStart(
             Path.DirectorySeparatorChar,
             Path.AltDirectorySeparatorChar
         )
         if relative.Length == 0 {
-            return rootNamespace!!
+            return rootNamespace
         }
         let dotted = relative.Replace(Path.DirectorySeparatorChar, '.').Replace(Path.AltDirectorySeparatorChar, '.')
         return if string.IsNullOrEmpty(rootNamespace) {

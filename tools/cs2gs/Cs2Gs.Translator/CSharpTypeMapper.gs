@@ -728,7 +728,7 @@ class CSharpTypeMapper {
         }
         for import_ in imports {
             if import_.Alias != nil {
-                if !this.reservedTypeAliases.TryGetValue(import_.Alias!!, out var targets) {
+                if !this.reservedTypeAliases.TryGetValue(import_.Alias, out var targets) {
                     targets = HashSet[string](StringComparer.Ordinal)
                     this.reservedTypeAliases.Add(import_.Alias!!, targets)
                 }
@@ -1210,10 +1210,10 @@ class CSharpTypeMapper {
         }
         if shortName != simpleName &&
             (
-            this.reservedTypeAliases.ContainsKey(shortName!!) || this.synthesizedTypeAliases.ContainsKey(shortName!!) ||
+            this.reservedTypeAliases.ContainsKey(shortName) || this.synthesizedTypeAliases.ContainsKey(shortName) ||
                 this
                 .reservedImportedTypeNames
-                .Contains(shortName!!)
+                .Contains(shortName)
         ) {
             return false
         }
@@ -1345,8 +1345,8 @@ class CSharpTypeMapper {
                     namespaceName + ".",
                     StringComparison.Ordinal
                 ) {
-                    let namespaceAlias = this.GetOrCreateImportedNamespaceAlias(namespaceName!!, context, location)
-                    return namespaceAlias + qualifiedTarget[namespaceName!!.Length ..]
+                    let namespaceAlias = this.GetOrCreateImportedNamespaceAlias(namespaceName, context, location)
+                    return namespaceAlias + qualifiedTarget[namespaceName.Length ..]
                 }
             }
             let leadingAlias = this.GetOrCreateImportedNamespaceAlias(leadingSegment, context, location)
@@ -1843,7 +1843,7 @@ class CSharpTypeMapper {
         if this.nameAllocator == nil {
             return StripGlobalPrefix(type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat))
         }
-        let nameAllocator = this.nameAllocator!!
+        let nameAllocator = this.nameAllocator
         let parts = Stack[string]()
         var outermost INamedTypeSymbol? = type
         for var current INamedTypeSymbol? = type; current != nil; current = current!!.ContainingType {
@@ -2135,7 +2135,7 @@ class CSharpTypeMapper {
             let roslynName = "${named.ContainingNamespace.ToDisplayString()}.${named.Name}"
             if RoslynAnalyzerApiMap.TryMapType(roslynName, out var mapped) {
                 if !string.IsNullOrEmpty(mapped.GsNamespace) && this.importTrackingSuppression == 0 {
-                    this.shortenedNamespaces.Add(mapped.GsNamespace!!)
+                    this.shortenedNamespaces.Add(mapped.GsNamespace)
                 }
                 if mapped.AdaptationNote != nil {
                     context.Report(
@@ -2339,7 +2339,7 @@ class CSharpTypeMapper {
         let definition = named.OriginalDefinition
         let key = "$simpleName`${definition.Arity}:${definition.ContainingNamespace.ToDisplayString()}"
         if this.barePrintedMetadataTypeKeys.Add(key) {
-            this.barePrintedMetadataTypes.Add((simpleName!!, definition))
+            this.barePrintedMetadataTypes.Add((simpleName, definition))
         }
     }
 
@@ -3628,10 +3628,10 @@ class CSharpTypeMapper {
                 if node is Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax expr {
                     let typeInfo = semanticModel.GetTypeInfo(expr)
                     if typeInfo.Type != nil {
-                        AddReferencedNamespaces(typeInfo.Type!!, names)
+                        AddReferencedNamespaces(typeInfo.Type, names)
                     }
                     if typeInfo.ConvertedType != nil {
-                        AddReferencedNamespaces(typeInfo.ConvertedType!!, names)
+                        AddReferencedNamespaces(typeInfo.ConvertedType, names)
                     }
                     if semanticModel.GetSymbolInfo(expr).Symbol is {} symbol {
                         if symbol.ContainingType != nil {
@@ -4322,7 +4322,7 @@ class CSharpTypeMapper {
             symbol INamedTypeSymbol
         ) GTypeReference? -> if symbol.ContainingType != nil &&
             mapped.ContainingType != nil {
-            MergeAnonymousNullability(mapped.ContainingType!!, symbol.ContainingType)
+            MergeAnonymousNullability(mapped.ContainingType, symbol.ContainingType)
         } else {
             mapped.ContainingType
         }

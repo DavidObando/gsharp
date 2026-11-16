@@ -270,7 +270,7 @@ stderr:
             return if string.IsNullOrWhiteSpace(value) {
                 cast[IEnumerable[string]](Array.Empty[string]())
             } else {
-                value!!.Split(Path.PathSeparator).Where(File.Exists)
+                value.Split(Path.PathSeparator).Where(File.Exists)
             }
         }
 

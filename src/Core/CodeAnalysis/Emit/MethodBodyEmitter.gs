@@ -1258,11 +1258,11 @@ internal partial class MethodBodyEmitter {
                 !TryGetClosedReferenceShape(b, out var bDef, out var bArgs) {
                 return false
             }
-            if !aDef.IsSameAs(bDef) || aArgs!!.Length != bArgs!!.Length {
+            if !aDef.IsSameAs(bDef) || aArgs.Length != bArgs.Length {
                 return false
             }
-            for var i = 0; i < aArgs!!.Length; i++ {
-                if aArgs!![i] == nil || bArgs!![i] == nil || !aArgs!![i].IsSameAs(bArgs!![i]) {
+            for var i = 0; i < aArgs.Length; i++ {
+                if aArgs[i] == nil || bArgs[i] == nil || !aArgs[i].IsSameAs(bArgs[i]) {
                     return false
                 }
             }

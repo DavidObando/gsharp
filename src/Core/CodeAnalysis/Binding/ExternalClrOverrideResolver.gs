@@ -241,7 +241,7 @@ internal shared class ExternalClrOverrideResolver {
                 continue
             }
             builder ??= ImmutableArray.CreateBuilder[UnimplementedAbstractMember]()
-            builder!!.Add(
+            builder.Add(
                 UnimplementedAbstractMember(
                     GetDeclaringTypeDisplayName(slot.DeclaringType),
                     GetMemberDisplayName(slot),
@@ -436,10 +436,10 @@ internal shared class ExternalClrOverrideResolver {
 
     private func GetGenericDefinition(type Type?) Type? -> if type?.IsGenericType == true {
         (
-            if type!!.IsGenericTypeDefinition {
+            if type.IsGenericTypeDefinition {
                 type
             } else {
-                type!!.GetGenericTypeDefinition()
+                type.GetGenericTypeDefinition()
             }
         )
     } else {
@@ -817,11 +817,11 @@ internal shared class ExternalClrOverrideResolver {
                 TypeSymbol.Void
             )
         }
-        if isAsync && IsClrNonGenericAsyncReturnType(clrReturnType!!, isValueTask) {
+        if isAsync && IsClrNonGenericAsyncReturnType(clrReturnType, isValueTask) {
             return returnRefKind == RefKind.None && returnType == TypeSymbol.Void
         }
         if isAsync {
-            if !TryUnwrapClrAsyncReturnType(clrReturnType!!, isValueTask, out var unwrappedReturnType) {
+            if !TryUnwrapClrAsyncReturnType(clrReturnType, isValueTask, out var unwrappedReturnType) {
                 return false
             }
             clrReturnType = unwrappedReturnType

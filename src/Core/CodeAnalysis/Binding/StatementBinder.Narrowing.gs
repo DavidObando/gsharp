@@ -5195,7 +5195,7 @@ internal partial class StatementBinder {
                         (path AccessPath, currentExists bool, _ TypeSymbol?, otherExists bool, _ TypeSymbol?) -> {
                             if !currentExists && otherExists {
                                 removedOnRebind ??= HashSet[SpeculativeFrameKey]()
-                                removedOnRebind!!.Add(SpeculativeFrameKey(savedFrame, path))
+                                removedOnRebind.Add(SpeculativeFrameKey(savedFrame, path))
                             }
                         }
                     )
@@ -6232,7 +6232,7 @@ internal partial class StatementBinder {
                     continue
                 }
                 if mayShareStorage != nil {
-                    if mayShareStorage!!(assigned, root) {
+                    if mayShareStorage(assigned, root) {
                         return true
                     }
                 } else if StatementBinder.SharesStorage(assigned, root) {
@@ -6901,7 +6901,7 @@ internal partial class StatementBinder {
 
         protected open override func VisitVariableDeclaration(node BoundVariableDeclaration) {
             if node.Initializer != nil && TryGetWritableReferenceOperand(node.Initializer, out var operand) {
-                writableReferenceAliases[node.Variable] = operand!!
+                writableReferenceAliases[node.Variable] = operand
             }
             base.VisitVariableDeclaration(node)
             let inFunctionLiteral = visitedFunctionLiterals.Count > 0
@@ -7833,9 +7833,9 @@ internal partial class StatementBinder {
                 let unknownCallable = IsUnknownCallable(initializer)
                 if TryGetFunctionLiterals(initializer, out var literals) {
                     if preserveCaptured && Literals.TryGetValue(node.Variable, out var existing) {
-                        existing.UnionWith(literals!!)
+                        existing.UnionWith(literals)
                     } else {
-                        Literals[node.Variable] = HashSet[BoundFunctionLiteralExpression](literals!!)
+                        Literals[node.Variable] = HashSet[BoundFunctionLiteralExpression](literals)
                     }
                     if unknownCallable {
                         Unknown.Add(node.Variable)
@@ -7897,9 +7897,9 @@ internal partial class StatementBinder {
                         node.Variable,
                         out var existing
                     ) {
-                        existing.UnionWith(literals!!)
+                        existing.UnionWith(literals)
                     } else {
-                        Literals[node.Variable] = HashSet[BoundFunctionLiteralExpression](literals!!)
+                        Literals[node.Variable] = HashSet[BoundFunctionLiteralExpression](literals)
                     }
                     if unknownCallable {
                         Unknown.Add(node.Variable)
@@ -8289,7 +8289,7 @@ internal partial class StatementBinder {
         // delegate stored in a variable.
         if syntax.TypeParameterList != nil {
             return if prepareGenericLocalFunctionDeclaration != nil {
-                prepareGenericLocalFunctionDeclaration!!(syntax)()
+                prepareGenericLocalFunctionDeclaration(syntax)()
             } else {
                 throw InvalidOperationException(
                     "Generic local-function declarations require prepareGenericLocalFunctionDeclaration to be wired."
@@ -8441,7 +8441,7 @@ internal partial class StatementBinder {
                     // that declares the variable into the current scope before
                     // the body binds. The variable's type is the explicit type
                     // clause when present, else the literal's natural type.
-                    initializer = bindFunctionLiteralWithSelfDeclaration!!(
+                    initializer = bindFunctionLiteralWithSelfDeclaration(
                         literalInitializer,
                         (fn FunctionSymbol, fnType FunctionTypeSymbol) -> {
                             // Issue #3501 A2: a literal with `ref`/`out`/`in`
@@ -8550,7 +8550,7 @@ internal partial class StatementBinder {
                 // real generic method, not the erased-delegate adapter) are unaffected.
                 if initializer is BoundFunctionLiteralExpression functionLiteral &&
                     checkNonGenericLocalFunctionEnclosingTypeParameterReference != nil {
-                    checkNonGenericLocalFunctionEnclosingTypeParameterReference!!(
+                    checkNonGenericLocalFunctionEnclosingTypeParameterReference(
                         syntax.Identifier.Location,
                         syntax.Identifier.ValueText,
                         functionLiteral
@@ -8620,20 +8620,18 @@ internal partial class StatementBinder {
         }
         variable!!.HasDefinitelyNonNullValue = isReadOnly &&
             !(variableType is NullableTypeSymbol) &&
-            IsDefinitelyNonNullValue(convertedInitializer!!)
-        variable!!.CallableParameterNameTree = BuildCallableParameterNameTree(convertedInitializer!!)
+            IsDefinitelyNonNullValue(convertedInitializer)
+        variable!!.CallableParameterNameTree = BuildCallableParameterNameTree(convertedInitializer)
         // ADR-0058 / issue #376: propagate `scoped` modifier from syntax to the local symbol,
         // or infer function-local escape scope from the initializer (STE data-flow propagation).
         if variable is LocalVariableSymbol localVar {
-            localVar.HoldsScopedManagedReference |= ManagedReferenceOrigins.IsScopedHandle(convertedInitializer!!)
+            localVar.HoldsScopedManagedReference |= ManagedReferenceOrigins.IsScopedHandle(convertedInitializer)
             localVar.IsScoped |= localVar.HoldsScopedManagedReference
             if localVar.IsReadOnly && variableType is ByRefTypeSymbol {
                 localVar.ManagedReferenceOrigin = if convertedInitializer is BoundAddressOfExpression address {
                     address.Operand
                 } else {
-                    cast[BoundExpression](
-                        BoundDereferenceExpression(convertedInitializer!!.Syntax, convertedInitializer!!)
-                    )
+                    cast[BoundExpression](BoundDereferenceExpression(convertedInitializer.Syntax, convertedInitializer))
                 }
             }
             if syntax.IsScoped {
@@ -8806,7 +8804,7 @@ internal partial class StatementBinder {
             )
             return BoundVariableDeclaration(syntax, errorVar, BoundErrorExpression(nil))
         }
-        let initializer = bindExpression(syntax.Initializer!!, false)
+        let initializer = bindExpression(syntax.Initializer, false)
         if initializer is BoundErrorExpression {
             let errorVar = bindLocalVariableWithAccessibility(
                 syntax.Identifier,
@@ -9548,7 +9546,7 @@ internal partial class StatementBinder {
                 out var substitution,
                 out var receiverParamType
             ) {
-                extensionMatches.Add((candidate, substitution, receiverParamType!!))
+                extensionMatches.Add((candidate, substitution, receiverParamType))
             }
         }
         if extensionMatches.Count == 0 {
@@ -9881,11 +9879,11 @@ internal partial class StatementBinder {
                     continue
                 }
                 try {
-                    for var i = 0; i < typeArguments!!.Length; i++ {
-                        typeArguments!![i] = $scope.References!!.MapClrTypeToReferences(typeArguments!![i]) ??
-                            typeArguments!![i]
+                    for var i = 0; i < typeArguments.Length; i++ {
+                        typeArguments[i] = $scope.References!!.MapClrTypeToReferences(typeArguments[i]) ??
+                            typeArguments[i]
                     }
-                    closedCandidates.Add(candidate.MakeGenericMethod(typeArguments!!))
+                    closedCandidates.Add(candidate.MakeGenericMethod(typeArguments))
                 } catch (ArgumentException) { }
             }
             candidates = closedCandidates

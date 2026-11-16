@@ -90,14 +90,14 @@ internal shared class ImportedAssemblySemantics {
     internal func GetPrimaryConstructorMember(type Type, index int32) MemberInfo? {
         if !TryGetTypeSemantics(type, out var semantics) ||
             index < 0 ||
-            index >= semantics!!
+            index >= semantics
             .PrimaryConstructorParameterNames
             .Length {
             return nil
         }
         let flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly
         let fields = ClrTypeUtilities.SafeGetFields(type, flags)
-        let tokens = semantics!!.PrimaryConstructorParameterFieldTokens
+        let tokens = semantics.PrimaryConstructorParameterFieldTokens
         if !tokens.IsDefaultOrEmpty && index < tokens.Length && tokens[index] != 0 {
             return fields.FirstOrDefault(
                 (field FieldInfo) -> field.MetadataToken == tokens[index] && object.ReferenceEquals(
@@ -106,7 +106,7 @@ internal shared class ImportedAssemblySemantics {
                 )
             )
         }
-        let name = semantics!!.PrimaryConstructorParameterNames[index]
+        let name = semantics.PrimaryConstructorParameterNames[index]
         let field = fields.FirstOrDefault((candidate FieldInfo) -> candidate.Name == name)
         return if field != nil {
             cast[MemberInfo](field)
@@ -124,7 +124,7 @@ internal shared class ImportedAssemblySemantics {
             !TryGetTypeSemantics(type, out var semantics) {
             return nil
         }
-        let names = semantics!!.PrimaryConstructorParameterNames
+        let names = semantics.PrimaryConstructorParameterNames
         let flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly
         for ctor in ClrTypeUtilities.SafeGetConstructors(type, flags) {
             let parameters = ctor.GetParameters()
@@ -182,18 +182,18 @@ internal shared class ImportedAssemblySemantics {
         }
         if type.IsValueType ||
             !TryGetTypeSemantics(type, out var semantics) ||
-            !semantics!!.IsData ||
+            !semantics.IsData ||
             index < 0 ||
-            index >= semantics!!
+            index >= semantics
             .PrimaryConstructorParameterNames
             .Length {
             return nil
         }
-        let tokens = semantics!!.PrimaryConstructorParameterFieldTokens
+        let tokens = semantics.PrimaryConstructorParameterFieldTokens
         if !tokens.IsDefaultOrEmpty && index < tokens.Length && tokens[index] != 0 {
             return nil
         }
-        let names = semantics!!.PrimaryConstructorParameterNames
+        let names = semantics.PrimaryConstructorParameterNames
         let flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly
         var hasPositionalDeconstruct = false
         for method in ClrTypeUtilities.SafeGetMethods(type, flags) {
@@ -241,7 +241,7 @@ internal shared class ImportedAssemblySemantics {
     /// @returns Whether a different compilation may derive from the class.
     func IsInheritableClass(type Type) bool -> type.IsClass &&
         !type.IsSealed &&
-        (!TryGetTypeSemantics(type, out var semantics) || semantics!!.InheritanceMode == ImportedInheritanceMode.Open)
+        (!TryGetTypeSemantics(type, out var semantics) || semantics.InheritanceMode == ImportedInheritanceMode.Open)
 
     /// Issue #3329: looks up [`type`](paramref)'s magic-collection-field
     /// marker — the field-name-to-shape-tag map recorded by

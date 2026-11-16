@@ -34,7 +34,7 @@ shared class ServerCapabilitiesFactory {
             SelectionRangeProvider: true,
             LinkedEditingRangeProvider: true,
             CompletionProvider: CompletionOptions{
-                TriggerCharacters: if options!!.CompletionTriggerOnDot {
+                TriggerCharacters: if options.CompletionTriggerOnDot {
                     []string{"."}
                 } else {
                     Array.Empty[string]()
@@ -49,7 +49,7 @@ shared class ServerCapabilitiesFactory {
             CodeActionProvider: CodeActionOptions{
                 CodeActionKinds: []CodeActionKind{CodeActionKind.QuickFix, CodeActionKind.RefactorRewrite}
             },
-            CodeLensProvider: if options!!.ReferenceCodeLens {
+            CodeLensProvider: if options.ReferenceCodeLens {
                 CodeLensOptions{ResolveProvider: false}
             } else {
                 default(CodeLensOptions?)
@@ -59,7 +59,7 @@ shared class ServerCapabilitiesFactory {
                 Full: SemanticTokensServerFull{Delta: false},
                 Range: true
             },
-            InlayHintProvider: if options!!.ParameterNameInlayHints || options!!.TypeInlayHints {
+            InlayHintProvider: if options.ParameterNameInlayHints || options.TypeInlayHints {
                 InlayHintOptions{ResolveProvider: false}
             } else {
                 default(InlayHintOptions?)

@@ -94,7 +94,7 @@ internal shared class RepositoryMirror {
         let written = List[string]()
         for path in sourceFiles!! {
             let extension = Path.GetExtension(path)
-            if !extension.Equals(".csproj", StringComparison.OrdinalIgnoreCase) || !excludedScope!!.IsExcluded(path) ||
+            if !extension.Equals(".csproj", StringComparison.OrdinalIgnoreCase) || !excludedScope.IsExcluded(path) ||
                 csharpSourceDirectories.Contains(DirectoryOf(path)) {
                 continue
             }
@@ -133,7 +133,7 @@ internal shared class RepositoryMirror {
         let destination = Path.GetFullPath(destinationRoot!!)
         let written = List[string]()
         for path in sourceFiles!! {
-            if !passthroughScope!!.IsExcluded(path) {
+            if !passthroughScope.IsExcluded(path) {
                 continue
             }
             let extension = Path.GetExtension(path)
@@ -435,7 +435,7 @@ internal shared class RepositoryMirror {
                 string.IsNullOrWhiteSpace(importedSdk) ||
                     (
                     !SdkPin.IsGsharpSdkAttribute(importedSdk) && !string.Equals(
-                        importedSdk!!.Trim(),
+                        importedSdk.Trim(),
                         "Microsoft.NET.Sdk",
                         StringComparison.OrdinalIgnoreCase
                     )
@@ -510,7 +510,7 @@ internal shared class RepositoryMirror {
             generatedProjectPaths != nil &&
             generatedProjectPaths.Count != 0 {
             content ??= File.ReadAllText(source)
-            let document = XDocument.Parse(content!!, LoadOptions.PreserveWhitespace)
+            let document = XDocument.Parse(content, LoadOptions.PreserveWhitespace)
             if GSharpProjectTransformer.RewriteProjectItemPaths(
                 document,
                 Path.GetDirectoryName(source),
