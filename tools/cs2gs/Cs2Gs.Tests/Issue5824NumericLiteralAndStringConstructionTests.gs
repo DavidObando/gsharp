@@ -257,7 +257,8 @@ internal shared class LiteralConstructionRuntimeParity {
         verifyIL bool = false,
         expectedOutput string? = nil,
         verifyAssembly Action[string]? = nil,
-        nullableContextOptions NullableContextOptions = NullableContextOptions.Enable
+        nullableContextOptions NullableContextOptions = NullableContextOptions.Enable,
+        emittedSource string? = nil
     ) {
         let tree = CSharpSyntaxTree.ParseText(source, CSharpParseOptions(LanguageVersion.Latest), path: "Probe.cs")
         let library = if librarySource != nil {
@@ -288,7 +289,7 @@ internal shared class LiteralConstructionRuntimeParity {
         )
         let model = compilation.GetSemanticModel(tree)
         let context = TranslationContext(compilation, model, "Probe.cs")
-        var printed = GSharpPrinter.Print(
+        var printed = emittedSource ?? GSharpPrinter.Print(
             CSharpToGSharpTranslator().TranslateDocument(LoadedDocument("Probe.cs", tree, model), context)
         )
         if transform != nil {

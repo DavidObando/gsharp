@@ -15,6 +15,224 @@ import System.Text
 import Xunit
 
 class Issue5951SourceMaybeNullReturnTests {
+    @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func SpeculativeReturnContracts_UseEffectiveBodies(replacementNull bool, specialFirst bool) {
+        let Body = (returnsNull bool) -> "{ calls++; return " +
+            (
+            if returnsNull {
+                "Empty()"
+            } else {
+                "Task.FromResult(1)"
+            }
+        ) +
+            "; }"
+        let Source = (returnsNull bool) -> `
+#nullable disable
+using System;
+using System.Diagnostics.CodeAnalysis;
+using System.Threading.Tasks;
+public static class P
+{
+    static int calls;
+    [return: MaybeNull] static Task<int> Empty() => null;
+    static Task<int> Read() ` + Body(returnsNull) + `
+    public static void Main() { Console.WriteLine(Read()?.Result ?? -1); Console.WriteLine(calls); }
+}`
+        let tree = CSharpSyntaxTree.ParseText(Source(!replacementNull), path: "Speculative.cs")
+        let compilation = CSharpCompilation.Create(
+            "Speculative5951",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.ConsoleApplication).WithNullableContextOptions(
+                NullableContextOptions.Disable
+            )
+        )
+        let normal = compilation.GetSemanticModel(tree)
+        let original = tree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[MethodDeclarationSyntax]()
+            .Single((method MethodDeclarationSyntax) -> method.Identifier.ValueText == "Read")
+        let replacement = Assert.IsAssignableFrom[BaseMethodDeclarationSyntax](
+            SyntaxFactory.ParseMemberDeclaration("static Task<int> Read() " + Body(replacementNull))
+        )
+        Assert.True(
+            Microsoft
+                .CodeAnalysis
+                .CSharp
+                .CSharpExtensions
+                .TryGetSpeculativeSemanticModelForMethodBody(
+                normal,
+                original.Body!!.SpanStart,
+                replacement,
+                out var speculative
+            )
+        )
+        let supplied = speculative ?? throw InvalidOperationException("Speculative model missing.")
+        for isSpecial in[]bool{specialFirst, !specialFirst, specialFirst} {
+            let context = TranslationContext(
+                compilation,
+                if isSpecial {
+                    supplied
+                } else {
+                    normal
+                },
+                tree.FilePath
+            )
+            let returnsNull = if isSpecial {
+                replacementNull
+            } else {
+                !replacementNull
+            }
+            using let analysis = ObliviousNullabilityAnalyzer.UseCatalogScope(context)
+            Assert.Equal(
+                returnsNull,
+                ObliviousNullabilityAnalyzer.ReturnContractIsNullable(compilation, normal.GetDeclaredSymbol(original)!!)
+            )
+            let printed = GSharpPrinter.Print(
+                CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, normal), context)
+            )
+            LiteralConstructionRuntimeParity.AssertMatches(
+                Source(returnsNull),
+                emittedSource: printed,
+                verifyIL: true,
+                nullableContextOptions: NullableContextOptions.Disable,
+                expectedOutput: string.Join(
+                    Environment.NewLine,
+                    []string{
+                        if returnsNull {
+                            "-1"
+                        } else {
+                            "1"
+                        },
+                        "1",
+                        ""
+                    }
+                )
+            )
+        }
+    }
+
+    @Fact
+    func AllowNullStorage_PreservesTheEmittedWriteContract() {
+        LiteralConstructionRuntimeParity.AssertMatches(`
+#nullable enable
+using System;
+using System.Diagnostics.CodeAnalysis;
+using System.Threading.Tasks;
+public static class Store
+{
+    [AllowNull] public static Task<int> Current = Task.FromResult(1);
+    public static Task<int> Factory() => Task.FromResult(7);
+}
+#nullable disable
+public static class P
+{
+    static int calls;
+    [return: MaybeNull] static Task<int> Empty() { calls++; return null; }
+    static Task<int> Read() => Store.Current;
+    public static void Main()
+    {
+        Store.Current = Empty();
+        Console.WriteLine(Read() == null);
+        Console.WriteLine(Store.Factory().Result);
+        Console.WriteLine(calls);
+    }
+}`, verifyIL: true, nullableContextOptions: NullableContextOptions.Disable, expectedOutput: string.Join(
+                Environment.NewLine,
+                []string{"True", "7", "1", ""}
+            ))
+    }
+
+    @Fact
+    func NarrowedAsyncResults_RetainEnabledProducerContracts() {
+        const source = `
+#nullable enable
+using System;
+using System.Threading.Tasks;
+public static class Producer
+{
+    public static async Task<string> Present()
+    {
+        string? value = "ok";
+        await Task.Yield();
+        return value;
+    }
+    public static Task<string> Forward(Task<string> value) => value;
+}
+#nullable disable
+public static class P
+{
+    static Task<string> Read()
+    {
+        Task<string> copy = Producer.Present();
+        return Producer.Forward(copy);
+    }
+    public static void Main() => Console.WriteLine(Read().GetAwaiter().GetResult());
+}`
+        let project = CSharpProjectLoader.LoadInMemory([](string, string){("Narrowed.cs", source)})
+        let document = Assert.Single(project.Documents)
+        let copy = document
+            .SyntaxTree
+            .GetRoot()
+            .DescendantNodes()
+            .OfType[VariableDeclaratorSyntax]()
+            .Single((node VariableDeclaratorSyntax) -> node.Identifier.ValueText == "copy")
+        Assert.False(
+            ObliviousNullabilityAnalyzer.StoredAwaitedResultIsTainted(
+                project.Compilation,
+                document.SemanticModel.GetDeclaredSymbol(copy)!!,
+                nil
+            )
+        )
+        LiteralConstructionRuntimeParity.AssertMatches(
+            source,
+            verifyIL: true,
+            nullableContextOptions: NullableContextOptions.Disable,
+            expectedOutput: "ok" + Environment.NewLine
+        )
+    }
+
+    @Fact
+    func StructuralTaskOperators_PreserveProjectedPayloadSources() {
+        LiteralConstructionRuntimeParity.AssertMatches(`
+#nullable disable
+using System;
+using System.Diagnostics.CodeAnalysis;
+using System.Threading.Tasks;
+public static class P
+{
+    static int calls;
+    static async Task<string> Missing() { calls++; await Task.Yield(); return null; }
+    [return: MaybeNull] static Task<string> Outer(bool empty)
+    { calls++; return empty ? null : Missing(); }
+    static Task<string> Coalesced(bool empty) => Outer(empty) ?? Task.FromResult("control");
+    static Task<string> Suppressed(bool empty) => Outer(empty)!;
+    static async Task Read()
+    {
+        Task<string> coalesced = Outer(false) ?? Task.FromResult("control");
+        Task<string> suppressed = Outer(false)!;
+        Console.WriteLine(await Coalesced(false) == null);
+        Console.WriteLine(await Suppressed(false) == null);
+        Console.WriteLine(await coalesced == null);
+        Console.WriteLine(await suppressed == null);
+        Console.WriteLine(await (Outer(false) ?? Task.FromResult("control")) == null);
+        Console.WriteLine(await (Outer(false)!) == null);
+        Console.WriteLine(await Coalesced(true));
+        Console.WriteLine(Suppressed(true) == null);
+        Console.WriteLine(calls);
+    }
+    public static void Main() => Read().GetAwaiter().GetResult();
+}`, verifyIL: true, nullableContextOptions: NullableContextOptions.Disable, expectedOutput: string.Join(
+                Environment.NewLine,
+                []string{"True", "True", "True", "True", "True", "True", "control", "True", "14", ""}
+            ))
+    }
+
     @Fact
     func AttributedDelegateInvoke_PreservesSourceReturnContract() {
         LiteralConstructionRuntimeParity.AssertMatches(`

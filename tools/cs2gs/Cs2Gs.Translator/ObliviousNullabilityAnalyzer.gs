@@ -1527,9 +1527,9 @@ internal shared class ObliviousNullabilityAnalyzer {
         let nodes = graph.Nodes
         let tupleEdges = List[(Target TupleElementKey, Source TupleElementKey)]()
         for owner in owners {
-            for tree in owner.SyntaxTrees {
-                let model = TranslationContext.GetSemanticModel(owner, tree)
-                for syntax in TranslationContext.GetEffectiveNodes(tree.GetRoot(), owner) {
+            for root in TranslationContext.GetEffectiveSyntaxRoots(owner) {
+                for candidate in TranslationContext.GetEffectiveNodes(root, owner) {
+                    let syntax = TranslationContext.GetEffectiveDeclaration(candidate, owner, out var model)
                     for (parameter, value) in EnumerateArgumentValueFlows(syntax, model, includeGuarded: true) {
                         AddValueContractFlows(owner, parameter, value, model, graph, tupleEdges)
                     }
@@ -1578,7 +1578,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                             model.GetDeclaredSymbol(declaration) as INamedTypeSymbol
                         )?.DelegateInvokeMethod
                         case write is AssignmentExpressionSyntax: model.GetSymbolInfo(write.Left).Symbol
-                        default: model.GetDeclaredSymbol(syntax)
+                        default: TranslationContext.GetEffectiveDeclaredSymbol(model, syntax)
                     }
                     GetValueContractNode(owner, declared, graph)
                     let expressions = List[ExpressionSyntax]()
@@ -1647,9 +1647,9 @@ internal shared class ObliviousNullabilityAnalyzer {
         for owner in owners {
             CollectInterfaceImplementationEdges(owner, contractEdges, ScalarFlowPosition.Value)
             CollectOverrideContractEdges(owner, contractEdges, ScalarFlowPosition.Value)
-            for tree in owner.SyntaxTrees {
-                let model = TranslationContext.GetSemanticModel(owner, tree)
-                for (delegateType, invoke, source) in EnumerateDelegateReturnFlows(tree.GetRoot(), model) {
+            for root in TranslationContext.GetEffectiveSyntaxRoots(owner) {
+                let model = TranslationContext.GetEffectiveSemanticModel(owner, root.SyntaxTree)
+                for (delegateType, invoke, source) in EnumerateDelegateReturnFlows(root, model) {
                     if IsSourceDelegateType(owner, delegateType) &&
                         GetValueContractNode(owner, invoke, graph) != nil &&
                         GetValueContractNode(owner, source, graph) != nil {
@@ -1876,16 +1876,17 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         let annotated = method != nil && HasMaybeNullReturnContract(sourceOwner, method)
         let nullable = IsDeclaredNullablePosition(type)
+        let acceptsNull = path.Length == 0 && HasRunAllowNullWriteContract(source, graph.Owners)
         let canBeNullable = type.IsReferenceType &&
             (method == nil || !method.IsAsync) &&
-            (nullable || annotated || IsEligibleTupleLeaf(type))
+            (nullable || annotated || acceptsNull || IsEligibleTupleLeaf(type))
         if !canBeNullable && !IsTaskLike(type) {
             return nil
         }
         let node = ReturnContractNode(
             sourceOwner!!,
             source!!,
-            (nullable && !IsInferredStorage(source)) || annotated,
+            (nullable && !IsInferredStorage(source)) || annotated || acceptsNull,
             canBeNullable
         )
         node.TuplePath = path
@@ -1908,11 +1909,14 @@ internal shared class ObliviousNullabilityAnalyzer {
             .CodeAnalysis
             .NullableFlowState
             .NotNull
+        let guarded = IsNullGuardDominatedRead(expression, model) || IsNullGuardDominatedExpression(expression, model)
         if node
             .TuplePath
             .Length == 0 &&
             node.Symbol is IMethodSymbol{IsAsync: true} method &&
             IsEligibleTupleLeaf(SymbolValueType(method)) &&
+            !flowNotNull &&
+            !guarded &&
             IsDirectlyNullable(expression, model) {
             node.ResultSeed = true
         }
@@ -1925,7 +1929,6 @@ internal shared class ObliviousNullabilityAnalyzer {
         if node.Symbol is IPropertySymbol property && ImplementsBaseOrInterfaceMember(property) {
             return
         }
-        let guarded = IsNullGuardDominatedRead(expression, model) || IsNullGuardDominatedExpression(expression, model)
         if TryResolveTupleElementSource(expression, model, out var tupleSource) {
             node.TupleSources.Add((tupleSource, guarded))
         }
@@ -1940,9 +1943,12 @@ internal shared class ObliviousNullabilityAnalyzer {
                 (
                     model.Compilation,
                     item.Symbol,
-                    flowNotNull &&
-                        !IsInferredStorage(item.Symbol) &&
-                        IsDeclaredNullablePosition(SymbolDeclaredType(item.Symbol)),
+                    item.RootNarrowed ||
+                        (
+                        flowNotNull &&
+                            !IsInferredStorage(item.Symbol) &&
+                            IsDeclaredNullablePosition(SymbolDeclaredType(item.Symbol))
+                    ),
                     item.AwaitDepth - (
                         if node.TuplePath.Length == 0 && node.Symbol is IMethodSymbol{IsAsync: true} {
                             1
@@ -1950,7 +1956,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                             0
                         }
                     ),
-                    guarded
+                    guarded || item.RootGuarded
                 )
             )
         }
@@ -2001,22 +2007,33 @@ internal shared class ObliviousNullabilityAnalyzer {
             if awaitDepth == 1 && node.ResultSeed {
                 return true
             }
+            let atValueRoot = node
+                .TuplePath
+                .Length == 0 &&
+                node.Symbol is IMethodSymbol{IsAsync: true} &&
+                awaitDepth == 1
             let nullableSource = node.Sources.Any(
-                (item(Owner Compilation, Symbol ISymbol, Narrowed bool, AwaitDepth int32, Guarded bool)) ->
-                ReturnSourceIsNullable(
-                    item.Owner,
-                    item.Symbol,
-                    projectedGraph,
-                    requirePromotion,
-                    awaitDepth + item.AwaitDepth,
-                    seen
-                )
+                (item(Owner Compilation, Symbol ISymbol, Narrowed bool, AwaitDepth int32, Guarded bool)) -> {
+                    if atValueRoot && item.Guarded {
+                        return false
+                    }
+                    return ReturnSourceIsNullable(
+                        item.Owner,
+                        item.Symbol,
+                        projectedGraph,
+                        requirePromotion || (atValueRoot && item.Narrowed),
+                        awaitDepth + item.AwaitDepth,
+                        seen
+                    )
+                }
             )
             if nullableSource {
                 return true
             }
             return node.TupleSources.Any(
-                (item(Source TupleElementKey, Guarded bool)) -> ReturnSourceIsNullable(
+                (item(Source TupleElementKey, Guarded bool)) ->
+                !(atValueRoot && item.Guarded) &&
+                    ReturnSourceIsNullable(
                     node.Owner,
                     item.Source.ContractSymbol!!,
                     projectedGraph,
@@ -11815,6 +11832,9 @@ internal shared class ObliviousNullabilityAnalyzer {
     ) {
         let pending = Queue[(Owner Compilation, Symbol ISymbol, AwaitDepth int32)]()
         for source in ResolveSourceFlows(value, model, $scope) {
+            if position == ScalarFlowPosition.Value && (source.RootGuarded || source.RootNarrowed) {
+                continue
+            }
             pending.Enqueue(
                 (
                     model.Compilation,
@@ -11906,7 +11926,14 @@ internal shared class ObliviousNullabilityAnalyzer {
                 }
             }
             if depth == 1 && source is IMethodSymbol returning && HasProjectedReturnResult(returning) {
-                edges.Add((target, Canonical(returning)!!))
+                let emitted = if sourceOwner != nil {
+                    RemapMemberOwner(sourceOwner, returning) ?? declaration
+                } else {
+                    returning
+                }
+                if IsEligibleTupleLeaf(SymbolValueType(emitted)) {
+                    edges.Add((target, Canonical(returning)!!))
+                }
                 continue
             }
             if sourceOwner != nil && declaration != nil {
@@ -12191,7 +12218,9 @@ internal shared class ObliviousNullabilityAnalyzer {
         resultType ITypeSymbol? = nil
     ) sequence[ISymbol?] {
         for source in ResolveSourceFlows(expression, model, $scope, respectNullGuards, readConversion, resultType) {
-            yield Canonical(source.Symbol)
+            if !source.RootGuarded && !source.RootNarrowed {
+                yield Canonical(source.Symbol)
+            }
         }
     }
 
@@ -12202,7 +12231,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         respectNullGuards bool = false,
         readConversion bool = true,
         resultType ITypeSymbol? = nil
-    ) sequence[(Symbol ISymbol, AwaitDepth int32)] {
+    ) sequence[(Symbol ISymbol, AwaitDepth int32, RootGuarded bool, RootNarrowed bool)] {
         if GetContextualOperator(expression, model, resultType) is IMethodSymbol contextualOperator {
             if CanForwardConversionOperandNullability(
                 resultType,
@@ -12214,7 +12243,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 }
             }
             if !IsNonNullableValueType(resultType) {
-                yield (contextualOperator, 0)
+                yield (contextualOperator, 0, false, false)
             }
             yield break
         }
@@ -12243,15 +12272,20 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
             case awaitExpression is AwaitExpressionSyntax {
                 for source in ResolveSourceFlows(awaitExpression.Expression, model, $scope, respectNullGuards) {
-                    yield (source.Symbol, source.AwaitDepth + 1)
+                    yield (source.Symbol, source.AwaitDepth + 1, false, false)
                 }
             }
             case suppress is PostfixUnaryExpressionSyntax when suppress.IsKind(
                 SyntaxKind.SuppressNullableWarningExpression
             ) {
-                yield break
+                for source in ResolveSourceFlows(suppress.Operand, model, $scope, respectNullGuards) {
+                    yield (source.Symbol, source.AwaitDepth, source.RootGuarded, true)
+                }
             }
             case coalesce is BinaryExpressionSyntax when coalesce.IsKind(SyntaxKind.CoalesceExpression) {
+                for source in ResolveSourceFlows(coalesce.Left, model, $scope, respectNullGuards) {
+                    yield (source.Symbol, source.AwaitDepth, true, source.RootNarrowed)
+                }
                 for source in ResolveSourceFlows(coalesce.Right, model, $scope, respectNullGuards) {
                     yield source
                 }
@@ -12279,7 +12313,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
             case invocation is InvocationExpressionSyntax {
                 if model.GetSymbolInfo(invocation).Symbol is IMethodSymbol called && !called.ReturnsVoid {
-                    yield (called, 0)
+                    yield (called, 0, false, false)
                 }
             }
             case access is ElementAccessExpressionSyntax when
@@ -12287,7 +12321,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 $scope != SourceScope.CallsAndNonPropertyDeclarations &&
                 model
                 .GetSymbolInfo(access).Symbol is IPropertySymbol property && IsRefStorageSymbol(property) {
-                yield (property, 0)
+                yield (property, 0, false, false)
             }
             case access is ElementAccessExpressionSyntax when $scope != SourceScope.CallsOnly {
                 let (owner, depth) = RefArrayStorage(access, model)
@@ -12298,7 +12332,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                     .TryGetValue(owner, out var positions) &&
                     positions.TryGetValue(depth, out var sources) {
                     for source in sources {
-                        yield (source, 0)
+                        yield (source, 0, false, false)
                     }
                 }
                 if owner != nil &&
@@ -12308,7 +12342,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                     .TryGetValue(owner, out var outputPositions) &&
                     outputPositions.TryGetValue(depth, out var outputs) {
                     for output in outputs {
-                        yield (output, 0)
+                        yield (output, 0, false, false)
                     }
                 }
             }
@@ -12327,7 +12361,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                     yield break
                 }
                 if IsValueDeclarationSymbol(symbol) || symbol is IMethodSymbol {
-                    yield (symbol, 0)
+                    yield (symbol, 0, false, false)
                 }
             }
         }
@@ -12338,7 +12372,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         model SemanticModel,
         $scope SourceScope,
         respectNullGuards bool
-    ) sequence[(Symbol ISymbol, AwaitDepth int32)] {
+    ) sequence[(Symbol ISymbol, AwaitDepth int32, RootGuarded bool, RootNarrowed bool)] {
         if value is IConversionOperation conversion {
             if CanForwardCastOperandNullability(conversion) {
                 for source in ResolveSourceFlows(conversion.Operand, model, $scope, respectNullGuards) {
@@ -12346,7 +12380,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 }
             }
             if conversion.OperatorMethod is {} method && !IsNonNullableValueType(conversion.Type) {
-                yield (method, 0)
+                yield (method, 0, false, false)
             }
         } else if value?.Syntax is ExpressionSyntax expression {
             for source in ResolveSourceFlows(expression, model, $scope, respectNullGuards, readConversion: false) {
