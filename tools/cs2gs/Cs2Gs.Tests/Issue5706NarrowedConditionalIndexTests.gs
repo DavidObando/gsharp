@@ -29,8 +29,125 @@ import Xunit
 /// Each test also compares the translated program's output with C#.
 open class Issue5706NarrowedConditionalIndexTests {
     @Fact
+    func CurrentStatementPrefix_PreservesOrderedAndConditionalEvaluation() {
+        Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System;
+public static class Demo
+{
+    static Action? clear;
+    sealed class Token { public static implicit operator Token(string value) { clear?.Invoke(); return new Token(); } }
+    static char? Second(string first, char? second) => second;
+    static void Keep(string value) {}
+    static char? Tuple() { string? s = null; var pair = ((s ??= "a"), s?[0]); return pair.Item2; }
+    static char? Argument() { string? s = null; return Second(s ??= "b", s?[0]); }
+    static char? Optional(bool enabled) { string? s = null; return enabled ? Second(s ??= "c", s?[0]) : s?[0]; }
+    static char? Logical(bool enabled) { string? s = null; var ignored = enabled && Second(s ??= "l", s?[0]) != null; return s?[0]; }
+    static char? Declarators() { string? s = null; char? first = (s ??= "f")[0], second = s?[0]; return second; }
+    static char? Incrementors() { string? s = null; char? result = null; for (int i = 0; i < 1; Keep(s ??= "i"), result = s?[0], i++) {} return result; }
+    static char? Written() { string? s = null; var triple = ((s ??= "d"), s = null, s?[0]); return triple.Item3; }
+    static char? Converted() { string? s = null; clear = () => s = null; var pair = ((Token)(s ??= "e"), s?[0]); return pair.Item2; }
+    public static string Run() => Tuple() + "|" + Argument() + "|" + Optional(false) + "|" + Optional(true) + "|" +
+        Logical(false) + "|" + Logical(true) + "|" + Declarators() + "|" + Incrementors() + "|" + Written() + "|" + Converted();
+}`, rejectConditionalIndexWarnings: true, strictIl: true, expectedOutput: "a|b||c||l|f|i||")
+    }
+
+    @Fact
+    func CurrentStatementPrefix_RespectsOptionalHandlerHoles() {
+        Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using HandlerLibrary;
+public static class Demo
+{
+    static int holes;
+    static string Touch(string value) { holes++; return value; }
+    static char? Check(bool enabled, bool append)
+    {
+        string? s = null;
+        Api.Write(enabled, append, $"p{(s ??= Touch("a")) + s?[0]}");
+        return s?[0];
+    }
+    public static string Run() => Check(false, true) + "|" + Check(true, false) + "|" + Check(true, true) +
+        "|" + holes + ":" + Api.Constructors + ":" + Api.Appends + ":" + Api.Calls;
+}`, `
+#nullable enable
+using System.Runtime.CompilerServices;
+namespace HandlerLibrary;
+[InterpolatedStringHandler]
+public struct Handler {
+    private readonly bool append;
+    public Handler(int literalLength, int formattedCount, bool enabled, out bool shouldAppend)
+        : this(literalLength, formattedCount, enabled, true, out shouldAppend) {}
+    public Handler(int literalLength, int formattedCount, bool enabled, bool append, out bool shouldAppend) {
+        this.append = append;
+        shouldAppend = enabled;
+        Api.Constructors++;
+    }
+    public bool AppendLiteral(string value) { Api.Appends++; return append; }
+    public bool AppendFormatted(string? value) { Api.Appends++; return append; }
+}
+public static class Api {
+    public static int Constructors, Appends, Calls;
+    public static void Write(bool enabled, bool append, [InterpolatedStringHandlerArgument("enabled", "append")] Handler handler) { Calls++; }
+}`, rejectConditionalIndexWarnings: true, strictIl: true, expectedOutput: "||a|1:3:3:3")
+    }
+
+    @Fact
+    func ConditionExit_ExportsAssignmentsAndRetainsLaterInvalidation() {
+        Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System;
+public static class Demo
+{
+    static bool Keep(string value, bool result) => result;
+    static bool Invoke(string value, Action action) { action(); return true; }
+    static char? Plain(bool result) { string? s = null; if (Keep(s ??= "a", result)) {} return s?[0]; }
+    static char? Changed(bool result) { string? s = null; if (Keep(s ??= "b", result)) { s = null; } return s?[0]; }
+    static char? Captured() { string? s = null; if (Invoke(s ??= "c", () => s = null)) {} return s?[0]; }
+    public static string Run() => Plain(false) + "|" + Plain(true) + "|" + Changed(false) + "|" + Changed(true) + "|" + Captured();
+}`, rejectConditionalIndexWarnings: true, strictIl: true, expectedOutput: "a|a|b||")
+    }
+
+    @Fact
+    func ErasedNameOf_PreservesFactsButNotContextualConversionEffects() {
+        Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System;
+public static class Demo
+{
+    static Action? clear;
+    sealed class Token { public static implicit operator Token(string value) { clear?.Invoke(); return new Token(); } }
+    static char? Plain() { string? s = null; Action reset = () => s = null; s = "a"; var name = nameof(s.Length); return s?[0]; }
+    static char? Converted() { string? s = null; clear = () => s = null; s = "b"; Token name = nameof(s.Length); return s?[0]; }
+    public static string Run() => Plain() + "|" + Converted();
+}`, rejectConditionalIndexWarnings: true, strictIl: true, expectedOutput: "a|")
+    }
+
+    @Fact
+    func DroppedWrites_DoNotEscapeClosuresOrInvalidateLoopFacts() {
+        Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System;
+using System.Diagnostics;
+public static partial class Demo
+{
+    static int effects, calls;
+    static partial void Skip(Action action);
+    static partial void Skip(string? value);
+    [Conditional("OMITTED")] static void Trace(string? value) { calls++; }
+    static void Keep() { calls++; }
+    static string? Reset() { effects++; return null; }
+    static char? Closure() { string? s = null; s = "c"; Skip(() => s = null); Keep(); return s?[0]; }
+    static char? ConditionalLoop() { string? s = null; s = "l"; for (int i = 0; i < 2; i++) { Trace(s = Reset()); } return s?[0]; }
+    static char? PartialLoop() { string? s = null; s = "p"; for (int i = 0; i < 2; i++) { Skip(s = Reset()); } return s?[0]; }
+    public static string Run() => Closure() + "|" + ConditionalLoop() + "|" + PartialLoop() + "|" + effects + ":" + calls;
+}`, rejectConditionalIndexWarnings: true, strictIl: true, expectedOutput: "c|l|p|0:1")
+    }
+
+    @Fact
     func ElidedCalls_DoNotExportArgumentFactsOrEffects() {
         let printed = Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#define ACTIVE
 #define UNUSED
 #define OMITTED
 #undef OMITTED
@@ -46,7 +163,7 @@ using System.Diagnostics;
         static partial void Implemented(string value);
         static partial void Implemented(string value) { calls++; }
         [Conditional("OMITTED")] static void Trace(string value) { calls++; }
-        static void TraceOn(string value) { calls++; }
+        [Conditional("ACTIVE")] static void TraceOn(string value) { calls++; }
         sealed partial class Receiver
         {
             partial void Skip(string value);
@@ -75,6 +192,7 @@ using System.Diagnostics;
             Positive() + "|" + arguments + ":" + calls;
     }
 `, rejectConditionalIndexWarnings: true, expectedOutput: "||a||h|i|||k|3:3")
+        Assert.Contains(`@Conditional("ACTIVE")`, printed)
         Assert.Contains("cast[char?](s[0])", printed)
         Assert.Contains("s?[0]", printed)
         Assert.DoesNotContain("Skip(", printed)

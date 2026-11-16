@@ -100,29 +100,33 @@ partial class CSharpToGSharpTranslator {
                         requireRuntimeNonNullProof
                     )
                 }
-                if step.Statement is ForStatementSyntax forLoop {
-                    let declaration = forLoop.Declaration
-                    if declaration != nil && declaration.Span.End <= effectiveTarget.SpanStart {
-                        proof = this.GetGSharpAssignmentNarrowingProof(
-                            declaration,
+                for child in step.Statement.ChildNodes() {
+                    if child.SpanStart >= effectiveTarget.SpanStart {
+                        break
+                    }
+                    if child is not ExpressionSyntax && child is not VariableDeclarationSyntax {
+                        continue
+                    }
+                    // Incrementors precede the body in source, but run only after an iteration.
+                    if step.Statement is ForStatementSyntax forLoop &&
+                        child is ExpressionSyntax clause &&
+                        forLoop
+                        .Incrementors
+                        .Contains(clause) && !forLoop.Incrementors.Any(
+                        (incrementor ExpressionSyntax) -> incrementor.Span.Contains(effectiveTarget.Span)
+                    ) {
+                        continue
+                    }
+                    if this.ExpressionHasCoalescingAssignment(child) {
+                        proof = this.GetGSharpInitializerMutationProof(
+                            child,
                             symbol,
                             expression,
                             $scope,
                             proof,
-                            requireRuntimeNonNullProof
+                            requireRuntimeNonNullProof,
+                            before: effectiveTarget
                         )
-                    }
-                    for initializer in forLoop.Initializers {
-                        if initializer.Span.End <= effectiveTarget.SpanStart {
-                            proof = this.GetGSharpAssignmentNarrowingProof(
-                                initializer,
-                                symbol,
-                                expression,
-                                $scope,
-                                proof,
-                                requireRuntimeNonNullProof
-                            )
-                        }
                     }
                 }
             }
@@ -219,18 +223,14 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             if statement is IfStatementSyntax conditional {
-                let entry = if this.AssignmentNarrowingReachesEntry(symbol, inherited, conditional.Condition, $scope) &&
-                    !this
-                    .AssignmentRegionInvalidatesNarrowing(
-                    symbol,
+                let entry = this.GetGSharpAssignmentNarrowingProof(
                     conditional.Condition,
-                    conditional.Condition.SpanStart,
-                    conditional.Condition.Span.End
-                ) {
-                    inherited
-                } else {
-                    default(SyntaxNode?)
-                }
+                    symbol,
+                    use,
+                    $scope,
+                    inherited,
+                    requireRuntimeNonNullProof
+                )
                 let thenProof = this.GetGSharpAssignmentNarrowingProof(
                     conditional.Statement,
                     symbol,
@@ -297,7 +297,7 @@ partial class CSharpToGSharpTranslator {
             )
         }
 
-        private func ExpressionHasCoalescingAssignment(expression ExpressionSyntax) bool ->
+        private func ExpressionHasCoalescingAssignment(expression SyntaxNode) bool ->
         expression.DescendantNodesAndSelf((node SyntaxNode) -> !this.IsClosureBoundary(node)).Any(
             (node SyntaxNode) -> node.IsKind(SyntaxKind.CoalesceAssignmentExpression)
         )
@@ -435,16 +435,24 @@ partial class CSharpToGSharpTranslator {
             use ExpressionSyntax,
             $scope SyntaxNode,
             inherited SyntaxNode?,
-            requireRuntimeNonNullProof bool
+            requireRuntimeNonNullProof bool,
+            before SyntaxNode? = nil
         ) SyntaxNode? {
+            if before != nil && node.SpanStart >= before.SpanStart {
+                return inherited
+            }
             let proof = this.GetGSharpInitializerMutationProofCore(
                 node,
                 symbol,
                 use,
                 $scope,
                 inherited,
-                requireRuntimeNonNullProof
+                requireRuntimeNonNullProof,
+                before
             )
+            if before != nil && node.Span.End > before.SpanStart {
+                return proof
+            }
             if node is ExpressionSyntax expression &&
                 this
                 .context
@@ -473,7 +481,8 @@ partial class CSharpToGSharpTranslator {
             use ExpressionSyntax,
             $scope SyntaxNode,
             inherited SyntaxNode?,
-            requireRuntimeNonNullProof bool
+            requireRuntimeNonNullProof bool,
+            before SyntaxNode?
         ) SyntaxNode? {
             var inherited = inherited
             if this.IsClosureBoundary(node) || this.IsDroppedStatementOrLoopClause(node) {
@@ -494,15 +503,38 @@ partial class CSharpToGSharpTranslator {
                     use,
                     $scope,
                     inherited,
-                    requireRuntimeNonNullProof
+                    requireRuntimeNonNullProof,
+                    before
                 )
+                if before != nil && conditional.Condition.Span.Contains(before.Span) {
+                    return entry
+                }
+                if before != nil &&
+                    (
+                    conditional.WhenTrue.Span.Contains(before.Span) || conditional.WhenFalse.Span.Contains(before.Span)
+                ) {
+                    return this.GetGSharpInitializerMutationProof(
+                        if conditional.WhenTrue.Span.Contains(before.Span) {
+                            conditional.WhenTrue
+                        } else {
+                            conditional.WhenFalse
+                        },
+                        symbol,
+                        use,
+                        $scope,
+                        entry,
+                        requireRuntimeNonNullProof,
+                        before
+                    )
+                }
                 let thenProof = this.GetGSharpInitializerMutationProof(
                     conditional.WhenTrue,
                     symbol,
                     use,
                     $scope,
                     entry,
-                    requireRuntimeNonNullProof
+                    requireRuntimeNonNullProof,
+                    before
                 )
                 let elseProof = this.GetGSharpInitializerMutationProof(
                     conditional.WhenFalse,
@@ -510,7 +542,8 @@ partial class CSharpToGSharpTranslator {
                     use,
                     $scope,
                     entry,
-                    requireRuntimeNonNullProof
+                    requireRuntimeNonNullProof,
+                    before
                 )
                 return if (thenProof != nil || conditional.WhenTrue is ThrowExpressionSyntax) &&
                     (elseProof != nil || conditional.WhenFalse is ThrowExpressionSyntax) {
@@ -532,8 +565,27 @@ partial class CSharpToGSharpTranslator {
                     use,
                     $scope,
                     inherited,
-                    requireRuntimeNonNullProof
+                    requireRuntimeNonNullProof,
+                    before
                 )
+                if before != nil {
+                    if switched.GoverningExpression.Span.Contains(before.Span) {
+                        return proof
+                    }
+                    for arm in switched.Arms {
+                        if arm.Span.Contains(before.Span) {
+                            return this.GetGSharpInitializerMutationProof(
+                                arm,
+                                symbol,
+                                use,
+                                $scope,
+                                proof,
+                                requireRuntimeNonNullProof,
+                                before
+                            )
+                        }
+                    }
+                }
                 // gsc exports discriminant assignments, not assignments that occur only in switch arms.
                 return if proof != nil && !this.AssignmentRegionInvalidatesNarrowing(
                     symbol,
@@ -558,7 +610,8 @@ partial class CSharpToGSharpTranslator {
                     use,
                     $scope,
                     inherited,
-                    requireRuntimeNonNullProof
+                    requireRuntimeNonNullProof,
+                    before
                 )
             }
             if node is ConditionalAccessExpressionSyntax conditionalAccess {
@@ -569,7 +622,8 @@ partial class CSharpToGSharpTranslator {
                     use,
                     $scope,
                     inherited,
-                    requireRuntimeNonNullProof
+                    requireRuntimeNonNullProof,
+                    before
                 )
             }
             if node is InterpolatedStringExpressionSyntax interpolation {
@@ -584,7 +638,8 @@ partial class CSharpToGSharpTranslator {
                             use,
                             $scope,
                             inherited,
-                            requireRuntimeNonNullProof
+                            requireRuntimeNonNullProof,
+                            before
                         )
                     }
                     operation = operation.Parent
@@ -600,10 +655,12 @@ partial class CSharpToGSharpTranslator {
                     use,
                     $scope,
                     inherited,
-                    requireRuntimeNonNullProof
+                    requireRuntimeNonNullProof,
+                    before
                 )
                 // The target has its own postcondition. Other symbols cannot gain facts from the optional RHS.
-                return if this.BindsTo(coalescing.Left, symbol) {
+                return if this.BindsTo(coalescing.Left, symbol) &&
+                    (before == nil || node.Span.End <= before.SpanStart) {
                     this.GetGSharpAssignmentStoreProof(
                         coalescing,
                         symbol,
@@ -625,8 +682,12 @@ partial class CSharpToGSharpTranslator {
                     use,
                     $scope,
                     proof,
-                    requireRuntimeNonNullProof
+                    requireRuntimeNonNullProof,
+                    before
                 )
+            }
+            if before != nil && node.Span.End > before.SpanStart {
+                return proof
             }
             if node is AssignmentExpressionSyntax assignment && this.BindsTo(assignment.Left, symbol) {
                 return this.GetGSharpAssignmentStoreProof(
@@ -668,7 +729,8 @@ partial class CSharpToGSharpTranslator {
             use ExpressionSyntax,
             $scope SyntaxNode,
             inherited SyntaxNode?,
-            requireRuntimeNonNullProof bool
+            requireRuntimeNonNullProof bool,
+            before SyntaxNode? = nil
         ) SyntaxNode? {
             let proof = if first == nil {
                 inherited
@@ -679,8 +741,58 @@ partial class CSharpToGSharpTranslator {
                     use,
                     $scope,
                     inherited,
-                    requireRuntimeNonNullProof
+                    requireRuntimeNonNullProof,
+                    before
                 )
+            }
+            if before != nil {
+                if conditionalOperand.SpanStart >= before.SpanStart {
+                    return proof
+                }
+                if conditionalOperand.Span.Contains(before.Span) {
+                    if conditionalOperand is InterpolatedStringExpressionSyntax interpolation {
+                        var entry = if this.ExecutionEffectInvalidatesAssignmentNarrowing(
+                            interpolation,
+                            this.IsClosureAssignedVariable(symbol),
+                            this.IsByReferenceVariable(symbol)
+                        ) {
+                            default(SyntaxNode?)
+                        } else {
+                            proof
+                        }
+                        for content in interpolation.Contents {
+                            if content.Span.Contains(before.Span) {
+                                return this.GetGSharpInitializerMutationProof(
+                                    content,
+                                    symbol,
+                                    use,
+                                    $scope,
+                                    entry,
+                                    requireRuntimeNonNullProof,
+                                    before
+                                )
+                            }
+                            if this.AssignmentRegionInvalidatesNarrowing(
+                                symbol,
+                                content,
+                                content.SpanStart,
+                                content.Span.End
+                            ) {
+                                entry = nil
+                            }
+                        }
+                        return entry
+                    }
+                    return this.GetGSharpInitializerMutationProof(
+                        conditionalOperand,
+                        symbol,
+                        use,
+                        $scope,
+                        proof,
+                        requireRuntimeNonNullProof,
+                        before
+                    )
+                }
             }
             // A skipped operand establishes no facts. A possible write or call can still invalidate an incoming fact.
             return if proof != nil && !this.AssignmentRegionInvalidatesNarrowing(

@@ -2358,18 +2358,19 @@ partial class CSharpToGSharpTranslator {
                         continue
                     }
                     var withinScope = true
-                    if excludeNested {
-                        for var ancestor SyntaxNode? = candidate.Parent; ancestor != nil && !object.ReferenceEquals(
-                            ancestor,
-                            scope_
-                        );
-                            ancestor = ancestor!!
-                            .Parent {
-                            CompilationMeasurements.Count("translation.scope_boundary_visits")
-                            if this.IsClosureBoundary(ancestor) || this.IsDroppedStatementOrLoopClause(ancestor) {
-                                withinScope = false
-                                break
-                            }
+                    for var ancestor SyntaxNode? = candidate; ancestor != nil; ancestor = ancestor!!.Parent {
+                        CompilationMeasurements.Count("translation.scope_boundary_visits")
+                        if this.IsDroppedStatementOrLoopClause(ancestor) ||
+                            (
+                            excludeNested && !object.ReferenceEquals(ancestor, scope_) && this.IsClosureBoundary(
+                                ancestor
+                            )
+                        ) {
+                            withinScope = false
+                            break
+                        }
+                        if object.ReferenceEquals(ancestor, scope_) {
+                            break
                         }
                     }
                     if withinScope {

@@ -15296,6 +15296,9 @@ partial class CSharpToGSharpTranslator {
         /// yes (a redundant `!!` is removed by the polish pass; a missing one is GS0158). A constant has no
         /// initializer to run.
         private func NodeRunsStaticTypeInitializer(node Microsoft.CodeAnalysis.SyntaxNode) bool {
+            if this.IsUnevaluatedNameOfOperand(node) {
+                return false
+            }
             if node is not MemberAccessExpressionSyntax && node is not IdentifierNameSyntax {
                 return false
             }
@@ -15429,6 +15432,10 @@ partial class CSharpToGSharpTranslator {
             node Microsoft.CodeAnalysis.SyntaxNode,
             rootType ITypeSymbol? = nil
         ) bool {
+            if this.IsUnevaluatedNameOfOperand(node) ||
+                (this.IsErasedNameOf(node) && !this.NodeEmitsTypeConversionCall(node)) {
+                return false
+            }
             if this.NodeOperatorCallbacksMayWrite(node, rootType) {
                 return true
             }
@@ -21901,6 +21908,16 @@ partial class CSharpToGSharpTranslator {
             return !this.IsKnownCallFreeNode(node)
         }
 
+        private func IsErasedNameOf(node Microsoft.CodeAnalysis.SyntaxNode) bool ->
+        node is InvocationExpressionSyntax{Expression: IdentifierNameSyntax{Identifier: {ValueText: "nameof"}}} &&
+            this
+            .context
+            .SemanticModel
+            .GetOperation(node) is INameOfOperation
+
+        private func IsUnevaluatedNameOfOperand(node Microsoft.CodeAnalysis.SyntaxNode) bool ->
+        node.Ancestors().Any(this.IsErasedNameOf)
+
         private func ConstantPatternMayCallEquals(
             pattern Microsoft.CodeAnalysis.CSharp.Syntax.ConstantPatternSyntax
         ) bool {
@@ -21945,6 +21962,9 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func IsKnownCallFreeNode(node Microsoft.CodeAnalysis.SyntaxNode) bool {
+            if this.IsUnevaluatedNameOfOperand(node) {
+                return true
+            }
             // A contextual user-defined conversion (`int n = token;`) runs source code at any expression.
             if node is Microsoft
                 .CodeAnalysis
@@ -21972,6 +21992,9 @@ partial class CSharpToGSharpTranslator {
                 )
             ) {
                 return false
+            }
+            if this.IsErasedNameOf(node) {
+                return true
             }
             // ADR-0208 R19 (#5593): gsc emits a constant pattern on an `object` input, or on a nullable value input
             // whose underlying type is not a primitive, an enum or `decimal`, as `object.Equals`, which runs the input's
