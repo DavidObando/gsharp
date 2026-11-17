@@ -49,6 +49,11 @@ internal sealed class PrefixDiagnosticClassifier {
             return ClassifiedDiagnostic(diagnostic, DiagnosticFinality.Artifact, "cut")
         }
         let inPrefixText = object.ReferenceEquals(location.Text, prefixCut.Text)
+        // A parse diagnostic that reaches the cut is on a token or a construct that the cut ended, such
+        // as an unterminated string. Text after the cut can complete it.
+        if inPrefixText && prefixParse.Contains(diagnostic) && location.Span.End >= prefixCut.Cut {
+            return ClassifiedDiagnostic(diagnostic, DiagnosticFinality.Artifact, "cut")
+        }
         // The tokens before the cut are the same in both parses. A parse diagnostic that the source tree
         // does not report there comes from the closing tokens at the cut.
         if inPrefixText && prefixParse.Contains(diagnostic) && location.Span.Start < prefixCut.Cut {

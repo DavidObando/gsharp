@@ -161,7 +161,7 @@ func Main() {
     }
 
     @Fact
-    func UnknownStaticMemberOfAnImportedType_IsFinal() {
+    func UnknownStaticMemberOfAnImportedType_IsFinalWhenTheDeclarationsAreKept() {
         const source = `package P
 
 import System
@@ -172,14 +172,127 @@ func Main() {
 /*CUT*/
 }
 `
+        // A later source type named `Console` or `Math` can hide the imported one.
+        let nothing = Bind(source, PrefixRemainder.Nothing).Diagnostics
+        Assert.Equal(
+            []string{"GS0159", "GS0158"},
+            nothing.Select((d ClassifiedDiagnostic) -> d.Diagnostic.Id).ToArray()
+        )
+        Assert.All(
+            nothing,
+            (d ClassifiedDiagnostic) -> {
+                Assert.Equal(DiagnosticFinality.FutureDependent, d.Finality)
+                Assert.Equal("later-member", d.Reason)
+            }
+        )
+        let keep = Bind(source, PrefixRemainder.KeepDeclarations).Diagnostics
+        Assert.Equal([]string{"GS0159", "GS0158"}, keep.Select((d ClassifiedDiagnostic) -> d.Diagnostic.Id).ToArray())
+        Assert.All(keep, (d ClassifiedDiagnostic) -> Assert.Equal(DiagnosticFinality.Final, d.Finality))
+    }
+
+    @Fact
+    func ClosedPartialType_MissingInterfaceMember_CanBeALaterPart() {
+        const source = `package P
+
+partial class Holder : System.IDisposable {
+    func Run() {
+    }
+}
+
+func Main() {
+    let x = 1
+/*CUT*/
+}
+`
+        let nothing = Assert.Single(Bind(source, PrefixRemainder.Nothing).Diagnostics)
+        Assert.Equal("GS0187", nothing.Diagnostic.Id)
+        Assert.Equal(DiagnosticFinality.FutureDependent, nothing.Finality)
+        Assert.Equal("rest-of-type", nothing.Reason)
+        Assert.Equal(
+            DiagnosticFinality.Final,
+            Assert.Single(Bind(source, PrefixRemainder.KeepDeclarations).Diagnostics).Finality
+        )
+    }
+
+    @Fact
+    func OutParameter_DependsOnHowTheBodyExits() {
+        const openLiteral = `package P
+
+func Main() {
+    let f = func (out v int32) {
+        let x = 1
+/*CUT*/
+        v = x
+    }
+}
+`
+        const completedReturn = `package P
+
+func Get(out v int32) bool {
+    let x = 1
+    return true
+/*CUT*/
+}
+`
         for remainder in[]PrefixRemainder{PrefixRemainder.Nothing, PrefixRemainder.KeepDeclarations} {
-            let diagnostics = Bind(source, remainder).Diagnostics
-            Assert.Equal(
-                []string{"GS0159", "GS0158"},
-                diagnostics.Select((d ClassifiedDiagnostic) -> d.Diagnostic.Id).ToArray()
-            )
-            Assert.All(diagnostics, (d ClassifiedDiagnostic) -> Assert.Equal(DiagnosticFinality.Final, d.Finality))
+            let literal = Assert.Single(Bind(openLiteral, remainder).Diagnostics)
+            Assert.Equal("GS0238", literal.Diagnostic.Id)
+            Assert.Equal(DiagnosticFinality.FutureDependent, literal.Finality)
+            let completed = Assert.Single(Bind(completedReturn, remainder).Diagnostics)
+            Assert.Equal("GS0238", completed.Diagnostic.Id)
+            Assert.Equal(DiagnosticFinality.Final, completed.Finality)
         }
+    }
+
+    @Fact
+    func Scope_AfterAnInnerBlock_KeepsTheOuterLocals() {
+        const source = `package P
+
+func F(p int32) {
+    let x = p
+    if true {
+        let y = 2
+    }/*CUT*/
+    let z = x
+}
+`
+        let names = Bind(source, PrefixRemainder.Nothing).Scope.Select((s Symbol) -> s.Name).ToList()
+        Assert.Contains("p", names)
+        Assert.Contains("x", names)
+        Assert.DoesNotContain("y", names)
+    }
+
+    @Fact
+    func PrefixOnlyTree_UnfinishedTextAtTheEnd_IsAnArtifact() {
+        for text in[]string{"package P\nfunc Main() {\n    let x =", "package P\nfunc Main() {\n    let s = \"abc"} {
+            let tree = SyntaxTree.Parse(SourceText.From(text, "prefix.gs"))
+            let result = Compilation(tree).BindPrefix(tree, text.Length, PrefixBindOptions(PrefixRemainder.Nothing))
+            Assert.NotEmpty(result.Diagnostics)
+            Assert.All(
+                result.Diagnostics,
+                (d ClassifiedDiagnostic) -> Assert.NotEqual(DiagnosticFinality.Final, d.Finality)
+            )
+        }
+    }
+
+    @Fact
+    func PrefixOnlyTree_KeepsTheOpenMemberFacts() {
+        const text = `package P
+
+func Main() {
+    let first = func () {
+        second()
+    }`
+        let tree = SyntaxTree.Parse(SourceText.From(text, "prefix.gs"))
+        let result = Compilation(tree).BindPrefix(
+            tree,
+            text.Length,
+            PrefixBindOptions(PrefixRemainder.KeepDeclarations)
+        )
+        let diagnostic = Assert.Single(result.Diagnostics)
+        Assert.Equal("GS0130", diagnostic.Diagnostic.Id)
+        Assert.Equal(DiagnosticFinality.FutureDependent, diagnostic.Finality)
+        Assert.Equal("later-declaration", diagnostic.Reason)
     }
 
     @Fact
@@ -589,15 +702,16 @@ func Value(x int32) int32 {
 
     shared {
         // The statements that the mutation check inserts, the ID that the complete file reports, and the
-        // finality when nothing follows the cut. A later top-level function can declare an unknown name.
+        // finality when nothing follows the cut. A later declaration can declare the name, or a later type can
+        // hide the imported one.
         private let Mutations[](Statement string, Id string, WithNothingAfterTheCut DiagnosticFinality) = [](
             string,
             string,
             DiagnosticFinality
         ){
-            ("System.Console.NoSuchMember__(1)", "GS0159", DiagnosticFinality.Final),
-            ("let noSuchProperty__ = System.Math.NoSuchProperty__", "GS0158", DiagnosticFinality.Final),
-            ("System.Math.Abs()", "GS0159", DiagnosticFinality.Final),
+            ("System.Console.NoSuchMember__(1)", "GS0159", DiagnosticFinality.FutureDependent),
+            ("let noSuchProperty__ = System.Math.NoSuchProperty__", "GS0158", DiagnosticFinality.FutureDependent),
+            ("System.Math.Abs()", "GS0159", DiagnosticFinality.FutureDependent),
             ("noSuchFunction__(1)", "GS0130", DiagnosticFinality.FutureDependent)
         }
 

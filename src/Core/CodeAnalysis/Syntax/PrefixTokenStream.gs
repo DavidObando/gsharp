@@ -282,14 +282,28 @@ internal sealed class CutLayout {
             return CutLayout(braces, member, topLevelStatementsOpen, root.Members)
         }
 
+        // A child that ends at the cut contains it when the parser closed it with a missing token: the
+        // source text ends inside that child.
         private func ChildContaining(node SyntaxNode, cut int32) SyntaxNode? {
             for child in node.GetChildren() {
                 let span = child.Span
-                if span.Start < cut && cut < span.End {
+                if span.Start < cut && (cut < span.End || cut == span.End && EndsWithMissingToken(child)) {
                     return child
                 }
             }
             return nil
+        }
+
+        private func EndsWithMissingToken(node SyntaxNode) bool {
+            var current SyntaxNode = node
+            while current is not SyntaxToken {
+                let count = current.ChildCount
+                if count == 0 {
+                    return false
+                }
+                current = current.GetChild(count - 1)
+            }
+            return cast[SyntaxToken](current).IsMissing
         }
 
         // The open brace of a body that holds declarations, or null.

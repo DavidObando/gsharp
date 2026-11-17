@@ -574,14 +574,6 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         }
     }
 
-    /// Gets a value that tells whether a premise is in progress (ADR-0225).
-    internal prop HasPremise bool {
-        get {
-            let stack List[PrefixPremise]? = premises
-            return stack != nil && stack.Count > 0
-        }
-    }
-
     /// Stops the premise that the last (cref:PushPremise) started.
     internal func PopPremise() {
         premises!!.RemoveAt(premises!!.Count - 1)

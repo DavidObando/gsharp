@@ -19,11 +19,12 @@ import System.Text
 
 internal partial class DeclarationBinder {
     internal func VerifyAbstractMethodImplementations() {
-        // ADR-0225: a type that is open at the cut can still declare the missing members.
+        // ADR-0225: a type that is open at the cut can still declare the missing members, and with
+        // nothing after the cut, a later part of a partial type can too.
         var pushed = false
         for (syntax, structSymbol) in pendingAbstractImplementationChecks {
             Diagnostics.PopPremiseIf(pushed)
-            pushed = Diagnostics.PushPremiseIf(PrefixBindingContext.IsOpen(syntax), PrefixPremise.RestOfType)
+            pushed = Diagnostics.PushPremiseIf(PrefixBindingContext.IsIncompleteType(syntax), PrefixPremise.RestOfType)
             if !structSymbol.IsDeclaredAbstract {
                 for requirement in structSymbol.GetUnimplementedAbstractPropertyAccessors() {
                     // Keep the established open/get-only requirement syntax; explicit
@@ -151,11 +152,12 @@ internal partial class DeclarationBinder {
     }
 
     internal func VerifyInterfaceImplementations() {
-        // ADR-0225: a type that is open at the cut can still declare the missing members.
+        // ADR-0225: a type that is open at the cut can still declare the missing members, and with
+        // nothing after the cut, a later part of a partial type can too.
         var pushed = false
         for (syntax, structSymbol) in pendingInterfaceImplementationChecks {
             Diagnostics.PopPremiseIf(pushed)
-            pushed = Diagnostics.PushPremiseIf(PrefixBindingContext.IsOpen(syntax), PrefixPremise.RestOfType)
+            pushed = Diagnostics.PushPremiseIf(PrefixBindingContext.IsIncompleteType(syntax), PrefixPremise.RestOfType)
             let ResolveExplicitClrInterfaceImplementations = func (structSymbol StructSymbol) {
                 for method in structSymbol.Methods {
                     let target = method.ExplicitInterfaceClauseTarget

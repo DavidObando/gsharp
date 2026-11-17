@@ -79,13 +79,13 @@ internal sealed class PrefixCut {
     /// Returns a value that tells whether [`location`](paramref) is in the text that the bind removed.
     /// @param location A diagnostic location.
     /// @returns `true` for a location from the cut to the first kept token.
-    internal func IsRemoved(location TextLocation) bool -> object.ReferenceEquals(location.Text, Text) &&
-        location
-        .Span
-        .Start >= Cut &&
-        location
-        .Span
-        .Start < KeptStart
+    internal func IsRemoved(location TextLocation) bool {
+        if !object.ReferenceEquals(location.Text, Text) || location.Span.Start < Cut {
+            return false
+        }
+        // With nothing after the cut, everything at or after it is removed, also when the text ends there.
+        return Remainder == PrefixRemainder.Nothing || location.Span.Start < KeptStart
+    }
 
     /// Gets the prefix tree. The parser sets it after the parse.
     internal prop Tree SyntaxTree? {
@@ -167,9 +167,6 @@ internal sealed class PrefixPremise {
             DiagnosticFinality.FutureDependent,
             "rest-of-statement"
         )
-
-        /// Gets the premise of a diagnostic that the binder proved final.
-        internal let Final PrefixPremise = PrefixPremise(DiagnosticFinality.Final, string.Empty)
     }
 }
 
@@ -251,6 +248,16 @@ internal shared class PrefixBindingContext {
         }
         return cast[SyntaxToken](current).IsSealedAtCut
     }
+
+    /// Returns a value that tells whether a type can still get members after the cut: it is open at the
+    /// cut, or it is partial and nothing follows the cut, so a later part can follow.
+    /// @param syntax A type declaration.
+    /// @returns `true` when a later declaration can add a member to the type.
+    internal func IsIncompleteType(syntax StructDeclarationSyntax) bool -> IsOpen(syntax) ||
+        syntax.IsPartial &&
+        current
+        .Value
+        ?.Remainder == PrefixRemainder.Nothing
 
     /// Returns a value that tells whether [`node`](paramref) or one of its ancestors of kind
     /// [`kind`](paramref) is open at the cut.
