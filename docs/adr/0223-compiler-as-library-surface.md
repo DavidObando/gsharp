@@ -28,7 +28,7 @@ Oats found that every API it calls is public, but the contract around those APIs
 
 D1 changes no other code.
 
-### D2. Packaging (design only)
+### D2. Packaging (implemented, #6067)
 
 Publish `GSharp.Core` as its own NuGet package, `Gsharp.Compiler`, from the same build as `Gsharp.NET.Sdk`, with the same version.
 
@@ -38,6 +38,14 @@ Publish `GSharp.Core` as its own NuGet package, `Gsharp.Compiler`, from the same
 - The public API snapshot (`test/Core.Tests/Baselines/gsharp-core-public-api.txt`) becomes the compatibility record for the package. Pre-1.0 releases can break it, but each break gets a release note.
 
 Until the package exists, `$(GsharpSdkToolsDirectory)compiler/GSharp.Core.dll` is the documented reference path. The SDK keeps the property name and that relative path for the 0.5 line.
+
+Implementation notes:
+
+- `src/Sdk/Gsharp.Compiler/Gsharp.Compiler.gsproj` packs the build output of `src/Core`. It packs `GSharp.Core.pdb` beside the DLL in `lib/net10.0/`, so the package has no symbol package.
+- The package dependencies come from the `PackageReference` items of the pack project. `build/gsharp.build.props` defines the `System.Reflection.MetadataLoadContext` version once for `src/Core` and the pack project.
+- `runtimes/gsharp/` is a flat folder. NuGet does not select files from it, so a host does not reference them. A host gives the folder to the compiler as the bundled runtime directory (D4).
+- The SDK's `tools/compiler/`, `tools/gsgen/`, and `tools/formatter/` folders packed the bootstrap SDK's `Gsharp.Extensions.dll` and `Gsharp.Runtime.Channels.dll`. They now pack the files of the same build, as ADR-0210 does for `Gsharp.Runtime.Values.dll`.
+- `build/release-publish.py verify` checks that the SDK has one copy of each runtime assembly, and that `Gsharp.Compiler` has the same bytes, `GSharp.Core`, and the `System.Reflection.MetadataLoadContext` dependency.
 
 ### D3. Hermetic reference sets (implemented)
 
