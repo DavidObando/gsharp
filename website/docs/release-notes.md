@@ -16,6 +16,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Admit conversion operators whose owning class appears through a nullable reference type. Preserve nullable operand and return contracts. Reject same-type conversions and duplicate signatures that differ only by reference-nullability annotations. Translator acceptance remains gated on a released compiler SDK pin. (Fixes #6024)
+
 - Include accessible static members of constructed imported types in language-server completion, including trailing dots and unfinished member names. Keep instance members and constructors out of type-qualified suggestions. (Fixes #6019)
 
 - Reject ref-struct type arguments in ordinary generic constructor calls with GS0219, as in type declarations. Check symbolic arguments before erasure, including source constructors and open generic owners. Preserve imported parameters that allow ref structs. (Fixes #6015)
