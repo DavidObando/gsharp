@@ -16,7 +16,7 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
-- **Symbolic imported-call arguments** (Fixes #6055). Constructor and method overload selection uses source type conversions when CLR erasure surrogates differ. Enum-valued dictionary properties can bind copy constructors without losing their closed type identity.
+- **Symbolic imported-call arguments** (Fixes #6055, #6056). Constructor and method overload selection uses source type conversions when CLR erasure surrogates differ or falsely agree. Enum-valued dictionary properties can bind copy constructors without losing their closed type identity; invariant enum-to-integer generic conversions are rejected instead of emitting invalid IL.
 
 - **Fewer cascading parse diagnostics** (Oats). The parser reports `GS0005` once for each token where it stops, so `func f( int32 {` gives one `GS0005`, not two. The binder does not report `GS0113` "Type ''" for a type name token that the parser synthesized.
 

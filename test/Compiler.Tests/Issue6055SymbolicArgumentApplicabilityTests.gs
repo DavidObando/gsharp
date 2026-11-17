@@ -1,7 +1,10 @@
 package GSharp.Compiler.Tests
 
+import Microsoft.CodeAnalysis
+import Microsoft.CodeAnalysis.CSharp
 import System
 import System.IO
+import System.Linq
 import System.Text
 import Xunit
 
@@ -9,16 +12,7 @@ class Issue6055SymbolicArgumentApplicabilityTests {
     @Fact
     func ClosedSourceArguments_UseSymbolicConversionsAcrossErasureSurrogates() {
         using let fixture = NativeSliceLanguageTests.Fixture()
-        let contract = fixture.CompileCSharp(`using System.Collections.Generic;
-namespace Contracts6055;
-public sealed class Sink<T> {
-    public Sink(IDictionary<string, T>? values) { Count = values?.Count ?? 99; }
-    public Sink(object? values) { Count = -1; }
-    public int Count { get; }
-    public static int Read(IDictionary<string, T>? values) => values?.Count ?? 99;
-    public static int Read(object? values) => -1;
-    public static void Clear(ref Dictionary<string, T> values) => values.Clear();
-}`, "Contract6055")
+        let contract = fixture.CompileCSharp(ContractSource, "Contract6055")
         let dll = fixture.Compile(`import System
 import System.Collections.Generic
 import Contracts6055
@@ -51,6 +45,7 @@ Console.WriteLine(Sink[Failure](state.Failures).Count)
 Console.WriteLine(Sink[Failure].Read(state.Failures))
 Console.WriteLine(Sink[Failure](local).Count)
 Console.WriteLine(Sink[Failure].Read(local))
+Console.WriteLine(Exact[Failure](state.Failures).Count)
 Console.WriteLine(Sink[Failure].Read(nil))
 Console.WriteLine(ReadNullable(nil))
 Console.WriteLine(ReadNullable(Values()))
@@ -91,6 +86,7 @@ class P {
         Console.WriteLine(Sink<Failure>.Read(state.Failures));
         Console.WriteLine(new Sink<Failure>(local).Count);
         Console.WriteLine(Sink<Failure>.Read(local));
+        Console.WriteLine(new Exact<Failure>(state.Failures).Count);
         Console.WriteLine(Sink<Failure>.Read(null));
         Console.WriteLine(ReadNullable(null));
         Console.WriteLine(ReadNullable(new Values()));
@@ -111,15 +107,20 @@ public sealed class Sink<T> {
     public static int Read(IDictionary<string, T>? values) => values?.Count ?? 99;
     public static int Read(object? values) => -1;
     public static void Clear(ref Dictionary<string, T> values) => values.Clear();
+}
+public sealed class Exact<T> {
+    public Exact(Dictionary<string, T>? values) { Count = values?.Count ?? 99; }
+    public Exact(params Dictionary<string, T>[] values) { Count = values.Length; }
+    public int Count { get; }
 }`, "Native6055")
         IlVerifier.Verify(native)
         File.Copy(Path.ChangeExtension(dll, ".runtimeconfig.json"), Path.ChangeExtension(native, ".runtimeconfig.json"))
         let expected = Encoding.UTF8.GetBytes(
-            "0\nTrue\nTrue\n1\n1\n1\n1\n1\n99\n99\n0\n-1\nTrue\n1\n0\n".Replace("\n", Environment.NewLine)
+            "0\nTrue\nTrue\n1\n1\n1\n1\n1\n1\n99\n99\n0\n-1\nTrue\n1\n0\n".Replace("\n", Environment.NewLine)
         )
         Assert.Equal(expected, fixture.RunBytes(native))
         Assert.Equal(expected, fixture.RunBytes(dll))
-        for target in[]string{"Other", "object"} {
+        for target in[]string{"Other", "object", "int32"} {
             let (code, diagnostics) = fixture.TryCompile(`import System
 import System.Collections.Generic
 enum Failure { Suspension }
@@ -132,6 +133,86 @@ let copy = Dictionary[string, TARGET](State().Values, StringComparer.Ordinal)
 `.Replace("TARGET", target), "Reject6055", executable: true)
             Assert.True(code != 0, target + ": " + diagnostics)
             Assert.Contains("Reject6055.gs(9,12,9,22): error GS0267", diagnostics)
+            AssertNativeRejects(
+                "Dictionary<string, " +
+                    (
+                    if target == "int32" {
+                        "int"
+                    } else {
+                        target
+                    }
+                ) +
+                    ">",
+                "new State().Values, StringComparer.Ordinal",
+                contract
+            )
         }
+    }
+
+    @Theory
+    @InlineData("State().Values")
+    @InlineData("State().Values, State().Values")
+    func ErasedClrIdentity_DoesNotAdmitInvariantArguments(arguments string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(ContractSource, "Contract6056")
+        let (code, diagnostics) = fixture.TryCompile(`import Contracts6055
+import System.Collections.Generic
+enum Failure { Suspension }
+class State {
+    init() { Values = Dictionary[string, Failure]() }
+    prop Values Dictionary[string, Failure] { get; }
+}
+let copy = Exact[int32](ARGUMENTS)
+`.Replace("ARGUMENTS", arguments), "Reject6056", executable: true, "/r:" + contract)
+        Assert.True(code != 0, diagnostics)
+        Assert.Contains("Reject6056.gs(8,12,8,17): error GS0267", diagnostics)
+        AssertNativeRejects("Exact<int>", arguments.Replace("State()", "new State()"), contract)
+    }
+
+    shared {
+        private func AssertNativeRejects(target string, arguments string, contract string) {
+            let source = `using System;
+using System.Collections.Generic;
+using Contracts6055;
+enum Failure { Suspension }
+enum Other { Suspension }
+class State {
+    public Dictionary<string, Failure> Values { get; } = new();
+}
+class Check { static void Main() { var copy = new TARGET(ARGUMENTS); } }
+`.Replace("TARGET", target).Replace("ARGUMENTS", arguments)
+            let references = cast[string](AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES"))
+                .Split(Path.PathSeparator)
+                .Append(contract)
+                .Select((path string) -> cast[MetadataReference](MetadataReference.CreateFromFile(path)))
+            let compilation = CSharpCompilation.Create(
+                "NativeRejected6056",
+                []SyntaxTree{CSharpSyntaxTree.ParseText(source)},
+                references,
+                CSharpCompilationOptions(OutputKind.ConsoleApplication)
+            )
+            let errors = compilation
+                .GetDiagnostics()
+                .Where((diagnostic Diagnostic) -> diagnostic.Severity == DiagnosticSeverity.Error)
+                .ToArray()
+            Assert.NotEmpty(errors)
+            Assert.All(errors, (diagnostic Diagnostic) -> Assert.Equal("CS1503", diagnostic.Id))
+        }
+
+        private const ContractSource string = `using System.Collections.Generic;
+namespace Contracts6055;
+public sealed class Sink<T> {
+    public Sink(IDictionary<string, T>? values) { Count = values?.Count ?? 99; }
+    public Sink(object? values) { Count = -1; }
+    public int Count { get; }
+    public static int Read(IDictionary<string, T>? values) => values?.Count ?? 99;
+    public static int Read(object? values) => -1;
+    public static void Clear(ref Dictionary<string, T> values) => values.Clear();
+}
+public sealed class Exact<T> {
+    public Exact(Dictionary<string, T>? values) { Count = values?.Count ?? 99; }
+    public Exact(params Dictionary<string, T>[] values) { Count = values.Length; }
+    public int Count { get; }
+}`
     }
 }

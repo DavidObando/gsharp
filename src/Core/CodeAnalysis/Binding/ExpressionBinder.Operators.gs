@@ -4521,22 +4521,6 @@ internal partial class ExpressionBinder {
                 ) {
                     nativeTarget = nativeTarget.GetElementPositions()[0]
                 }
-                // Symbolic conversions must not depend on the caller's CLR erasure surrogate.
-                if !clrParameterType.IsByRef && TypeSymbol.ContainsSameCompilationUserType(sourceType) &&
-                    TypeSymbol
-                    .ContainsSameCompilationUserType(nativeTarget) {
-                    let symbolicConversion = Conversion.ClassifyNonStructural(sourceType, nativeTarget)
-                    if symbolicConversion.IsIdentity {
-                        return ClrOverloadResolution.ImplicitConversionKind.Identity
-                    }
-                    if symbolicConversion.IsImplicit {
-                        return if Conversion.IsReferenceLikeTarget(sourceType.StripToBareShape()) {
-                            ClrOverloadResolution.ImplicitConversionKind.Reference
-                        } else {
-                            ClrOverloadResolution.ImplicitConversionKind.Boxing
-                        }
-                    }
-                }
                 if nativeConversions != nil && NativeProtocolOperations.GetProtocol(nativeTarget) != nil {
                     return if nativeConversions.ClassifyArgumentConversion(sourceType, nativeTarget).IsImplicit {
                         if sourceType == nativeTarget {
@@ -4581,6 +4565,38 @@ internal partial class ExpressionBinder {
                     nativeTarget
                 ) {
                     return ClrOverloadResolution.ImplicitConversionKind.Reference
+                }
+                // A CLR erasure can invent identity just as it can hide a valid conversion.
+                // Function arguments retain the contextual delegate classifier's return-conversion rank.
+                if !clrParameterType.IsByRef &&
+                    sourceType is not FunctionTypeSymbol &&
+                    TypeSymbol
+                    .ContainsSameCompilationUserType(sourceType) {
+                    let symbolicConversion = Conversion.ClassifyNonStructural(sourceType, nativeTarget)
+                    if TypeSymbol.ContainsSameCompilationUserType(nativeTarget) {
+                        if symbolicConversion.IsIdentity {
+                            return ClrOverloadResolution.ImplicitConversionKind.Identity
+                        }
+                        if symbolicConversion.IsImplicit {
+                            return if Conversion.IsReferenceLikeTarget(sourceType.StripToBareShape()) {
+                                ClrOverloadResolution.ImplicitConversionKind.Reference
+                            } else {
+                                ClrOverloadResolution.ImplicitConversionKind.Boxing
+                            }
+                        }
+                    }
+                    if Conversion.RequiresSymbolicTypeArgumentIdentity(sourceType) &&
+                        !nativeTarget
+                        .StripToBareShape()
+                        .ConstructedTypeArguments
+                        .IsDefaultOrEmpty &&
+                        !TypeSymbol.ContainsTypeParameter(nativeTarget) &&
+                        !symbolicConversion.IsImplicit &&
+                        !Conversion.HasClrArgumentRuntimeRelation(sourceType, nativeTarget) &&
+                        !ConversionClassifier
+                        .HasUserDefinedImplicitConversionForTypes(sourceType, nativeTarget) {
+                        return ClrOverloadResolution.ImplicitConversionKind.None
+                    }
                 }
                 if sourceType.ClrType != nil || !TypeSymbol.ContainsSameCompilationUserType(sourceType) ||
                     !DeclaresImplicitOperator(sourceType) {
