@@ -214,6 +214,8 @@ jobs:
             ${{ runner.temp }}/gsharp-cs2gs-gate/*/migrate.log
             ${{ runner.temp }}/gsharp-cs2gs-gate/*/runs/**/*.json
             ${{ runner.temp }}/gsharp-cs2gs-gate/*/runs/**/report.html
+            ${{ runner.temp }}/gsharp-cs2gs-gate/*/runs/**/sdk.build.stdout.log
+            ${{ runner.temp }}/gsharp-cs2gs-gate/*/runs/**/sdk.build.stderr.log
             ${{ runner.temp }}/gsharp-cs2gs-gate/*/smoke/*
 
   csharp-migrate:
@@ -435,6 +437,8 @@ jobs:
             ${{ env.SELFMIG_GATE_ROOT }}/shard-${{ matrix.name }}/runs/**/*.json
             ${{ env.SELFMIG_GATE_ROOT }}/shard-${{ matrix.name }}/runs/**/report.html
             ${{ env.SELFMIG_GATE_ROOT }}/shard-${{ matrix.name }}/runs/**/sdk.build.log
+            ${{ env.SELFMIG_GATE_ROOT }}/shard-${{ matrix.name }}/runs/**/sdk.build.stdout.log
+            ${{ env.SELFMIG_GATE_ROOT }}/shard-${{ matrix.name }}/runs/**/sdk.build.stderr.log
             ${{ env.SELFMIG_GATE_ROOT }}/shard-${{ matrix.name }}/runs/**/polish.log
             ${{ env.SELFMIG_GATE_ROOT }}/shard-${{ matrix.name }}/runs/**/test-parity.log
 

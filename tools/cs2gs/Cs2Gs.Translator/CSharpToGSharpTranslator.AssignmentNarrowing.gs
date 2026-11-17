@@ -1189,7 +1189,47 @@ partial class CSharpToGSharpTranslator {
             byReference bool
         ) bool ->
         (closureAssigned && this.NodeMayRunEscapedClosure(node)) ||
-            (byReference && (this.NodeRunsStaticTypeInitializer(node) || this.NodeMayWriteReferenceStorage(node)))
+            (byReference && this.NodeRunsStaticTypeInitializer(node)) ||
+            (byReference && this.NodeMayWriteReferenceStorage(node)) ||
+            this.CallMayInvalidateAnyRoot(node)
+
+        private func CallMayInvalidateAnyRoot(node SyntaxNode) bool {
+            if ObliviousNullabilityAnalyzer.CallArgumentList(node) is not{} arguments {
+                return false
+            }
+            return (
+                this.WritableReferenceArgumentTarget(node) is {} receiver && this.WritableReferenceMayInvalidateAnyRoot(
+                    receiver
+                )
+            ) ||
+                arguments
+                .Arguments
+                .Any(
+                (argument ArgumentSyntax) -> this.WritableReferenceArgumentTarget(argument) is {} target &&
+                    this.WritableReferenceMayInvalidateAnyRoot(target)
+            )
+        }
+
+        // RecordWritableReference preserves unrelated roots for variables, tuple storage, array elements, and stable member paths.
+        private func WritableReferenceMayInvalidateAnyRoot(target ExpressionSyntax) bool {
+            let stripped = UnwrapParenthesesAndSuppressions(target)!!
+            if stripped is MemberAccessExpressionSyntax member &&
+                this
+                .context
+                .GetSymbolInfo(member)
+                .Symbol is IFieldSymbol{ContainingType: {IsTupleType: true}} {
+                return this.WritableReferenceMayInvalidateAnyRoot(member.Expression)
+            }
+            return this.WritesThroughStorage(stripped, isArgument: true) &&
+                !(
+                stripped is ElementAccessExpressionSyntax element &&
+                    this
+                    .context
+                    .GetTypeInfo(element.Expression)
+                    .Type is IArrayTypeSymbol
+            ) &&
+                !this.IsSameStableAccessPath(stripped, stripped)
+        }
 
         // Chained stores complete conversions, setters, and reference-storage effects after their inner assignment.
         private func AssignmentStoreCompletesAfterProof(
