@@ -414,7 +414,8 @@ open class Program {
                 }
                 let referencePaths = ReferenceResolver.ResolveDriverReferencePaths(
                     parsed.References,
-                    ResolveRuntimeDirectory(parsed)
+                    ResolveRuntimeDirectory(parsed),
+                    useSdkToolsVariable: false
                 )
                 CompilationMeasurements.Count("input.references", referencePaths.Count)
                 using let references = if parsed.OutputPath == nil {
@@ -626,17 +627,18 @@ open class Program {
         private func CopyBundledRuntimesBeside(outputPath string, runtimeDirectory string?) {
             CopyBundledRuntimeBeside(
                 outputPath,
-                ReferenceResolver.FindBundledChannelsRuntimePath(AppContext.BaseDirectory, runtimeDirectory)
+                ReferenceResolver.FindBundledChannelsRuntimePath(AppContext.BaseDirectory, runtimeDirectory, false)
             )
             CopyBundledRuntimeBeside(
                 outputPath,
-                ReferenceResolver.FindBundledValuesRuntimePath(AppContext.BaseDirectory, runtimeDirectory)
+                ReferenceResolver.FindBundledValuesRuntimePath(AppContext.BaseDirectory, runtimeDirectory, false)
             )
         }
 
         /// Gives the bundled runtime directory of one request (ADR-0223 D4): the /sdktoolsdir: switch, else
-        /// the GSHARP_SDK_TOOLS_DIR variable. The resolver searches it before the folder beside gsc, so
-        /// the order of ADR-0207 does not change. Each request has its own value, so a compiler worker
+        /// the GSHARP_SDK_TOOLS_DIR variable. The resolver searches it before the folder beside gsc, and
+        /// gsc turns off the resolver's own variable fallback, so the order of ADR-0207 does not change: a
+        /// switch hides the variable. Each request has its own value, so a compiler worker
         /// keeps no directory from an earlier request.
         /// @param parsed The parsed command line.
         /// @returns The folder, or `null` when neither input gives one.

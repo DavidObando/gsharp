@@ -1446,15 +1446,39 @@ class ReferenceResolver : IDisposable {
         /// the process has loaded when the call runs, so a test host, a benchmark host, and `gsc` can see
         /// different types. Use (cref:ForReferencePack) for a reference set that does not depend on the host.
         /// @returns A default resolver.
-        func Default() ReferenceResolver -> Default(nil)
+        func Default() ReferenceResolver -> DefaultInHost(nil)
 
         /// Gets a resolver that searches the runtime's currently loaded assemblies plus the well-known BCL
         /// assemblies, with the bundled G# runtimes from a runtime directory.
         /// @remarks The result depends on the host process (ADR-0223 D3). See
         /// (cref:ResolveDriverReferencePaths) for the search order of the bundled runtimes (ADR-0223 D4).
+        /// The bundled runtimes load into a context that the resolver owns, and they replace host assemblies
+        /// with the same simple name. So the resolver uses the files that it found, also when the process has
+        /// loaded another copy. A `null` directory gives the same result as (cref:Default).
         /// @param runtimeDirectory The folder with the bundled G# runtime assemblies, or `null`.
         /// @returns A default resolver.
         func Default(runtimeDirectory string?) ReferenceResolver {
+            if string.IsNullOrEmpty(runtimeDirectory) {
+                return DefaultInHost(nil)
+            }
+            let runtimes = ResolveDriverReferencePaths(Array.Empty[string](), runtimeDirectory)
+            let runtimeNames = HashSet[string](StringComparer.OrdinalIgnoreCase)
+            for path in runtimes {
+                let name = AssemblyName.GetAssemblyName(path).Name
+                if name != nil {
+                    runtimeNames.Add(name)
+                }
+            }
+            let host = BuildHostAssemblies().RemoveAll((a Assembly) -> runtimeNames.Contains(a.GetName().Name ?? ""))
+            return WithRuntimeReferences(runtimes, host)
+        }
+
+        /// The resolver of (cref:Default): it loads the bundled runtimes into the default load context.
+        /// A runtime that the process has already loaded, from any file, stays the one that it loaded.
+        /// `gsi` uses it with GSHARP_SDK_TOOLS_DIR to keep the search order of ADR-0207.
+        /// @param runtimeDirectory The folder with the bundled G# runtime assemblies, or `null`.
+        /// @returns A default resolver.
+        internal func DefaultInHost(runtimeDirectory string?) ReferenceResolver {
             for path in ResolveDriverReferencePaths(Array.Empty[string](), runtimeDirectory) {
                 try {
                     // Deliberately load here: BuildHostAssemblies excludes DriverReferenceLoadContext assemblies.
@@ -1497,7 +1521,19 @@ class ReferenceResolver : IDisposable {
         /// @returns The effective reference paths.
         func ResolveDriverReferencePaths(referencePaths IEnumerable[string]?, runtimeDirectory string?) IReadOnlyList[
             string
-        ] {
+        ] -> ResolveDriverReferencePaths(referencePaths, runtimeDirectory, useSdkToolsVariable: true)
+
+        /// Resolves driver references with a choice about the `GSHARP_SDK_TOOLS_DIR` fallback.
+        /// @param referencePaths Explicit reference paths.
+        /// @param runtimeDirectory The folder with the bundled G# runtime assemblies, or `null`.
+        /// @param useSdkToolsVariable `false` when the caller already chose between its own switch and the
+        /// variable, as `gsc` does with /sdktoolsdir:.
+        /// @returns The effective reference paths.
+        internal func ResolveDriverReferencePaths(
+            referencePaths IEnumerable[string]?,
+            runtimeDirectory string?,
+            useSdkToolsVariable bool
+        ) IReadOnlyList[string] {
             let paths = List[string]()
             if referencePaths != nil {
                 for path in referencePaths {
@@ -1506,9 +1542,13 @@ class ReferenceResolver : IDisposable {
                     }
                 }
             }
-            AppendBundledPath(paths, FindBundledExtensionPath(AppContext.BaseDirectory, runtimeDirectory))
-            AppendBundledPath(paths, FindBundledChannelsRuntimePath(AppContext.BaseDirectory, runtimeDirectory))
-            AppendBundledPath(paths, FindBundledValuesRuntimePath(AppContext.BaseDirectory, runtimeDirectory))
+            let baseDirectory = AppContext.BaseDirectory
+            AppendBundledPath(paths, FindBundledExtensionPath(baseDirectory, runtimeDirectory, useSdkToolsVariable))
+            AppendBundledPath(
+                paths,
+                FindBundledChannelsRuntimePath(baseDirectory, runtimeDirectory, useSdkToolsVariable)
+            )
+            AppendBundledPath(paths, FindBundledValuesRuntimePath(baseDirectory, runtimeDirectory, useSdkToolsVariable))
             return paths
         }
 
@@ -2242,19 +2282,28 @@ class ReferenceResolver : IDisposable {
             }
         }
 
-        internal func FindBundledExtensionPath(baseDirectory string, runtimeDirectory string? = nil) string? {
+        internal func FindBundledExtensionPath(
+            baseDirectory string,
+            runtimeDirectory string? = nil,
+            useSdkToolsVariable bool = true
+        ) string? {
             // Compiler cannot ProjectReference Gsharp.Extensions because its bootstrap
             // build already references Compiler; solution and SDK layouts provide it.
             return FindBundledRuntimePath(
                 baseDirectory,
                 runtimeDirectory,
+                useSdkToolsVariable,
                 "Gsharp.Extensions.dll",
                 "Gsharp.Extensions",
                 "extensions"
             )
         }
 
-        internal func FindBundledChannelsRuntimePath(baseDirectory string, runtimeDirectory string? = nil) string? {
+        internal func FindBundledChannelsRuntimePath(
+            baseDirectory string,
+            runtimeDirectory string? = nil,
+            useSdkToolsVariable bool = true
+        ) string? {
             // ADR-0174 D1. The compiler core deliberately takes no ProjectReference
             // on the channel runtime (emitted programs bind whichever runtime is in
             // the reference set); gsc/gsi ship it beside themselves, the solution
@@ -2263,6 +2312,7 @@ class ReferenceResolver : IDisposable {
             return FindBundledRuntimePath(
                 baseDirectory,
                 runtimeDirectory,
+                useSdkToolsVariable,
                 "Gsharp.Runtime.Channels.dll",
                 "Gsharp.Runtime.Channels",
                 "channels"
@@ -2271,10 +2321,12 @@ class ReferenceResolver : IDisposable {
 
         internal func FindBundledValuesRuntimePath(
             baseDirectory string,
-            runtimeDirectory string? = nil
+            runtimeDirectory string? = nil,
+            useSdkToolsVariable bool = true
         ) string? -> FindBundledRuntimePath(
             baseDirectory,
             runtimeDirectory,
+            useSdkToolsVariable,
             "Gsharp.Runtime.Values.dll",
             "Gsharp.Runtime.Values",
             "values"
@@ -2300,6 +2352,7 @@ class ReferenceResolver : IDisposable {
         private func FindBundledRuntimePath(
             baseDirectory string,
             runtimeDirectory string?,
+            useSdkToolsVariable bool,
             fileName string,
             projectFolder string,
             sdkFolder string
@@ -2316,7 +2369,13 @@ class ReferenceResolver : IDisposable {
             candidates.Add(Path.Combine(baseDirectory, fileName))
             candidates.Add(Path.Combine(baseDirectory, "..", projectFolder, fileName))
             candidates.Add(Path.Combine(baseDirectory, "..", sdkFolder, fileName))
-            let sdkToolsDirectory = Environment.GetEnvironmentVariable("GSHARP_SDK_TOOLS_DIR")
+            // A driver that already chose between its switch and the variable passes `false`, so the
+            // variable never overrides the switch (ADR-0207).
+            let sdkToolsDirectory = if useSdkToolsVariable {
+                Environment.GetEnvironmentVariable("GSHARP_SDK_TOOLS_DIR")
+            } else {
+                nil
+            }
             if !string.IsNullOrEmpty(sdkToolsDirectory) {
                 candidates.Add(Path.Combine(sdkToolsDirectory, sdkFolder, fileName))
             }

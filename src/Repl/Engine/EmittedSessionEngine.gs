@@ -277,7 +277,7 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
                 ReferenceResolver.ResolveDriverReferencePaths(referencePaths, runtimeDirectory)
             )
         } else {
-            ReferenceResolver.Default(runtimeDirectory)
+            ReferenceResolver.DefaultInHost(runtimeDirectory)
         }
         var dllPath string? = nil
         var ownershipTransferred = false

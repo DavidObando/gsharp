@@ -66,7 +66,8 @@ Implementation notes:
 
 - `Default(runtimeDirectory)`, `ForReferencePack(targetFramework, packRoot, runtimeDirectory)`, and `ResolveDriverReferencePaths(referencePaths, runtimeDirectory)` take the argument. `Default()` and the one-argument `ResolveDriverReferencePaths` stay, and use no runtime directory. `WithReferences` and `WithRuntimeReferences` take explicit paths and do not add bundled runtimes, so a host gives them the result of `ResolveDriverReferencePaths`.
 - In the runtime directory, the search uses the SDK layout (`extensions/`, `channels/`, `values/`) first, then the folder itself. The folder itself is the layout of `runtimes/gsharp/` in the D2 package.
-- `gsc` gives the `/sdktoolsdir:` switch, else `GSHARP_SDK_TOOLS_DIR`, as the argument. Its order does not change: the switch or the variable, then the folder beside `gsc`. Each request of a compiler worker has its own value. `gsi` gives `GSHARP_SDK_TOOLS_DIR` as the argument, so its order does not change either.
+- `gsc` gives the `/sdktoolsdir:` switch, else `GSHARP_SDK_TOOLS_DIR`, as the argument, and turns off the resolver's own variable fallback. Its order does not change: the switch or the variable, then the folder beside `gsc`; a switch hides the variable.
+- `Default(runtimeDirectory)` loads the runtimes into a context that the resolver owns, and they replace host assemblies with the same simple name, so the resolver uses the files that it found. `Default()` keeps its behavior. Each request of a compiler worker has its own value. `gsi` gives `GSHARP_SDK_TOOLS_DIR` as the argument, so its order does not change either.
 - A library host that sets only the variable now gets the files beside the application first. Before, the variable came first.
 
 ### D5. Thread-safety contract (documentation now, stress test before "supported")

@@ -112,6 +112,70 @@ open class Adr0223RuntimeDirectoryTests {
         }
     }
 
+    /// gsc chooses between /sdktoolsdir: and the variable itself and turns off the resolver's variable
+    /// fallback, so a switch hides the variable as before ADR-0223 D4. Library callers keep the fallback.
+    @Fact
+    func BundledRuntime_DriverChoice_SwitchHidesTheVariable() {
+        let root = Directory.CreateTempSubdirectory("adr0223_switch_").FullName
+        let previous = Environment.GetEnvironmentVariable(Variable)
+        try {
+            let application = Path.Combine(root, "app")
+            let switchFolder = Path.Combine(root, "switch")
+            let variable = Path.Combine(root, "variable")
+            Directory.CreateDirectory(application)
+            Directory.CreateDirectory(switchFolder)
+            let fromVariable = PlaceRuntime(Path.Combine(variable, "channels"))
+            Environment.SetEnvironmentVariable(Variable, variable)
+            Assert.Null(ReferenceResolver.FindBundledChannelsRuntimePath(application, switchFolder, false))
+            Assert.Equal(
+                fromVariable,
+                ReferenceResolver.FindBundledChannelsRuntimePath(application, switchFolder, true)
+            )
+            Assert.Equal(fromVariable, ReferenceResolver.FindBundledChannelsRuntimePath(application, switchFolder))
+        } finally {
+            Environment.SetEnvironmentVariable(Variable, previous)
+            Directory.Delete(root, recursive: true)
+        }
+    }
+
+    /// `Default(runtimeDirectory)` uses the files of its folder, also when the process has already loaded
+    /// another copy of the same runtime assembly. Two calls with two folders give two different files.
+    @Fact
+    func Default_RuntimeDirectory_UsesItsOwnFilesWhenTheHostLoadedOthers() {
+        let root = Directory.CreateTempSubdirectory("adr0223_default_").FullName
+        let previous = Environment.GetEnvironmentVariable(Variable)
+        try {
+            Environment.SetEnvironmentVariable(Variable, nil)
+            let bundled = ReferenceResolver.ResolveDriverReferencePaths(Array.Empty[string]())
+            Assert.Equal(RuntimeFiles.Length, bundled.Count)
+            // The host loads the copies beside the application, as Default() does.
+            using let host = ReferenceResolver.Default()
+            for fileName in RuntimeFiles {
+                let simpleName = Path.GetFileNameWithoutExtension(fileName)
+                Assert.Contains(host.Assemblies, (a Assembly) -> a.GetName().Name == simpleName)
+            }
+            for name in[]string{"first", "second"} {
+                let folder = Path.GetFullPath(Path.Combine(root, name))
+                Directory.CreateDirectory(folder)
+                for path in bundled {
+                    File.Copy(path, Path.Combine(folder, Path.GetFileName(path)))
+                }
+                using let resolver = ReferenceResolver.Default(folder)
+                for fileName in RuntimeFiles {
+                    let simpleName = Path.GetFileNameWithoutExtension(fileName)
+                    let assembly = resolver.Assemblies.Single((a Assembly) -> a.GetName().Name == simpleName)
+                    Assert.True(ReferenceResolver.TryGetAssemblyPath(assembly, out var path))
+                    Assert.Equal(Path.Combine(folder, fileName), path)
+                }
+            }
+        } finally {
+            Environment.SetEnvironmentVariable(Variable, previous)
+            try {
+                Directory.Delete(root, recursive: true)
+            } catch (UnauthorizedAccessException) { } catch (IOException) { }
+        }
+    }
+
     shared {
         private const Variable string = "GSHARP_SDK_TOOLS_DIR"
         private let RuntimeFiles[]string = []string{
