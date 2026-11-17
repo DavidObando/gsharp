@@ -394,6 +394,95 @@ public static class P {
 `.Replace("INPUTTYPE", inputType).Replace("INPUT", input).Replace("PATTERN", pattern), "v0!v1!|v0|v0!|v1|v1!|2:4")
     }
 
+    @Theory
+    @InlineData("in x, in p", "int", "7")
+    @InlineData("x, p", "int", "7")
+    @InlineData("right: in p, left: in x", "int", "7")
+    @InlineData("in x, in p", "string", "\"value\"")
+    @InlineData("x, p", "object", "null")
+    func ReadonlyArguments_KeepPatternCopyAddressIdentity(arguments string, type string, value string) {
+        AssertParity(`
+using System;
+using System.Runtime.CompilerServices;
+public static class P {
+    static bool Same(in TYPE left, in TYPE right) =>
+        Unsafe.AreSame(ref Unsafe.AsRef(in left), ref Unsafe.AsRef(in right));
+    static string Read() {
+        TYPE x = VALUE;
+        bool matched = x is var p;
+        return Same(ARGUMENTS) + "|" + Same(in x, in x);
+    }
+    public static void Main() { Console.Write(Read()); }
+}
+`.Replace("ARGUMENTS", arguments).Replace("TYPE", type).Replace("VALUE", value), "False|True")
+    }
+
+    @Fact
+    func AddressedNullableMemberCapture_PreservesTheReadBeforeItsAlias() {
+        AssertParity(`
+#nullable disable
+using System;
+public class Holder { public object Item = null; }
+public static class P {
+    static string Read(object input) {
+        var holder = new Holder { Item = input };
+        bool matched = holder.Item is var p;
+        object value = p;
+        ref readonly object alias = ref p;
+        return (value == null) + "|" + (alias == null);
+    }
+    public static void Main() { Console.Write(Read(null) + ";" + Read("live")); }
+}
+`, "True|True;False|False")
+    }
+
+    @Theory
+    @InlineData("Remember", "string p", "string", "\"new\"", "First(2) + \"|\" + saved()", "new|new")
+    @InlineData("Immediate", "string p", "string", "\"new\"", "First(2) + \"|\" + saved()", "new|old")
+    @InlineData("Remember", "var p", "object?", "null", "(First(2) == null) + \"|\" + saved()", "True|nil")
+    @InlineData("Immediate", "var p", "object?", "null", "(First(2) == null) + \"|\" + saved()", "True|old")
+    func LiftedRecursiveFunctions_UseSharedGuardStorageAndTheirOwnCaptureParameters(
+        callback string,
+        pattern string,
+        captureType string,
+        write string,
+        result string,
+        expected string
+    ) {
+        AssertParity(`
+#nullable enable
+using System;
+public static class P {
+    static Func<string> saved = () => "unset";
+    static bool Remember(Func<string> read) { saved = read; return true; }
+    static bool Immediate(Func<string> read) {
+        string value = read();
+        saved = () => value;
+        return true;
+    }
+    static string Read(object input) {
+        switch (input) {
+            case PATTERN when CALLBACK(() => p as string ?? "nil"):
+                return RESULT;
+                CAPTURETYPE First(int n) {
+                    if (n == 0) { p = WRITE; return p; }
+                    return Second<int>(n - 1);
+                }
+                CAPTURETYPE Second<T>(int n) { return n == 0 ? p : First(n - 1); }
+        }
+        return "miss";
+    }
+    public static void Main() { Console.Write(Read("old")); }
+}
+`.Replace(
+                "CALLBACK",
+                callback
+            ).Replace(
+                "PATTERN",
+                pattern
+            ).Replace("CAPTURETYPE", captureType).Replace("WRITE", write).Replace("RESULT", result), expected)
+    }
+
     shared {
         private func AssertParity(source string, expected string, verifyTranslation Action[string]? = nil) {
             let root = IlVerifyRunner().RepoRoot ?? throw DirectoryNotFoundException("Repository root not found.")

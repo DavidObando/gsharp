@@ -164,9 +164,7 @@ partial class CSharpToGSharpTranslator {
                     )
                 }
                 for capture in recursiveLift.Captures {
-                    let captureArgument GExpression = IdentifierExpression(
-                        this.EmittedName(capture.Symbol, capture.Symbol.Name)
-                    )
+                    let captureArgument = this.WritableSymbolStorage(capture.Symbol)
                     recursiveArguments.Add(
                         if capture.IsByRef {
                             cast[GExpression](UnaryExpression("&", captureArgument))

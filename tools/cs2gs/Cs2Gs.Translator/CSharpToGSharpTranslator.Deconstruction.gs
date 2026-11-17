@@ -5015,7 +5015,20 @@ partial class CSharpToGSharpTranslator {
                     if captureType == nil {
                         continue
                     }
-                    if captureType.IsReferenceType && !CaptureHasExplicitNullableType(capture.Symbol) {
+                    if captureType.IsReferenceType &&
+                        capture.Symbol is ILocalSymbol local &&
+                        this
+                        .state
+                        .EmittedLocalStorageAcceptsNil
+                        .TryGetValue(local, out var acceptsNil) {
+                        captureType = captureType.WithNullableAnnotation(
+                            if acceptsNil {
+                                Microsoft.CodeAnalysis.NullableAnnotation.Annotated
+                            } else {
+                                Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated
+                            }
+                        )
+                    } else if captureType.IsReferenceType && !CaptureHasExplicitNullableType(capture.Symbol) {
                         captureType = captureType.WithNullableAnnotation(
                             Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated
                         )
@@ -5038,10 +5051,28 @@ partial class CSharpToGSharpTranslator {
                     localFunction.ReturnType.GetLocation()
                 )
                 let liftedTypeParameters = this.MapMethodTypeParameters(recursiveLocal)
-                let liftedBody = this.TranslateBody(
-                    localFunction,
-                    "recursive local function '${localFunction.Identifier.Text}'"
-                )
+                let captureBindings = Dictionary[ISymbol, GExpression](SymbolEqualityComparer.Default)
+                for capture in recursiveLift.Captures {
+                    if this.state.PatternBindings.TryGetValue(capture.Symbol, out var replacement) {
+                        captureBindings.Add(capture.Symbol, replacement)
+                        this
+                            .state
+                            .PatternBindings[capture.Symbol] = IdentifierExpression(
+                            this.EmittedName(capture.Symbol, capture.Symbol.Name)
+                        )
+                    }
+                }
+                var liftedBody BlockStatement
+                try {
+                    liftedBody = this.TranslateBody(
+                        localFunction,
+                        "recursive local function '${localFunction.Identifier.Text}'"
+                    )
+                } finally {
+                    for binding in captureBindings {
+                        this.state.PatternBindings[binding.Key] = binding.Value
+                    }
+                }
                 let helper = MethodDeclaration(
                     recursiveLift.Name,
                     liftedParameters,
@@ -5476,7 +5507,7 @@ partial class CSharpToGSharpTranslator {
                             }: declaration.Type
                             default: default(TypeSyntax?)
                         }
-                    )!!
+                    )
                     if type is NullableTypeSyntax {
                         return true
                     }

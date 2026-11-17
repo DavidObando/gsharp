@@ -192,11 +192,7 @@ partial class CSharpToGSharpTranslator {
                 .PatternBindings
                 .TryGetValue(boundSymbol, out var replacement) {
                 if IsWriteTarget(identifier, includeAddress: true) {
-                    return if replacement is NonNullAssertionExpression asserted {
-                        asserted.Operand
-                    } else {
-                        replacement
-                    }
+                    return this.WritableSymbolStorage(boundSymbol)
                 }
                 return this.ReadPatternBinding(identifier, boundSymbol, replacement)
             }
@@ -269,6 +265,17 @@ partial class CSharpToGSharpTranslator {
                 return IdentifierExpression("_")
             }
             return IdentifierExpression(this.EmittedName(identifier, identifier.Identifier))
+        }
+
+        private func WritableSymbolStorage(symbol ISymbol) GExpression {
+            if this.state.PatternBindings.TryGetValue(symbol, out var replacement) {
+                return if replacement is NonNullAssertionExpression asserted {
+                    asserted.Operand
+                } else {
+                    replacement
+                }
+            }
+            return IdentifierExpression(this.EmittedName(symbol, symbol.Name))
         }
 
         private func ReadPatternBinding(

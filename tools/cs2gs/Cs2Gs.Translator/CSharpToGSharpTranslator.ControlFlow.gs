@@ -2202,7 +2202,11 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func PatternBindingNeedsStorage(local ILocalSymbol) bool ->
-        this.IsLocalReassigned(local) || this.IsClosureAssignedVariable(local)
+        this.IsLocalReassigned(local) || this.IsClosureAssignedVariable(local) ||
+            this
+            .GetScopeWriteIndex(this.state.CurrentBodyScope ?? local.DeclaringSyntaxReferences[0].SyntaxTree.GetRoot())
+            .ReadonlyAddresses
+            .ContainsKey(local)
 
         private func BindsTo(expression ExpressionSyntax?, target ISymbol?) bool -> CSharpToGSharpTranslator.BindsTo(
             expression,
@@ -2251,6 +2255,9 @@ partial class CSharpToGSharpTranslator {
             public let AddressNames Dictionary[ISymbol, List[SyntaxNode]] = Dictionary[ISymbol, List[SyntaxNode]](
                 SymbolEqualityComparer.Default
             )
+            public let ReadonlyAddresses Dictionary[ISymbol, List[SyntaxNode]] = Dictionary[ISymbol, List[SyntaxNode]](
+                SymbolEqualityComparer.Default
+            )
         }
 
         private func GetScopeWriteIndex(scope_ SyntaxNode) ScopeWriteIndex {
@@ -2280,6 +2287,20 @@ partial class CSharpToGSharpTranslator {
                 }
                 if target != nil {
                     this.IndexScopeWriteTarget(index.Writes, bindings, node, target)
+                }
+                if node is ArgumentSyntax argument &&
+                    (
+                    argument.RefKindKeyword.IsKind(SyntaxKind.InKeyword) ||
+                        (
+                        this
+                            .context
+                            .SemanticModel
+                            .GetOperation(argument) is IArgumentOperation{Parameter: {} parameter} &&
+                            (parameter.RefKind == RefKind.In || parameter.RefKind == RefKind.RefReadOnlyParameter) &&
+                            this.PassesInArgumentWithoutConversion(argument)
+                    )
+                ) {
+                    this.IndexScopeWriteTarget(index.ReadonlyAddresses, bindings, node, argument.Expression)
                 }
                 let declaredName string? = switch node {
                     case declaration is VariableDeclaratorSyntax: declaration.Identifier.ValueText
