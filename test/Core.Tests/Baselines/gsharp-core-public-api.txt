@@ -3644,6 +3644,7 @@ type sealed class GSharp.Core.CodeAnalysis.DiagnosticBag : System.Object, System
   method public Void ReportPrivateInterfaceMemberRequiresBody(GSharp.Core.CodeAnalysis.Text.TextLocation location, String methodName)
   method public Void ReportPrivateMemberInaccessible(GSharp.Core.CodeAnalysis.Text.TextLocation location, String memberName, String declaringTypeName)
   method public Void ReportPropertyHasBothSetAndInit(GSharp.Core.CodeAnalysis.Text.TextLocation location, String name)
+  method public Void ReportPropertyInitializerNotSupported(GSharp.Core.CodeAnalysis.Text.TextLocation location, String propertyName)
   method public Void ReportPropertyPatternRequiresStructOrClass(GSharp.Core.CodeAnalysis.Text.TextLocation location, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type)
   method public Void ReportProtectedMemberInaccessible(GSharp.Core.CodeAnalysis.Text.TextLocation location, String memberName, String declaringTypeName)
   method public Void ReportProtectedRequiresOpenType(GSharp.Core.CodeAnalysis.Text.TextLocation location)
