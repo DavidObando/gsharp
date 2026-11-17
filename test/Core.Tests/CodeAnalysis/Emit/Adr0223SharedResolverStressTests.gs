@@ -91,6 +91,7 @@ open class Adr0223SharedResolverStressTests {
     shared {
         private const Rounds int32 = 3
         private const ExceptionPrefix string = "exception "
+        private const InternalErrorId string = "GS9998"
         private const MinimumWorkers int32 = 8
         // The compiler recurses deeply on some samples. Use the stack size of the main thread.
         private const WorkerStackSize int32 = 16777216
@@ -160,7 +161,8 @@ open class Adr0223SharedResolverStressTests {
         }
 
         // Describes one compilation: the diagnostics in report order, then the image hash or the
-        // exception. An exception is a result, so that a crash on one worker is a mismatch.
+        // exception. An exception is a result, so that a crash on one worker is a mismatch. An internal
+        // compiler error (GS9998, which Emit makes from an exception) is an exception too.
         private func CompileAndDescribe(name string, text string, references ReferenceResolver) string {
             let builder = StringBuilder()
             try {
@@ -181,6 +183,9 @@ open class Adr0223SharedResolverStressTests {
                 } else {
                     builder.Append("failed")
                 }
+                if result.Diagnostics.Any((d Diagnostic) -> d.Id == InternalErrorId) {
+                    builder.Insert(0, ExceptionPrefix + InternalErrorId + " ")
+                }
                 for diagnostic in result.Diagnostics {
                     let span = diagnostic.Location.Span
                     builder
@@ -194,6 +199,8 @@ open class Adr0223SharedResolverStressTests {
                         .Append(diagnostic.Message)
                 }
             } catch (ex Exception) {
+                // Drop a partial description, such as "emitted " before a hash failure.
+                builder.Clear()
                 builder.Append(ExceptionPrefix).Append(ex.GetType().FullName).Append(": ").Append(ex.Message)
             }
             return builder.ToString()
