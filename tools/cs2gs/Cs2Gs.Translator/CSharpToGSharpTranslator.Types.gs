@@ -3512,10 +3512,9 @@ partial class CSharpToGSharpTranslator {
                 this
                 .context
                 .GetDeclaredSymbol(bound) is {} boundSymbol {
-                if mutableBindings != nil && boundSymbol is ILocalSymbol mutableSymbol && this.IsSymbolReassigned(
-                    mutableSymbol,
-                    this.state.CurrentBodyScope ?? pattern.SyntaxTree.GetRoot()
-                ) {
+                if mutableBindings != nil &&
+                    boundSymbol is ILocalSymbol mutableSymbol &&
+                    this.PatternBindingNeedsStorage(mutableSymbol) {
                     mutableBindings.Add((mutableSymbol, memberAccess))
                     return
                 }

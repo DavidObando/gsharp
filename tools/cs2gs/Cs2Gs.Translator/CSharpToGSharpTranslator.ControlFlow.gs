@@ -2336,6 +2336,9 @@ partial class CSharpToGSharpTranslator {
                     default: default(ExpressionSyntax?)
                 }
                 if addressOperand != nil {
+                    if node is RefExpressionSyntax reference && this.IsReadOnlyReference(reference) {
+                        this.IndexScopeWriteTarget(index.ReadonlyAddresses, bindings, node, addressOperand)
+                    }
                     // Keep every operand name, including indices, as CollectAddressTakenNames does.
                     for operandNode in addressOperand.DescendantNodesAndSelf() {
                         CompilationMeasurements.Count("translation.scope_address_node_visits")

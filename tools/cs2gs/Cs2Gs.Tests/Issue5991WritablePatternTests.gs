@@ -517,6 +517,66 @@ class P {
     }
 
     @Theory
+    @InlineData("Counter")
+    @InlineData("int")
+    func LiftedReadonlyAliasInitializers_KeepTheOriginalStorageAddress(type string) {
+        AssertParity(`using System;
+using System.Runtime.CompilerServices;
+struct Counter { }
+class P {
+    static TYPE anchor;
+    static IntPtr saved;
+    static bool Same(in TYPE value) =>
+        saved == Unsafe.ByteOffset(ref anchor, ref Unsafe.AsRef(in value));
+    static bool Read() {
+        TYPE x = default;
+        bool matched = x is var p;
+        ref readonly TYPE outer = ref p;
+        saved = Unsafe.ByteOffset(ref anchor, ref Unsafe.AsRef(in outer));
+        return First(2);
+        bool First(int n) {
+            ref readonly TYPE inner = ref p;
+            return n == 0 ? Same(in inner) : Second<int>(n - 1);
+        }
+        bool Second<T>(int n) {
+            ref readonly TYPE inner = ref p;
+            return n == 0 ? Same(in inner) : First(n - 1);
+        }
+    }
+    static void Main() => Console.Write(Read());
+}`.Replace("TYPE", type), "True")
+    }
+
+    @Theory
+    @InlineData("var p")
+    @InlineData("Counter p")
+    func MutatedRecursivePatterns_KeepReadonlySubpatternCopyStorage(capture string) {
+        AssertParity(`using System;
+using System.Runtime.CompilerServices;
+struct Counter { }
+class Holder { public Counter Value; public int Count; }
+class P {
+    static int compared;
+    static bool Same(in Counter left, in Counter right) {
+        compared++;
+        return Unsafe.AreSame(ref Unsafe.AsRef(in left), ref Unsafe.AsRef(in right));
+    }
+    static string Read() {
+        var input = new Holder();
+        switch (input) {
+            case Holder { Value: CAPTURE, Count: var count } h:
+                count++;
+                return $"{First(2)}|{count}|{compared}";
+                bool First(int n) => n == 0 ? Same(in h.Value, in p) : Second<int>(n - 1);
+                bool Second<T>(int n) => n == 0 ? Same(in h.Value, in p) : First(n - 1);
+            default: return "miss";
+        }
+    }
+    static void Main() => Console.Write(Read());
+}`.Replace("CAPTURE", capture), "False|1|1")
+    }
+
+    @Theory
     @InlineData("Counter", "p.Same(in x)", "x.Same(in x)")
     @InlineData("Outer", "p.Inner.Same(x.Inner)", "x.Inner.Same(x.Inner)")
     func ReadonlyReceivers_KeepPatternCopyAddressIdentity(type string, read string, control string) {
