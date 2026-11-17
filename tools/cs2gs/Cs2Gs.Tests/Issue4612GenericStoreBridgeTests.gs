@@ -17,6 +17,8 @@ import System
 import System.Collections.Generic
 import System.IO
 import System.Linq
+import System.Text
+import System.Text.Json
 import System.Text.RegularExpressions
 import System.Threading.Tasks
 import Xunit
@@ -24,11 +26,377 @@ import Xunit
 /// Issue #4612 (option 1): cs2gs keeps its fail-fast `!!` when a maybe-null
 /// value is stored into a type-parameter or array-element slot, and now reports each such site
 /// as `CS2GS-GENERIC-STORE-BRIDGE`, so the runtime change is visible at
-/// translate time. The generated code is unchanged.
+/// translate time. Explicit nullable storage can supply a complete inferred method argument without a bridge.
 /// @remarks Discrimination witness (ADR-0154): with `ReportStoreBridge` returning
 /// before it reports, every test that expects a site fails, and the output
 /// assertions still pass, which shows the report does not change the code.
 open class Issue4612GenericStoreBridgeTests {
+    @Fact
+    func ExplicitNullableCapture_PublicMigration_PreservesCompleteInferredArgument() {
+        let directory = Path.Combine(AppContext.BaseDirectory, "nullable-inference", Guid.NewGuid().ToString("N"))
+        let sourceRoot = Path.Combine(directory, "source")
+        Directory.CreateDirectory(sourceRoot)
+        try {
+            GsharpTestProjectRunner.WriteIsolationBoundary(sourceRoot)
+            File.WriteAllText(
+                Path.Combine(sourceRoot, "Probe.csproj"),
+                `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable></PropertyGroup></Project>`
+            )
+            File.WriteAllText(Path.Combine(sourceRoot, "Input.cs"), ExplicitNullableCapture)
+            AssertProcess(ProcessRunner.Run("git", []string{"init", "--quiet"}, sourceRoot))
+            let native = CSharpProjectLoader.LoadInMemory(
+                [](string, string){
+                    ("Input.cs", ExplicitNullableCapture),
+                    ("Entry.cs", `class Entry { static void Main() => System.Console.WriteLine(Demo.P.Run("value")); }`)
+                },
+                outputKind: OutputKind.ConsoleApplication
+            )
+            Assert.Empty(
+                native
+                    .Compilation
+                    .GetDiagnostics()
+                    .Where(
+                    (diagnostic Diagnostic) -> diagnostic.Severity is DiagnosticSeverity.Error or
+                        DiagnosticSeverity.Warning
+                )
+            )
+            let tree = native.Compilation.SyntaxTrees.Single((candidate SyntaxTree) -> candidate.FilePath == "Input.cs")
+            let model = native.Compilation.GetSemanticModel(tree)
+            let call = tree
+                .GetRoot()
+                .DescendantNodes()
+                .OfType[InvocationExpressionSyntax]()
+                .Single((candidate InvocationExpressionSyntax) -> candidate.Expression.ToString() == "IsNull")
+            let method = Assert.IsAssignableFrom[IMethodSymbol](model.GetSymbolInfo(call).Symbol)
+            let captured = Assert.IsAssignableFrom[ILocalSymbol](
+                model.GetSymbolInfo(call.ArgumentList.Arguments[0].Expression).Symbol
+            )
+            Assert.Equal(NullableAnnotation.Annotated, captured.Type.NullableAnnotation)
+            Assert.Equal(NullableAnnotation.NotAnnotated, method.TypeArgumentNullableAnnotations[0])
+            Assert.True(SymbolEqualityComparer.Default.Equals(captured.Type, method.TypeArguments[0]))
+            let nativePath = Path.Combine(directory, "Native.dll")
+            {
+                using let stream = File.Create(nativePath)
+                let emitted = native.Compilation.Emit(stream)
+                Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics))
+                Assert.Empty(emitted.Diagnostics)
+            }
+            File.WriteAllText(
+                Path.Combine(directory, "Native.runtimeconfig.json"),
+                `{"runtimeOptions":{"tfm":"net10.0","framework":{"name":"Microsoft.NETCore.App","version":"10.0.0"}}}`
+            )
+            AssertStrictIl(nativePath)
+            let expected = Encoding.UTF8.GetBytes("True" + Environment.NewLine)
+            Assert.Equal(expected, RunOutputBytes(nativePath))
+            let compiler = GscInvoker.Resolve(nil, "Release", AppContext.BaseDirectory)
+            Assert.NotNull(compiler)
+            using let global = JsonDocument.Parse(
+                File.ReadAllText(Path.Combine(IlVerifyRunner().RepoRoot, "global.json"))
+            )
+            let sdk = global.RootElement.GetProperty("msbuild-sdks").GetProperty("Gsharp.NET.Sdk").GetString()
+            let translated = Path.Combine(directory, "translated")
+            let artifacts = Path.Combine(directory, "artifacts")
+            let migration = ProcessRunner.Run(
+                "dotnet",
+                []string{
+                    typeof(Cs2Gs.Cli.Program).Assembly.Location,
+                    "migrate",
+                    "--corpus",
+                    sourceRoot,
+                    "--out",
+                    translated,
+                    "--artifacts",
+                    artifacts,
+                    "--sdk-version",
+                    sdk!!,
+                    "--sdk-pin",
+                    "global-json",
+                    "--stop-after",
+                    "translate",
+                    "--gsc",
+                    compiler!!
+                },
+                sourceRoot
+            )
+            AssertProcess(migration)
+            let generated = Path.Combine(translated, "Input.gs")
+            let printed = File.ReadAllText(generated)
+            Assert.Contains("IsNull(captured)", printed)
+            Assert.DoesNotContain("IsNull(captured!!)", printed)
+            Assert.DoesNotContain(CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId, migration.Output)
+            let entry = Path.Combine(directory, "Entry.gs")
+            File.WriteAllText(entry, `System.Console.WriteLine(Demo.P.Run[string]("value"))`)
+            let target = Path.Combine(directory, "Target.dll")
+            let compiled = GscInvoker(compiler!!).Compile(
+                []string{generated, entry},
+                target,
+                TargetKind.Exe,
+                Array.Empty[string]()
+            )
+            Assert.True(compiled.ExitCode == 0, compiled.Output)
+            Assert.Contains("GS0536", compiled.Output)
+            AssertStrictIl(target)
+            Assert.Equal(expected, RunOutputBytes(target))
+        } finally {
+            DeleteDirectory(directory)
+        }
+    }
+
+    @Fact
+    func ExplicitNullableCapture_PreservesGetterValueAndDelegateEvaluationCounts() {
+        let source = `#nullable enable
+using System;
+class Box<T> where T : class {
+    public T? Current;
+    public int Reads;
+    public T? Value { get { Reads++; return Current; } }
+}
+static class P {
+    static int calls;
+    static string Observe<U>(U value) { calls++; return (value is null).ToString(); }
+    static string Run<T>(T replacement) where T : class {
+        var box = new Box<T> { Current = replacement };
+        (T?, int) pair = (replacement, 0);
+        string result = "";
+        int callbacks = 0;
+        var (callback, _) = ((Action)(() => {
+            callbacks++;
+            var (captured, _) = pair;
+            result = Observe(captured) + "|" + Observe(box.Value);
+        }), 0);
+        pair = (default(T), 0);
+        box.Current = default(T);
+        callback();
+        return result + "|" + callbacks + "|" + box.Reads + "|" + calls;
+    }
+    public static void Main() => Console.Write(Run("value"));
+}`
+        let native = CSharpProjectLoader.LoadInMemory(
+            [](string, string){("Probe.cs", source)},
+            outputKind: OutputKind.ConsoleApplication
+        )
+        Assert.Empty(
+            native
+                .Compilation
+                .GetDiagnostics()
+                .Where(
+                (diagnostic Diagnostic) -> diagnostic.Severity is DiagnosticSeverity.Error or DiagnosticSeverity.Warning
+            )
+        )
+        let (printed, sites) = Translate(source)
+        Assert.Contains("Observe(captured)", printed)
+        Assert.Empty(sites)
+        LiteralConstructionRuntimeParity.AssertMatches(
+            source,
+            verifyTranslation: (raw string) -> Assert.Equal(printed, raw),
+            verifyAssembly: (assembly string) -> {
+                AssertStrictIl(assembly)
+                Assert.Equal(Encoding.UTF8.GetBytes("True|True|1|1|2"), RunOutputBytes(assembly))
+            }
+        )
+    }
+
+    @Fact
+    func SynthesizedTypeArguments_KeepRequiredGenericInputAssertionAndOverload() {
+        let source = ExplicitNullableCapture
+            .Replace("public static class P", "public sealed class Marker { }\n    public static class P")
+            .Replace("static string IsNull<T>(T value) => (value is null).ToString();", `static string IsNull<A, B>(A value, System.Collections.Generic.List<B> marker) =>
+            "generic:" + (value is null).ToString();
+        static string IsNull(object value, System.Collections.Generic.List<object> marker) => "wrong";`)
+            .Replace("IsNull(captured)", "IsNull(captured, new System.Collections.Generic.List<Marker>())")
+            .Replace("pair = (default(T), 0);", "")
+            .Replace("public static string Run<T>", `public static void Main() => System.Console.Write(Run("value"));
+        public static string Run<T>`)
+        let native = CSharpProjectLoader.LoadInMemory(
+            [](string, string){("Probe.cs", source)},
+            outputKind: OutputKind.ConsoleApplication
+        )
+        Assert.Empty(
+            native
+                .Compilation
+                .GetDiagnostics()
+                .Where(
+                (diagnostic Diagnostic) -> diagnostic.Severity is DiagnosticSeverity.Error or DiagnosticSeverity.Warning
+            )
+        )
+        let (printed, sites) = Translate(source)
+        Assert.Contains("IsNull[T, Marker](captured!!,", printed)
+        Assert.Single(sites)
+        LiteralConstructionRuntimeParity.AssertMatches(
+            source,
+            verifyTranslation: (raw string) -> Assert.Equal(printed, raw),
+            verifyAssembly: (assembly string) -> {
+                AssertStrictIl(assembly)
+                Assert.Equal(Encoding.UTF8.GetBytes("generic:False"), RunOutputBytes(assembly))
+            }
+        )
+    }
+
+    @Fact
+    func SiblingTypeParameterConstraints_KeepRequiredGenericInputAssertion() {
+        let source = ExplicitNullableCapture.Replace("static string IsNull<T>(T value) => (value is null).ToString();", `static string IsNull<A, B>(A value, B marker) where B : System.Collections.Generic.List<A> =>
+            (value is null).ToString();`).Replace(
+            "IsNull(captured)",
+            "IsNull(captured, new System.Collections.Generic.List<T>())"
+        ).Replace("pair = (default(T), 0);", "").Replace("public static string Run<T>", `public static void Main() => System.Console.Write(Run("value"));
+        public static string Run<T>`)
+        let native = CSharpProjectLoader.LoadInMemory(
+            [](string, string){("Probe.cs", source)},
+            outputKind: OutputKind.ConsoleApplication
+        )
+        Assert.Empty(
+            native
+                .Compilation
+                .GetDiagnostics()
+                .Where(
+                (diagnostic Diagnostic) -> diagnostic.Severity is DiagnosticSeverity.Error or DiagnosticSeverity.Warning
+            )
+        )
+        let (printed, sites) = Translate(source)
+        Assert.Contains("IsNull(captured!!,", printed)
+        Assert.Single(sites)
+        LiteralConstructionRuntimeParity.AssertMatches(
+            source,
+            verifyTranslation: (raw string) -> Assert.Equal(printed, raw),
+            verifyAssembly: (assembly string) -> {
+                AssertStrictIl(assembly)
+                Assert.Equal(Encoding.UTF8.GetBytes("False"), RunOutputBytes(assembly))
+            }
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func OuterMethodTypeParameters_AreNotCalleeInferenceSlots(genericLocal bool) {
+        let outerArguments = if genericLocal {
+            "A, T"
+        } else {
+            "T"
+        }
+        let localArguments = if genericLocal {
+            "<U>"
+        } else {
+            ""
+        }
+        let markerParameter = if genericLocal {
+            ", U marker"
+        } else {
+            ""
+        }
+        let markerArgument = if genericLocal {
+            ", 0"
+        } else {
+            ""
+        }
+        let typeArguments = if genericLocal {
+            "int, string"
+        } else {
+            "string"
+        }
+        let source = `#nullable enable
+static class P {
+    static void Run<OUTER>(T? value) where T : class? {
+        void SinkLOCAL(T xMARKER) { System.Console.Write(x is null); }
+        if (value is not null) Sink(valueARGUMENT);
+    }
+    public static void Main() => Run<TYPES>("value");
+}`.Replace(
+            "OUTER",
+            outerArguments
+        ).Replace(
+            "LOCAL",
+            localArguments
+        ).Replace("MARKER", markerParameter).Replace("ARGUMENT", markerArgument).Replace("TYPES", typeArguments)
+        let native = CSharpProjectLoader.LoadInMemory(
+            [](string, string){("Probe.cs", source)},
+            outputKind: OutputKind.ConsoleApplication
+        )
+        Assert.Empty(
+            native
+                .Compilation
+                .GetDiagnostics()
+                .Where(
+                (diagnostic Diagnostic) -> diagnostic.Severity is DiagnosticSeverity.Error or DiagnosticSeverity.Warning
+            )
+        )
+        LiteralConstructionRuntimeParity.AssertMatches(
+            source,
+            verifyAssembly: (assembly string) -> {
+                AssertStrictIl(assembly)
+                Assert.Equal(Encoding.UTF8.GetBytes("False"), RunOutputBytes(assembly))
+            }
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func NestedAssignments_KeepTheirOwnFixedStorageContract(recursive bool) {
+        let callee = if recursive {
+            "Run"
+        } else {
+            "Consume"
+        }
+        let source = `#nullable enable
+static class P {
+    static void Consume<U>(U value) { }
+    static void Run<T>(T slot) where T : class? {
+        T? value = default;
+        CALL(slot = value);
+    }
+}`.Replace("CALL", callee)
+        let (printed, sites) = Translate(source)
+        Assert.Contains("value!!", printed)
+        let site = Assert.Single(sites)
+        Assert.Equal(Expected(source, "value);"), Position(site))
+    }
+
+    @Fact
+    func ExplicitNullableInference_KeepsFixedResultOwnerConstraintAndForgivenContracts() {
+        let (printed, sites) = Translate(`#nullable enable
+class Box<T> where T : class { public void Store(T value) { } }
+static class P {
+    static int Observe<U>(U value) => 0;
+    static U Identity<U>(U value) => value;
+    static int Constrained<U>(U value) where U : class => 0;
+    static int Fixed(string value) => 0;
+    static void Run<T>(T? value, Box<T> box, string? text) where T : class {
+        _ = Observe(value);
+        _ = Observe(value!);
+        _ = Identity<T>(value);
+        _ = Constrained(value);
+        box.Store(value);
+        _ = Fixed(text);
+    }
+}`)
+        Assert.Contains("Observe(value)", printed)
+        Assert.Contains("Observe(value!!)", printed)
+        Assert.Contains("Identity[T](value!!)", printed)
+        Assert.Contains("Constrained(value!!)", printed)
+        Assert.Contains("box.Store(value!!)", printed)
+        Assert.Contains("Fixed(text!!)", printed)
+        Assert.NotEmpty(sites)
+        Assert.All(sites, (site TranslationDiagnostic) -> Assert.Equal(TranslationSeverity.Warning, site.Severity))
+        Assert.Equal(4, sites.Count)
+        let dependent = ExplicitNullableCapture.Replace(
+            "static string IsNull<T>(T value) => (value is null).ToString();",
+            "static T Identity<T>(T value) => value;"
+        )
+            .Replace("IsNull(captured)", "(Identity(captured) is null).ToString()")
+        let (dependentPrinted, dependentSites) = Translate(dependent)
+        Assert.Contains("Identity(captured!!)", dependentPrinted)
+        Assert.Contains("result-depends-on-slot=yes", Assert.Single(dependentSites).Message)
+        let fixedByOtherInput = ExplicitNullableCapture.Replace(
+            "IsNull<T>(T value)",
+            "IsNull<T>(T value, System.Collections.Generic.List<T> fixedValues)"
+        )
+            .Replace("IsNull(captured)", "IsNull(captured, new System.Collections.Generic.List<T>())")
+        let (fixedPrinted, fixedSites) = Translate(fixedByOtherInput)
+        Assert.Contains("IsNull(captured!!,", fixedPrinted)
+        Assert.Contains("result-depends-on-slot=no", Assert.Single(fixedSites).Message)
+    }
+
     @Fact
     func DeconstructionStores_ReportOnlyGenericSlots_WithoutChangingOutput() {
         let source = `using System.Collections.Generic;
@@ -2295,6 +2663,77 @@ public static class ExtraBridge
     }
 
     shared {
+        private const ExplicitNullableCapture string = `
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        static string IsNull<T>(T value) => (value is null).ToString();
+        public static string Run<T>(T replacement) where T : class
+        {
+            (T?, int) pair = (replacement, 0);
+            string result = "";
+            var (callback, _) = ((System.Action)(() =>
+            {
+                var (captured, _) = pair;
+                result = IsNull(captured);
+            }), 0);
+            pair = (default(T), 0);
+            callback();
+            return result;
+        }
+    }
+}`
+
+        private func AssertProcess(result ProcessRunResult) {
+            Assert.False(result.TimedOut, result.Output)
+            Assert.True(result.ExitCode == 0, result.Output)
+        }
+
+        private func AssertStrictIl(assembly string) {
+            let arguments = List[string]{"tool", "run", "ilverify", assembly, "-s", "System.Private.CoreLib"}
+            let references = Directory.EnumerateFiles(
+                Path.GetDirectoryName(typeof(object).Assembly.Location)!!,
+                "*.dll"
+            )
+                .ToArray()
+            Assert.NotEmpty(references)
+            for reference in references {
+                arguments.Add("-r")
+                arguments.Add(reference)
+            }
+            AssertProcess(ProcessRunner.Run("dotnet", arguments, IlVerifyRunner().RepoRoot))
+        }
+
+        private func RunOutputBytes(assembly string)[]uint8 {
+            let start = System
+                .Diagnostics
+                .ProcessStartInfo("dotnet"){
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            }
+            start.ArgumentList.Add(assembly)
+            using let process = System
+                .Diagnostics
+                .Process
+                .Start(start) ??
+                throw InvalidOperationException("Could not start dotnet.")
+            using let bytes = MemoryStream()
+            let output = process.StandardOutput.BaseStream.CopyToAsync(bytes)
+            let error = process.StandardError.ReadToEndAsync()
+            if !process.WaitForExit(120000) {
+                process.Kill(entireProcessTree: true)
+                process.WaitForExit()
+                Assert.Fail("dotnet timed out.")
+            }
+            output.GetAwaiter().GetResult()
+            Assert.Equal(string.Empty, error.GetAwaiter().GetResult())
+            Assert.Equal(0, process.ExitCode)
+            return bytes.ToArray()
+        }
+
         private const MaybeNullHelper string = `#nullable enable
     private static string? Branch(string value) => value.Length > 1 ? value : null;
 #nullable restore`

@@ -148,7 +148,7 @@ ALLOWED_PROJECT_TARGETS = {
     ("src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj", "PackGsgen"):
         "6260906aff2a33e6700343d5c4611aa074410707a0fdbd2621bd7fad52febde3",
     ("src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj", "_GsharpPackPublishedSdkPayloads"):
-        "ac971c74649a7130dcbb2dd538afaabaee8bf9d6d8e562d7d613d8b3acc62ad0",
+        "ea03b90f923a545feb3ea40b69246ef5282cc95ec9dcd2f67a711beba9a04059",
     ("src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj", "PackGsharpHotReloadRuntime"):
         "1acb9836d2fd29a80d1afdad36b4b71ebcd0b7d87994268dc1000ad8d4c7d4bd",
     ("src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj", "PackGsharpChannelsRuntime"):
@@ -156,7 +156,7 @@ ALLOWED_PROJECT_TARGETS = {
     ("src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj", "PackGsharpValuesRuntime"):
         "4a5f332b47ec810147c105b412a83cc5445cff3303d9a2d58ea72a845ac3cf03",
     ("src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj", "PackGsharpExtensions"):
-        "6749f459a9c9632053ce5f56db5755dd8d97cb2be107df09c744e9274e5a48e5",
+        "d8fd2949a5d6843e43538118b10b2fed19b9c24764ed40891bbc661271b14e06",
 }
 ALLOWED_IMPORT_TARGETS = {
     ("build/gsharp.props", "InitGsharpProps"):
