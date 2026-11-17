@@ -783,7 +783,7 @@ internal partial class DeclarationBinder {
                 if !syntax.IsRef && TypeSymbol.IsByRefLike(paramType) {
                     Diagnostics.ReportByRefLikeEscape(
                         paramSyntax.Identifier!!.Location,
-                        paramType!!,
+                        paramType,
                         "be used as the type of field '$paramName'"
                     )
                     continue
@@ -809,7 +809,7 @@ internal partial class DeclarationBinder {
                 }
                 let primaryCtorParam = ParameterSymbol(
                     paramName,
-                    paramType!!,
+                    paramType,
                     isVariadic,
                     declaringSyntax: paramSyntax.Identifier,
                     isScoped: paramSyntax.IsScoped
@@ -825,7 +825,7 @@ internal partial class DeclarationBinder {
                     fields.Add(
                         FieldSymbol(
                             paramName,
-                            paramType!!,
+                            paramType,
                             Accessibility.Public,
                             isReadOnly: syntax.IsInline,
                             declaration: paramSyntax
@@ -2511,29 +2511,29 @@ internal partial class DeclarationBinder {
                         indexerParameters,
                         out var baseProp
                     ) {
-                        if !baseProp!!.IsVirtual && !baseProp!!.IsOverride {
+                        if !baseProp.IsVirtual && !baseProp.IsOverride {
                             Diagnostics.ReportOverrideOfSealedMethod(propSyntax.Identifier.Location, propName)
-                        } else if isIndexer != baseProp!!.IsIndexer ||
+                        } else if isIndexer != baseProp.IsIndexer ||
                             (
                             isIndexer &&
-                                !HaveSameIndexerParameterTypes(baseProp!!.Parameters, indexerParameters, baseTypeSubst)
+                                !HaveSameIndexerParameterTypes(baseProp.Parameters, indexerParameters, baseTypeSubst)
                         ) {
                             Diagnostics.ReportOverrideSignatureMismatch(propSyntax.Identifier.Location, propName)
                         } else if isIndexer &&
-                            !HaveSameIndexerSignature(baseProp!!.Parameters, indexerParameters, baseTypeSubst) {
+                            !HaveSameIndexerSignature(baseProp.Parameters, indexerParameters, baseTypeSubst) {
                             for var i = 0; i < indexerParameters.Length; i++ {
-                                if baseProp!!.Parameters[i].RefKind != indexerParameters[i].RefKind {
+                                if baseProp.Parameters[i].RefKind != indexerParameters[i].RefKind {
                                     Diagnostics.ReportOverrideRefKindMismatch(
                                         propSyntax.Identifier.Location,
                                         propName,
                                         indexerParameters[i].Name,
-                                        refKindToString(baseProp!!.Parameters[i].RefKind),
+                                        refKindToString(baseProp.Parameters[i].RefKind),
                                         refKindToString(indexerParameters[i].RefKind)
                                     )
                                     break
                                 }
                             }
-                        } else if baseProp!!.ReturnRefKind != propReturnRefKind {
+                        } else if baseProp.ReturnRefKind != propReturnRefKind {
                             // Issue #3879: a source base property is selected by
                             // NAME here, so without this the ref-kind never
                             // participated — `override prop P ref T` bound
@@ -2542,16 +2542,16 @@ internal partial class DeclarationBinder {
                             // caller reads by value. The two directions are both
                             // wrong and both report the same signature mismatch.
                             Diagnostics.ReportOverrideSignatureMismatch(propSyntax.Identifier.Location, propName)
-                        } else if (hasGetter && !baseProp!!.HasGetter) ||
-                            (hasSetter && (!baseProp!!.HasSetter || isInitOnly != baseProp!!.IsInitOnly)) ||
-                            (hasGetter && getterAccessibility != baseProp!!.GetterAccessibility) ||
-                            (hasSetter && setterAccessibility != baseProp!!.SetterAccessibility) {
+                        } else if (hasGetter && !baseProp.HasGetter) ||
+                            (hasSetter && (!baseProp.HasSetter || isInitOnly != baseProp.IsInitOnly)) ||
+                            (hasGetter && getterAccessibility != baseProp.GetterAccessibility) ||
+                            (hasSetter && setterAccessibility != baseProp.SetterAccessibility) {
                             Diagnostics.ReportOverrideSignatureMismatch(propSyntax.Identifier.Location, propName)
-                        } else if PropertyOverrideTypeConforms(structSymbol, baseProp!!, propType) {
+                        } else if PropertyOverrideTypeConforms(structSymbol, baseProp, propType) {
                             overriddenProperty = baseProp
                         } else if !hasSetter &&
-                            baseProp!!.HasGetter &&
-                            !baseProp!!.HasSetter &&
+                            baseProp.HasGetter &&
+                            !baseProp.HasSetter &&
                             propReturnRefKind == RefKind
                             .None {
                             // Issue #4481: a get-only override may narrow the
@@ -2846,9 +2846,9 @@ internal partial class DeclarationBinder {
                         eventName,
                         out var baseEvent
                     ) {
-                        if !baseEvent!!.IsVirtual && !baseEvent!!.IsOverride {
+                        if !baseEvent.IsVirtual && !baseEvent.IsOverride {
                             Diagnostics.ReportOverrideOfSealedMethod(eventSyntax.Identifier.Location, eventName)
-                        } else if !PropertyOverrideTypeConforms(structSymbol, baseEvent!!.Type, handlerType) {
+                        } else if !PropertyOverrideTypeConforms(structSymbol, baseEvent.Type, handlerType) {
                             Diagnostics.ReportOverrideSignatureMismatch(eventSyntax.Identifier.Location, eventName)
                         } else {
                             overriddenEvent = baseEvent
@@ -4601,7 +4601,7 @@ internal partial class DeclarationBinder {
                 return false
             }
             resolvedMethodOwners ??= Dictionary[string, TypeSymbol?](StringComparer.Ordinal)
-            if !resolvedMethodOwners!!.TryGetValue(methodName, out var methodOwner) {
+            if !resolvedMethodOwners.TryGetValue(methodName, out var methodOwner) {
                 methodOwner = conversions.MemberLookup.FindLexicalMemberOwner(lexicalOwner, methodName)
                 resolvedMethodOwners!![methodName] = methodOwner
             }
@@ -5199,7 +5199,7 @@ internal partial class DeclarationBinder {
                 if !c.TypeParameters.IsDefaultOrEmpty {
                     levels ??= List[ImmutableArray[TypeParameterSymbol]]()
                     // Prepend so the outermost enclosing type's parameters come first.
-                    levels!!.Insert(0, c.TypeParameters)
+                    levels.Insert(0, c.TypeParameters)
                 }
             }
             let result = List[TypeParameterSymbol]()
@@ -5316,8 +5316,8 @@ internal partial class DeclarationBinder {
                 if declaredInterface?.IsInterface != true {
                     continue
                 }
-                let interfaces = List[Type]{declaredInterface!!}
-                interfaces.AddRange(declaredInterface!!.GetInterfaces())
+                let interfaces = List[Type]{declaredInterface}
+                interfaces.AddRange(declaredInterface.GetInterfaces())
                 for clrInterface in interfaces {
                     let containingType = if object.ReferenceEquals(clrInterface, declaredInterface) {
                         ifaceSymbol

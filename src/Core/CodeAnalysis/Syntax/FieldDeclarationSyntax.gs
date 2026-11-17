@@ -73,13 +73,13 @@ partial class FieldDeclarationSyntax : SyntaxNode {
     /// `const` field (Issue #948) is also read-only; see
     /// (cref:IsConst).
     prop IsReadOnly bool -> VarOrLetKeyword != nil &&
-        (VarOrLetKeyword!!.Kind == SyntaxKind.LetKeyword || VarOrLetKeyword!!.Kind == SyntaxKind.ConstKeyword)
+        (VarOrLetKeyword.Kind == SyntaxKind.LetKeyword || VarOrLetKeyword!!.Kind == SyntaxKind.ConstKeyword)
 
     /// Gets a value indicating whether this field was declared with the
     /// `const` keyword (Issue #948) and is therefore a compile-time
     /// constant: implicitly static, read-only, and emitted as a literal
     /// field whose initializer must be a constant expression.
-    prop IsConst bool -> VarOrLetKeyword != nil && VarOrLetKeyword!!.Kind == SyntaxKind.ConstKeyword
+    prop IsConst bool -> VarOrLetKeyword != nil && VarOrLetKeyword.Kind == SyntaxKind.ConstKeyword
 
     /// Gets the field identifier.
     prop Identifier SyntaxToken {

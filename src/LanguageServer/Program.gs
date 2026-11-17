@@ -165,7 +165,7 @@ open class Program {
                 return if string.IsNullOrWhiteSpace(tracePath) {
                     default(string?)
                 } else {
-                    tracePath!!.Trim()
+                    tracePath.Trim()
                 }
             }
             let separatorIndex = logArg.IndexOf('=')

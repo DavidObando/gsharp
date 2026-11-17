@@ -24,7 +24,7 @@ open class DataClassOpenTranslationTests {
             .Members
             .OfType[TypeDeclaration]()
             .Single(
-            (t TypeDeclaration) -> t.Name == "Message" && (t.TypeParameters == nil || t.TypeParameters!!.Count == 0)
+            (t TypeDeclaration) -> t.Name == "Message" && (t.TypeParameters == nil || t.TypeParameters.Count == 0)
         )
         Assert.Equal(TypeDeclarationKind.DataClass, message.Kind)
         Assert.True(message.IsOpen)

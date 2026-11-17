@@ -44,7 +44,7 @@ internal shared class SdkPin {
     /// @param version The candidate version.
     /// @returns `true` when the version is well-formed.
     internal func IsValidVersion(version string?) bool -> !string.IsNullOrEmpty(version) && VersionPattern.IsMatch(
-        version!!
+        version
     )
 
     /// Returns the value a generated project's `Sdk` attribute carries for

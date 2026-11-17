@@ -238,7 +238,7 @@ shared class SemanticLookup {
                 return declared
             }
             let spanKey = SpanKey(token)
-            if (spanKey != nil) && this.declarationsBySpan.TryGetValue(spanKey!!, out var bySpan) {
+            if (spanKey != nil) && this.declarationsBySpan.TryGetValue(spanKey, out var bySpan) {
                 return bySpan
             }
             if token.IsMissing {
@@ -336,7 +336,7 @@ shared class SemanticLookup {
                                 return declared
                             }
                             let key = SpanKey(tp.Identifier)
-                            if (key != nil) && this.declarationsBySpan.TryGetValue(key!!, out var bySpan) {
+                            if (key != nil) && this.declarationsBySpan.TryGetValue(key, out var bySpan) {
                                 return bySpan
                             }
                         }
@@ -485,9 +485,7 @@ shared class SemanticLookup {
             // check lets them bail out before scanning the file's accessors/assignments.
             let spanKey = SpanKey(token)
             if !(spanKey != nil) ||
-                (
-                !this.memberAccessTokenSpans.Contains(spanKey!!) && !this.fieldAssignmentTokenSpans.Contains(spanKey!!)
-            ) {
+                (!this.memberAccessTokenSpans.Contains(spanKey) && !this.fieldAssignmentTokenSpans.Contains(spanKey)) {
                 return nil
             }
             let candidateAccessors IEnumerable[AccessorExpressionSyntax] = if this.cachedAccessorsByTree.ContainsKey(
@@ -1310,7 +1308,7 @@ shared class SemanticLookup {
 
     private func ExpandImportAlias(tree SyntaxTree, name string) string {
         for import_ in tree.Root.Members.OfType[ImportSyntax]() {
-            if import_.AliasIdentifier != nil && import_.AliasIdentifier!!.Text == name {
+            if import_.AliasIdentifier != nil && import_.AliasIdentifier.Text == name {
                 let aliased = string.Join(".", import_.Identifiers.Select((i SyntaxToken) -> i.Text))
                 if !string.IsNullOrEmpty(aliased) {
                     return aliased
@@ -1336,7 +1334,7 @@ shared class SemanticLookup {
             for var i = 0; i < typeClause.QualifierIdentifierTokens.Length; i++ {
                 if SemanticModel.TokenMatches(typeClause.QualifierIdentifierTokens[i], token) {
                     if typeClause.Identifier != nil {
-                        segments.Add((typeClause.Identifier!!.Text, typeClause.GetSegmentTypeArguments(0)?.Count ?? 0))
+                        segments.Add((typeClause.Identifier.Text, typeClause.GetSegmentTypeArguments(0)?.Count ?? 0))
                     }
                     for var j = 0; j <= i; j++ {
                         segments.Add(
@@ -1671,7 +1669,7 @@ shared class SemanticLookup {
         let seen = HashSet[string](StringComparer.Ordinal)
         for import_ in tree.Root.Members.OfType[ImportSyntax]() {
             // `import alias = System.Console` makes `alias` refer to the dotted path.
-            if import_.AliasIdentifier != nil && import_.AliasIdentifier!!.Text == name {
+            if import_.AliasIdentifier != nil && import_.AliasIdentifier.Text == name {
                 let aliased = string.Join(".", import_.Identifiers.Select((i SyntaxToken) -> i.Text))
                 if !string.IsNullOrEmpty(aliased) && seen.Add(aliased) {
                     yield aliased

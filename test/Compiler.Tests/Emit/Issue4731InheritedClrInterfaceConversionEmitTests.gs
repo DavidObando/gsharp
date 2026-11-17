@@ -158,10 +158,11 @@ public func Probe() int32 {
         )
     }
 
+    // Closed symbolic generic mismatches are rejected before argument lowering.
     @Theory
     @InlineData("[]Other", "Item", "GS0155")
-    @InlineData("List[Other]", "Item", "GS0155")
-    @InlineData("sequence[List[Other]]", "List[Item]", "GS0155")
+    @InlineData("List[Other]", "Item", "GS0159")
+    @InlineData("sequence[List[Other]]", "List[Item]", "GS0159")
     @InlineData("sequence[(Other, int32)]", "(Item, int32)", "GS0156")
     @InlineData("sequence[ImmutableArray[Item]]", "IEnumerable[Item]", "GS0159")
     func ImportedGenericMethodSlot_UnrelatedSourceShapes_AreRejected(
@@ -180,6 +181,10 @@ func Unsafe(value ` + "$sourceType" + `) int32 ->
     Enumerable.Count[` + "$elementType" + `](value)`))
         Assert.NotEqual(0, result.ExitCode)
         Assert.True(result.Output.Contains("error " + diagnostic + ":", StringComparison.Ordinal), result.Output)
+        if diagnostic == "GS0159" {
+            let callLength = ("Count[" + elementType + "](value)").Length
+            Assert.Contains("Consumer.gs(8,16,8," + (16 + callLength).ToString() + "): error GS0159", result.Output)
+        }
         Assert.False(File.Exists(result.AssemblyPath))
     }
 

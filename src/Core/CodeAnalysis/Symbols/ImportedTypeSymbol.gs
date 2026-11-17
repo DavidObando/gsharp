@@ -160,7 +160,7 @@ class ImportedTypeSymbol : TypeSymbol {
                 expression: "ClrType"
             )
         }
-        let openDefinition = OpenDefinition!!
+        let openDefinition = OpenDefinition
         var contextObject Type? = nil
         for parameter in openDefinition.GetGenericArguments() {
             if string.Equals(parameter.BaseType?.FullName, "System.Object", StringComparison.Ordinal) {
@@ -420,7 +420,7 @@ class ImportedTypeSymbol : TypeSymbol {
             // constructors and `with`/copy resolve consistently in EVERY position.
             // Guard the payload against a value/reference mismatch so a stale
             // marker can never mis-shape the aggregate.
-            if type.IsValueType != semantics!!.IsValueType {
+            if type.IsValueType != semantics.IsValueType {
                 return false
             }
             // Issue #2278: a generic type's OPEN definition (e.g. `Box<>`,
@@ -438,7 +438,7 @@ class ImportedTypeSymbol : TypeSymbol {
             if type.IsGenericTypeDefinition {
                 return false
             }
-            if !type.IsValueType && !semantics!!.IsData {
+            if !type.IsValueType && !semantics.IsData {
                 // All classes carry GSharp.TypeSemantics for inheritance policy (#4808);
                 // non-data reference classes stay ordinary CLR imports and do not build a semantic aggregate.
                 return false
@@ -493,9 +493,9 @@ class ImportedTypeSymbol : TypeSymbol {
                 return type
             }
             let normalized TypeSymbol = if annotated == nil {
-                cast[TypeSymbol](aggregate!!)
+                cast[TypeSymbol](aggregate)
             } else {
-                cast[TypeSymbol](NullabilityAnnotatedTypeSymbol(aggregate!!, annotated.NullableFlags))
+                cast[TypeSymbol](NullabilityAnnotatedTypeSymbol(aggregate, annotated.NullableFlags))
             }
             return if nullable {
                 cast[TypeSymbol](NullableTypeSymbol.Get(normalized))
@@ -614,7 +614,7 @@ class ImportedTypeSymbol : TypeSymbol {
                 propertySymbol.ImportedMember = property
                 propertyBuilder.Add(propertySymbol)
             }
-            let primaryConstructorParameters = BuildPrimaryConstructorParameters(type, semantics!!)
+            let primaryConstructorParameters = BuildPrimaryConstructorParameters(type, semantics)
             ApplyPrimaryConstructorDefaults(type, primaryConstructorParameters)
             let aggregate = StructSymbol(
                 name: BuildAggregateDisplayName(type),
@@ -622,9 +622,9 @@ class ImportedTypeSymbol : TypeSymbol {
                 accessibility: MapTypeAccessibility(type),
                 declaration: nil,
                 packageName: type.Namespace ?? string.Empty,
-                isData: semantics!!.IsData,
+                isData: semantics.IsData,
                 isInline: false,
-                isClass: !semantics!!.IsValueType,
+                isClass: !semantics.IsValueType,
                 primaryConstructorParameters: primaryConstructorParameters,
                 isOpen: false,
                 baseClass: nil,
@@ -632,7 +632,7 @@ class ImportedTypeSymbol : TypeSymbol {
             )
             let builtProperties = propertyBuilder.ToImmutable()
             aggregate.SetProperties(builtProperties)
-            if !semantics!!.IsValueType && semantics!!.IsData && !primaryConstructorParameters.IsDefaultOrEmpty {
+            if !semantics.IsValueType && semantics.IsData && !primaryConstructorParameters.IsDefaultOrEmpty {
                 let inheritedPositionalBuilder = ImmutableArray.CreateBuilder[PropertySymbol]()
                 for var i = 0; i < primaryConstructorParameters.Length; i++ {
                     let parameter = primaryConstructorParameters[i]
@@ -688,12 +688,12 @@ class ImportedTypeSymbol : TypeSymbol {
             // A class needs no reconstruction: its literal always calls the
             // REAL parameterless constructor, which already runs these
             // initializers in-type.
-            if semantics!!.IsValueType && ImportedAssemblySemantics.TryGetMagicCollectionFields(
+            if semantics.IsValueType && ImportedAssemblySemantics.TryGetMagicCollectionFields(
                 type,
                 out var magicFieldKinds
             ) {
                 let fieldsByName = aggregate.Fields.ToDictionary((f FieldSymbol) -> f.Name, StringComparer.Ordinal)
-                for (fieldName, kind) in magicFieldKinds!! {
+                for (fieldName, kind) in magicFieldKinds {
                     if !fieldsByName.TryGetValue(fieldName, out var fieldSymbol) || instanceInitBuilder.ContainsKey(
                         fieldSymbol
                     ) {

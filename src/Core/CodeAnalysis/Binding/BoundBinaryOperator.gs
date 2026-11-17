@@ -417,7 +417,7 @@ data class BoundBinaryOperator : IEquatable[BoundBinaryOperator] {
                             BoundBinaryOperatorKind.NullCoalesce,
                             leftType,
                             rightType,
-                            common!!
+                            common
                         )
                     }
                 }

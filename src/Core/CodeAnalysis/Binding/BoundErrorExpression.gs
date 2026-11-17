@@ -62,13 +62,13 @@ class BoundErrorExpression : BoundExpression {
             if left is BoundErrorExpression leftError &&
                 (!leftError.MemberGroup.IsDefaultOrEmpty || !leftError.FailedChildren.IsDefaultOrEmpty) {
                 builder ??= ImmutableArray.CreateBuilder[BoundErrorExpression]()
-                builder!!.Add(leftError)
+                builder.Add(leftError)
             }
             if right is BoundErrorExpression rightError &&
                 (!rightError.MemberGroup.IsDefaultOrEmpty || !rightError.FailedChildren.IsDefaultOrEmpty) {
                 builder ??= ImmutableArray.CreateBuilder[BoundErrorExpression]()
-                if !builder!!.Contains(rightError) {
-                    builder!!.Add(rightError)
+                if !builder.Contains(rightError) {
+                    builder.Add(rightError)
                 }
             }
             if builder != nil {

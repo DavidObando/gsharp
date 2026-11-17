@@ -52,7 +52,7 @@ class PathMember : IEquatable[PathMember] {
         if ClrMember == nil || otherClrMember == nil {
             return ClrMember == nil && otherClrMember == nil
         }
-        let clrMember = ClrMember!!
+        let clrMember = ClrMember
         return clrMember.MetadataToken == otherClrMember.MetadataToken && object.ReferenceEquals(
             clrMember.Module,
             otherClrMember.Module
@@ -74,7 +74,7 @@ class PathMember : IEquatable[PathMember] {
         return if ClrMember == nil {
             0
         } else {
-            HashCode.Combine(RuntimeHelpers.GetHashCode(ClrMember!!.Module), ClrMember!!.MetadataToken)
+            HashCode.Combine(RuntimeHelpers.GetHashCode(ClrMember.Module), ClrMember!!.MetadataToken)
         }
     }
 

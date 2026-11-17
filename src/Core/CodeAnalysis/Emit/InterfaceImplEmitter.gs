@@ -515,11 +515,11 @@ internal class InterfaceImplEmitter {
             for slotEvent in defIface.Events {
                 if IsExplicitlyImplemented(structSymbol, slotEvent) ||
                     !TryFindImplicitEvent(structSymbol, iface, slotEvent, out var ev, out var declaringType) ||
-                    (object.ReferenceEquals(declaringType, structSymbol) && ev!!.IsFieldLike) ||
+                    (object.ReferenceEquals(declaringType, structSymbol) && ev.IsFieldLike) ||
                     !this
                     .cache
                     .EventAccessorHandles
-                    .TryGetValue(ev!!, out var implAccessors) {
+                    .TryGetValue(ev, out var implAccessors) {
                     continue
                 }
                 let isGenericIface = ReflectionMetadataEmitter.IsUserGenericInterfaceReference(iface)
@@ -541,8 +541,8 @@ internal class InterfaceImplEmitter {
                     if (declaration != nil) {
                         let body = this.GetEventAccessorBody(
                             structSymbol,
-                            declaringType!!,
-                            ev!!,
+                            declaringType,
+                            ev,
                             isAdd: true,
                             implAccessors.Add
                         )
@@ -567,8 +567,8 @@ internal class InterfaceImplEmitter {
                     if (declaration != nil) {
                         let body = this.GetEventAccessorBody(
                             structSymbol,
-                            declaringType!!,
-                            ev!!,
+                            declaringType,
+                            ev,
                             isAdd: false,
                             implAccessors.Remove
                         )
@@ -583,8 +583,8 @@ internal class InterfaceImplEmitter {
             if declaredInterface?.IsInterface != true {
                 continue
             }
-            let interfaces = List[Type]{declaredInterface!!}
-            interfaces.AddRange(declaredInterface!!.GetInterfaces())
+            let interfaces = List[Type]{declaredInterface}
+            interfaces.AddRange(declaredInterface.GetInterfaces())
             for clrInterface in interfaces {
                 for slotEvent in clrInterface.GetEvents(
                     BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly
@@ -606,11 +606,11 @@ internal class InterfaceImplEmitter {
                         out var ev,
                         out var declaringType
                     ) ||
-                        (object.ReferenceEquals(declaringType, structSymbol) && ev!!.IsFieldLike) ||
+                        (object.ReferenceEquals(declaringType, structSymbol) && ev.IsFieldLike) ||
                         !this
                         .cache
                         .EventAccessorHandles
-                        .TryGetValue(ev!!, out var implAccessors) {
+                        .TryGetValue(ev, out var implAccessors) {
                         continue
                     }
                     if slotEvent.AddMethod != nil && emittedClrSlots.Add(slotEvent.AddMethod!!) {
@@ -620,8 +620,8 @@ internal class InterfaceImplEmitter {
                             .GetMethodEntityHandle(slotEvent.AddMethod!!, containingType)
                         let body = this.GetEventAccessorBody(
                             structSymbol,
-                            declaringType!!,
-                            ev!!,
+                            declaringType,
+                            ev,
                             isAdd: true,
                             implAccessors.Add
                         )
@@ -634,8 +634,8 @@ internal class InterfaceImplEmitter {
                             .GetMethodEntityHandle(slotEvent.RemoveMethod!!, containingType)
                         let body = this.GetEventAccessorBody(
                             structSymbol,
-                            declaringType!!,
-                            ev!!,
+                            declaringType,
+                            ev,
                             isAdd: false,
                             implAccessors.Remove
                         )
@@ -859,7 +859,7 @@ internal class InterfaceImplEmitter {
                 if !IsExplicitlyImplemented(structSymbol, slotEvent) &&
                     TryFindImplicitEvent(structSymbol, iface, slotEvent, out var ev, out var declaringType) &&
                     !object.ReferenceEquals(declaringType, structSymbol) {
-                    PlanBridge(ev!!)
+                    PlanBridge(ev)
                 }
             }
         }
@@ -868,8 +868,8 @@ internal class InterfaceImplEmitter {
             if declaredInterface?.IsInterface != true {
                 continue
             }
-            let interfaces = List[Type]{declaredInterface!!}
-            interfaces.AddRange(declaredInterface!!.GetInterfaces())
+            let interfaces = List[Type]{declaredInterface}
+            interfaces.AddRange(declaredInterface.GetInterfaces())
             for clrInterface in interfaces {
                 for slotEvent in clrInterface.GetEvents(
                     BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly
@@ -892,7 +892,7 @@ internal class InterfaceImplEmitter {
                         out var declaringType
                     ) &&
                         !object.ReferenceEquals(declaringType, structSymbol) {
-                        PlanBridge(ev!!)
+                        PlanBridge(ev)
                     }
                 }
             }

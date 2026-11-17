@@ -57,7 +57,7 @@ internal class ObliviousSignatureGroups {
     init(compilation Compilation) {
         let visited = HashSet[ISymbol](SymbolEqualityComparer.Default)
         for tree in compilation.SyntaxTrees {
-            let model = TranslationContext.GetSemanticModel(compilation, tree)
+            let model = TranslationContext.GetEffectiveSemanticModel(compilation, tree)
             for declaration in tree.GetRoot().DescendantNodes().OfType[BaseTypeDeclarationSyntax]() {
                 if model.GetDeclaredSymbol(declaration) is not INamedTypeSymbol type || !visited.Add(type) {
                     continue
@@ -224,7 +224,8 @@ partial class CSharpToGSharpTranslator {
             symbol
         ) != nil
 
-        private func ObliviousContainerFlowState() ObliviousContainerFlow -> ObliviousContainerFlowCache.GetValue(
+        private func ObliviousContainerFlowState() ObliviousContainerFlow -> ObliviousContainerFlowCache
+            .GetOrCreateValue(this.context.CatalogIdentity).GetValue(
             this.context.Compilation,
             (compilation Compilation) -> this.CollectObliviousContainerFlow(compilation)
         )
@@ -2206,9 +2207,10 @@ partial class CSharpToGSharpTranslator {
                     (Creation AnonymousObjectCreationExpressionSyntax, Properties[]IPropertySymbol, Model SemanticModel)
                 ]
             ](System.StringComparer.Ordinal)
-            for tree in compilation.SyntaxTrees {
-                let model = TranslationContext.GetSemanticModel(compilation, tree)
-                for node in tree.GetRoot().DescendantNodes() {
+            for root in TranslationContext.GetEffectiveSyntaxRoots(compilation) {
+                let tree = root.SyntaxTree
+                let model = this.context.GetOwnedSemanticModel(tree, cast[CSharpCompilation](compilation))
+                for node in TranslationContext.GetEffectiveNodes(root, compilation) {
                     if node is AnonymousObjectCreationExpressionSyntax anonymousCreation && model.GetTypeInfo(
                         anonymousCreation
                     )
@@ -3006,9 +3008,9 @@ partial class CSharpToGSharpTranslator {
 
         shared {
             private let ObliviousContainerFlowCache ConditionalWeakTable[
-                Compilation,
-                ObliviousContainerFlow
-            ] = ConditionalWeakTable[Compilation, ObliviousContainerFlow]()
+                object,
+                ConditionalWeakTable[Compilation, ObliviousContainerFlow]
+            ] = ConditionalWeakTable[object, ConditionalWeakTable[Compilation, ObliviousContainerFlow]]()
 
             // The declared positions of storage. A lambda parameter is found by its
             // declaration.

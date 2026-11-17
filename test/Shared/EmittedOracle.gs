@@ -117,7 +117,7 @@ shared class EmittedOracle {
             throw ArgumentException("At least one non-null source is required.", "sources")
         }
         options ??= EmittedOracleOptions()
-        let referencePaths = options!!
+        let referencePaths = options
             .References
             ?.Where((r string) -> !string.IsNullOrWhiteSpace(r))
             .ToArray() ??
@@ -130,7 +130,9 @@ shared class EmittedOracle {
         // excludes collectible-ALC assemblies from its host scan, so earlier
         // oracle runs' still-loaded emitted assemblies can never shadow this
         // compilation's source packages (issue #3235).
-        using let resolver = if referencePaths.Length > 0 {
+        using let resolver = if options?.ResolverFactory is {} createResolver {
+            createResolver()
+        } else if referencePaths.Length > 0 {
             ReferenceResolver.WithReferences(referencePaths)
         } else {
             ReferenceResolver.Default()

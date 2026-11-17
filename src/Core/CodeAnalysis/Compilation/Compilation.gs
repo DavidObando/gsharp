@@ -569,9 +569,10 @@ open class Compilation {
     /// Issue #5623: gets GS0634 when an executable has no entry point.
     /// Call this function only when the output is an executable and no other error stops the output.
     /// (cref:IsLibrary) is `false` by default, so a host that does not know the output kind must not call it.
+    /// Public for library hosts (ADR-0223 D1).
     /// A function whose name differs from `Main` only in case gets a hint and the diagnostic location.
     /// @returns GS0634, or an empty array when the program has an entry point.
-    internal func GetMissingEntryPointDiagnostics() ImmutableArray[Diagnostic] {
+    func GetMissingEntryPointDiagnostics() ImmutableArray[Diagnostic] {
         if IsLibrary || Submission != nil || SyntaxTrees.IsDefaultOrEmpty {
             return ImmutableArray[Diagnostic].Empty
         }
@@ -1190,7 +1191,7 @@ open class Compilation {
         if References == nil {
             return
         }
-        let references = References!!
+        let references = References
         this.References.CurrentAssemblyName = assemblyName ?? references.CurrentAssemblyName
     }
 
@@ -1224,7 +1225,7 @@ open class Compilation {
         /// @param ex The exception that escaped the compiler pipeline.
         /// @returns A diagnostic anchored at an (cref:EmitDiagnosticException) source
         /// node when available; otherwise a location-less diagnostic.
-        internal func CreateInternalErrorDiagnostic(ex Exception) Diagnostic {
+        func CreateInternalErrorDiagnostic(ex Exception) Diagnostic {
             ArgumentNullException.ThrowIfNull(ex, paramName: "ex")
             var anchoredException EmitDiagnosticException? = nil
             var rootEx = ex

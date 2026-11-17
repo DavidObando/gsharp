@@ -531,7 +531,7 @@ internal shared class IlVerifier {
             return Array.Empty[string]()
         }
         let refs = List[string]()
-        for path in Directory.EnumerateFiles(runtimeDir!!, "*.dll", SearchOption.TopDirectoryOnly) {
+        for path in Directory.EnumerateFiles(runtimeDir, "*.dll", SearchOption.TopDirectoryOnly) {
             let name = Path.GetFileName(path)
             if name.StartsWith("System.", StringComparison.OrdinalIgnoreCase) || string.Equals(
                 name,

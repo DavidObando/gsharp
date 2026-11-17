@@ -295,7 +295,7 @@ internal shared class AccessibilityChecker {
                 }
                 case typeParameter is TypeParameterSymbol {
                     visited ??= HashSet[TypeParameterSymbol](ReferenceEqualityComparer.Instance)
-                    if !visited!!.Add(typeParameter) {
+                    if !visited.Add(typeParameter) {
                         return nil
                     }
                     current = typeParameter.ClassConstraint ?? typeParameter.TypeParameterBound

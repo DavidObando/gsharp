@@ -69,7 +69,7 @@ Printed:
     func L1Document_PreservesImmutableFieldInitializationAbi() {
         let (unit, context) = TranslateL1()
         let cart = unit.Members.OfType[TypeDeclaration]().Single((t TypeDeclaration) -> t.Name == "Cart")
-        Assert.True(cart.PrimaryConstructorParameters == nil || cart.PrimaryConstructorParameters!!.Count == 0)
+        Assert.True(cart.PrimaryConstructorParameters == nil || cart.PrimaryConstructorParameters.Count == 0)
         let fields = cart.Members.OfType[FieldDeclaration]().ToArray()
         Assert.Equal([]string{"_customer", "_items"}, fields.Select((field FieldDeclaration) -> field.Name))
         Assert.All(fields, (field FieldDeclaration) -> Assert.Equal(Visibility.Private, field.Visibility))

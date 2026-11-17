@@ -55,7 +55,7 @@ internal partial class MethodBodyEmitter {
         if this.asyncFieldMap != nil && this.asyncFieldMap.TryGetHoistedField(variable, out var hoistedField) {
             this.il.OpCode(ILOpCode.Ldarg_0)
             this.il.OpCode(ILOpCode.Ldfld)
-            this.il.Token(this.ResolveCurrentStateMachineFieldToken(hoistedField!!))
+            this.il.Token(this.ResolveCurrentStateMachineFieldToken(hoistedField))
             return
         }
         if variable is ParameterSymbol ps && this.parameters.TryGetValue(ps, out var argIndex) {
@@ -468,7 +468,7 @@ internal partial class MethodBodyEmitter {
         // that yields the object reference typed as the constraint) so the
         // verifier accepts the subsequent `ldfld` against the constraint class —
         // the same shape the C# compiler emits for `t.field`.
-        if fa.Receiver!!.Type is TypeParameterSymbol fieldReceiverTp {
+        if fa.Receiver.Type is TypeParameterSymbol fieldReceiverTp {
             this.EmitExpression(fa.Receiver!!)
             this.il.OpCode(ILOpCode.Box)
             this.il.Token(this.outer.memberRefs.GetElementTypeToken(fieldReceiverTp))
@@ -856,7 +856,7 @@ internal partial class MethodBodyEmitter {
         }
         // Issue #1235: constrained dispatch handles both reference- and
         // value-type substitutions without boxing a value-type receiver.
-        if access.Receiver!!.Type is TypeParameterSymbol tpReceiver {
+        if access.Receiver.Type is TypeParameterSymbol tpReceiver {
             this.EmitConstrainedTypeParameterReceiver(access.Receiver!!)
             this.il.OpCode(ILOpCode.Constrained)
             this.il.Token(this.outer.memberRefs.GetElementTypeToken(tpReceiver))
@@ -957,7 +957,7 @@ internal partial class MethodBodyEmitter {
         }
         // Issue #1235 (write side): constrained dispatch preserves writes when
         // T is a value type and avoids boxing when T is a reference type.
-        if assn.Receiver!!.Type is TypeParameterSymbol tpAssnReceiver {
+        if assn.Receiver.Type is TypeParameterSymbol tpAssnReceiver {
             this.EmitConstrainedTypeParameterReceiver(assn.Receiver!!)
             this.EmitExpression(assn.Value)
             this.il.OpCode(ILOpCode.Dup)
@@ -2001,7 +2001,7 @@ internal partial class MethodBodyEmitter {
             return
         }
         // Load receiver address, then ldflda.
-        let receiverIsClass = (fa.Receiver!!.Type is StructSymbol rs && rs.IsClass) ||
+        let receiverIsClass = (fa.Receiver.Type is StructSymbol rs && rs.IsClass) ||
             fa.Receiver!!
             .Type
             ?.ClrType

@@ -622,7 +622,7 @@ internal shared class RefCapabilities {
         if method?.ReturnType.IsByRef != true {
             return RefKind.None
         }
-        let parameter = method!!.ReturnParameter
+        let parameter = method.ReturnParameter
         return if parameter.GetRequiredCustomModifiers().Any(
             (type Type) -> type.FullName == "System.Runtime.InteropServices.InAttribute"
         ) ||

@@ -956,6 +956,16 @@ internal class MemberLookup {
             this.Bounds = Dictionary[TypeParameterSymbol, SourceInferenceBounds]()
         }
 
+        init(source SourceInferenceState) {
+            this.FixedParameters = HashSet[TypeParameterSymbol](source.FixedParameters)
+            this.Bounds = Dictionary[TypeParameterSymbol, SourceInferenceBounds]()
+            for pair in source.Bounds {
+                let bounds = SourceInferenceBounds(){Exact = pair.Value.Exact, Lower = pair.Value.Lower}
+                bounds.Upper.AddRange(pair.Value.Upper)
+                this.Bounds[pair.Key] = bounds
+            }
+        }
+
         prop FixedParameters HashSet[TypeParameterSymbol] {
             get;
         }
@@ -1794,17 +1804,17 @@ internal class MemberLookup {
             ) {
                 return nil
             }
-            if field!!.Accessibility != Accessibility.Public {
+            if field.Accessibility != Accessibility.Public {
                 return nil
             }
-            if !ParameterTypeMatchesSubstituted(field!!.Type, clrProp.PropertyType, symbolicArgs) {
+            if !ParameterTypeMatchesSubstituted(field.Type, clrProp.PropertyType, symbolicArgs) {
                 return nil
             }
             // A read-only field cannot satisfy a read-write property contract.
-            if clrProp.SetMethod != nil && field!!.IsReadOnly {
+            if clrProp.SetMethod != nil && field.IsReadOnly {
                 return nil
             }
-            return field!!
+            return field
         }
 
         /// Probes [`type`](paramref) for an
@@ -2401,7 +2411,9 @@ internal class MemberLookup {
                 // symbolic slice here the call's return would collapse to the
                 // erased `object[]` and fail to convert to `[]Foo` (GS0155). Mirror
                 // the generic-type branch below, which already honours #903.
-                if TypeSymbol.RequiresSymbolicProjection(mappedElement) ||
+                if TypeSymbol.RequiresSymbolicProjection(mappedElement) || TypeSymbol.ContainsTupleType(
+                    mappedElement
+                ) ||
                     (preserveReferenceTupleIdentity && ContainsReferenceTuple(mappedElement)) ||
                     ContainsRankOneNonSzArray(mappedElement) ||
                     ClrNullability.ContainsFunctionPointer(openClr) ||
@@ -2428,7 +2440,9 @@ internal class MemberLookup {
                     methodTypeArguments,
                     preserveReferenceTupleIdentity
                 )
-                if TypeSymbol.RequiresSymbolicProjection(mappedPointee) ||
+                if TypeSymbol.RequiresSymbolicProjection(mappedPointee) || TypeSymbol.ContainsTupleType(
+                    mappedPointee
+                ) ||
                     (preserveReferenceTupleIdentity && ContainsReferenceTuple(mappedPointee)) ||
                     ContainsRankOneNonSzArray(mappedPointee) ||
                     ClrNullability.ContainsFunctionPointer(openClr) ||
@@ -2500,7 +2514,7 @@ internal class MemberLookup {
                     // filled a `List[[3]int32]` slot. Measured accepted on `main`
                     // and on this branch until this line was added; the named-tuple
                     // sibling one line up already proved the path was live.
-                    if TypeSymbol.RequiresSymbolicProjection(mapped) || TypeSymbol.ContainsNamedTupleElements(mapped) ||
+                    if TypeSymbol.RequiresSymbolicProjection(mapped) || TypeSymbol.ContainsTupleType(mapped) ||
                         (preserveReferenceTupleIdentity && ContainsReferenceTuple(mapped)) ||
                         ContainsRankOneNonSzArray(mapped) ||
                         (a.ContainsGenericParameters && mapped.ClrType?.ContainsGenericParameters == false) {
@@ -2602,13 +2616,9 @@ internal class MemberLookup {
         /// Returns `null` when no symbolic substitution applies, so
         /// callers keep their existing return-type derivation.
         ///
-        /// ADR-0193 Phase 2 (GSA0007): this member and
-        /// (cref:ResolveByRefParameterPointeeFromSymbolicTypeArgs) return a
-        /// projected signature position with no declaration-nullability merge, so
-        /// a concrete oblivious container returned (or `out`-bound) through a
-        /// symbolically inferred generic call loses its `!`. Both reach the
-        /// door only through (cref:MapOpenSignatureWithoutDeclarationMerge),
-        /// the one suppressed member, so the gap stays one call wide.
+        /// Tuple-bearing, managed-reference and async-container returns use the canonical
+        /// merged reader to preserve declaration nullability. Other existing value-return,
+        /// parameter and delegate projection gaps stay tracked by ADR-0193.
         /// @param closed The closed generic method selected by overload resolution.
         /// @param symbolicMethodTypeArgs Per-MVar symbolic type arguments; entries may be `null`.
         /// @param receiverType The receiver's static type symbol (for type-level Var substitution); may be
@@ -2635,6 +2645,14 @@ internal class MemberLookup {
             if openReturn == nil || openReturn.IsSameAs(typeof(Void)) {
                 return nil
             }
+            if openReturn.IsByRef {
+                return GetClrOpenMethodReturnTypeSymbol(
+                    openMethod,
+                    receiverOpenDef,
+                    receiverTypeArgs,
+                    symbolicMethodTypeArgs
+                )
+            }
             if openReturn.IsGenericType && !openReturn.IsGenericTypeDefinition {
                 let openReturnDefinition = openReturn.GetGenericTypeDefinition()
                 let fullName = openReturnDefinition.FullName
@@ -2643,32 +2661,11 @@ internal class MemberLookup {
                         "System.Threading.Tasks.ValueTask`1" or
                         "System.Collections.Generic.IAsyncEnumerable`1"
                 ) {
-                    let openArguments = openReturn.GetGenericArguments()
-                    let projectedArguments = ImmutableArray.CreateBuilder[TypeSymbol](openArguments.Length)
-                    for argument in openArguments {
-                        projectedArguments.Add(
-                            MapOpenSignatureWithoutDeclarationMerge(
-                                argument,
-                                receiverOpenDef,
-                                receiverTypeArgs,
-                                openMethod,
-                                symbolicMethodTypeArgs
-                            )
-                        )
-                    }
-                    let symbolicArguments = projectedArguments.MoveToImmutable()
-                    let erasedObject = ResolveErasedObjectInContext(openReturnDefinition)
-                    let closedReturn = TryBuildErasedClosedGeneric(
-                        openReturnDefinition,
-                        openReturnDefinition.GetGenericArguments(),
-                        symbolicArguments,
-                        erasedObject
-                    ) ??
-                        openReturn
-                    return TupleElementNamesReader.ApplyNames(
-                        ImportedTypeSymbol.GetConstructed(closedReturn, openReturnDefinition, symbolicArguments),
-                        openMethod.ReturnParameter,
-                        openReturn
+                    return GetClrOpenMethodReturnTypeSymbol(
+                        openMethod,
+                        receiverOpenDef,
+                        receiverTypeArgs,
+                        symbolicMethodTypeArgs
                     )
                 }
             }
@@ -2708,8 +2705,16 @@ internal class MemberLookup {
             // parameter bound to `T!` (an explicit argument at an oblivious
             // declaration, or #4459's oblivious-slot inference) keeps it. The CLR
             // fallback reads the closed `string` and would drop the `!`.
-            return if TypeSymbol.RequiresSymbolicProjection(mapped) || TypeSymbol.ContainsNamedTupleElements(mapped) ||
-                TypeSymbol.ContainsSourceArrayShape(mapped) || mapped is PlatformTypeSymbol {
+            if TypeSymbol.ContainsTupleType(mapped) {
+                return GetClrOpenMethodReturnTypeSymbol(
+                    openMethod,
+                    receiverOpenDef,
+                    receiverTypeArgs,
+                    symbolicMethodTypeArgs
+                )
+            }
+            return if TypeSymbol.RequiresSymbolicProjection(mapped) || TypeSymbol.ContainsSourceArrayShape(mapped) ||
+                mapped is PlatformTypeSymbol {
                 mapped
             } else {
                 default(TypeSymbol?)
@@ -2769,7 +2774,7 @@ internal class MemberLookup {
                 parameters[parameterIndex],
                 openType
             )
-            return if TypeSymbol.RequiresSymbolicProjection(mapped) || TypeSymbol.ContainsNamedTupleElements(mapped) {
+            return if TypeSymbol.RequiresSymbolicProjection(mapped) || TypeSymbol.ContainsTupleType(mapped) {
                 mapped
             } else {
                 default(TypeSymbol?)
@@ -2787,9 +2792,9 @@ internal class MemberLookup {
         // `[NullabilityFunnel]` and deletes the pragma. Every reference to it is
         // pinned by Adr0193SymbolicProjectionGapCallersTests.
         /// ADR-0193 Phase 2: the known symbolic-projection gap, in one place.
-        /// (cref:ResolveCallReturnTypeFromSymbolicTypeArgs) and
-        /// (cref:ResolveByRefParameterPointeeFromSymbolicTypeArgs) project
-        /// through here, and so do the symbolic lambda- and delegate-target projections (the binder's
+        /// (cref:ResolveCallReturnTypeFromSymbolicTypeArgs) uses this to decide symbolic retention;
+        /// tuple-bearing signatures then use the canonical merged reader. Other value returns,
+        /// (cref:ResolveByRefParameterPointeeFromSymbolicTypeArgs) and the symbolic lambda- and delegate-target projections (the binder's
         /// `TryBuildSymbolicDelegateTarget*` and deferred-lambda paths)
         /// project a delegate-typed signature position through symbolic type
         /// arguments and read the literal's target shape off the result. They
@@ -2799,7 +2804,7 @@ internal class MemberLookup {
         /// `!` or `?` onto the projected delegate, and every one of those
         /// consumers tests the result for (cref:ImportedTypeSymbol) without
         /// peeling it: exactly the blocker that keeps
-        /// (cref:ResolveCallReturnTypeFromSymbolicTypeArgs) unmerged.
+        /// non-tuple value-return, parameter and delegate projections unmerged.
         /// The params-array element projection over symbolic method type
         /// arguments (`OverloadResolver.ExpandParamsArguments`) shares the
         /// same blocker. Routing them here, rather than calling the door from
@@ -3073,7 +3078,7 @@ internal class MemberLookup {
                 if inferred[i] is {} inferredType &&
                     (
                     IsSymbolicInferenceConflict(inferredType) || TypeSymbol.RequiresSymbolicProjection(inferredType) ||
-                        TypeSymbol.ContainsNamedTupleElements(inferredType) || TypeSymbol.ContainsSourceArrayShape(
+                        TypeSymbol.ContainsTupleType(inferredType) || TypeSymbol.ContainsSourceArrayShape(
                         inferredType
                     ) ||
                         symbolicArgTypes.Any(
@@ -3497,7 +3502,7 @@ internal class MemberLookup {
                     continue
                 }
                 for var i = 0; i < vector.Length; i++ {
-                    if !object.Equals(agreedVector!![i], vector[i]) {
+                    if !object.Equals(agreedVector[i], vector[i]) {
                         // Two own members disagree about what to convert to. That
                         // is a genuine ambiguity, not an erasure to repair.
                         return default(ImmutableArray[TypeSymbol?])
@@ -3611,7 +3616,7 @@ internal class MemberLookup {
                     }
                 }
                 if openParameterType.IsArray && openParameterType.GetArrayRank() == 1 {
-                    let symbolicElement TypeSymbol? = TryGetElementType(symbolicArgumentType!!)
+                    let symbolicElement TypeSymbol? = TryGetElementType(symbolicArgumentType)
                     return symbolicElement != nil &&
                         IsErasureOnlyEnumMatch(openParameterType.GetElementType(), symbolicElement)
                 }
@@ -3639,7 +3644,7 @@ internal class MemberLookup {
                         return false
                     }
                     if openArguments.Length == 1 {
-                        let symbolicElement TypeSymbol? = TryGetElementType(symbolicArgumentType!!)
+                        let symbolicElement TypeSymbol? = TryGetElementType(symbolicArgumentType)
                         if symbolicElement != nil {
                             return IsErasureOnlyEnumMatch(openArguments[0], symbolicElement)
                         }
@@ -3679,7 +3684,7 @@ internal class MemberLookup {
                 if declaringType?.IsConstructedGenericType == true &&
                     symbolicReceiverType is ImportedTypeSymbol symbolicReceiver &&
                     symbolicReceiver.OpenDefinition != nil {
-                    let declaringDefinition = declaringType!!.GetGenericTypeDefinition()
+                    let declaringDefinition = declaringType.GetGenericTypeDefinition()
                     var receiverCarriesSymbolicType = ClrTypeUtilities.AreSame(
                         symbolicReceiver.OpenDefinition,
                         declaringDefinition
@@ -4207,25 +4212,25 @@ internal class MemberLookup {
         func TryGetUserPatternEnumerableElementType(type StructSymbol, out elementType TypeSymbol?) bool {
             elementType = nil
             if !TypeMemberModel.TryGetMethodIncludingInherited(type, "GetEnumerator", out var getEnumerator) ||
-                getEnumerator!!
+                getEnumerator
                 .Parameters
                 .Length != 0 ||
-                getEnumerator!!.Type == nil {
+                getEnumerator.Type == nil {
                 return false
             }
             // ADR-0186 §9: a GetEnumerator declared in an oblivious scope returns
             // a platform enumerator (`IEnumerator[Item]!`); its shape — and so the
             // element type — is the underlying enumerator's.
-            var effectiveEnumeratorType TypeSymbol? = type.SubstituteMemberType(getEnumerator!!.Type)
+            var effectiveEnumeratorType TypeSymbol? = type.SubstituteMemberType(getEnumerator.Type)
             if effectiveEnumeratorType != nil {
                 effectiveEnumeratorType = PlatformTypeSymbol.StripTopLevel(effectiveEnumeratorType)
             }
             if effectiveEnumeratorType is StructSymbol enumeratorType {
                 if TypeMemberModel.TryGetMethodIncludingInherited(enumeratorType, "MoveNext", out var moveNext) &&
-                    moveNext!!
+                    moveNext
                     .Parameters
                     .Length == 0 &&
-                    moveNext!!.Type == TypeSymbol.Bool &&
+                    moveNext.Type == TypeSymbol.Bool &&
                     TryGetUserEnumeratorCurrent(enumeratorType, out _, out elementType) {
                     return true
                 }
@@ -4246,10 +4251,10 @@ internal class MemberLookup {
             for owner in type.GetHierarchy() {
                 if owner.TryGetField("Current", out var field) {
                     current = field
-                    if field!!.Accessibility != Accessibility.Public {
+                    if field.Accessibility != Accessibility.Public {
                         return false
                     }
-                    elementType = field!!.Type
+                    elementType = field.Type
                     return true
                 }
                 for property in owner.Properties {
@@ -5412,7 +5417,7 @@ internal class MemberLookup {
                 let openDef = imported.OpenDefinition ??
                     (
                     if imported.ClrType?.IsGenericType == true {
-                        imported.ClrType!!.GetGenericTypeDefinition()
+                        imported.ClrType.GetGenericTypeDefinition()
                     } else {
                         default(Type?)
                     }
@@ -7002,6 +7007,24 @@ internal class MemberLookup {
             existing TypeSymbol?,
             incoming TypeSymbol?
         ) TypeSymbol? -> MergeRecoveredTypeArgument(existing, incoming)
+
+        internal func CopySourceTypeInference(
+            source Dictionary[TypeParameterSymbol, TypeSymbol],
+            target Dictionary[TypeParameterSymbol, TypeSymbol]
+        ) {
+            if object.ReferenceEquals(source, target) {
+                return
+            }
+            target.Clear()
+            for pair in source {
+                target[pair.Key] = pair.Value
+            }
+            sourceInferenceBounds.Remove(target)
+            // Provisional bounds must not become fixed merely because their dictionary was copied.
+            if sourceInferenceBounds.TryGetValue(source, out var state) {
+                sourceInferenceBounds.Add(target, SourceInferenceState(state))
+            }
+        }
 
         internal func InferSourceTypeArgument(
             substitution Dictionary[TypeParameterSymbol, TypeSymbol],
@@ -9448,11 +9471,11 @@ internal class MemberLookup {
                 // `ImportedTypeSymbol` already and reached Pattern A on its own.
                 if actual is MapTypeSymbol mapActual &&
                     TryProjectErasedClrType(mapActual, out var erasedMapClr) &&
-                    erasedMapClr!!
+                    erasedMapClr
                     .IsGenericType {
                     actual = ImportedTypeSymbol.GetConstructed(
                         erasedMapClr,
-                        erasedMapClr!!.GetGenericTypeDefinition(),
+                        erasedMapClr.GetGenericTypeDefinition(),
                         ImmutableArray.Create(mapActual.KeyType, mapActual.ValueType)
                     )
                 }

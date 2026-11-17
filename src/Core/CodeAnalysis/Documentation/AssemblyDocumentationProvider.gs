@@ -113,11 +113,11 @@ class AssemblyDocumentationProvider {
             if method.IsGenericMethod && !method.IsGenericMethodDefinition {
                 method = method.GetGenericMethodDefinition()
             }
-            let provider AssemblyDocumentationProvider? = ForAssembly(SafeAssembly(method!!.DeclaringType))
+            let provider AssemblyDocumentationProvider? = ForAssembly(SafeAssembly(method.DeclaringType))
             if provider == nil {
                 return nil
             }
-            let id string? = DocumentationIdProvider.GetDocumentationId(method!!)
+            let id string? = DocumentationIdProvider.GetDocumentationId(method)
             return if id != nil && provider.TryGetDocumentation(id, out var documentation) {
                 documentation
             } else {
@@ -311,10 +311,10 @@ class AssemblyDocumentationProvider {
                 }
                 for member in membersElement.Elements("member") {
                     let name = string?(member.Attribute(XName?("name")!!))
-                    if string.IsNullOrEmpty(name) || result.ContainsKey(name!!) {
+                    if string.IsNullOrEmpty(name) || result.ContainsKey(name) {
                         continue
                     }
-                    result[name!!] = XmlDocumentationParser.ParseMember(member)
+                    result[name] = XmlDocumentationParser.ParseMember(member)
                 }
             } catch (ex Exception) when ex is IOException ||
                 ex is UnauthorizedAccessException ||

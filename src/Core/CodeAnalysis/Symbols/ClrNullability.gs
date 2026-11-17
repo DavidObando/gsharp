@@ -186,7 +186,7 @@ shared class ClrNullability {
         let baseSymbol = TypeSymbol.FromClrType(elementType)
         var layoutType = GetOpenDefinition(property)?.PropertyType
         if layoutType?.IsByRef == true {
-            layoutType = layoutType!!.GetElementType()
+            layoutType = layoutType.GetElementType()
         }
         return TupleElementNamesReader.ApplyNames(
             ApplyReferenceNullabilityFull(baseSymbol, elementType, property, property.DeclaringType, layoutType),
@@ -260,7 +260,7 @@ shared class ClrNullability {
         let definition = GetMetadataDefinition(method) as MethodInfo
         var layoutType = definition?.ReturnType
         if layoutType?.IsByRef == true {
-            layoutType = layoutType!!.GetElementType()
+            layoutType = layoutType.GetElementType()
         }
         let attributeMethod = if ClrTypeUtilities.IsTypeBuilderInstantiation(method.DeclaringType) &&
             definition != nil {
@@ -325,7 +325,7 @@ shared class ClrNullability {
             default(Type?)
         }
         if layoutType?.IsByRef == true {
-            layoutType = layoutType!!.GetElementType()
+            layoutType = layoutType.GetElementType()
         }
         let attributeParameter = if parameter.Member is MethodBase parameterMethod &&
             ClrTypeUtilities.IsTypeBuilderInstantiation(parameterMethod.DeclaringType) &&

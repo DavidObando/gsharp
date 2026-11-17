@@ -582,7 +582,7 @@ internal partial class DeclarationBinder {
                     let argument = BoundAttributeArgument(
                         namedArg.NameToken.ValueText,
                         value,
-                        valueType!!,
+                        valueType,
                         namedArg,
                         isMemberAssignment
                     )
@@ -610,7 +610,7 @@ internal partial class DeclarationBinder {
                         hadArgumentError = true
                         continue
                     }
-                    positional.Add(BoundAttributeArgument(name: nil, value, valueType!!, argSyntax))
+                    positional.Add(BoundAttributeArgument(name: nil, value, valueType, argSyntax))
                 }
             }
         }
@@ -893,13 +893,13 @@ internal partial class DeclarationBinder {
         if string.Equals(qualifier, containingNamespace, StringComparison.Ordinal) {
             return true
         }
-        if !$scope.TryLookupImport(segments[0], out var import_) || !import_!!.IsAlias {
+        if !$scope.TryLookupImport(segments[0], out var import_) || !import_.IsAlias {
             return false
         }
         let expandedQualifier = if typeIndex == 1 {
-            import_!!.Target
+            import_.Target
         } else {
-            import_!!.Target + "." + string.Join(".", segments, 1, typeIndex - 1)
+            import_.Target + "." + string.Join(".", segments, 1, typeIndex - 1)
         }
         return string.Equals(expandedQualifier, containingNamespace, StringComparison.Ordinal)
     }
@@ -1091,8 +1091,8 @@ internal partial class DeclarationBinder {
                 unwrappedExpr.Syntax is ExpressionSyntax innerSyntax &&
                 TryBindAttributeArgument(innerSyntax, out var innerValue, out var innerType) {
                 value = if innerValue is not BoundAttributeArgument &&
-                    ShouldPreserveBoxedAttributeElementType(innerValue, innerType!!) {
-                    cast[object?](BoundAttributeArgument(nil, innerValue, innerType!!))
+                    ShouldPreserveBoxedAttributeElementType(innerValue, innerType) {
+                    cast[object?](BoundAttributeArgument(nil, innerValue, innerType))
                 } else {
                     innerValue
                 }
@@ -1224,8 +1224,8 @@ internal partial class DeclarationBinder {
                 return false
             }
             elementValues[i] = if containerElementType.IsSameAs(typeof(object)) &&
-                ShouldPreserveBoxedAttributeElementType(elementValue, valueType!!) {
-                cast[object?](BoundAttributeArgument(nil, elementValue, valueType!!))
+                ShouldPreserveBoxedAttributeElementType(elementValue, valueType) {
+                cast[object?](BoundAttributeArgument(nil, elementValue, valueType))
             } else {
                 elementValue
             }
