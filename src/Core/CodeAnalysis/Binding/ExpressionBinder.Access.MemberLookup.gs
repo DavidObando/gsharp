@@ -898,7 +898,14 @@ internal partial class ExpressionBinder {
                                 staticMethods
                             )
                         }
-                        return BindExtensionMethodGroupOrError(receiver, ne)
+                        // ADR-0225: a later declaration cannot add a static member to an imported class.
+                        let pushed = Diagnostics.PushPremiseIf(
+                            PrefixBindingContext.Current != nil && receiver == nil && !Diagnostics.HasPremise,
+                            PrefixPremise.Final
+                        )
+                        let missing = BindExtensionMethodGroupOrError(receiver, ne)
+                        Diagnostics.PopPremiseIf(pushed)
+                        return missing
                     }
                     // Lookup admits a property when either accessor is
                     // visible, but a read calls the getter: it must be the

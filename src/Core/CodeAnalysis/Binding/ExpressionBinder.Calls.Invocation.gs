@@ -2292,7 +2292,13 @@ internal partial class ExpressionBinder {
             ) {
                 return BoundErrorExpression(nil)
             }
+            // ADR-0225: a later declaration cannot add a static member to an imported class.
+            let pushed = Diagnostics.PushPremiseIf(
+                PrefixBindingContext.Current != nil && !Diagnostics.HasPremise,
+                PrefixPremise.Final
+            )
             Diagnostics.ReportUnableToFindFunction(ce.Location, methodName)
+            Diagnostics.PopPremiseIf(pushed)
             return BoundErrorExpression(nil)
         }
         // Issue #1320: normalize a sequence[T]/asyncsequence[T] or user-element

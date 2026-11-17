@@ -19,7 +19,11 @@ import System.Text
 
 internal partial class DeclarationBinder {
     internal func VerifyAbstractMethodImplementations() {
+        // ADR-0225: a type that is open at the cut can still declare the missing members.
+        var pushed = false
         for (syntax, structSymbol) in pendingAbstractImplementationChecks {
+            Diagnostics.PopPremiseIf(pushed)
+            pushed = Diagnostics.PushPremiseIf(PrefixBindingContext.IsOpen(syntax), PrefixPremise.RestOfType)
             if !structSymbol.IsDeclaredAbstract {
                 for requirement in structSymbol.GetUnimplementedAbstractPropertyAccessors() {
                     // Keep the established open/get-only requirement syntax; explicit
@@ -86,6 +90,7 @@ internal partial class DeclarationBinder {
                 )
             }
         }
+        Diagnostics.PopPremiseIf(pushed)
     }
 
     /// Issue #1006: once interface base clauses have been bound, expand each
@@ -146,7 +151,11 @@ internal partial class DeclarationBinder {
     }
 
     internal func VerifyInterfaceImplementations() {
+        // ADR-0225: a type that is open at the cut can still declare the missing members.
+        var pushed = false
         for (syntax, structSymbol) in pendingInterfaceImplementationChecks {
+            Diagnostics.PopPremiseIf(pushed)
+            pushed = Diagnostics.PushPremiseIf(PrefixBindingContext.IsOpen(syntax), PrefixPremise.RestOfType)
             let ResolveExplicitClrInterfaceImplementations = func (structSymbol StructSymbol) {
                 for method in structSymbol.Methods {
                     let target = method.ExplicitInterfaceClauseTarget
@@ -434,6 +443,7 @@ internal partial class DeclarationBinder {
             VerifyPrivateInterfaceHelpersNotOverridden(syntax, structSymbol)
             VerifyExplicitInterfaceClauseResolution(syntax, structSymbol)
         }
+        Diagnostics.PopPremiseIf(pushed)
     }
 
     private func VerifyInterfaceMethodImplementationsAndDefaultConflicts(

@@ -353,6 +353,7 @@ type class GSharp.Core.CodeAnalysis.Compilation.Compilation : System.Object
   method public GSharp.Core.CodeAnalysis.Compilation.EmitResult Emit(System.IO.Stream peStream, System.IO.Stream refStream)
   method public GSharp.Core.CodeAnalysis.Diagnostics.ILogger get_Logger()
   method public GSharp.Core.CodeAnalysis.Emit.DebugInformationOptions get_DebugInformation()
+  method public GSharp.Core.CodeAnalysis.PrefixBindResult BindPrefix(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree tree, Int32 cut, GSharp.Core.CodeAnalysis.PrefixBindOptions options, System.Threading.CancellationToken cancellationToken = null)
   method public GSharp.Core.CodeAnalysis.SemanticModel GetSemanticModel(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree)
   method public GSharp.Core.CodeAnalysis.Symbols.NullabilityMode get_Nullability()
   method public GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver get_References()
@@ -766,6 +767,10 @@ type enum GSharp.Core.CodeAnalysis.Binding.RefKind : Int32
   field public const GSharp.Core.CodeAnalysis.Binding.RefKind Out = 2
   field public const GSharp.Core.CodeAnalysis.Binding.RefKind Ref = 1
   field public const GSharp.Core.CodeAnalysis.Binding.RefKind RefReadOnly = 4
+type enum GSharp.Core.CodeAnalysis.DiagnosticFinality : Int32
+  field public const GSharp.Core.CodeAnalysis.DiagnosticFinality Artifact = 2
+  field public const GSharp.Core.CodeAnalysis.DiagnosticFinality Final = 0
+  field public const GSharp.Core.CodeAnalysis.DiagnosticFinality FutureDependent = 1
 type enum GSharp.Core.CodeAnalysis.DiagnosticSeverity : Int32
   field public const GSharp.Core.CodeAnalysis.DiagnosticSeverity Error = 3
   field public const GSharp.Core.CodeAnalysis.DiagnosticSeverity Hidden = 0
@@ -799,6 +804,9 @@ type enum GSharp.Core.CodeAnalysis.Lowering.Async.KickoffOperationKind : Int32
 type enum GSharp.Core.CodeAnalysis.Lowering.Async.StateMachineContainerKind : Int32
   field public const GSharp.Core.CodeAnalysis.Lowering.Async.StateMachineContainerKind Class = 1
   field public const GSharp.Core.CodeAnalysis.Lowering.Async.StateMachineContainerKind Struct = 0
+type enum GSharp.Core.CodeAnalysis.PrefixRemainder : Int32
+  field public const GSharp.Core.CodeAnalysis.PrefixRemainder KeepDeclarations = 1
+  field public const GSharp.Core.CodeAnalysis.PrefixRemainder Nothing = 0
 type enum GSharp.Core.CodeAnalysis.Symbols.Accessibility : Int32
   field public const GSharp.Core.CodeAnalysis.Symbols.Accessibility Internal = 1
   field public const GSharp.Core.CodeAnalysis.Symbols.Accessibility Private = 2
@@ -3258,6 +3266,14 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.SubmissionReference : System.
   property public GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope GlobalScope { get; }
   property public String AssemblyName { get; }
   property public String PackageName { get; }
+type sealed class GSharp.Core.CodeAnalysis.ClassifiedDiagnostic : System.Object
+  method public GSharp.Core.CodeAnalysis.Diagnostic get_Diagnostic()
+  method public GSharp.Core.CodeAnalysis.DiagnosticFinality get_Finality()
+  method public String get_Reason()
+  method public virtual override String ToString()
+  property public GSharp.Core.CodeAnalysis.Diagnostic Diagnostic { get; }
+  property public GSharp.Core.CodeAnalysis.DiagnosticFinality Finality { get; }
+  property public String Reason { get; }
 type sealed class GSharp.Core.CodeAnalysis.ClosureValue : System.Object
   method public GSharp.Core.CodeAnalysis.Binding.BoundBlockStatement get_Body()
   method public GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol get_Function()
@@ -4226,10 +4242,34 @@ type sealed class GSharp.Core.CodeAnalysis.Lowering.Lowerer : GSharp.Core.CodeAn
   method protected virtual override GSharp.Core.CodeAnalysis.Binding.BoundStatement RewriteTryStatement(GSharp.Core.CodeAnalysis.Binding.BoundTryStatement node)
   method public static GSharp.Core.CodeAnalysis.Binding.BoundBlockStatement Lower(GSharp.Core.CodeAnalysis.Binding.BoundStatement statement)
   method public static GSharp.Core.CodeAnalysis.Binding.BoundBlockStatement Lower(GSharp.Core.CodeAnalysis.Binding.BoundStatement statement, GSharp.Core.CodeAnalysis.Symbols.StructSymbol declaringType)
+type sealed class GSharp.Core.CodeAnalysis.OpenConstruct : System.Object
+  method public GSharp.Core.CodeAnalysis.Symbols.Symbol get_Symbol()
+  method public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_ExpectedType()
+  method public GSharp.Core.CodeAnalysis.Syntax.SyntaxKind get_Kind()
+  property public GSharp.Core.CodeAnalysis.Symbols.Symbol Symbol { get; }
+  property public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol ExpectedType { get; }
+  property public GSharp.Core.CodeAnalysis.Syntax.SyntaxKind Kind { get; }
 type sealed class GSharp.Core.CodeAnalysis.PEWriter.MetadataWriter : System.Object
   method public Void .ctor()
 type sealed class GSharp.Core.CodeAnalysis.PEWriter.PEWriter : System.Object
   method public Void .ctor()
+type sealed class GSharp.Core.CodeAnalysis.PrefixBindOptions : System.Object
+  method public Boolean get_IncludeScope()
+  method public GSharp.Core.CodeAnalysis.PrefixRemainder get_Remainder()
+  method public Void .ctor(GSharp.Core.CodeAnalysis.PrefixRemainder remainder, Boolean includeScope = true)
+  property public Boolean IncludeScope { get; }
+  property public GSharp.Core.CodeAnalysis.PrefixRemainder Remainder { get; }
+type sealed class GSharp.Core.CodeAnalysis.PrefixBindResult : System.Object
+  method public GSharp.Core.CodeAnalysis.Compilation.Compilation get_Compilation()
+  method public GSharp.Core.CodeAnalysis.Syntax.SyntaxTree get_SyntaxTree()
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.ClassifiedDiagnostic> get_Diagnostics()
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.OpenConstruct> get_OpenConstructs()
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.Symbol> get_Scope()
+  property public GSharp.Core.CodeAnalysis.Compilation.Compilation Compilation { get; }
+  property public GSharp.Core.CodeAnalysis.Syntax.SyntaxTree SyntaxTree { get; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.ClassifiedDiagnostic> Diagnostics { get; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.OpenConstruct> OpenConstructs { get; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.Symbol> Scope { get; }
 type sealed class GSharp.Core.CodeAnalysis.SemanticModel : System.Object
   method public GSharp.Core.CodeAnalysis.Binding.BoundExpression GetReferencedExpression(GSharp.Core.CodeAnalysis.Syntax.SyntaxToken token, System.Threading.CancellationToken cancellationToken = null)
   method public GSharp.Core.CodeAnalysis.Binding.BoundNode GetBoundNode(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode node, System.Threading.CancellationToken cancellationToken = null)

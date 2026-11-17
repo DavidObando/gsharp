@@ -530,8 +530,87 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         messageArguments[]object
     ) {
         let message = string.Format(descriptor.MessageFormat, messageArguments)
-        let diagnostic = Diagnostic(location, descriptor.Id, severity, message)
-        Add(diagnostic)
+        let created = Diagnostic(location, descriptor.Id, severity, message)
+        // ADR-0225: the binder states the premise when it reports, so the finality is fixed at
+        // creation. A copy after Add would break the reference identity that the bag tracks.
+        let stack List[PrefixPremise]? = premises
+        if stack != nil && stack.Count > 0 {
+            let premise PrefixPremise = stack[stack.Count - 1]
+            Add(created.WithPrefixFinality(premise.Finality, premise.Reason))
+        } else {
+            Add(created)
+        }
+    }
+
+    // ADR-0225: the premises of the reports in progress, innermost last. It is null outside a prefix bind.
+    private var premises List[PrefixPremise]?
+
+    /// Starts a premise for the diagnostics that this bag reports until (cref:PopPremise) (ADR-0225).
+    /// A binder calls it only when the premise holds at the cut of a prefix bind.
+    /// @param premise The finality and the reason of the diagnostics.
+    internal func PushPremise(premise PrefixPremise) {
+        if premises == nil {
+            premises = List[PrefixPremise]()
+        }
+        premises!!.Add(premise)
+    }
+
+    /// Starts [`premise`](paramref) when [`holds`](paramref) is true (ADR-0225).
+    /// @param holds Whether the premise holds at the cut.
+    /// @param premise The premise.
+    /// @returns [`holds`](paramref), for (cref:PopPremiseIf).
+    internal func PushPremiseIf(holds bool, premise PrefixPremise) bool {
+        if holds {
+            PushPremise(premise)
+        }
+        return holds
+    }
+
+    /// Stops the premise that (cref:PushPremiseIf) started when it returned `true`.
+    /// @param pushed The value that (cref:PushPremiseIf) returned.
+    internal func PopPremiseIf(pushed bool) {
+        if pushed {
+            PopPremise()
+        }
+    }
+
+    /// Gets a value that tells whether a premise is in progress (ADR-0225).
+    internal prop HasPremise bool {
+        get {
+            let stack List[PrefixPremise]? = premises
+            return stack != nil && stack.Count > 0
+        }
+    }
+
+    /// Stops the premise that the last (cref:PushPremise) started.
+    internal func PopPremise() {
+        premises!!.RemoveAt(premises!!.Count - 1)
+    }
+
+    // ADR-0225: a report for a failed lookup. A premise of the binder wins. Otherwise the open
+    // declarations at the cut decide whether a later declaration can declare the name.
+    private func ReportFailedLookup(
+        location TextLocation,
+        descriptor DiagnosticDescriptor,
+        kind PrefixLookupKind,
+        messageArguments ...object
+    ) {
+        let stack List[PrefixPremise]? = premises
+        let premise PrefixPremise? = if stack == nil || stack.Count == 0 {
+            PrefixBindingContext.ClassifyFailedLookup(location, kind)
+        } else {
+            default(PrefixPremise?)
+        }
+        if premise != nil {
+            PushPremise(premise)
+            try {
+                Report(location, descriptor, descriptor.Severity, messageArguments)
+            } finally {
+                PopPremise()
+            }
+        } else {
+            Report(location, descriptor, descriptor.Severity, messageArguments)
+        }
     }
 
     internal class Transaction : IDisposable {

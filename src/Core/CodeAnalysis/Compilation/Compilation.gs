@@ -376,6 +376,7 @@ open class Compilation {
             // ADR-0186: body binding reads imported member signatures too.
             using let nullabilityScope = NullabilityOptions.Enter(Nullability, PlatformNilChecks)
             using let recordingScope = CallCandidateRecorder.Enter(RecordMemberGroups, FailedCalls)
+            using let prefixScope = PrefixBindingContext.Enter(FindPrefixCut())
             ThrowIfCannotBuild_Locked()
             BodyBindProbe?.Invoke()
             let bp = Binder.BindProgram(
@@ -420,6 +421,7 @@ open class Compilation {
         // leaf with no Compilation in reach.
         using let nullabilityScope = NullabilityOptions.Enter(Nullability, PlatformNilChecks)
         using let recordingScope = CallCandidateRecorder.Enter(RecordMemberGroups, FailedCalls)
+        using let prefixScope = PrefixBindingContext.Enter(FindPrefixCut())
         var bound BoundGlobalScope
         if reused != nil {
             CallCandidateRecorder.ReplayFailedCalls(reused.FailedCalls)
@@ -767,6 +769,102 @@ open class Compilation {
             }
         }
         return nil
+    }
+
+    /// Binds [`tree`](paramref) as if its text ended at [`cut`](paramref), and classifies each diagnostic as
+    /// final, future-dependent or an artifact of the cut (ADR-0225). The host writes no seal: the parser
+    /// closes each delimiter that is open at the cut.
+    /// @remarks This compilation does not change. The result holds a new compilation, built as by
+    /// (cref:WithReplacedSyntaxTree), that contains the prefix tree. A complete program never gets a
+    /// classification, so (cref:GetDiagnostics) of a compilation without a prefix tree does not change.
+    /// @param tree A tree of this compilation. Its text can end at the cut or continue after it.
+    /// @param cut A character offset into the text of [`tree`](paramref).
+    /// @param options What follows the cut, and whether the result contains the scope at the cut.
+    /// @param cancellationToken Cancels this caller's wait for the binds.
+    /// @returns The classified diagnostics, the open constructs and the scope at the cut.
+    func BindPrefix(
+        tree SyntaxTree,
+        cut int32,
+        options PrefixBindOptions,
+        cancellationToken CancellationToken = default(CancellationToken)
+    ) PrefixBindResult {
+        ArgumentNullException.ThrowIfNull(tree, paramName: "tree")
+        ArgumentNullException.ThrowIfNull(options, paramName: "options")
+        let index = SyntaxTrees.IndexOf(tree)
+        if index < 0 {
+            throw ArgumentException("The syntax tree is not part of this compilation.", "tree")
+        }
+        if cut < 0 || cut > tree.Text.Length {
+            throw ArgumentOutOfRangeException("cut", cut, "The cut must be in the text of the tree.")
+        }
+        let prefixTree = SyntaxTree.ParsePrefix(tree, cut, options.Remainder)
+        let prefixCut = Invariant.Required(
+            prefixTree.Prefix,
+            "a prefix parse records its cut",
+            expression: "prefixTree.Prefix"
+        )
+        let successor = CreateSuccessor(SyntaxTrees.SetItem(index, prefixTree), shareBodyCache: false)
+        let diagnostics = successor.GetDiagnostics(cancellationToken)
+        let classified = ImmutableArray.CreateBuilder[ClassifiedDiagnostic](diagnostics.Length)
+        let classifier = PrefixDiagnosticClassifier(this, tree, prefixTree, prefixCut, cancellationToken)
+        for diagnostic in diagnostics {
+            classified.Add(classifier.Classify(diagnostic))
+        }
+        let model = successor.GetSemanticModel(prefixTree)
+        let openConstructs = ImmutableArray.CreateBuilder[OpenConstruct]()
+        for token in prefixCut.SealedTokens {
+            if GetOpenConstruct(prefixTree, model, token, cancellationToken) is {} construct {
+                openConstructs.Add(construct)
+            }
+        }
+        let symbolsInScope = if options.IncludeScope {
+            model.LookupSymbols(cut, cancellationToken: cancellationToken)
+        } else {
+            ImmutableArray[Symbol].Empty
+        }
+        return PrefixBindResult(
+            classified.MoveToImmutable(),
+            openConstructs.ToImmutable(),
+            symbolsInScope,
+            successor,
+            prefixTree
+        )
+    }
+
+    // ADR-0225: the cut of the prefix tree that this compilation binds, or null.
+    private func FindPrefixCut() PrefixCut? {
+        for tree in SyntaxTrees {
+            if tree.Prefix is {} prefixCut {
+                return prefixCut
+            }
+        }
+        return nil
+    }
+
+    // ADR-0225: the construct that a sealed token closes. A body of a declaration reports the declaration.
+    private func GetOpenConstruct(
+        prefixTree SyntaxTree,
+        model SemanticModel,
+        token SyntaxToken,
+        cancellationToken CancellationToken
+    ) OpenConstruct? {
+        var owner = prefixTree.GetParent(token)
+        if owner == nil {
+            return nil
+        }
+        if owner is BlockStatementSyntax && prefixTree.GetParent(owner) is {} declaration && model.GetDeclaredSymbol(
+            declaration,
+            cancellationToken
+        ) != nil {
+            owner = declaration
+        }
+        let symbol = model.GetDeclaredSymbol(owner, cancellationToken)
+        let expectedType = if symbol is FunctionSymbol function {
+            function.Type
+        } else {
+            default(TypeSymbol?)
+        }
+        return OpenConstruct(owner.Kind, symbol, expectedType)
     }
 
     // Builds a compilation over [`trees`](paramref) with this compilation's options (ADR-0212 §8).

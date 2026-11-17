@@ -3999,7 +3999,14 @@ internal partial class ExpressionBinder {
         let inheritedImportedType = TypeMemberModel.GetNearestImportedBase(structSym)
         if inheritedImportedType?.ClrType is Type {
             let imported = CreateInheritedImportedClassSymbol(inheritedImportedType!!, ne)
-            return BindAccessorStep(receiver: nil, imported, ne)
+            // ADR-0225: a later declaration can add the static member to the source type.
+            let pushed = Diagnostics.PushPremiseIf(
+                PrefixBindingContext.Current?.Remainder == PrefixRemainder.Nothing,
+                PrefixPremise.LaterMember
+            )
+            let inherited = BindAccessorStep(receiver: nil, imported, ne)
+            Diagnostics.PopPremiseIf(pushed)
+            return inherited
         }
         Diagnostics.ReportUnableToFindMember(ne.Location, memberName)
         return BoundErrorExpression(nil)
@@ -4839,7 +4846,15 @@ internal partial class ExpressionBinder {
         }
         if inheritedImportedType?.ClrType is Type {
             let imported = CreateInheritedImportedClassSymbol(inheritedImportedType!!, ce)
-            return BindAccessorCall(receiver: nil, imported, ce)
+            // ADR-0225: a later declaration can add the static function to the source type. The
+            // premise covers the arguments too; it is future-dependent only with nothing after the cut.
+            let pushed = Diagnostics.PushPremiseIf(
+                PrefixBindingContext.Current?.Remainder == PrefixRemainder.Nothing,
+                PrefixPremise.LaterMember
+            )
+            let inherited = BindAccessorCall(receiver: nil, imported, ce)
+            Diagnostics.PopPremiseIf(pushed)
+            return inherited
         }
         Diagnostics.ReportUnableToFindMember(ce.Location, methodName)
         return BoundErrorExpression(nil)

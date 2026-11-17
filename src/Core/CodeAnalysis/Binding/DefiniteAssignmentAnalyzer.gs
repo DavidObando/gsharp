@@ -696,10 +696,16 @@ internal shared class DefiniteAssignmentAnalyzer {
                     let exit = EdgeExit(endBranch, exitAssigned, conditionalExits) ?? initialAssigned
                     for op in outParams {
                         if !exit.Contains(op) {
+                            // ADR-0225: a later statement of an open body can assign the parameter.
+                            let pushed = diagnostics.PushPremiseIf(
+                                PrefixBindingContext.IsOpen(function.Declaration?.Body),
+                                PrefixPremise.RestOfBody
+                            )
                             diagnostics.ReportOutParameterNotAssigned(
                                 GetReportLocation(endBranch.From, function),
                                 op.Name
                             )
+                            diagnostics.PopPremiseIf(pushed)
                         }
                     }
                 }
@@ -728,7 +734,12 @@ internal shared class DefiniteAssignmentAnalyzer {
                 if diagnostics != nil && !outParams.IsDefaultOrEmpty {
                     for op in outParams {
                         if !exit.Contains(op) {
+                            let pushed = diagnostics.PushPremiseIf(
+                                PrefixBindingContext.IsOpen(function.Declaration?.Body),
+                                PrefixPremise.RestOfBody
+                            )
                             diagnostics.ReportOutParameterNotAssigned(GetReportLocation(fromBlock, function), op.Name)
+                            diagnostics.PopPremiseIf(pushed)
                         }
                     }
                 }
