@@ -215,6 +215,54 @@ func Main() {
     }
 
     @Fact
+    func PartialTypeWithAnOpenLaterPart_MissingInterfaceMember_IsFutureDependent() {
+        const source = `package P
+
+interface IWork {
+    func Run();
+}
+
+partial class Worker : IWork {
+}
+
+partial class Worker {
+/*CUT*/
+    func Run() {
+    }
+}
+`
+        let nothing = Assert.Single(Bind(source, PrefixRemainder.Nothing).Diagnostics)
+        Assert.Equal("GS0187", nothing.Diagnostic.Id)
+        Assert.Equal(DiagnosticFinality.FutureDependent, nothing.Finality)
+        Assert.Equal("rest-of-type", nothing.Reason)
+        Assert.Empty(Bind(source, PrefixRemainder.KeepDeclarations).Diagnostics)
+    }
+
+    @Fact
+    func TryThatEndsAtTheCut_WithoutCatch_IsFutureDependent() {
+        const source = `package P
+
+import System
+
+func Main() {
+    try {
+        Console.WriteLine(1)
+    }
+/*CUT*/
+    catch {
+        Console.WriteLine(2)
+    }
+}
+`
+        for remainder in[]PrefixRemainder{PrefixRemainder.Nothing, PrefixRemainder.KeepDeclarations} {
+            let diagnostic = Assert.Single(Bind(source, remainder).Diagnostics)
+            Assert.Equal("GS0118", diagnostic.Diagnostic.Id)
+            Assert.Equal(DiagnosticFinality.FutureDependent, diagnostic.Finality)
+            Assert.Equal("rest-of-statement", diagnostic.Reason)
+        }
+    }
+
+    @Fact
     func OutParameter_DependsOnHowTheBodyExits() {
         const openLiteral = `package P
 

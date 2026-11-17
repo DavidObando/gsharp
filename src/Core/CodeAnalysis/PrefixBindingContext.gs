@@ -266,14 +266,83 @@ internal shared class PrefixBindingContext {
     }
 
     /// Returns a value that tells whether a type can still get members after the cut: it is open at the
-    /// cut, or it is partial and nothing follows the cut, so a later part can follow.
-    /// @param syntax A type declaration.
+    /// cut, one of its partial parts is open, or it is partial and nothing follows the cut.
+    /// @param syntax A type declaration. For a partial type it is the node that merges the parts.
     /// @returns `true` when a later declaration can add a member to the type.
-    internal func IsIncompleteType(syntax StructDeclarationSyntax) bool -> IsOpen(syntax) ||
-        syntax.IsPartial &&
-        current
-        .Value
-        ?.Remainder == PrefixRemainder.Nothing
+    internal func IsIncompleteType(syntax StructDeclarationSyntax) bool {
+        if IsOpen(syntax) {
+            return true
+        }
+        if !syntax.IsPartial || current.Value is not{} cut {
+            return false
+        }
+        if cut.Remainder == PrefixRemainder.Nothing {
+            return true
+        }
+        if cut.Tree is not{} tree {
+            return false
+        }
+        for part in syntax.PartialPartLocations {
+            if object.ReferenceEquals(part.Text, cut.Text) && IsOpen(TypeDeclarationAt(tree, part.Span.Start)) {
+                return true
+            }
+        }
+        return false
+    }
+
+    // The innermost type declaration of [`tree`](paramref) that contains [`position`](paramref).
+    private func TypeDeclarationAt(tree SyntaxTree, position int32) StructDeclarationSyntax? {
+        var found StructDeclarationSyntax? = nil
+        var node SyntaxNode = tree.Root
+        while true {
+            if node is StructDeclarationSyntax declaration {
+                found = declaration
+            }
+            var next SyntaxNode? = nil
+            for child in node.GetChildren() {
+                if child.Span.Start <= position && position < child.Span.End {
+                    next = child
+                    break
+                }
+            }
+            if next == nil {
+                return found
+            }
+            node = next
+        }
+        return found
+    }
+
+    /// Returns a value that tells whether [`node`](paramref) is the last construct before the cut: it
+    /// ends at or before the cut and no later token of its parent starts before the cut. A clause of the
+    /// construct (a `catch` after a `try` block) can still follow.
+    /// @param node A syntax node, or `null`.
+    /// @returns `true` for the last construct before the cut of a prefix tree.
+    internal func IsLastBeforeCut(node SyntaxNode?) bool {
+        if node == nil || node.SyntaxTree.Prefix is not{} cut || node.Span.End > cut.Cut {
+            return false
+        }
+        var current SyntaxNode = node
+        while node.SyntaxTree.GetParent(current) is {} parent {
+            var after = false
+            for sibling in parent.GetChildren() {
+                if object.ReferenceEquals(sibling, current) {
+                    after = true
+                } else if after &&
+                    sibling
+                    .Span
+                    .Start < cut.Cut &&
+                    !(sibling is SyntaxToken token && token.IsSealedAtCut) {
+                    return false
+                }
+            }
+            if parent.Span.End > cut.Cut || IsOpen(parent) {
+                return true
+            }
+            current = parent
+        }
+        return true
+    }
 
     /// Returns a value that tells whether [`node`](paramref) or one of its ancestors of kind
     /// [`kind`](paramref) is open at the cut.

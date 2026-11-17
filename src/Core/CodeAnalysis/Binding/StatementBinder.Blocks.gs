@@ -557,8 +557,12 @@ internal partial class StatementBinder {
             RestoreNonNullByRefVariables(nonNullByRefExits ?? nonNullByRefEntry)
         }
         if catches.Count == 0 && finallyBlock == nil {
-            // ADR-0225: a catch or finally clause can follow a try block that is open at the cut.
-            let pushed = Diagnostics.PushPremiseIf(PrefixBindingContext.IsOpen(syntax), PrefixPremise.RestOfStatement)
+            // ADR-0225: a catch or finally clause can follow a try block that is open at the cut, or a
+            // try statement that is the last construct before the cut.
+            let pushed = Diagnostics.PushPremiseIf(
+                PrefixBindingContext.IsOpen(syntax) || PrefixBindingContext.IsLastBeforeCut(syntax),
+                PrefixPremise.RestOfStatement
+            )
             Diagnostics.ReportTryWithoutCatchOrFinally(syntax.TryKeyword.Location)
             Diagnostics.PopPremiseIf(pushed)
             return BindErrorStatement()
