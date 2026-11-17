@@ -109,6 +109,11 @@ open class Adr0223HermeticReferenceTests {
                 Path.Combine(root, "9.0.20", "ref", "net9.0"),
                 ReferenceResolver.FindReferencePackDirectory("net9.0", root)
             )
+            // The moniker check ignores case, so the folder name does too, also on a case-sensitive file system.
+            Assert.Equal(
+                Path.Combine(root, "9.0.20", "ref", "net9.0"),
+                ReferenceResolver.FindReferencePackDirectory("NET9.0", root)
+            )
             // Numeric prerelease identifiers compare as numbers: preview.10 is newer than preview.9.
             Directory.CreateDirectory(Path.Combine(root, "10.0.20-preview.9", "ref", "net10.0"))
             Directory.CreateDirectory(Path.Combine(root, "10.0.20-preview.10", "ref", "net10.0"))
