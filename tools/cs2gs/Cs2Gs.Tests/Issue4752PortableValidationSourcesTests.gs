@@ -732,7 +732,7 @@ class Issue4752PortableValidationSourcesTests : IDisposable {
             GscPath: Compiler()
         }
         options.PassthroughProjectPaths.Add(Path.Combine(source, "src", "Interop", "Interop.csproj"))
-        let result = await MigrationPipeline(options, []IMigrationStage{probe!!}).ValidateAsync(
+        let result = await MigrationPipeline(options, []IMigrationStage{probe}).ValidateAsync(
             apps,
             []CorpusApp{app},
             fixture.Manifests
@@ -744,8 +744,8 @@ class Issue4752PortableValidationSourcesTests : IDisposable {
             Path.Combine(fixture.Migrated, "src", "Interop", "Interop.csproj"),
             options.GeneratedProjectPaths!![Path.Combine(source, "src", "Interop", "Interop.csproj")]
         )
-        Assert.NotNull(probe!!.Observation)
-        return probe!!.Observation
+        Assert.NotNull(probe.Observation)
+        return probe.Observation
     }
 
     private data class Fixture(

@@ -182,7 +182,7 @@ internal class IlVerifyFilterInFinallyRule {
             }
             try {
                 {
-                    using let stream = File.OpenRead(assemblyPath!!)
+                    using let stream = File.OpenRead(assemblyPath)
                     {
                         using let pe = PEReader(stream)
                         if !pe.HasMetadata {

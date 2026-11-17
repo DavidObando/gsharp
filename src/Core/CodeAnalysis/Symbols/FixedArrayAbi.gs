@@ -115,7 +115,7 @@ internal class FixedArrayAbi {
         let positions = type.GetElementPositions()
         var shape = type.ClrType
         if shape?.IsByRef == true {
-            shape = shape!!.GetElementType()
+            shape = shape.GetElementType()
         }
         shape = NullableLifting.GetValueTypeNullableUnderlyingClr(shape) ?? shape
         if (
@@ -193,7 +193,7 @@ internal class FixedArrayAbi {
             if type?.IsGenericType != true {
                 return false
             }
-            let definition = type!!.GetGenericTypeDefinition()
+            let definition = type.GetGenericTypeDefinition()
             if definition.IsNested || definition.Namespace != "Gsharp.Values.FixedArrays.V1" {
                 return false
             }

@@ -1124,7 +1124,7 @@ internal partial class DeclarationBinder {
             return
         }
         // A conversion from a type to itself is never user-definable.
-        if Conversion.Classify(sourceType, targetType).IsIdentity {
+        if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(sourceType, targetType) {
             Diagnostics.ReportConversionOperatorMustInvolveEnclosingType(syntax.Identifier.Location)
             return
         }
@@ -1186,11 +1186,9 @@ internal partial class DeclarationBinder {
             if existing.Parameters.Length != 1 {
                 continue
             }
-            if Conversion.Classify(existing.Parameters[0].Type, sourceType).IsIdentity && Conversion.Classify(
-                existing.Type,
-                targetType
-            )
-                .IsIdentity {
+            if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(existing.Parameters[0].Type, sourceType) &&
+                TypeSymbol
+                .AreRuntimeEquivalentIgnoringReferenceNullability(existing.Type, targetType) {
                 Diagnostics.ReportDuplicateConversionOperator(syntax.Identifier.Location, sourceType, targetType)
                 return
             }
@@ -2031,14 +2029,14 @@ internal partial class DeclarationBinder {
                 if TypeSignaturesEquivalent(candidateIface, boundType) {
                     return candidateIface
                 }
-                if ClrTypeImplementsInterface(candidateIface, boundType!!) {
-                    return boundType!!
+                if ClrTypeImplementsInterface(candidateIface, boundType) {
+                    return boundType
                 }
             }
             Diagnostics.ReportExplicitInterfaceClauseNotImplemented(
                 clauseTypeSyntax.Location,
                 structSymbol.Name,
-                boundType!!.Name,
+                boundType.Name,
                 memberName
             )
             return nil
@@ -2284,7 +2282,7 @@ internal partial class DeclarationBinder {
         /// @param package The owning package.
         /// @returns The owning struct definition, or `null`.
         private func TryGetSamePackageOwner(type TypeSymbol, $package PackageSymbol?) StructSymbol? {
-            if type is StructSymbol structSymbol && $package != nil && string.Equals(
+            if type.StripToBareShape() is StructSymbol structSymbol && $package != nil && string.Equals(
                 structSymbol.PackageName,
                 $package.Name,
                 StringComparison.Ordinal
@@ -2508,7 +2506,7 @@ internal partial class DeclarationBinder {
                         arg = Binder.SubstituteType(arg, subst)
                     }
                     subst ??= Dictionary[TypeParameterSymbol, TypeSymbol]()
-                    subst!![defParams[i]] = arg
+                    subst[defParams[i]] = arg
                 }
             }
             return subst
@@ -2619,7 +2617,7 @@ internal partial class DeclarationBinder {
                 out var awaited,
                 out isValueTask
             ) {
-                awaited!!
+                awaited
             } else {
                 declaredType
             }

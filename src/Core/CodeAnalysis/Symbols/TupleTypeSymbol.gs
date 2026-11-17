@@ -85,7 +85,7 @@ class TupleTypeSymbol : TypeSymbol {
                 let elementName = if string.IsNullOrEmpty(declared) {
                     "Item${i + 1}"
                 } else {
-                    declared!!
+                    declared
                 }
                 builder.Add(FieldSymbol(elementName, ElementTypes[i], Accessibility.Public, isReadOnly: true))
             }

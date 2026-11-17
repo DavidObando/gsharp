@@ -1168,7 +1168,7 @@ class Lexer {
                     if Lookahead == '{' {
                         fragments ??= List[InterpolationFragment]()
                         if sb.Length > 0 {
-                            fragments!!.Add(InterpolationFragment.FromText(sb.ToString()))
+                            fragments.Add(InterpolationFragment.FromText(sb.ToString()))
                             sb.Clear()
                         }
                         position += 2 // consume '${'
@@ -1184,14 +1184,14 @@ class Lexer {
                             break
                         }
                         let exprText = this.text.ToString(exprStart, position - exprStart)
-                        fragments!!.Add(InterpolationFragment.FromExpression(exprText, exprStart))
+                        fragments.Add(InterpolationFragment.FromExpression(exprText, exprStart))
                         position++ // consume '}'
                         break
                     }
                     if char.IsLetter(Lookahead) || Lookahead == '_' {
                         fragments ??= List[InterpolationFragment]()
                         if sb.Length > 0 {
-                            fragments!!.Add(InterpolationFragment.FromText(sb.ToString()))
+                            fragments.Add(InterpolationFragment.FromText(sb.ToString()))
                             sb.Clear()
                         }
                         position++ // consume '$'
@@ -1200,7 +1200,7 @@ class Lexer {
                             position++
                         }
                         let idText = this.text.ToString(idStart, position - idStart)
-                        fragments!!.Add(InterpolationFragment.FromExpression(idText, idStart))
+                        fragments.Add(InterpolationFragment.FromExpression(idText, idStart))
                         break
                     }
                     sb.Append('$')

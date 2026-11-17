@@ -332,19 +332,242 @@ source indexer setter, `box[0] = 1`) and a conversion operator (`op_Implicit` or
 converted function literal or on a relational pattern operand: #5663, #5665,
 corpus rows z19 to z29) keep the full storage invalidation.
 
-**Known limitations of the call rule.** Because a plain call does not kill
-the fact, the rule does not cover a callee that writes the storage by a path
-the call site does not show: (1) a mutable global or static that the
-by-reference parameter aliases (`Run(ref g)`, then `Clear()` assigns `g`);
-(2) an alias created elsewhere (the caller passed an element or member, and
-a callee reaches its container through an array, list, `StrongBox`, a
+**Call-effect summaries (#5326).** For a plain call, the compiler computes a
+transitive `CallEffectSummary` over the callee's syntax and imported metadata
+(written field/property types, written element/buffer slot types, virtual/interface
+overrides, generic substitutions, BCL equality/comparer/`ToString` callbacks,
+and `WritesAnyStorage` for reflection/unsafe/unknown callees) and drops a
+by-reference parameter's fact when `SummaryMayOverwriteRoot` reports that the
+call can write storage that may hold the root: (1) a mutable global or static
+that the by-reference parameter aliases (`Run(ref g)`, then `Clear()` assigns
+`g`); (2) an alias created elsewhere (the caller passed an element or member,
+and a callee reaches its container through an array, list, `StrongBox`, a
 cyclic object, a base class or a subclass, a generic holder, a
 `CollectionsMarshal` slot, `LinkedListNode<T>.ValueRef`, `Memory<T>.Span`);
 (3) a container reachable from an operand (`Clear(xs)` with the aliased
-element in `xs`). They are the same hole as in C# nullable analysis and are
-pinned as accepted programs by corpus rows h2 and h3 (they run and throw
-`NullReferenceException`). A sound call-effect model is tracked in the
-follow-up issue (effect summaries) tracked in #5326.
+element in `xs`). Corpus rows `h2` (`h2_limitation_call_with_container_operand`)
+and `h3` (`h3_limitation_call_writes_global`) are therefore rejected with
+`GS0158`.
+
+Imported methods without a trusted effect model have unknown writes. Resolving an
+overload does not establish that its body is effect-free. Imported getter reads
+skip effects only under the verified assembly identity and stable-accessor policy.
+`Lazy<T>.Value`, for example, can invoke its factory. `cs2gs` uses the same
+assembly-identity rule when an imported call removes a by-reference loop fact.
+Its translation retains a runtime assertion unless the program re-proves the fact.
+Unknown-effect imported calls do not change overload selection; execution tests
+separately pin instance precedence and constant-narrowing overloads.
+
+Effect-model trust uses image fingerprints from the installed
+`Microsoft.NETCore.App` framework manifest, runtime, and reference packs.
+Matching a public-key token or assembly name is insufficient. Application
+dependencies on the host's trusted-platform list do not acquire a framework model.
+Loaded metadata images use their immutable snapshots. Explicit-reference membership
+belongs to each resolver, not the process-wide original-path registry.
+Reference visibility does not require an effect model. Visible host fallbacks
+outside the supported framework manifest retain unknown effects.
+The C# loader binds owned immutable reference images. Effect trust uses those
+same bytes, not a reference's supplied path. Unverified Roslyn references remain unknown.
+Arbitrary Roslyn references keep their actual metadata and properties: `FilePath`
+does not authorize reopening or rebinding them. File-origin authority is recorded
+only at the loader's private MSBuild file-input ingestion boundary. Owned metadata
+identity preserves verified provenance across property projections without rereading
+or hashing the image.
+
+Comparer discovery examines all visible untrusted assemblies, including private
+implementations and unregistered host assemblies. A binding pass caches the
+inventory and matches callback targets to compared storage types. A lookup without
+stored comparers, such as `List<T>.Contains`, does not invoke unrelated comparers.
+
+The translator applies root-type storage effects to ordinary statements, condition
+operands, and loops. Source-call traversal shares the compiler's container, buffer,
+and callback-container rules. Resolved calls can still write aliased storage.
+Unknown callback arguments stay unknown; proven disjoint writes and pure callbacks
+retain the fact. Call and method indexes are compilation-scoped.
+The operation walk includes implicit accessors, handlers, constructors, and dispatch
+through source implementations of imported slots. Constructed storage types and
+comparer contracts retain their semantic positions. Deferred factories retain their
+callbacks until enumeration.
+Completed summaries include root types, substitutions, and callback bindings.
+Changed recursive bindings remain unknown; cyclic incomplete negatives are not cached.
+Traversal observes the translation cancellation token and bounds context growth.
+An open value argument can contain guarded reference storage, including imported structs.
+
+An imported interface declaration does not prove its runtime implementation.
+Unmodeled open dispatch has unknown effects. Proven closed receivers retain their selected summaries.
+Operation traversal uses the owning source compilation, including referenced source projects.
+Event accessors, deconstruction leaves, instance property initializers, and actual buffer operands participate in storage effects.
+Enumeration executes source iterator bodies, deferred callbacks, and applicable stored comparer factories.
+Creating a deferred sequence does not execute its body.
+
+Each project load owns one immutable metadata snapshot per referenced image.
+Reference properties can differ while sharing that snapshot and its verified provenance.
+Compilation-wide indexes use weak compilation ownership; document visitors retain separate mutable summaries.
+Completed summaries do not consume the active recursion budget.
+Cheap deferred-factory shape checks precede framework image verification.
+
+Source callback inventories do not prove that imported or open implementations are pure.
+Callback proofs include private imported comparer contracts and actual enumeration implementations.
+Unproven implementations have unknown writes. Closed trusted primitives, strings, arrays, and supported containers retain their applicable models.
+Direct formatting expressions use the same operation query as callee bodies and loop regions.
+Only a function's own yields make it deferred; invoked nested functions retain their own effects.
+Deferred-factory models require verified framework images after the cheap shape check.
+Unreadable reference-pack manifests contribute no trust or reference directories, and do not poison other packs.
+Runtime image verification caches immutable assembly fingerprints across compilation queries.
+
+Operation callbacks include contextual implicit conversions, not only explicit invocation syntax.
+Inherited and synthesized callback implementations participate in the same target proof.
+A visible comparer inventory cannot close a public input contract against separately compiled callers.
+Externally supplied stored comparers and open collection dispatch therefore have unknown effects.
+Owned construction and default-comparer proofs remain distinct from static receiver types and join summary cache keys.
+Framework image verification establishes provenance, not method purity. Shared positive method models provide the remaining effect proof.
+Pack-root enumeration failures retain previously discovered runtime images and do not poison the trust cache.
+
+Selected imported unary and binary operator methods use the bound-call effect funnel, including lifted source operators.
+Source ownership prefers the root compilation's actual reference graph before separately loaded catalog compilations.
+The loader snapshots metadata across the reachable solution before constructing any project compilation.
+Snapshot I/O failures preserve the original untrusted reference and its Roslyn diagnostics.
+Runtime manifest names and callback inventories remain local until their complete input validates or their scan succeeds.
+Deferred and comparer indexes publish together as one immutable bundle; cancellation leaves no partial shared entries.
+An exact source override summary replaces its inherited declaration's fallback summary when the bound slot proves the target.
+Effect bodies and initializers carry their selected method's compilation owner.
+Callback bindings retain the caller's owning compilation independently of the callee.
+The same syntax-tree instance in two compilations is not a shared semantic model;
+operation and callback summary keys include ownership. Active owned models take an
+O(1) fast path. Immutable ownership indexes are weakly shared by actual root graph
+and catalog identity/version, rather than copied per document. Cancellation stages
+the graph locally and publishes no partial index or failed lazy value.
+Deferred framework execution uses the selected method definition's unsubstituted
+return contract. Substituting `IEnumerable<T>` for an immediate method's type
+parameter does not make its callback deferred. Region analysis, bound summaries,
+and translator queries share this policy after image verification.
+Symbol-owned projection, signature, constructor, and initializer queries use the
+same compilation-owner lookup. Projection inventories retain each consumer's
+compilation and publish only completed indexes for that graph/catalog version.
+Corrupt owned file inputs retain their original untrusted references and Roslyn
+diagnostics. File-input tests require cache-backed replacement and continued
+healthy snapshots; unchanged references alone are not snapshot evidence.
+
+Loaded runtime assemblies do not acquire trust from their current file paths.
+Only captured immutable load images or exact compiler-owned canonical CLR
+framework bindings establish runtime provenance. Identity metadata, MVIDs, paths,
+timestamps, and default-load-context membership alone do not establish trust.
+Unregistered assemblies remain untrusted after their original files change.
+
+A translation context captures one immutable catalog version, matching its
+immutable Roslyn compilation/model and per-document pass lifetime. Its public
+catalog readers, source owners, effect indexes, and projection queries use that
+same snapshot. Caller list mutation affects a new context, never part of an
+existing context. Snapshot arrays and completed indexes share weak root/catalog
+identity-and-version ownership, without copying catalogs per document. This
+preserves the pipeline's fresh-context-per-retranslation behavior and avoids
+invalidating live projection boundaries during a pass. Existing CLR constructor
+and semantic-model-scope overloads remain executable for compiled consumers.
+Equivalent ordered compilation catalogs also reuse a weak canonical version,
+even when callers supply different list instances. These analysis identities do
+not own emitted declarations. The translator retains declaration registries for
+its output lifetime, partitioned by opaque actual-compilation tokens and package.
+The tokens retain no compilation, catalog, or semantic model. Normal and special
+models share declaration ownership, but retain separate shape evidence. Ordered
+emitted nullability contracts and generated-type dependencies distinguish declarations
+when that evidence differs.
+Synthetic names remain content-derived; unchanged non-nullable shapes keep their names.
+Derived signature and producer visitors use the related-context factory, retaining
+cancellation and the captured model/catalog inputs.
+
+The captured catalog also owns linked ref-storage promotions, frozen contracts,
+taint results, null-argument graphs, source-assembly classification, and anonymous
+shape evidence. These answers must not use a compilation-only mutable cache.
+Translation and direct analyzer entry points enter a catalog query scope and
+restore the prior scope on exit. Weak scope/compilation caches share completed
+answers only for equivalent semantic inputs. Source membership derives from the captured
+version and never expands a process-wide compilation set. Immutable syntax/path
+facts remain compilation-shared. Related linked-storage visitors retain the same
+catalog identity; reconciliation stages a batch before publishing its entries.
+The analyzer projects source membership through the compilation's bound assembly
+references, using its existing source-classification query. Weakly interned
+equivalent classifications reuse that compilation's analysis across consumers.
+An added or removed relevant source produces another domain; unrelated consumers
+do not force another library analysis. Full-catalog storage and container-flow
+queries retain the complete captured version instead of this projection.
+
+A supplied semantic model remains context-local under its actual compilation
+and tree. Nested tree switches consult that model before a shared normal model.
+Accessibility-ignoring and speculative models never enter the normal shared
+cache. Their model-sensitive effect, projection, storage, container-flow, and
+shape caches use a context-local domain, inherited by related visitors.
+Effect and projection inventories also retain the actual ownership graph in
+that domain; related visitors cannot replace another graph's selected bindings.
+Normal document peers still share the normal graph/catalog caches.
+The analysis scope carries the effective supplied model as well as its identity.
+Model-sensitive builders use `GetEffectiveSemanticModel`, which matches actual
+compilation and tree identity before using that model. Other owners and trees
+use normal models. Nested catalog queries retain the supplied-model input in
+separate weak publications; nested normal contexts restore normal binding.
+Ref-storage scans enter the owning scope before capturing its active model.
+Normal declaration inventories retain the separate normal-model reader.
+An unscoped cache lookup uses the same canonical default compilation domain as
+an ordinary query, without computing its taint graph merely to inspect the cache.
+Speculative method bodies form an effective syntax inventory over the original
+compilation. Roslyn's parent model and original speculation position identify
+the actual owning declaration. Inventories omit that declaration's original body
+and add the supplied replacement body under its actual speculative model.
+Inventory and declaration readers require the actual compilation as input.
+A different compilation sharing the original tree keeps its original body.
+Declared symbols, signature headers, unaffected declarations, and other trees
+remain original inputs. Iterator, suspension, return, and constructor-folding facts
+use effective bodies before declaration emission. Field and property usage scans
+enumerate effective containing-type scopes, including all actual partial declarations.
+Each original or replacement root uses its own owning semantic model.
+Constructor overwrite proofs, record-struct literal plans, primary lifting, and
+parameter-name contexts read the same effective declaration/model pair. Original
+constructor symbols and initializer headers retain their original identity.
+Lifted-helper reservation and identifier inventories use effective scoped roots.
+Their allocator and reservation caches share the analysis model domain, separately
+from output-owned anonymous declarations. Repeated physical names reuse their
+source-site allocation instead of consuming another suffix.
+Allocation keys also include the semantic operation path. Nested tuple positions
+retain distinct names without depending on which sibling positions require bridges.
+Effective replacement roots obey the same nested-type traversal boundary as original
+nodes. Helper assignments are indexed by their actual emitted owner and source symbol.
+Anonymous output contract keys recursively include every physical type child,
+including managed-reference elements, and retain invariant and readonly structure.
+Anonymous merge caches key the original incoming physical contract separately from
+the evidence shape and emitted output identity. A prior merge cannot replace another
+creation's invariant storage before output identity is computed.
+Cached physical local names also replay current-body occupancy. The same occupancy
+commit handles fresh allocations, reservations, record-local replay, and designators.
+The physical naming registry remains model-scoped; each visitor owns its body state.
+Output contracts canonicalize native and qualified runtime representations only
+with the same recognized source-type identity that selects those forms during mapping.
+Incoming merge keys retain scope-correct rendering contracts.
+They include the existing printer's recursive type spelling and the complete structural contract.
+Ordinary aliases and qualifiers remain input distinctions, not physical output distinctions.
+Merge results use the same actual-compilation and catalog/model analysis domain as their shape evidence.
+An invalid snapshot retains its original untrusted reference and properties without publishing image ownership.
+Call effects apply to external alias roots even when facts contain readonly
+member links. A replaced root loses every descendant fact. The shared direct-callee
+inventory includes generic construction and source/custom CLR event accessors;
+noncalling fieldlike source events retain their separate assignment behavior.
+Composite literals retain their ordered constructor and initializer callable-state updates.
+Return, ref-storage, null-flow, shape, effect, projection, import, and naming
+walks use the same inventory and declaration resolver. Body translation uses
+the replacement while retaining the original declared method and parameter symbols.
+Implicit one-argument tree scopes prefer an active owner, then the root, before
+requiring a unique external owner. An explicit selected owner always wins.
+
+Manifest-only image capture cannot preserve linked metadata modules. Such
+references remain original, file-backed, and untrusted until all modules can be
+captured together. Missing or corrupt modules retain their Roslyn diagnostics.
+Single-module references retain immutable-image capture and shared provenance.
+
+The Windows loaded-image witness renames the mapped original aside before
+moving the genuine image to its original path; it retains the loaded assembly
+through the trust and diagnostic checks.
+
+The original open-comparer corpus row `h1_by_ref_param_survives_calls` now records its exact rejection diagnostics.
+The disjoint out-parameter execution control re-proves its fact around unknown comparer calls.
+This keeps the disjoint-write coverage without assuming that an externally supplied comparer is pure.
 
 **The conservative default.** The lists above and the proof rules of
 section 8 are closed. A fact survives a program point only when one of the
@@ -858,7 +1081,7 @@ compatibility note. "Probe" refers to section 4.
 | R9 | Invalidation is expression-granular: `s != nil ? consume((s = nil), s.Length) : 0` (ADR-0064 L576-581, #4985) | accepted, dereferences nil at run time | GS0158 | less permissive (soundness) |
 | R10 | Every handler entry sees the writes of every `when` filter in the function: a later clause (probe cA), an intervening `finally` (probe d1), an inner `catch` reached through a replacement exception (probe f3), where the filter stores nil (bug [#5168](https://github.com/DavidObando/gsharp/issues/5168)) | accepted, dereferences nil at run time | GS0158 | less permissive (soundness) |
 | R11 | Any call, written or introduced by lowering, kills a fact on a mutable global: `text = "safe"; Clear(); text.Length` where `Clear` assigns the global (probes d3, d3b); `for item in items { }` over an iterator that assigns it (probe f5) (bug [#5170](https://github.com/DavidObando/gsharp/issues/5170)) | accepted, throws `NullReferenceException` at run time | GS0158 | less permissive (soundness) |
-| R12 | A write to any member of an alias class kills the facts on the whole class, and so does any member, index or indirect write (a call alone does not kill a by-reference parameter's fact: amendment A3, #5292), because a `ref` local or a by-reference parameter may alias the written element or member: `let ref a C? = x; ...; x = nil; a.Value` (probes d4, d4b); `let ref a C? = xs[0]; ...; xs[0] = nil; a.Value` (probe f2); `Run(ref xs[0], xs)` with `Run(ref a C?, xs []C?)` doing `xs[0] = nil; a.Value` (probe g2) (bug [#5171](https://github.com/DavidObando/gsharp/issues/5171)) | accepted, throws `NullReferenceException` at run time | GS0158 | less permissive (soundness) |
+| R12 | A write to any member of an alias class kills the facts on the whole class, and so does any member, index or indirect write or a call whose `CallEffectSummary` can write storage that may hold the root (amendment A3, #5292, #5326), because a `ref` local or a by-reference parameter may alias the written element or member: `let ref a C? = x; ...; x = nil; a.Value` (probes d4, d4b); `let ref a C? = xs[0]; ...; xs[0] = nil; a.Value` (probe f2); `Run(ref xs[0], xs)` with `Run(ref a C?, xs []C?)` doing `xs[0] = nil; a.Value` (probe g2); `Clear(xs)` or `Clear()` writing an aliased element or global (probes h2, h3) (bugs [#5171](https://github.com/DavidObando/gsharp/issues/5171), [#5326](https://github.com/DavidObando/gsharp/issues/5326)) | accepted, throws `NullReferenceException` at run time | GS0158 | less permissive (soundness) |
 | R13 | A suspension point (`await`, `yield`) kills facts on mutable globals and on closure-assigned locals, because the code that runs while the function is suspended may invoke a closure that escaped: iterator with `let clear = func() { s = nil }`, `if s != nil { yield 0; yield s.Length }` (probe g5) | accepted, prints `0` and `1` | GS0158 | less permissive (conservative default; the program is correct) |
 | R14 | A read of a property with user code (a non-auto getter) is a `call` in every position, a condition included, and removes every member-bearing path. So is a read or write of an auto property that can dispatch to an override (#5599): an `open` or `override` property (a property override can be overridden again) on a receiver whose type can have a subclass, or a property reached through an interface. A value type and a class that is neither `open` nor `sealed` cannot have a subclass, so their auto properties keep the facts, and so does the initializer of a construction, whose type is exact. Example: `if getResultCall.Receiver is not BoundImportedInstanceCallExpression getAwaiterCall { return }` after an earlier proof of a member path (`ExpressionBinder.Access.MemberLookup.gs:3991`, `BaseCallForwarderRewriter.gs:490`) | accepted (today's straight-line kill follows the statement's syntax: calls and member writes only) | GS0158 / GS0159 on the member-path read | less permissive |
 | R15 | Any call, written or introduced by lowering, kills a fact on a closure-assigned local or parameter, because the callee can run a closure that escaped and assigns it. A declared function with no captures and no callable argument is no exception. A call through a callable value keeps today's classification (`AnalyzeCallableVariable`): `h.Callback = func() { x = nil }; if x == nil { return 0 }; Wrapper(h); x.Value` with `Wrapper(h Holder) { h.Callback() }` (probe q3, straight-line form; bug [#5237](https://github.com/DavidObando/gsharp/issues/5237)). A by-reference parameter keeps its fact (amendment A3), and a local that no closure assigns keeps its fact | accepted, throws `NullReferenceException` at run time | GS0158 | less permissive (soundness) |

@@ -354,7 +354,8 @@ async sequence[T]
         // Ensure the token is inside a method body, not in the struct's own declarations.
         let insideMethod = enclosingDecl.Methods.Any(
             (m FunctionDeclarationSyntax) -> m.Body != nil &&
-                m.Body!!
+                m
+                .Body
                 .Span
                 .Start <= token
                 .Span
@@ -1051,7 +1052,7 @@ shared class DocumentSymbolComputer {
         return if string.IsNullOrWhiteSpace(name) {
             fallback
         } else {
-            name!!
+            name
         }
     }
 }
@@ -1711,11 +1712,19 @@ shared class CompletionComputer {
             // segment) and speculatively bind it to infer the member type.
             let receiverExpression ExpressionSyntax? = ReconstructReceiverExpression(content, chainRoot, accessor)
             if receiverExpression != nil {
+                let boundReceiverType = BoundSemantics.GetExpressionType(compilation, accessor.LeftPart)
+                if boundReceiverType == nil && BoundSemantics.GetNodeSymbol(
+                    compilation,
+                    accessor.LeftPart
+                ) is TypeSymbol staticQualifier {
+                    AddMembers(items, seen, content, compilation, offset, staticQualifier, staticMembers: true)
+                    return items
+                }
                 // Issue #4989: the receiver's bound (flow) type when the binder has
                 // one; a speculative bind of the reconstructed chain otherwise
                 // (incomplete code). The bound query takes the receiver segment in
                 // the document's own tree, which the binder indexed.
-                let receiverType TypeSymbol? = BoundSemantics.GetExpressionType(compilation, accessor.LeftPart) ??
+                let receiverType TypeSymbol? = boundReceiverType ??
                     BoundSemantics
                     .GetPositionModel(compilation, content.SyntaxTree)
                     ?.GetSpeculativeTypeInfo(offset, receiverExpression)

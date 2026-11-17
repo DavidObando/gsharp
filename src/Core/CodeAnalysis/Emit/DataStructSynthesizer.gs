@@ -2005,7 +2005,7 @@ internal class DataStructSynthesizer {
                             ILOpCode.Call
                         }
                     )
-                    il.Token(this.resolveUserPropertyAccessorToken(declaringStruct, resolvedProperty!!, false))
+                    il.Token(this.resolveUserPropertyAccessorToken(declaringStruct, resolvedProperty, false))
                     if (members[i] is PropertySymbol and {ReturnRefKind: not RefKind.None}) {
                         this.EmitDeconstructRefDereference(il, memberType)
                     }

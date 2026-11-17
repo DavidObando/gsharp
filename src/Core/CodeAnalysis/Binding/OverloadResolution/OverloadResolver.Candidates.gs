@@ -1331,8 +1331,8 @@ internal partial class OverloadResolver {
                 bindLambdaWithTarget != nil &&
                 MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(paramType!!, out var asyncTarget) &&
                 !TypeSymbol
-                .ContainsTypeParameter(asyncTarget!!) {
-                if !IsContextuallyApplicableAsyncLambda(lambdaSyntax!!, asyncTarget!!, paramType!!) {
+                .ContainsTypeParameter(asyncTarget) {
+                if !IsContextuallyApplicableAsyncLambda(lambdaSyntax, asyncTarget, paramType!!) {
                     return false
                 }
                 continue
@@ -1350,13 +1350,13 @@ internal partial class OverloadResolver {
                 lambdaReturn == TypeSymbol.Error &&
                 MemberLookup
                 .TryGetLambdaTargetFunctionTypeFromSymbol(paramType!!, out var targetFunction) {
-                if argumentFunction.Arity != targetFunction!!.Arity {
+                if argumentFunction.Arity != targetFunction.Arity {
                     return false
                 }
                 var parametersCompatible = true
                 for var parameterIndex = 0; parameterIndex < argumentFunction.Arity; parameterIndex++ {
                     let writtenType = argumentFunction.ParameterTypes[parameterIndex]
-                    let targetType = targetFunction!!.ParameterTypes[parameterIndex]
+                    let targetType = targetFunction.ParameterTypes[parameterIndex]
                     parametersCompatible &= TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
                         targetType,
                         writtenType
@@ -1506,7 +1506,7 @@ internal partial class OverloadResolver {
         if lambda == nil || !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(parameterType, out var target) {
             return true
         }
-        return IsLambdaReturnShapeCompatible(lambda, target!!, argument)
+        return IsLambdaReturnShapeCompatible(lambda, target, argument)
     }
 
     private func IsLambdaReturnShapeCompatible(
@@ -2387,7 +2387,7 @@ internal partial class OverloadResolver {
                 argumentFunction.ReturnType,
                 out var argumentResult
             ) ||
-                !AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(targetFunction!!.ReturnType, out var targetResult) {
+                !AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(targetFunction.ReturnType, out var targetResult) {
                 return false
             }
             return TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(argumentResult, targetResult)
@@ -2395,7 +2395,7 @@ internal partial class OverloadResolver {
 
         private func TryBoundLambdaBodyNeverCompletes(argument BoundExpression?) bool -> argument != nil &&
             LambdaBinder.TryGetFunctionLiteral(argument, out var literal) && ControlFlowGraph.AllPathsReturn(
-            Lowerer.Lower(literal!!.Body)
+            Lowerer.Lower(literal.Body)
         )
 
         private func IsObviouslyNonCompleting(block BlockExpressionSyntax) bool -> IsObviouslyNonCompleting(

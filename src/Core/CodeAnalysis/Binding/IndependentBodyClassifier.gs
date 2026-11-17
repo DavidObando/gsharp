@@ -245,7 +245,7 @@ internal class IndependentBodyClassifier {
                     return nil
                 }
                 let name = owner.IdentifierToken.ValueText
-                if scope_.TryLookupImport(name, out var import_) && import_!!.IsAlias {
+                if scope_.TryLookupImport(name, out var import_) && import_.IsAlias {
                     return nil
                 }
                 typeLookupContext ??= BinderContext(scope_)

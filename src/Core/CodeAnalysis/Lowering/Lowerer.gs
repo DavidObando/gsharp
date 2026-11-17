@@ -819,14 +819,14 @@ class Lowerer : BoundTreeRewriter {
             // shape; the Current read takes the merged element the binder
             // gave the loop variable (MemberLookup.TryGetAsyncEnumerableElementType).
             enumeratorType = MemberLookup.GetClrOpenMethodReturnTypeSymbol(
-                openGetAsyncEnumerator!!,
+                openGetAsyncEnumerator,
                 patternImp.OpenDefinition,
                 patternImp.TypeArguments
             )
                 .StripToBareShape()
             currentType = if (openCurrentMember is PropertyInfo or FieldInfo) {
                 MemberLookup.GetClrMemberValueTypeSymbol(
-                    openCurrentMember!!,
+                    openCurrentMember,
                     patternImp.OpenDefinition,
                     patternImp.TypeArguments
                 )
@@ -1480,14 +1480,14 @@ class Lowerer : BoundTreeRewriter {
                 "GetEnumerator",
                 out var userGetEnumerator
             ) &&
-                userGetEnumerator!!
+                userGetEnumerator
                 .Parameters
                 .Length == 0 {
-                enumeratorType = userType.SubstituteMemberType(userGetEnumerator!!.Type)
+                enumeratorType = userType.SubstituteMemberType(userGetEnumerator.Type)
                 getEnumeratorCall = BoundUserInstanceCallExpression(
                     nil,
                     collection,
-                    userGetEnumerator!!,
+                    userGetEnumerator,
                     ImmutableArray[BoundExpression].Empty
                 )
                 // ADR-0186 §9: a GetEnumerator declared in an oblivious scope
@@ -1780,10 +1780,10 @@ class Lowerer : BoundTreeRewriter {
                 "MoveNext",
                 out var userMoveNext
             ) &&
-                userMoveNext!!
+                userMoveNext
                 .Parameters
                 .Length == 0 &&
-                userMoveNext!!.Type == TypeSymbol.Bool &&
+                userMoveNext.Type == TypeSymbol.Bool &&
                 MemberLookup
                 .TryGetUserEnumeratorCurrent(userEnumerator, out var currentMember, out var currentType) {
                 moveNextCallFactory = (receiver BoundExpression) -> {
