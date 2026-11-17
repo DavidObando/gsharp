@@ -492,8 +492,7 @@ internal shared class StructuralProjectionPlanner {
         // The aggregate supplies construction metadata, not the symbolic target identity.
         var dataType = if ImportedTypeSymbol.TryCreateSemanticAggregate(clrType, nil, out var aggregate) &&
             (
-            aggregate!!.UsesConstructorOwnedDataConstruction ||
-                aggregate is {IsClass: true, HasPrimaryConstructor: true}
+            aggregate.UsesConstructorOwnedDataConstruction || aggregate is {IsClass: true, HasPrimaryConstructor: true}
         ) {
             aggregate
         } else {

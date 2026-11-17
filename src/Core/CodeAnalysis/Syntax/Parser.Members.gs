@@ -811,6 +811,28 @@ open partial class Parser {
         openModifier SyntaxToken?,
         overrideModifier SyntaxToken?
     ) PropertyDeclarationSyntax {
+        let property = ParsePropertyDeclarationCore(accessibilityModifier, openModifier, overrideModifier)
+        SkipUnsupportedPropertyInitializer(property)
+        return property
+    }
+
+    // The `PropertyDecl` grammar has no initializer. Report GS0640 once and
+    // consume `= expr`. Otherwise the `=` starts a field declaration and
+    // causes GS0113, GS0288, and GS0005 at the same token.
+    private func SkipUnsupportedPropertyInitializer(property PropertyDeclarationSyntax) {
+        if Current.Kind != SyntaxKind.EqualsToken {
+            return
+        }
+        let equalsToken = NextToken()
+        Diagnostics.ReportPropertyInitializerNotSupported(equalsToken.Location, property.Identifier.Text)
+        ParseExpression()
+    }
+
+    private func ParsePropertyDeclarationCore(
+        accessibilityModifier SyntaxToken?,
+        openModifier SyntaxToken?,
+        overrideModifier SyntaxToken?
+    ) PropertyDeclarationSyntax {
         let propKeyword = MatchToken(SyntaxKind.IdentifierToken) // consumes "prop"
         // ADR-0149: optional explicit-interface qualifier clause
         // `prop (IFoo) P T` / `prop (IFoo) this[...] T`. Properties/indexers

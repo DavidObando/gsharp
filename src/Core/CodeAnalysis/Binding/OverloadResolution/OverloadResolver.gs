@@ -364,7 +364,7 @@ internal partial class OverloadResolver {
     }
 
     private func CaptureNarrowingBindSnapshot() StatementBinder.NarrowingBindSnapshot -> if captureNarrowingSnapshot != nil {
-        captureNarrowingSnapshot!!()
+        captureNarrowingSnapshot()
     } else {
         default(StatementBinder.NarrowingBindSnapshot)
     }

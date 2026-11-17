@@ -487,15 +487,15 @@ internal partial class MethodBodyEmitter {
         if !this.outer.closures.TryGetGoClosure(node, out var closure) {
             throw InvalidOperationException("Go statement has no synthesized display class.")
         }
-        if !this.outer.cache.ClassCtorHandles.TryGetValue(closure!!.ClassSym, out var ctorHandle) {
-            throw InvalidOperationException("Go display class '${closure!!.ClassSym.Name}' has no emitted constructor.")
+        if !this.outer.cache.ClassCtorHandles.TryGetValue(closure.ClassSym, out var ctorHandle) {
+            throw InvalidOperationException("Go display class '${closure.ClassSym.Name}' has no emitted constructor.")
         }
-        if !this.outer.cache.MethodHandles.TryGetValue(closure!!.InvokeMethod, out var invokeHandle) {
+        if !this.outer.cache.MethodHandles.TryGetValue(closure.InvokeMethod, out var invokeHandle) {
             throw InvalidOperationException(
-                "Go display invoke method '${closure!!.InvokeMethod.Name}' has no emitted MethodDef."
+                "Go display invoke method '${closure.InvokeMethod.Name}' has no emitted MethodDef."
             )
         }
-        let constructedClosure = closure!!.ConstructedClassSym
+        let constructedClosure = closure.ConstructedClassSym
         let closureIsGeneric = ReflectionMetadataEmitter.IsUserGenericTypeReference(constructedClosure)
         this.il.OpCode(ILOpCode.Newobj)
         this.il.Token(
@@ -505,8 +505,8 @@ internal partial class MethodBodyEmitter {
                 ctorHandle
             }
         )
-        for captured in closure!!.CaptureFields.Keys {
-            let field = closure!!.CaptureFields[captured]
+        for captured in closure.CaptureFields.Keys {
+            let field = closure.CaptureFields[captured]
             var fieldToken EntityHandle
             if closureIsGeneric {
                 fieldToken = this.outer.userTokens.ResolveFieldToken(constructedClosure, field)
@@ -524,7 +524,7 @@ internal partial class MethodBodyEmitter {
             this
                 .outer
                 .userTokens
-                .ResolveClosureInvokeFtnToken(constructedClosure, closure!!.ClassSym, closure!!.InvokeMethod)
+                .ResolveClosureInvokeFtnToken(constructedClosure, closure.ClassSym, closure.InvokeMethod)
         } else {
             invokeHandle
         }

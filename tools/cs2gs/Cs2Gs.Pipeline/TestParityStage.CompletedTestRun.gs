@@ -14,7 +14,7 @@ partial class TestParityStage : IMigrationStage {
         /// @returns `true` when a test run completed.
         internal func CompletedTestRun(output string?) bool {
             return !string.IsNullOrEmpty(output) && Regex.IsMatch(
-                output!!,
+                output,
                 "^\\s*(Passed|Failed)!\\s+-\\s+Failed:",
                 RegexOptions.Multiline | RegexOptions.CultureInvariant
             )

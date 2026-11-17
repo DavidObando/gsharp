@@ -2000,7 +2000,7 @@ partial class CSharpToGSharpTranslator {
             for argument in invocation.ArgumentList.Arguments {
                 let parameter IParameterSymbol? = DetermineParameter(argument, this.context)
                 let parameterType ITypeSymbol? = if parameter?.IsParams == true {
-                    (parameter!!.Type as IArrayTypeSymbol)?.ElementType
+                    (parameter.Type as IArrayTypeSymbol)?.ElementType
                 } else {
                     parameter?.Type
                 }

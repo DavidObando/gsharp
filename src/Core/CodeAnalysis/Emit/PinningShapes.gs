@@ -61,7 +61,7 @@ internal shared class PinningShapes {
         if !references.TryResolveType(UnsafeTypeFullName, out var unsafeType) {
             return false
         }
-        for candidate in unsafeType!!.GetMethods(BindingFlags.Public | BindingFlags.Static) {
+        for candidate in unsafeType.GetMethods(BindingFlags.Public | BindingFlags.Static) {
             if candidate.Name == "AsPointer" && candidate.IsGenericMethodDefinition && candidate.GetGenericArguments()
                 .Length == 1 &&
                 candidate

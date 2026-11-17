@@ -390,7 +390,7 @@ internal shared class TriageCommand {
     /// @returns `true` when both resolve.
     private func TryResolveRunAndLedger(ref runDir string?, ref gapsPath string?, out ledger GapLedger?) bool {
         ledger = nil
-        if string.IsNullOrEmpty(runDir) || !File.Exists(Path.Combine(runDir!!, "run.json")) {
+        if string.IsNullOrEmpty(runDir) || !File.Exists(Path.Combine(runDir, "run.json")) {
             Console.Error.WriteLine(
                 "cs2gs triage: --run <dir> pointing at a directory containing run.json is required."
             )

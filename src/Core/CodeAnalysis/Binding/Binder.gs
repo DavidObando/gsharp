@@ -4154,7 +4154,7 @@ partial class Binder {
                     return nil
                 }
                 conventionNames.Add(conventionToken.Text)
-                conventionClrTypes.Add(callConvType!!)
+                conventionClrTypes.Add(callConvType)
             }
             return FunctionPointerTypeSymbol.GetUnmanagedExtended(
                 conventionNames.MoveToImmutable(),
@@ -4206,7 +4206,7 @@ partial class Binder {
                         pt = VariadicCarriers.ResolveDeclaredParameterType(pt)
                     }
                 }
-                paramTypes.Add(pt!!)
+                paramTypes.Add(pt)
                 variadicFlagsBuilder.Add(isVariadicSlot)
             }
             let fnReturnTypeClauseSyntax TypeClauseSyntax? = syntax.ReturnTypeClause
@@ -4688,7 +4688,7 @@ partial class Binder {
             out var clrOpenType,
             out var genericAmbiguity
         ) &&
-            ImportedGenericTypeHasPrecedence(identifierToken.ValueText, topLevelTypeArgumentCount, clrOpenType!!) {
+            ImportedGenericTypeHasPrecedence(identifierToken.ValueText, topLevelTypeArgumentCount, clrOpenType) {
             if genericAmbiguity != nil {
                 Diagnostics.ReportAmbiguousImportedTypeReference(
                     identifierToken.Location,
@@ -4711,12 +4711,13 @@ partial class Binder {
                     return nil
                 }
                 symbolicArgs.Add(ta)
-                // Issue #367: a by-ref-like (`ref struct`) type cannot be used as
-                // a generic type argument (e.g. `List[Span[int32]]`); the CLR
-                // forbids constructing a generic type over a by-ref-like type.
-                if TypeSymbol.IsByRefLike(ta) && !ClrTypeUtilities.GenericParameterAllowsByRefLike(clrOpenType, i) {
-                    let taLocation = topLevelTypeArguments[i].Identifier?.Location ?? identifierToken.Location
-                    Diagnostics.ReportByRefLikeEscape(taLocation, ta, "be used as a generic type argument")
+                if ReportByRefLikeGenericTypeArgument(
+                    Diagnostics,
+                    ta,
+                    topLevelTypeArguments[i].Identifier?.Location ?? identifierToken.Location,
+                    clrOpenType,
+                    i
+                ) {
                     return nil
                 }
                 // Issue #2391: this caller alone retains the established Int32
@@ -4741,8 +4742,8 @@ partial class Binder {
                 return nil
             }
             try {
-                let closed = clrOpenType!!.MakeGenericType(clrArgs)
-                if hasSymbolicArg || clrOpenType!!.FullName?.StartsWith(
+                let closed = clrOpenType.MakeGenericType(clrArgs)
+                if hasSymbolicArg || clrOpenType.FullName?.StartsWith(
                     "System.Tuple`",
                     StringComparison.Ordinal
                 ) == true ||
@@ -4840,7 +4841,9 @@ partial class Binder {
                 // that the type is undefined.
                 if ambiguousAcrossImportedPackages {
                     Diagnostics.ReportAmbiguousSourceType(identifierToken.Location, identifierToken.ValueText)
-                } else {
+                } else if !identifierToken.IsMissing {
+                    // The parser synthesized a missing type name token and
+                    // already reported GS0005 for it. GS0113 "Type ''" would repeat it.
                     Diagnostics.ReportUndefinedType(identifierToken.Location, identifierToken.ValueText)
                 }
                 return nil
@@ -4867,11 +4870,11 @@ partial class Binder {
                     if ta == nil {
                         return nil
                     }
-                    // Issue #367: by-ref-like (`ref struct`) types are not permitted
-                    // as generic type arguments to a user-defined generic type.
-                    if TypeSymbol.IsByRefLike(ta) {
-                        let taLocation = elementTypeArguments[i].Identifier?.Location ?? identifierToken.Location
-                        Diagnostics.ReportByRefLikeEscape(taLocation, ta, "be used as a generic type argument")
+                    if ReportByRefLikeGenericTypeArgument(
+                        Diagnostics,
+                        ta,
+                        elementTypeArguments[i].Identifier?.Location ?? identifierToken.Location
+                    ) {
                         return nil
                     }
                     typeArgsBuilder.Add(ta)
@@ -5022,7 +5025,7 @@ partial class Binder {
                 Diagnostics.ReportRectangularArrayRankTooLarge(syntax.Location, syntax.RectangularRank)
                 return nil
             }
-            return RectangularArrayTypeSymbol.Get(element!!, syntax.RectangularRank)
+            return RectangularArrayTypeSymbol.Get(element, syntax.RectangularRank)
         }
         // IsSlice (checked above, false here) is exactly "bracketed AND no
         // length token", so a non-slice array clause has a length token.
@@ -5113,7 +5116,7 @@ partial class Binder {
                 }
             }
             if syntax.ReadOnlySliceModifier != nil {
-                if !NativeSliceTypes.TryGetElement(bound!!, out var nativeElement, out var alreadyReadOnly) {
+                if !NativeSliceTypes.TryGetElement(bound, out var nativeElement, out var alreadyReadOnly) {
                     Diagnostics.ReportNativeSliceType(
                         syntax.ReadOnlySliceModifier!!.Location,
                         "readonly requires the native slice category; use Gsharp.Values.ReadOnlySlice[T] explicitly when slice is shadowed"
@@ -5141,12 +5144,12 @@ partial class Binder {
             // by an explicit `?` right after `]` (`[]?T` → `ArrayQuestionToken`).
             if syntax.IsArray {
                 bound = if syntax.IsArrayNullable {
-                    cast[TypeSymbol](NullableTypeSymbol.Get(bound!!))
+                    cast[TypeSymbol](NullableTypeSymbol.Get(bound))
                 } else {
                     bound
                 }
             } else if syntax.IsNullable {
-                bound = NullableTypeSymbol.Get(bound!!)
+                bound = NullableTypeSymbol.Get(bound)
             }
             // Issue #3315 / ADR-0159 addendum: the `?` after the closing `)` of a
             // parenthesized type clause marks the WHOLE inner type nullable —
@@ -5403,12 +5406,7 @@ partial class Binder {
             if ta == nil {
                 return nil
             }
-            if TypeSymbol.IsByRefLike(ta) {
-                Diagnostics.ReportByRefLikeEscape(
-                    taSyntax.Identifier?.Location ?? location,
-                    ta,
-                    "be used as a generic type argument"
-                )
+            if ReportByRefLikeGenericTypeArgument(Diagnostics, ta, taSyntax.Identifier?.Location ?? location) {
                 return nil
             }
             typeArgsBuilder.Add(ta)
@@ -5558,11 +5556,11 @@ partial class Binder {
             !binderCtx.HasUnclosedEnclosingTypeParameters(packageQualifiedSourceType, function) &&
             TryResolveOuterPrefix(segmentTexts, totalSegments, targetArity) != nil {
             if targetArity == 0 {
-                return packageQualifiedSourceType!!
+                return packageQualifiedSourceType
             }
             return BindAndConstructUserGenericSegment(
                 syntax,
-                packageQualifiedSourceType!!,
+                packageQualifiedSourceType,
                 Invariant.Required(
                     qualifiedTypeArguments,
                     "targetArity != 0 implies HasTypeArguments was true, so TypeArguments is non-null",
@@ -5609,7 +5607,7 @@ partial class Binder {
             }
             return BindAndConstructUserGenericSegment(
                 syntax,
-                sourceType!!,
+                sourceType,
                 Invariant.Required(
                     qualifiedTypeArguments,
                     "targetArity != 0 implies HasTypeArguments was true, so TypeArguments is non-null",
@@ -5689,20 +5687,20 @@ partial class Binder {
         if lastSegmentArity > 0 {
             let mangled = prefix + "`" + lastSegmentArity.ToString()
             if $scope.References!!.TryResolveType(mangled, out var directGeneric) {
-                return directGeneric!!
+                return directGeneric
             }
             for import_ in $scope.GetDeclaredImports() {
                 if $scope.References!!.TryResolveType(import_.Target + "." + mangled, out var viaImportGeneric) {
-                    return viaImportGeneric!!
+                    return viaImportGeneric
                 }
             }
         }
         if $scope.References!!.TryResolveType(prefix, out var direct) {
-            return direct!!
+            return direct
         }
         for import_ in $scope.GetDeclaredImports() {
             if $scope.References!!.TryResolveType(import_.Target + "." + prefix, out var viaImport) {
-                return viaImport!!
+                return viaImport
             }
         }
         return nil
@@ -5777,10 +5775,13 @@ partial class Binder {
                 return nil
             }
             symbolicArgs.Add(ta)
-            // Issue #367: by-ref-like types cannot serve as generic arguments.
-            if TypeSymbol.IsByRefLike(ta) && !ClrTypeUtilities.GenericParameterAllowsByRefLike(clrType, i) {
-                let taLocation = typeArguments[i].Identifier?.Location ?? identifierToken.Location
-                Diagnostics.ReportByRefLikeEscape(taLocation, ta, "be used as a generic type argument")
+            if ReportByRefLikeGenericTypeArgument(
+                Diagnostics,
+                ta,
+                typeArguments[i].Identifier?.Location ?? identifierToken.Location,
+                clrType,
+                i
+            ) {
                 return nil
             }
             let erasedArgument = if ta is EnumSymbol &&
@@ -5888,8 +5889,8 @@ partial class Binder {
         if outerLen == 1 {
             if arity > 0 {
                 if $scope.TryLookupImportedGenericClass(segmentTexts[0], arity, out var imported) &&
-                    ImportedGenericTypeHasPrecedence(segmentTexts[0], arity, imported!!) {
-                    return imported!!
+                    ImportedGenericTypeHasPrecedence(segmentTexts[0], arity, imported) {
+                    return imported
                 }
                 return LookupType(segmentTexts[0], arity)?.ClrType
             }
@@ -5900,11 +5901,11 @@ partial class Binder {
             prefix += "`" + arity.ToString()
         }
         if $scope.References!!.TryResolveType(prefix, out var direct) {
-            return direct!!
+            return direct
         }
         for import_ in $scope.GetDeclaredImports() {
             if $scope.References!!.TryResolveType(import_.Target + "." + prefix, out var viaImport) {
-                return viaImport!!
+                return viaImport
             }
         }
         return nil
@@ -5921,7 +5922,7 @@ partial class Binder {
         ) {
             return !ambiguousAcrossImportedPackages
         }
-        return binderCtx.ImportedTypeOverridesSourceType($scope, name, sourceType!!, arity, function, importedType)
+        return binderCtx.ImportedTypeOverridesSourceType($scope, name, sourceType, arity, function, importedType)
     }
 
     /// Issue #1506: walks [`segmentTexts`](paramref) from [`start`](paramref) to
@@ -6023,9 +6024,13 @@ partial class Binder {
                 return nil
             }
             symbolicArgs.Add(ta)
-            if TypeSymbol.IsByRefLike(ta) && !ClrTypeUtilities.GenericParameterAllowsByRefLike(nestedDef, i) {
-                let taLocation = argSyntaxes[i].Identifier?.Location ?? identifierToken.Location
-                Diagnostics.ReportByRefLikeEscape(taLocation, ta, "be used as a generic type argument")
+            if ReportByRefLikeGenericTypeArgument(
+                Diagnostics,
+                ta,
+                argSyntaxes[i].Identifier?.Location ?? identifierToken.Location,
+                nestedDef,
+                i
+            ) {
                 return nil
             }
             clrArgs[i] = ProjectGenericArgument(ta, typeof(object), &hasSymbolicArg)
@@ -6088,12 +6093,8 @@ partial class Binder {
         // `ContainsSourceArrayShape` is `ContainsFixedLengthArray` widened to
         // both spellings; see its remarks for why this is a representation
         // change and not a rule change.
-        if TypeSymbol.RequiresSymbolicProjection(type) ||
-            type.ClrType == nil ||
-            type is TupleTypeSymbol ||
-            TypeSymbol.ContainsNamedTupleElements(type) || TypeSymbol.ContainsSourceArrayShape(type) ||
-            MemberLookup
-            .ContainsReferenceTuple(type) {
+        if TypeSymbol.RequiresSymbolicProjection(type) || type.ClrType == nil || TypeSymbol.ContainsTupleType(type) ||
+            TypeSymbol.ContainsSourceArrayShape(type) || MemberLookup.ContainsReferenceTuple(type) {
             hasSymbolicArgument = true
             // Issue #2919 follow-up: a nullable source enum keeps the same
             // caller-selected leaf surrogate as the bare enum. A caller that
@@ -6307,7 +6308,7 @@ partial class Binder {
     /// ordinary imported-type projection.
     private func ResolveClrTypeClauseSymbol(type Type) TypeSymbol {
         return if ImportedTypeSymbol.TryCreateSemanticAggregate(type, this.$scope.References, out var aggregate) {
-            cast[TypeSymbol](aggregate!!)
+            cast[TypeSymbol](aggregate)
         } else {
             TypeSymbol.FromClrTypeWithoutNullability(type, NullabilityFreeReason.ResolvedTypeName)
         }
@@ -6504,20 +6505,20 @@ partial class Binder {
                 .ImportedTypeOverridesSourceType(
                 $scope,
                 name,
-                aliased!!,
+                aliased,
                 preferredArity,
                 function,
-                importedType!!.ClassType
+                importedType.ClassType
             ) {
                 if ImportedTypeSymbol.TryCreateSemanticAggregate(
-                    importedType!!.ClassType,
+                    importedType.ClassType,
                     $scope.References,
                     out var importedAggregate
                 ) {
                     return importedAggregate
                 }
                 return TypeSymbol.FromClrTypeWithoutNullability(
-                    importedType!!.ClassType,
+                    importedType.ClassType,
                     NullabilityFreeReason.ResolvedTypeName
                 )
             }
@@ -6525,14 +6526,14 @@ partial class Binder {
             // chosen and the cross-import collision is not what this reference
             // means.
             importedTypeAmbiguity = nil
-            return aliased!!
+            return aliased
         }
         if name.IndexOf('.') >= 0 && $scope.TryLookupQualifiedSourceType(
             name,
             preferredArity,
             out var qualifiedSourceType
         ) {
-            return qualifiedSourceType!!
+            return qualifiedSourceType
         }
         if ambiguousAcrossImportedPackages {
             // Issue #2455: a genuine cross-package collision where two or more
@@ -6547,14 +6548,14 @@ partial class Binder {
         }
         if $scope.TryLookupImportedClass(name, declaration: nil, out var importedClass, out importedTypeAmbiguity) {
             if ImportedTypeSymbol.TryCreateSemanticAggregate(
-                importedClass!!.ClassType,
+                importedClass.ClassType,
                 $scope.References,
                 out var aggregate
             ) {
                 return aggregate
             }
             return TypeSymbol.FromClrTypeWithoutNullability(
-                importedClass!!.ClassType,
+                importedClass.ClassType,
                 NullabilityFreeReason.ResolvedTypeName
             )
         }
@@ -6569,8 +6570,8 @@ partial class Binder {
         // a same-compilation SOURCE type declared in another package (the
         // conventional resx `import R = ...Properties.Resources` pattern),
         // generalized to any namespace depth.
-        if $scope.TryLookupImport(name, out var aliasImport) && aliasImport!!.IsAlias {
-            let aliasTarget = aliasImport!!.Target
+        if $scope.TryLookupImport(name, out var aliasImport) && aliasImport.IsAlias {
+            let aliasTarget = aliasImport.Target
             if $scope.References!!.TryResolveType(aliasTarget, out var clrAliasType) {
                 if ImportedTypeSymbol.TryCreateSemanticAggregate(
                     clrAliasType,
@@ -6589,7 +6590,7 @@ partial class Binder {
                 !binderCtx.HasUnclosedEnclosingTypeParameters(explicitSourceAlias, function) {
                 return explicitSourceAlias
             }
-            if $scope.TryLookupSourceTypeAliasTarget(aliasImport!!, preferredArity, out var aliasedSourceType) &&
+            if $scope.TryLookupSourceTypeAliasTarget(aliasImport, preferredArity, out var aliasedSourceType) &&
                 !binderCtx.HasUnclosedEnclosingTypeParameters(aliasedSourceType, function) {
                 return aliasedSourceType
             }
@@ -6712,7 +6713,7 @@ partial class Binder {
                     resolved = false
                     break
                 }
-                current = next!!
+                current = next
             }
             if resolved {
                 return current
@@ -12136,7 +12137,7 @@ partial class Binder {
                     builder?.Clear()
                     if !nestedConstruction.EnclosingTypeArguments.IsDefaultOrEmpty {
                         builder ??= ImmutableArray.CreateBuilder[TypeSymbol]()
-                        builder!!.AddRange(nestedConstruction.EnclosingTypeArguments)
+                        builder.AddRange(nestedConstruction.EnclosingTypeArguments)
                         hasConstructedSegment = true
                     }
                 } else if i == startIndex {
@@ -12144,7 +12145,7 @@ partial class Binder {
                     if !headEnclosingParams.IsDefaultOrEmpty {
                         builder ??= ImmutableArray.CreateBuilder[TypeSymbol]()
                         for tp in headEnclosingParams {
-                            builder!!.Add(tp)
+                            builder.Add(tp)
                         }
                     }
                 }
@@ -12168,7 +12169,7 @@ partial class Binder {
                     return default(ImmutableArray[TypeSymbol])
                 }
                 builder ??= ImmutableArray.CreateBuilder[TypeSymbol]()
-                builder!!.AddRange(ownArgs)
+                builder.AddRange(ownArgs)
                 hasConstructedSegment = true
             }
             return if hasConstructedSegment && builder != nil && builder.Count > 0 {
@@ -12176,6 +12177,32 @@ partial class Binder {
             } else {
                 default(ImmutableArray[TypeSymbol])
             }
+        }
+
+        internal func ReportByRefLikeGenericTypeArgument(
+            diagnostics DiagnosticBag,
+            argument TypeSymbol,
+            location TextLocation,
+            openDefinition Type? = nil,
+            index int32 = 0
+        ) bool {
+            if !TypeSymbol.IsByRefLike(argument) || ClrTypeUtilities.GenericParameterAllowsByRefLike(
+                openDefinition,
+                index
+            ) {
+                return false
+            }
+            let reason = "be used as a generic type argument"
+            let message = string.Format(
+                CultureInfo.CurrentCulture,
+                DiagnosticDescriptors.ByRefLikeEscape.MessageFormat,
+                argument,
+                reason
+            )
+            if !AlreadyReportedHere(diagnostics, DiagnosticDescriptors.ByRefLikeEscape.Id, message, location) {
+                diagnostics.ReportByRefLikeEscape(location, argument, reason)
+            }
+            return true
         }
 
         /// Issue #4032: reports `GS0152` when a closed generic TYPE clause
@@ -12211,6 +12238,7 @@ partial class Binder {
         /// @param clrArgs The projected (possibly erased) CLR arguments.
         /// @param symbolicArgs The symbolic arguments, in the same order.
         /// @param location Where to anchor the diagnostic.
+        /// @param typeArgumentLocation The source location of each explicit type argument, when available.
         /// @returns `true` when a diagnostic was reported.
         internal func ReportUnsatisfiedGenericTypeConstraint(
             diagnostics DiagnosticBag,
@@ -12218,13 +12246,29 @@ partial class Binder {
             clrArgs[]?Type,
             symbolicArgs ImmutableArray[TypeSymbol],
             location TextLocation,
-            bindingScope BoundScope? = nil
+            bindingScope BoundScope? = nil,
+            typeArgumentLocation Func[int32, TextLocation]? = nil
         ) bool {
             if openDefinition == nil ||
                 clrArgs == nil ||
                 symbolicArgs.IsDefaultOrEmpty ||
                 symbolicArgs.Length != clrArgs.Length {
                 return false
+            }
+            // Validate symbolic arguments before erasure or an open sibling can hide a ref struct.
+            for var i = 0; i < symbolicArgs.Length; i++ {
+                if !TypeSymbol.IsByRefLike(symbolicArgs[i]) {
+                    continue
+                }
+                if ReportByRefLikeGenericTypeArgument(
+                    diagnostics,
+                    symbolicArgs[i],
+                    typeArgumentLocation?.Invoke(i) ?? location,
+                    openDefinition,
+                    i
+                ) {
+                    return true
+                }
             }
             if bindingScope is {} declaringScope && declaringScope.IsDeferringUserGenericConstraintChecks() {
                 // Headers cannot validate incomplete source constructor or interface contracts.
@@ -13425,7 +13469,7 @@ partial class Binder {
                 // an explicit type argument.
                 InferTypeArgumentsCore(
                     pc.ElementType,
-                    argumentElement!!,
+                    argumentElement,
                     substitution,
                     MemberLookup.SymbolicInferenceBoundKind.Exact
                 )
@@ -13524,7 +13568,7 @@ partial class Binder {
             ) &&
                 pf
                 .ParameterTypes
-                .Length == af!!
+                .Length == af
                 .ParameterTypes
                 .Length {
                 // Infer type parameters that appear inside a delegate parameter,
@@ -13533,12 +13577,12 @@ partial class Binder {
                 for var i = 0; i < pf.ParameterTypes.Length; i++ {
                     InferTypeArgumentsCore(
                         pf.ParameterTypes[i],
-                        af!!.ParameterTypes[i],
+                        af.ParameterTypes[i],
                         substitution,
                         MemberLookup.ReverseInferenceBoundKind(boundKind)
                     )
                 }
-                InferTypeArgumentsCore(pf.ReturnType, af!!.ReturnType, substitution, boundKind)
+                InferTypeArgumentsCore(pf.ReturnType, af.ReturnType, substitution, boundKind)
             } else if TryGetUserGenericArguments(parameterType, out var userParamDef, out var userParamArgs) &&
                 userParamArgs
                 .Any(TypeSymbol.ContainsTypeParameter) {
@@ -13550,7 +13594,7 @@ partial class Binder {
                 // Unify positionally against whichever constructed instance (the
                 // argument itself, or one of its implemented interfaces) shares the
                 // parameter's generic definition.
-                if TryFindUserGenericArguments(argumentType, userParamDef!!, out var userArgArgs) &&
+                if TryFindUserGenericArguments(argumentType, userParamDef, out var userArgArgs) &&
                     userParamArgs.Length == userArgArgs
                     .Length {
                     let parameters = switch userParamDef {
@@ -13588,7 +13632,7 @@ partial class Binder {
                 parameterType,
                 out var parameterFunction
             ) {
-                InferTypeArgumentsCore(parameterFunction!!, argumentType, substitution, boundKind)
+                InferTypeArgumentsCore(parameterFunction, argumentType, substitution, boundKind)
                 return
             }
             var foundProjection = false
@@ -14136,13 +14180,14 @@ partial class Binder {
                     if allClr {
                         try {
                             let closed = it.OpenDefinition!!.MakeGenericType(clrArgs)
+                            // CLR reconstruction also loses unnamed tuple identity in reference slots (#6039).
                             if it.OpenDefinition!!.FullName?.StartsWith(
                                 "System.Tuple`",
                                 StringComparison.Ordinal
                             ) == true ||
                                 substitutedArgs
                                 .Any(
-                                (a TypeSymbol) -> TypeSymbol.ContainsNamedTupleElements(a) ||
+                                (a TypeSymbol) -> TypeSymbol.ContainsTupleType(a) ||
                                     TypeSymbol.ContainsSourceArrayShape(a)
                             ) {
                                 return ImportedTypeSymbol.GetConstructed(closed, it.OpenDefinition, substitutedArgs)

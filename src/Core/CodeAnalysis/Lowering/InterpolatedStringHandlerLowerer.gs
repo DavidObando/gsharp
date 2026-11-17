@@ -97,7 +97,7 @@ internal class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewriter {
         if this.handler == nil {
             return this.RewriteStringFormat(node)
         }
-        let handler = this.handler!!
+        let handler = this.handler
         for part in node.Parts {
             if part.IsHole && TypeSymbol.IsByRefLike(part.Value!!.Type) &&
                 FindByRefLikeToString(part.Value!!.Type) == nil {
@@ -189,7 +189,7 @@ internal class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewriter {
             let appendFormatted = BoundImportedInstanceCallExpression(
                 node.Syntax,
                 BoundVariableExpression(nil, handlerLocal),
-                method!!,
+                method,
                 TypeSymbol.Void,
                 arguments.ToImmutable(),
                 argumentRefKinds: default(ImmutableArray[RefKind]),
@@ -299,11 +299,11 @@ internal class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewriter {
             .TryResolveType("System.Object", requireExternalVisibility: false, out var objectType) {
             throw InvalidOperationException("String.Format cannot be resolved from the target reference set.")
         }
-        this.stringFormat = stringType!!.GetMethod(
+        this.stringFormat = stringType.GetMethod(
             "Format",
             BindingFlags.Public | BindingFlags.Static,
             binder: nil,
-            types: []Type{stringType!!, objectType!!.MakeArrayType()},
+            types: []Type{stringType, objectType.MakeArrayType()},
             modifiers: nil
         ) ??
             throw InvalidOperationException(
@@ -323,13 +323,13 @@ internal class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewriter {
         var changed = false
         let primary BaseConstructorInitializer? = structSym.BaseConstructorInitializer
         if primary != nil && this.TryRewriteInitializerArguments(primary, out var loweredPrimary) {
-            structSym.SetBaseConstructorInitializer(loweredPrimary!!)
+            structSym.SetBaseConstructorInitializer(loweredPrimary)
             changed = true
         }
         for ctor in structSym.ExplicitConstructors {
             let init BaseConstructorInitializer? = ctor.BaseInitializer
             if init != nil && this.TryRewriteInitializerArguments(init, out var loweredInit) {
-                ctor.SetBaseInitializer(loweredInit!!)
+                ctor.SetBaseInitializer(loweredInit)
                 changed = true
             }
         }
@@ -833,7 +833,7 @@ internal class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewriter {
         private func FindAppendLiteral(
             handlerType Type
         ) MethodInfo -> if InterpolatedStringHandlerInfo.TryResolveAppendLiteral(handlerType, out var method) {
-            method!!
+            method
         } else {
             throw InvalidOperationException(
                 "Interpolated-string handler '${handlerType.Name}' has no AppendLiteral(string) method."

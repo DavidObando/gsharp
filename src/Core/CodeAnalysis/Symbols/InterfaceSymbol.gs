@@ -268,7 +268,7 @@ class InterfaceSymbol : TypeSymbol {
         Definition,
         this
     ) {
-        SubstituteBaseInterfaces(Definition!!.BaseInterfaces)
+        SubstituteBaseInterfaces(Definition.BaseInterfaces)
     } else {
         baseInterfaces
     }
@@ -281,7 +281,7 @@ class InterfaceSymbol : TypeSymbol {
         Definition,
         this
     ) {
-        SubstituteBaseClrInterfaces(Definition!!.BaseClrInterfaces)
+        SubstituteBaseClrInterfaces(Definition.BaseClrInterfaces)
     } else {
         baseClrInterfaces
     }
@@ -620,7 +620,7 @@ class InterfaceSymbol : TypeSymbol {
         if membersResolved &&
             (
             Definition == nil || object.ReferenceEquals(Definition, this) ||
-                resolvedSignatureVersion == Definition!!.signatureVersion
+                resolvedSignatureVersion == Definition.signatureVersion
         ) {
             return
         }
@@ -689,7 +689,7 @@ class InterfaceSymbol : TypeSymbol {
             membersResolved = true
             return
         }
-        let definition = Definition!!
+        let definition = Definition
         // Issue #3905: substituting this instance's members can, through a
         // mutually-referential generic type, come back round and read one of
         // this instance's member tables. That read must not restart the
@@ -1243,7 +1243,7 @@ class InterfaceSymbol : TypeSymbol {
                 let resolvedClrArgs = [substitutedArgs.Count]Type
                 for var i = 0; i < substitutedArgs.Count; i++ {
                     let clr = if MemberLookup.TryProjectErasedClrType(substitutedArgs[i], out var projected) {
-                        projected!!
+                        projected
                     } else {
                         substitutedArgs[i].ClrType ?? typeof(object)
                     }

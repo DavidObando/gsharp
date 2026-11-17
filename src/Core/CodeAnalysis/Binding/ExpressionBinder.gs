@@ -436,7 +436,7 @@ internal partial class ExpressionBinder {
     }
 
     private func CaptureNarrowingBindSnapshot() StatementBinder.NarrowingBindSnapshot -> if captureNarrowingSnapshot != nil {
-        captureNarrowingSnapshot!!()
+        captureNarrowingSnapshot()
     } else {
         default(StatementBinder.NarrowingBindSnapshot)
     }
@@ -1481,7 +1481,7 @@ internal partial class ExpressionBinder {
         }
         if syntax is LambdaExpressionSyntax {
             if TryBindLambdaExpressionWithTargetType(syntax, targetType, out var targetTypedLambda) {
-                return ConvertTargetTypedValue(syntax, targetTypedLambda!!, targetType)
+                return ConvertTargetTypedValue(syntax, targetTypedLambda, targetType)
             }
             return ConvertTargetTypedValue(syntax, BindExpression(syntax), targetType)
         }
@@ -1944,7 +1944,7 @@ internal partial class ExpressionBinder {
             // conversion classifier decides whether the surrounding context
             // actually accepts it (otherwise a cannot-convert is reported).
             if TryBindMethodGroup(syntax, out var methodGroup) {
-                return methodGroup!!
+                return methodGroup
             }
             // ADR-0156 Phase 2: a bare identifier may name a top-level global
             // (static field) or function (static method group) of a prior
@@ -1962,7 +1962,7 @@ internal partial class ExpressionBinder {
             // OverloadResolver and runs only after the name failed to resolve as
             // a variable or free-function method group.
             if TryBindImportedStaticMember(syntax, out var importedStaticMember) {
-                return importedStaticMember!!
+                return importedStaticMember
             }
             // Issue #1582: a bare identifier inside an instance method of a G#
             // class that derives from a metadata base may name an inherited CLR
@@ -1975,7 +1975,7 @@ internal partial class ExpressionBinder {
                 syntax.IdentifierToken.ValueText,
                 out var inheritedClrMember
             ) {
-                return inheritedClrMember!!
+                return inheritedClrMember
             }
             // Issue #3840: a bare identifier inside a DEFAULT INTERFACE METHOD
             // body may name the enclosing interface's own instance property.
@@ -1984,7 +1984,7 @@ internal partial class ExpressionBinder {
             // `this.`-qualified access behave identically in a DIM exactly as
             // they already do in a class body.
             if TryBindInterfaceInstancePropertyByBareName(syntax, out var interfaceMember) {
-                return interfaceMember!!
+                return interfaceMember
             }
             if binderCtx.InConstructorInitializer && IsConstructorInitializerInstanceMethod(name) {
                 Diagnostics.ReportConstructorInitializerCannotReferenceInstanceMember(
@@ -3171,7 +3171,7 @@ internal partial class ExpressionBinder {
                 typeSymbol.UnderlyingType is ChannelTypeSymbol
         ) &&
             MemberLookup.TryProjectErasedClrType(typeSymbol, out var erasedChannel) {
-            return erasedChannel!!
+            return erasedChannel
         }
         // Issue #4012: the FIXED-LENGTH array `[N]T` is the one G#-native array
         // shape this method never had an arm for. The `[]T` arm above (#2182)
@@ -3298,7 +3298,7 @@ internal partial class ExpressionBinder {
             .TryProjectErasedClrType(typeSymbol, out var erasedTuple) {
             // Issue #3087: imported instance-method applicability still needs
             // the full erased ValueTuple shape when an element is symbolic.
-            return erasedTuple!!
+            return erasedTuple
         }
         // Issue #903: a delegate-typed argument (an untyped/typed arrow lambda,
         // a func literal, or a named delegate value) whose parameter or return
@@ -3317,7 +3317,7 @@ internal partial class ExpressionBinder {
         let functionType FunctionTypeSymbol? = typeSymbol as FunctionTypeSymbol ??
             (typeSymbol as NullableTypeSymbol)?.UnderlyingType as FunctionTypeSymbol
         if functionType != nil && TryBuildErasedDelegateClrType(functionType, out var erasedDelegate) {
-            return erasedDelegate!!
+            return erasedDelegate
         }
         return nil
     }
@@ -3594,7 +3594,7 @@ internal partial class ExpressionBinder {
                             nil,
                             receiver,
                             clrProp,
-                            GetInheritedClrMemberType(receiver!!.Type, clrProp)
+                            GetInheritedClrMemberType(receiver.Type, clrProp)
                         )
                     )
                 )
@@ -3606,7 +3606,7 @@ internal partial class ExpressionBinder {
                         nil,
                         receiver,
                         clrFld,
-                        GetInheritedClrMemberType(receiver!!.Type, clrFld)
+                        GetInheritedClrMemberType(receiver.Type, clrFld)
                     )
                 )
                 return true
@@ -3646,7 +3646,7 @@ internal partial class ExpressionBinder {
         ) {
             return false
         }
-        receiver = BoundVariableExpression(nil, effThis!!)
+        receiver = BoundVariableExpression(nil, effThis)
         return true
     }
 
@@ -3701,7 +3701,7 @@ internal partial class ExpressionBinder {
         ) {
             return false
         }
-        receiver = BoundVariableExpression(nil, effThis!!)
+        receiver = BoundVariableExpression(nil, effThis)
         return true
     }
 
@@ -3736,14 +3736,7 @@ internal partial class ExpressionBinder {
         // `ChannelReader[T]`, not the erased `ChannelReader[object]`. Passing the
         // receiver (the derived class) routes the projection through the nearest
         // imported base; see MemberLookup.GetProjectionReceiverImportedType.
-        if !TryGetWritableClrMember(
-            member,
-            receiver!!.Type,
-            out _,
-            out var targetSymbol,
-            out _,
-            fromDerivedType: true
-        ) {
+        if !TryGetWritableClrMember(member, receiver.Type, out _, out var targetSymbol, out _, fromDerivedType: true) {
             Diagnostics.ReportCannotAssign(assignLocation, name)
             let _ = BindExpression(valueSyntax)
             bound = BoundErrorExpression(nil)
@@ -3754,9 +3747,9 @@ internal partial class ExpressionBinder {
         bound = BoundClrPropertyAssignmentExpression(
             nil,
             receiver,
-            member!!,
+            member,
             converted,
-            targetSymbol!!,
+            targetSymbol,
             staticContainerType: nil
         )
         return true
@@ -4204,7 +4197,7 @@ internal partial class ExpressionBinder {
                 return true
             }
             visited ??= HashSet[TypeParameterSymbol](ReferenceEqualityComparer.Instance)
-            if !visited!!.Add(current) {
+            if !visited.Add(current) {
                 break
             }
             current = current.TypeParameterBound
@@ -4224,7 +4217,7 @@ internal partial class ExpressionBinder {
                 return true
             }
             visited ??= HashSet[TypeParameterSymbol](ReferenceEqualityComparer.Instance)
-            if !visited!!.Add(current) {
+            if !visited.Add(current) {
                 break
             }
             current = current.TypeParameterBound
@@ -4242,7 +4235,7 @@ internal partial class ExpressionBinder {
                 return true
             }
             visited ??= HashSet[TypeParameterSymbol](ReferenceEqualityComparer.Instance)
-            if !visited!!.Add(current) {
+            if !visited.Add(current) {
                 break
             }
             current = current.TypeParameterBound
@@ -4258,7 +4251,7 @@ internal partial class ExpressionBinder {
                 return cls
             }
             visited ??= HashSet[TypeParameterSymbol](ReferenceEqualityComparer.Instance)
-            if !visited!!.Add(current) {
+            if !visited.Add(current) {
                 break
             }
             current = current.TypeParameterBound
@@ -4275,7 +4268,7 @@ internal partial class ExpressionBinder {
                 result.Add(iface)
             }
             visited ??= HashSet[TypeParameterSymbol](ReferenceEqualityComparer.Instance)
-            if !visited!!.Add(current) {
+            if !visited.Add(current) {
                 break
             }
             current = current.TypeParameterBound
@@ -4563,7 +4556,7 @@ internal partial class ExpressionBinder {
                 return true
             }
             if IsNaturalFuncOrActionDelegateShape(from) && IsNaturalFuncOrActionDelegateShape(to) {
-                return CanNaturalFunctionDelegatesOverlapAtRuntime(fromFn!!, toFn!!)
+                return CanNaturalFunctionDelegatesOverlapAtRuntime(fromFn, toFn)
             }
             return false
         }
@@ -5362,7 +5355,7 @@ internal partial class ExpressionBinder {
         var visited HashSet[TypeParameterSymbol]? = nil
         while current is TypeParameterSymbol tp && substitutions.TryGetValue(tp, out var next) {
             visited ??= HashSet[TypeParameterSymbol](ReferenceEqualityComparer.Instance)
-            if !visited!!.Add(tp) {
+            if !visited.Add(tp) {
                 break
             }
             current = PeelReferenceNullableAndPlatform(next)
@@ -6337,7 +6330,7 @@ internal partial class ExpressionBinder {
                     continue
                 }
                 flags ??= [arguments.Count + argumentOffset]bool
-                flags!![i + argumentOffset] = true
+                flags[i + argumentOffset] = true
             }
             return flags
         }
@@ -6948,9 +6941,7 @@ internal partial class ExpressionBinder {
             }
             // ADR-0118 / issue #944: an indexer has the CLR name `Item` but is never
             // reachable by bare name — only through `this[i]`.
-            if (
-                !TypeMemberModel.TryGetProperty(thisInterface, name, out var property, out _) || property!!.IsIndexer
-            ) &&
+            if (!TypeMemberModel.TryGetProperty(thisInterface, name, out var property, out _) || property.IsIndexer) &&
                 MemberLookup.GetInterfaceImportedBaseInstanceProperty(thisInterface, name) == nil {
                 return false
             }

@@ -117,7 +117,7 @@ class Context : IDisposable {
         if source == nil {
             return false
         }
-        let source = source!!
+        let source = source
         try {
             source.Cancel()
             return true

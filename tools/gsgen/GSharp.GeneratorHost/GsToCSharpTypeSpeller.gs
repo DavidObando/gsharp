@@ -312,9 +312,7 @@ class GsToCSharpTypeSpeller {
         // `List[T]`) so the open definition + symbolic args reconstruct the
         // strongly-typed shape rather than the type-erased `<object>` closure.
         if !imported.TypeArguments.IsDefaultOrEmpty && imported.OpenDefinition != nil {
-            let baseName string? = StripGenericArity(
-                imported.OpenDefinition!!.FullName ?? imported.OpenDefinition!!.Name
-            )
+            let baseName string? = StripGenericArity(imported.OpenDefinition.FullName ?? imported.OpenDefinition!!.Name)
             let args = string.Join(
                 ", ",
                 imported.TypeArguments.Select(
@@ -439,7 +437,7 @@ class GsToCSharpTypeSpeller {
                 metadataName = metadataName.Substring(0, tick)
             }
             // Nested CLR types use `+`; C# spells them with `.`.
-            return metadataName!!.Replace('+', '.')
+            return metadataName.Replace('+', '.')
         }
     }
 }

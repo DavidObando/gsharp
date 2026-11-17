@@ -616,14 +616,14 @@ stderr:
             var facts = 0
             for file in context.EmittedFiles {
                 if file.IsFromReferencedProject || string.IsNullOrEmpty(file.CsFilePath) || !counted.Add(
-                    file.CsFilePath!!
+                    file.CsFilePath
                 ) ||
                     (file.GeneratedSource == nil && !File.Exists(file.CsFilePath)) {
                     continue
                 }
                 var source string
                 try {
-                    source = file.GeneratedSource?.Text ?? File.ReadAllText(file.CsFilePath!!)
+                    source = file.GeneratedSource?.Text ?? File.ReadAllText(file.CsFilePath)
                 } catch (IOException) {
                     // The bound is best-effort evidence, never a reason to crash the
                     // stage: an unreadable input simply contributes nothing.

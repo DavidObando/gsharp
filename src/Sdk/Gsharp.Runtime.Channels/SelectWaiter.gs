@@ -645,8 +645,8 @@ class SelectWaiter : IValueTaskSource[int32] {
             var waiter SelectWaiter? = cache
             cache = nil
             waiter ??= SelectWaiter()
-            waiter!!.Begin(cancellationToken)
-            return waiter!!
+            waiter.Begin(cancellationToken)
+            return waiter
         }
     }
 }
