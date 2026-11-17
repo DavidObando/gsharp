@@ -421,24 +421,24 @@ internal shared class ClrOverloadResolution {
         if ClrTypeUtilities.AreSame(target, source) {
             return ImplicitConversionKind.Identity
         }
-        if target!!.IsPointer && source.IsPointer && string.Equals(
-            target!!.GetElementType()?.FullName,
+        if target.IsPointer && source.IsPointer && string.Equals(
+            target.GetElementType()?.FullName,
             "System.Void",
             StringComparison.Ordinal
         ) {
             return ImplicitConversionKind.Reference
         }
-        if IsNumericWidening(source, target!!) {
+        if IsNumericWidening(source, target) {
             return ImplicitConversionKind.NumericWidening
         }
-        if string.Equals(target!!.FullName, "System.Object", StringComparison.Ordinal) {
+        if string.Equals(target.FullName, "System.Object", StringComparison.Ordinal) {
             return if source.IsValueType {
                 ImplicitConversionKind.Boxing
             } else {
                 ImplicitConversionKind.Reference
             }
         }
-        if IsNullableWrap(source, target!!) {
+        if IsNullableWrap(source, target) {
             return ImplicitConversionKind.NullableWrap
         }
         // Issue #322: any delegate type (Func<...>/Action<...> or a named
@@ -449,8 +449,8 @@ internal shared class ClrOverloadResolution {
         // while the target Delegate parameter (e.g. ASP.NET Core MapGet) is
         // loaded through a MetadataLoadContext, so the comparison is by name.
         if (
-            string.Equals(target!!.FullName, "System.Delegate", StringComparison.Ordinal) || string.Equals(
-                target!!.FullName,
+            string.Equals(target.FullName, "System.Delegate", StringComparison.Ordinal) || string.Equals(
+                target.FullName,
                 "System.MulticastDelegate",
                 StringComparison.Ordinal
             )
@@ -468,7 +468,7 @@ internal shared class ClrOverloadResolution {
         // literal's natural delegate type is a host-runtime Func<> closed over
         // MetadataLoadContext type arguments, on which those reflection probes
         // throw. Ranked last so an exact (identity) delegate match always wins.
-        if IsDelegateReturnCovariant(target!!, source) {
+        if IsDelegateReturnCovariant(target, source) {
             return ImplicitConversionKind.DelegateReturnCovariance
         }
         // Issue #1150: delegate return-type numeric widening. A delegate value
@@ -479,26 +479,26 @@ internal shared class ClrOverloadResolution {
         // delegate return type. Checked here — alongside the reference
         // covariance case — before the assignability / base-type-walk blocks
         // below. Ranked last so an exact (identity) delegate match always wins.
-        if IsDelegateReturnNumericWidening(target!!, source) {
+        if IsDelegateReturnNumericWidening(target, source) {
             return ImplicitConversionKind.DelegateReturnNumericWidening
         }
-        if object.ReferenceEquals(target!!.Assembly, source.Assembly) || target!!.GetType() == source.GetType() {
+        if object.ReferenceEquals(target.Assembly, source.Assembly) || target.GetType() == source.GetType() {
             try {
-                if target!!.IsAssignableFrom(source) {
+                if target.IsAssignableFrom(source) {
                     // Issue #2516: CLR array assignability is broader than G#.
                     // Distinct arrays remain invariant. Generic array
                     // interfaces accept a distinct element only through their
                     // own declared `out` variance and an implicit reference
                     // conversion; IList/ICollection therefore stay exact-only.
-                    if source.IsArray && target!!.IsArray {
+                    if source.IsArray && target.IsArray {
                         // Distinct array identity was ruled out above.
 
                     } else if source.IsArray &&
-                        target!!.IsInterface &&
-                        target!!.IsGenericType &&
+                        target.IsInterface &&
+                        target.IsGenericType &&
                         !ClrTypeUtilities
                         .ImplementsInterfaceByName(source, target) {
-                        if IsSafeArrayInterfaceVariance(target!!, source) {
+                        if IsSafeArrayInterfaceVariance(target, source) {
                             return ImplicitConversionKind.Reference
                         }
                     } else {
@@ -513,9 +513,9 @@ internal shared class ClrOverloadResolution {
         // Issue #570/#610: cross-context reference upcast fallback. When the
         // same-context fast path above cannot fire (live-runtime ↔ MLC boundary),
         // walk the source's interface set and base-type chain by name.
-        if target!!.IsInterface &&
+        if target.IsInterface &&
             (
-            ClrTypeUtilities.ImplementsInterfaceByName(source, target) || IsSafeArrayInterfaceVariance(target!!, source)
+            ClrTypeUtilities.ImplementsInterfaceByName(source, target) || IsSafeArrayInterfaceVariance(target, source)
         ) {
             return ImplicitConversionKind.Reference
         }
@@ -528,13 +528,13 @@ internal shared class ClrOverloadResolution {
         // `IEqualityComparer<IMethodSymbol>` slot) fell through and failed
         // GS0267 even though C#/the CLR accept it. Mirrors
         // `IsSafeArrayInterfaceVariance` for the general interface case.
-        if target!!.IsInterface && IsVariantGenericInterfaceConversion(target!!, source) {
+        if target.IsInterface && IsVariantGenericInterfaceConversion(target, source) {
             return ImplicitConversionKind.Reference
         }
         // Cross-context base-class walk (#610): covers inheritance across
         // reflection contexts (e.g. an MLC-loaded subclass passed to a
         // parameter typed as its live-runtime base class or vice versa).
-        if !source.IsValueType && !target!!.IsValueType && !target!!.IsInterface {
+        if !source.IsValueType && !target.IsValueType && !target.IsInterface {
             for var baseType Type? = source.BaseType; baseType != nil; baseType = baseType!!.BaseType {
                 if ClrTypeUtilities.AreSame(baseType, target) {
                     return ImplicitConversionKind.Reference
@@ -546,11 +546,11 @@ internal shared class ClrOverloadResolution {
         // whose CLR type is a surrogate (e.g. System.Object), the built-in checks
         // above won't recognise that the user class implements the target interface.
         // This callback lets the binder inject that knowledge.
-        if supplementaryInterfaceCheck != nil && target!!.IsInterface && supplementaryInterfaceCheck(source, target!!) {
+        if supplementaryInterfaceCheck != nil && target.IsInterface && supplementaryInterfaceCheck(source, target) {
             return ImplicitConversionKind.Reference
         }
         let udi Func[Type, Type, bool]? = UserDefinedImplicitConversionLookup
-        if udi != nil && udi(source, target!!) {
+        if udi != nil && udi(source, target) {
             return ImplicitConversionKind.UserDefinedImplicit
         }
         // Issue #889: a value-returning func/arrow literal (whose natural CLR
@@ -560,7 +560,7 @@ internal shared class ClrOverloadResolution {
         // Func<...> overload always wins when both are applicable. The binder's
         // void-izing rebind (RebindFunctionLiteralDelegateArguments) materializes
         // the actual discard for the selected literal argument.
-        if IsValueReturningDelegateToVoidDelegate(target!!, source) {
+        if IsValueReturningDelegateToVoidDelegate(target, source) {
             return ImplicitConversionKind.LambdaToVoidDelegate
         }
         // Issue #932: a func/arrow literal whose natural delegate type is a
@@ -572,7 +572,7 @@ internal shared class ClrOverloadResolution {
         // last because the covariance / void-discard cases above already cover
         // the differing-return-type shapes; this only handles the exact-shape
         // delegate-kind mismatch.
-        if IsStructurallyCompatibleDelegate(target!!, source) {
+        if IsStructurallyCompatibleDelegate(target, source) {
             return ImplicitConversionKind.DelegateStructuralMatch
         }
         // Issue #2142: a lambda/arrow literal (natural CLR type Func<…>/Action<…>)
@@ -725,10 +725,9 @@ internal shared class ClrOverloadResolution {
     /// type-parameter slot from a genuine (cref:object) parameter after
     /// both have erased to (cref:object) for reflection.
     /// @param symbolicArgumentConversionClassifier Issue #4054: optional binder callback that preserves a
-    /// same-compilation
-    /// argument's symbolic identity long enough to classify a user-defined
-    /// implicit conversion to the candidate parameter. Imported arguments keep
-    /// using the CLR classifier unchanged.
+    /// same-compilation argument's symbolic identity when CLR erasure loses or invents a conversion.
+    /// Null defers to CLR classification; None authoritatively rejects the candidate,
+    /// including CLR identity matches and contextual fallback paths.
     /// @param trailingParameterCountToIgnore Optional per-candidate count of trailing ABI-only parameters
     /// excluded
     /// from applicability and ranking.
@@ -4562,7 +4561,7 @@ internal shared class ClrOverloadResolution {
                     return true
                 }
                 default {
-                    return current!!.ClrType is {IsClass: true, IsValueType: false}
+                    return current.ClrType is {IsClass: true, IsValueType: false}
                 }
             }
         }
@@ -4763,11 +4762,7 @@ internal shared class ClrOverloadResolution {
         }
         let signature = methodGroupInference(argumentIndex, closedInputs) ??
             methodGroupInference(argumentIndex, delegateParameters)
-        if !(signature != nil) ||
-            signature!!
-            .Parameters
-            .Length != delegateParameters.Length ||
-            signature!!.Return == nil {
+        if !(signature != nil) || signature.Parameters.Length != delegateParameters.Length || signature.Return == nil {
             return false
         }
         // Issue #1531: void supplies no output bound for a value-returning
@@ -4823,11 +4818,7 @@ internal shared class ClrOverloadResolution {
         // Issue #3766: preserve single-candidate input inference only for
         // delegate inputs that could not be fixed from other arguments.
         let signature = methodGroupInference(argumentIndex, delegateParameters)
-        if !(signature != nil) ||
-            signature!!
-            .Parameters
-            .Length != delegateParameters.Length ||
-            signature!!.Return == nil {
+        if !(signature != nil) || signature.Parameters.Length != delegateParameters.Length || signature.Return == nil {
             return false
         }
         let inferred = Dictionary[string, Type](bounds, StringComparer.Ordinal)
@@ -5199,10 +5190,10 @@ internal shared class ClrOverloadResolution {
             return false
         }
         // Target must return void; source must return a value.
-        if !string.Equals(targetReturn!!.FullName, "System.Void", StringComparison.Ordinal) {
+        if !string.Equals(targetReturn.FullName, "System.Void", StringComparison.Ordinal) {
             return false
         }
-        if string.Equals(sourceReturn!!.FullName, "System.Void", StringComparison.Ordinal) {
+        if string.Equals(sourceReturn.FullName, "System.Void", StringComparison.Ordinal) {
             return false
         }
         if targetParams.Length != sourceParams.Length {
@@ -5644,7 +5635,7 @@ internal shared class ClrOverloadResolution {
                     // exactly the question this check asked before #4016, and
                     // leaves the projected vector to do its own job in
                     // `closed`'s parameter types.
-                    let constraintTypeArgSymbols = recoverTypeArgSymbols?(closed!!, false) ??
+                    let constraintTypeArgSymbols = recoverTypeArgSymbols?(closed, false) ??
                         default(ImmutableArray[TypeSymbol?])
                     resolvedTypeArgSymbols = constraintTypeArgSymbols
                     if HasSymbolicInferenceConflict(resolvedTypeArgSymbols) {
@@ -5657,7 +5648,7 @@ internal shared class ClrOverloadResolution {
                     ) {
                         return
                     }
-                    candidate = cast[T](cast[MethodBase](closed!!))
+                    candidate = cast[T](cast[MethodBase](closed))
                 } else {
                     return
                 }
@@ -5695,7 +5686,7 @@ internal shared class ClrOverloadResolution {
                     for var i = 0; i < inferenceArgTypes.Count; i++ {
                         if inferenceArgTypes[i] != nil && methodGroupArgumentCheck(i) {
                             groupCleared ??= inferenceArgTypes.ToArray()
-                            groupCleared!![i] = nil
+                            groupCleared[i] = nil
                         }
                     }
                     if groupCleared != nil {
@@ -5721,8 +5712,8 @@ internal shared class ClrOverloadResolution {
                         out var sourceToParameter
                     ) {
                         let parameterToSource = Enumerable.Repeat(-1, mi.GetParameters().Length).ToArray()
-                        for var sourceIndex = 0; sourceIndex < sourceToParameter!!.Length; sourceIndex++ {
-                            parameterToSource[sourceToParameter!![sourceIndex]] = sourceIndex
+                        for var sourceIndex = 0; sourceIndex < sourceToParameter.Length; sourceIndex++ {
+                            parameterToSource[sourceToParameter[sourceIndex]] = sourceIndex
                         }
                         let MapNamedMethodGroup = func (parameterIndex int32, delegateParameters IReadOnlyList[Type])(
                             Parameters[]Type,
@@ -5817,14 +5808,14 @@ internal shared class ClrOverloadResolution {
                 // bound with T = Nullable<int> survives applicability and the
                 // resolver picks the wrong overload, emitting IL that fails
                 // verification at runtime.
-                resolvedTypeArgSymbols = recoverTypeArgSymbols?(closed!!, false) ?? default(ImmutableArray[TypeSymbol?])
+                resolvedTypeArgSymbols = recoverTypeArgSymbols?(closed, false) ?? default(ImmutableArray[TypeSymbol?])
                 if HasSymbolicInferenceConflict(resolvedTypeArgSymbols) {
                     return
                 }
                 if !SatisfiesGenericConstraints(mi, typeArgs, resolvedTypeArgSymbols) {
                     return
                 }
-                candidate = cast[T](cast[MethodBase](closed!!))
+                candidate = cast[T](cast[MethodBase](closed))
             }
             // Closing a generic method changes its parameter types, not the raw declaration.
             var parameters = if object.ReferenceEquals(candidate, rawCandidate) {
@@ -5877,7 +5868,7 @@ internal shared class ClrOverloadResolution {
                         !IsMethodGroupSignatureCompatible(
                         methodGroupInference(i, delegateParameters),
                         delegateParameters,
-                        delegateReturn!!
+                        delegateReturn
                     ) {
                         ok = false
                         break
@@ -5910,19 +5901,16 @@ internal shared class ClrOverloadResolution {
                     isExpanded: false,
                     resolvedTypeArgSymbols: resolvedTypeArgSymbols
                 )
-                if (
-                    paramTypes[i].IsByRef ||
-                        !(
-                        conv == ImplicitConversionKind.Identity &&
-                            IsErasedGenericParameterSlot(rawCandidate, paramIndex, explicitTypeArgIsGenuine)
-                    )
-                ) &&
-                    symbolicArgumentConversionClassifier?(
+                if symbolicArgumentConversionClassifier?(
                     i,
                     paramTypes[i],
                     parameters[paramIndex],
                     resolvedTypeArgSymbols
                 ) is {} symbolicConversion {
+                    if symbolicConversion == ImplicitConversionKind.None {
+                        ok = false
+                        break
+                    }
                     if symbolicConversion == ImplicitConversionKind.DelegateRefKindMismatch {
                         if conv != ImplicitConversionKind.Identity {
                             ok = false
@@ -6172,11 +6160,7 @@ internal shared class ClrOverloadResolution {
         delegateParameters IReadOnlyList[Type],
         delegateReturn Type
     ) bool {
-        if !(signature != nil) ||
-            signature!!
-            .Parameters
-            .Length != delegateParameters.Count ||
-            signature!!.Return == nil {
+        if !(signature != nil) || signature.Parameters.Length != delegateParameters.Count || signature.Return == nil {
             return false
         }
         for var i = 0; i < delegateParameters.Count; i++ {
@@ -6267,7 +6251,7 @@ internal shared class ClrOverloadResolution {
                     }
                 }
                 resolvedTypeArgSymbols = if recoveredSymbols.IsDefault {
-                    recoverTypeArgSymbols?(closed!!, true) ?? default(ImmutableArray[TypeSymbol?])
+                    recoverTypeArgSymbols?(closed, true) ?? default(ImmutableArray[TypeSymbol?])
                 } else {
                     recoveredSymbols
                 }
@@ -6277,7 +6261,7 @@ internal shared class ClrOverloadResolution {
                 if !SatisfiesGenericConstraints(gmi, explicitTypeArgs.ToArray(), resolvedTypeArgSymbols) {
                     return
                 }
-                candidate = cast[T](cast[MethodBase](closed!!))
+                candidate = cast[T](cast[MethodBase](closed))
             } else {
                 return
             }
@@ -6341,7 +6325,7 @@ internal shared class ClrOverloadResolution {
                 }
             }
             resolvedTypeArgSymbols = if recoveredSymbols.IsDefault {
-                recoverTypeArgSymbols?(closed!!, true) ?? default(ImmutableArray[TypeSymbol?])
+                recoverTypeArgSymbols?(closed, true) ?? default(ImmutableArray[TypeSymbol?])
             } else {
                 recoveredSymbols
             }
@@ -6351,7 +6335,7 @@ internal shared class ClrOverloadResolution {
             if !SatisfiesGenericConstraints(mi, typeArgs, resolvedTypeArgSymbols) {
                 return
             }
-            candidate = cast[T](cast[MethodBase](closed!!))
+            candidate = cast[T](cast[MethodBase](closed))
         }
         var parameters = candidate.GetParameters()
         let ignoredTrailingParameters = Math.Clamp(
@@ -6417,7 +6401,7 @@ internal shared class ClrOverloadResolution {
                     !IsMethodGroupSignatureCompatible(
                     methodGroupInference(i, delegateParameters),
                     delegateParameters,
-                    delegateReturn!!
+                    delegateReturn
                 ) {
                     return
                 }
@@ -6460,19 +6444,15 @@ internal shared class ClrOverloadResolution {
                 isExpanded: true,
                 resolvedTypeArgSymbols: resolvedTypeArgSymbols
             )
-            if (
-                target.IsByRef ||
-                    !(
-                    conv == ImplicitConversionKind.Identity &&
-                        IsErasedGenericParameterSlot(rawCandidate, slot, explicitTypeArgIsGenuine)
-                )
-            ) &&
-                symbolicArgumentConversionClassifier?(
+            if symbolicArgumentConversionClassifier?(
                 i,
                 target,
                 parameters[slot],
                 resolvedTypeArgSymbols
             ) is {} symbolicConversion {
+                if symbolicConversion == ImplicitConversionKind.None {
+                    return
+                }
                 if symbolicConversion == ImplicitConversionKind.DelegateRefKindMismatch {
                     if conv != ImplicitConversionKind.Identity {
                         return
@@ -6687,7 +6667,7 @@ internal shared class ClrOverloadResolution {
             mapping = nil
             return false
         }
-        let mapped = localMapping!!
+        let mapped = localMapping
         if offset > 0 {
             for var i = 0; i < mapped.Length; i++ {
                 mapped[i] += offset
@@ -8877,7 +8857,7 @@ internal shared class ClrOverloadResolution {
                 continue
             }
             normalised ??= cast[[]Type](typeArgs.Clone())
-            normalised!![i] = contextObject
+            normalised[i] = contextObject
         }
         return normalised ?? typeArgs
     }

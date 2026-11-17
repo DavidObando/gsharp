@@ -476,8 +476,8 @@ partial class SemanticModel {
         out owner TypeSymbol?
     ) bool {
         if TypeMemberModel.TryGetPropertyWithOwner(contract, name, out var found, out var foundOwner) &&
-            found!!.IsStatic &&
-            found!!.HasGetter {
+            found.IsStatic &&
+            found.HasGetter {
             property = found
             owner = foundOwner
             return true

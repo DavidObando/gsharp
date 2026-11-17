@@ -78,7 +78,7 @@ shared class NullableLifting {
         }
         try {
             let mappedUnderlying = if references.TryMapClrTypeToReferences(underlying, out var projectedUnderlying) {
-                projectedUnderlying!!
+                projectedUnderlying
             } else {
                 underlying
             }
@@ -106,7 +106,7 @@ shared class NullableLifting {
         if typeSymbol is NullableTypeSymbol nullable {
             let innerVt = nullable.UnderlyingType?.ClrType
             if innerVt?.IsValueType == true && TryConstructNullable(references, innerVt, out var nullableClr) {
-                return nullableClr!!
+                return nullableClr
             }
         }
         let clr Type? = typeSymbol?.ClrType

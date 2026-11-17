@@ -191,7 +191,7 @@ open class GsharpTestProjectRunner {
             let configs = if string.IsNullOrEmpty(config) {
                 []string{"Release", "Debug"}
             } else {
-                []string{config!!, "Release", "Debug"}
+                []string{config, "Release", "Debug"}
             }
             for root in CandidatePackageRoots(repoRoot) {
                 for cfg in configs.Distinct(StringComparer.Ordinal) {
@@ -277,11 +277,11 @@ open class GsharpTestProjectRunner {
             let canonicalRepoRoot string? = CanonicalRootPath.Resolve(Path.GetFullPath(repoRoot))
             let assemblyRoot string? = FindAssemblyRepoRoot()
             if !string.IsNullOrEmpty(assemblyRoot) && !string.Equals(
-                CanonicalRootPath.Resolve(Path.GetFullPath(assemblyRoot!!)),
+                CanonicalRootPath.Resolve(Path.GetFullPath(assemblyRoot)),
                 canonicalRepoRoot,
                 StringComparison.Ordinal
             ) {
-                yield assemblyRoot!!
+                yield assemblyRoot
             }
         }
 
@@ -360,15 +360,15 @@ open class GsharpTestProjectRunner {
                     CompareVersions(version, best.Version)
                 }
                 if best == nil ||
-                    writtenUtc > best!!.WrittenUtc ||
+                    writtenUtc > best.WrittenUtc ||
                     (
-                    writtenUtc == best!!.WrittenUtc &&
+                    writtenUtc == best.WrittenUtc &&
                         (
                         versionComparison > 0 ||
                             (
                             versionComparison == 0 && string.CompareOrdinal(
                                 Path.GetFileName(file),
-                                Path.GetFileName(best!!.Path)
+                                Path.GetFileName(best.Path)
                             ) > 0
                         )
                     )

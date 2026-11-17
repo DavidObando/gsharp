@@ -295,7 +295,7 @@ class CSharpTestOracle {
                 for pair in oracle.TestsByFramework!! {
                     let normalizedFramework = NormalizeTargetFramework(pair.Key)
                     if string.IsNullOrWhiteSpace(normalizedFramework) || !seenNormalizedFrameworks.Add(
-                        normalizedFramework!!
+                        normalizedFramework
                     ) {
                         throw InvalidOperationException(
                             path +

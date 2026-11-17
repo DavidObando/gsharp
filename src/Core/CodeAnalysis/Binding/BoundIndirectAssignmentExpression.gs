@@ -21,7 +21,7 @@ class BoundIndirectAssignmentExpression : BoundExpression {
         Pointer = pointer
         Value = value
         _type = if TypeSymbol.TryGetPointeeType(pointer.Type, out var pointee) {
-            pointee!!
+            pointee
         } else {
             TypeSymbol.Error
         }

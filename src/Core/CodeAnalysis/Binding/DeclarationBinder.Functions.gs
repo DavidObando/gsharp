@@ -2029,14 +2029,14 @@ internal partial class DeclarationBinder {
                 if TypeSignaturesEquivalent(candidateIface, boundType) {
                     return candidateIface
                 }
-                if ClrTypeImplementsInterface(candidateIface, boundType!!) {
-                    return boundType!!
+                if ClrTypeImplementsInterface(candidateIface, boundType) {
+                    return boundType
                 }
             }
             Diagnostics.ReportExplicitInterfaceClauseNotImplemented(
                 clauseTypeSyntax.Location,
                 structSymbol.Name,
-                boundType!!.Name,
+                boundType.Name,
                 memberName
             )
             return nil
@@ -2506,7 +2506,7 @@ internal partial class DeclarationBinder {
                         arg = Binder.SubstituteType(arg, subst)
                     }
                     subst ??= Dictionary[TypeParameterSymbol, TypeSymbol]()
-                    subst!![defParams[i]] = arg
+                    subst[defParams[i]] = arg
                 }
             }
             return subst
@@ -2617,7 +2617,7 @@ internal partial class DeclarationBinder {
                 out var awaited,
                 out isValueTask
             ) {
-                awaited!!
+                awaited
             } else {
                 declaredType
             }

@@ -221,7 +221,7 @@ class SdkCompileRunner {
         let localSdk = GsharpTestProjectRunner.ResolveLocalSdkPackage(repoRoot, config) ??
             ResolveFallbackSdkPackageFromLocalFeed(repoRoot)
         var sdkVersion string? = nil
-        if localSdk != nil && localSdk!!.NupkgPath != nil {
+        if localSdk != nil && localSdk.NupkgPath != nil {
             GsharpTestProjectRunner.EnsureInLocalFeed(repoRoot, localSdk.NupkgPath)
             sdkVersion = localSdk.Version
         } else if repoRoot == nil {
@@ -693,7 +693,7 @@ class SdkCompileRunner {
                 sb.Append("    <Compile Include=\"").Append(gsFile).Append("\" />\n")
             }
             sb.Append("  </ItemGroup>\n")
-            if packages.Count > 0 || declaredPackageReferences!!.Count > 0 {
+            if packages.Count > 0 || declaredPackageReferences.Count > 0 {
                 sb.Append('\n')
                 sb.Append("  <ItemGroup>\n")
                 for (id, version) in packages {
@@ -713,7 +713,7 @@ class SdkCompileRunner {
                 // Central Package Management the version comes exclusively from
                 // the copied Directory.Packages.props's PackageVersion item — a
                 // Version= attribute here as well is rejected by NuGet (NU1008).
-                for declared in declaredPackageReferences!! {
+                for declared in declaredPackageReferences {
                     sb.Append("    <PackageReference Include=\"").Append(declared.Id).Append('"')
                     if !usesCentralPackageManagement {
                         sb.Append(" Version=\"").Append(declared.Version).Append('"')
@@ -746,10 +746,10 @@ class SdkCompileRunner {
                 }
                 sb.Append("  </ItemGroup>\n")
             }
-            if additionalFiles!!.Count > 0 {
+            if additionalFiles.Count > 0 {
                 sb.Append('\n')
                 sb.Append("  <ItemGroup>\n")
-                for spec in additionalFiles!! {
+                for spec in additionalFiles {
                     let segments = spec.Split(';', StringSplitOptions.RemoveEmptyEntries)
                     let path = segments[0]
                     let isAvaloniaXaml = segments.Skip(1).Any(
@@ -1099,7 +1099,7 @@ class SdkCompileRunner {
             var relative string? = if string.IsNullOrEmpty(mirrorRoot) {
                 Path.GetFileName(projectDirectory)
             } else {
-                Path.GetRelativePath(mirrorRoot!!, projectDirectory)
+                Path.GetRelativePath(mirrorRoot, projectDirectory)
             }
             relative = (relative ?? string.Empty).Replace('\\', '/').Trim('/')
             return if relative.Length == 0 || relative == "." {
@@ -1253,7 +1253,7 @@ class SdkCompileRunner {
             return if string.IsNullOrEmpty(parent) {
                 full
             } else {
-                parent!!
+                parent
             }
         }
 
@@ -1556,7 +1556,7 @@ class SdkCompileRunner {
             }
             let package_ = GsharpTestProjectRunner.ResolveLocalPackage(repoRoot, packageId, config) ??
                 ResolveFallbackPackageFromLocalFeed(repoRoot, packageId)
-            if package_ == nil || package_!!.NupkgPath == nil {
+            if package_ == nil || package_.NupkgPath == nil {
                 return if repoRoot == nil {
                     ResolveExternalPackageVersion(packageId)
                 } else {

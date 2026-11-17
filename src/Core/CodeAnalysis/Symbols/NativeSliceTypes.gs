@@ -48,7 +48,7 @@ internal shared class NativeSliceTypes {
             arguments[0]
         } else {
             TypeSymbol.FromClrTypeWithoutNullability(
-                clrType!!.GetGenericArguments()[0],
+                clrType.GetGenericArguments()[0],
                 NullabilityFreeReason.TypeStructure
             )
         }
@@ -70,13 +70,14 @@ internal shared class NativeSliceTypes {
             } else {
                 "Gsharp.Values.Slice`1"
             },
-            out type
+            out var resolved
         ) &&
-            IsDefinition(type, out _) &&
-            type!!
+            IsDefinition(resolved, out _) &&
+            resolved
             .GetMethods().Any((m MethodInfo) -> m.Name == "Subslice" && m.GetParameters().Length == 4) &&
-            type!!
+            resolved
             .GetMethods().Any((m MethodInfo) -> m.Name == "FromArray" && m.GetParameters().Length == 1) {
+            type = resolved
             return true
         }
         type = nil
@@ -101,8 +102,9 @@ internal shared class NativeSliceTypes {
             TryGetElement(source, out var from, out _) &&
             TryGetElement(target, out var to, out _) &&
             (
-            !Conversion.ClassifyNonStructural(from!!, to!!).IsIdentity || !NullableFlagsBuilder.Build(from!!)
-                .SequenceEqual(NullableFlagsBuilder.Build(to!!))
+            !Conversion.ClassifyNonStructural(from, to).IsIdentity || !NullableFlagsBuilder.Build(from).SequenceEqual(
+                NullableFlagsBuilder.Build(to)
+            )
         )
     }
 }

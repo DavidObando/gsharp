@@ -111,7 +111,7 @@ func Main() { }`
     @Theory
     @InlineData("s.Use(\"ab\")")
     @InlineData("s.Create(\"ab\").Run()")
-    func ApplicableInstanceMethodBesideAnImportedExtension_KeepsAByReferenceFact(call string) {
+    func ApplicableImportedInstanceMethod_InvalidatesUnmodeledReferenceEffects(call string) {
         let source = `package T
 import System
 import ExtLib
@@ -133,7 +133,7 @@ func Main() { }`
             .Where((diagnostic GsDiagnostic) -> diagnostic.IsError)
             .Select((d GsDiagnostic) -> "${d.Id}@${d.Location.StartLine + 1}:${d.Location.StartCharacter + 1}")
             .ToArray()
-        Assert.Equal("", string.Join(" ", errors))
+        Assert.Equal("GS0158@7:16", string.Join(" ", errors))
     }
 
     @Fact
@@ -224,7 +224,7 @@ public class S {
 
     @Theory
     @InlineData("s.Use(1, tok)", "GS0158@7:16")
-    @InlineData("s.TakeByte(1)", "")
+    @InlineData("s.TakeByte(1)", "GS0158@7:16")
     func ImportedConstantNarrowingOverload_MatchesNormalBinding(call string, expected string) {
         let source = `package T
 import System

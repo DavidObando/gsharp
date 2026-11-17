@@ -5,8 +5,7 @@ import GSharp.Core.CodeAnalysis.Syntax
 import System.Reflection
 
 internal partial class ExpressionBinder {
-    // Record only the actual direct member selected by normal binding. A type
-    // qualifier is not an expression receiver and must not be rebound by tools.
+    // Keep the resolved type qualifier when member selection fails, so tools can complete an unfinished access.
     private func RecordStaticTypeQualifier(result BoundExpression, owner TypeSymbol, member ExpressionSyntax) {
         if member is not(NameExpressionSyntax or CallExpressionSyntax) {
             return
@@ -30,7 +29,7 @@ internal partial class ExpressionBinder {
             }
             default: false
         }
-        if isStatic {
+        if isStatic || read is BoundErrorExpression {
             read.RecordStaticQualifier(owner, member)
         }
     }

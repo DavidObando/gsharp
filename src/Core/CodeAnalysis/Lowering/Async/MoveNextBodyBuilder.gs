@@ -30,7 +30,7 @@ shared class MoveNextBodyBuilder {
             throw ArgumentNullException("loweredBody")
         }
         awaitResumeStates ??= ImmutableDictionary[BoundAwaitExpression, int32].Empty
-        let resumePoints = awaitResumeStates!!
+        let resumePoints = awaitResumeStates
             .OrderBy((pair KeyValuePair[BoundAwaitExpression, int32]) -> pair.Value)
             .Select(
             (pair KeyValuePair[BoundAwaitExpression, int32]) -> AwaitResumePoint(

@@ -117,7 +117,7 @@ internal class CustomAttributeEncoder {
             .emitCtx
             .References
             .TryResolveType(typeName, requireExternalVisibility: false, out var resolved) {
-            resolved!!
+            resolved
         } else {
             fallbackType
         }
@@ -161,7 +161,7 @@ internal class CustomAttributeEncoder {
             .emitCtx
             .References
             .TryResolveType(typeName, requireExternalVisibility: false, out var resolved) {
-            resolved!!
+            resolved
         } else {
             fallbackType
         }
@@ -662,7 +662,7 @@ internal class CustomAttributeEncoder {
             resolved = clrType
         }
         let ctor ConstructorInfo? = ResolveAttributeConstructor(
-            resolved!!,
+            resolved,
             attr,
             out var effective,
             out var memberArguments
@@ -690,7 +690,7 @@ internal class CustomAttributeEncoder {
                 }
             }
         )
-        let attrTypeRef = this.getTypeReference(resolved!!)
+        let attrTypeRef = this.getTypeReference(resolved)
         let ctorRef = this
             .emitCtx
             .MetadataRows
@@ -710,7 +710,7 @@ internal class CustomAttributeEncoder {
         }
         valueBlob.WriteUInt16(uint16(memberArguments.Length))
         for arg in memberArguments {
-            WriteCustomAttributeNamedArg(valueBlob, resolved!!, arg)
+            WriteCustomAttributeNamedArg(valueBlob, resolved, arg)
         }
         this
             .emitCtx
@@ -1028,7 +1028,7 @@ internal class CustomAttributeEncoder {
                 // A boxed enum's tag names the enum, not its integer payload.
                 bb.WriteByte(0x55)
                 bb.WriteSerializedString(this.GetSerializedTypeName(unwrappedArgumentType))
-                this.WriteCustomAttributeFixedArg(bb, enumType!!, argument.Value)
+                this.WriteCustomAttributeFixedArg(bb, enumType, argument.Value)
                 return
             }
             let arrayElement TypeSymbol? = GetOneDimensionalArrayElementType(argument.Type)
@@ -1040,19 +1040,19 @@ internal class CustomAttributeEncoder {
                 bb.WriteByte(0x1D)
                 bb.WriteByte(0x55)
                 bb.WriteSerializedString(this.GetSerializedTypeName(arrayElement!!))
-                this.WriteCustomAttributeArrayArg(bb, elementWriteType!!, argument.Value)
+                this.WriteCustomAttributeArrayArg(bb, elementWriteType, argument.Value)
                 return
             }
             if paramType.IsSameAs(typeof(object)) &&
                 arrayElement != nil &&
                 TryGetAttributeParameterWriteType(argument.Type, out var arrayWriteType) &&
-                arrayWriteType!!.IsArray &&
-                arrayWriteType!!.GetArrayRank() == 1 {
+                arrayWriteType.IsArray &&
+                arrayWriteType.GetArrayRank() == 1 {
                 // A widened runtime container still carries the source array
                 // type in the wrapper (for example Type[] stored as object[]
                 // because it contains a same-compilation TypeSymbol).
-                WriteCustomAttributeFieldOrPropertyType(bb, arrayWriteType!!)
-                this.WriteCustomAttributeFixedArg(bb, arrayWriteType!!, argument.Value)
+                WriteCustomAttributeFieldOrPropertyType(bb, arrayWriteType)
+                this.WriteCustomAttributeFixedArg(bb, arrayWriteType, argument.Value)
                 return
             }
             if paramType.IsSameAs(typeof(object)) &&
@@ -2229,7 +2229,7 @@ internal class CustomAttributeEncoder {
                         isProperty = true
                         memberType = MemberLookup.GetClrPropertyTypeSymbol(importedBaseType, clrProperty)
                     } else {
-                        let clrField = cast[FieldInfo](clrMember!!)
+                        let clrField = cast[FieldInfo](clrMember)
                         isProperty = false
                         memberType = MemberLookup.GetClrFieldTypeSymbol(importedBaseType, clrField)
                     }

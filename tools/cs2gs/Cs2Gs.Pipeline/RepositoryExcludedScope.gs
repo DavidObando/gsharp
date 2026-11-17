@@ -90,16 +90,13 @@ internal class RepositoryExcludedScope {
                 for item in DeclaredProjectItems.Read(projectPath, "Compile") {
                     let include string? = item.Element.Attribute(XName?("Include")!!)?.Value
                     if string.IsNullOrEmpty(include) || DeclaredProjectItems.HasMsbuildExpressionInclude(item) ||
-                        include!!.Contains('*', StringComparison.Ordinal) {
+                        include.Contains('*', StringComparison.Ordinal) {
                         continue
                     }
                     let fullInclude = Path.GetFullPath(
                         Path.Combine(
                             projectDirectory!!,
-                            include!!.Replace('\\', Path.DirectorySeparatorChar).Replace(
-                                '/',
-                                Path.DirectorySeparatorChar
-                            )
+                            include.Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar)
                         )
                     )
                     let relativeInclude = Path.GetRelativePath(fullSourceRoot, fullInclude).Replace('\\', '/')

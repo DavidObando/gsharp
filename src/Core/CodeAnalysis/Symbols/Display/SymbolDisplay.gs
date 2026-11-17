@@ -574,7 +574,7 @@ shared class SymbolDisplay {
                 returnTypeOverride,
                 out var awaitedReturn
             ) {
-                awaitedReturn!!
+                awaitedReturn
             } else {
                 returnTypeOverride
             }
@@ -739,7 +739,7 @@ shared class SymbolDisplay {
             }
             case annotated is NullabilityAnnotatedTypeSymbol {
                 return if TryFormatWithPlatformArguments(annotated, out var withPlatformArguments) {
-                    withPlatformArguments!!
+                    withPlatformArguments
                 } else {
                     FormatType(annotated.BaseType)
                 }

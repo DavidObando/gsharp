@@ -433,7 +433,7 @@ shared class NullAssertionPolishPass {
             !File.Exists(normalized) {
             return nil
         }
-        let root = Path.GetFullPath(strippableRoot!!).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar
+        let root = Path.GetFullPath(strippableRoot).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar
         let canonicalRoot = CanonicalizePath(root.TrimEnd(Path.DirectorySeparatorChar)) + Path.DirectorySeparatorChar
         return if normalized.StartsWith(root, StringComparison.OrdinalIgnoreCase) || canonical.StartsWith(
             canonicalRoot,
@@ -454,10 +454,10 @@ shared class NullAssertionPolishPass {
             if string.IsNullOrEmpty(directory) || !Directory.Exists(directory) {
                 return path
             }
-            let info = DirectoryInfo(directory!!)
+            let info = DirectoryInfo(directory)
             let resolvedDirectory = info.ResolveLinkTarget(returnFinalTarget: true)
                 ?.FullName ??
-                ResolveAncestrySymlinks(directory!!)
+                ResolveAncestrySymlinks(directory)
             return Path.Combine(resolvedDirectory, Path.GetFileName(path))
         } catch (e Exception) when e is IOException || e is UnauthorizedAccessException || e is ArgumentException {
             return path
@@ -489,7 +489,7 @@ shared class NullAssertionPolishPass {
             }
             suffix.Add(name)
             // The IsNullOrEmpty guard above establishes that parent is non-null.
-            current = parent!!
+            current = parent
         }
         return directory
     }

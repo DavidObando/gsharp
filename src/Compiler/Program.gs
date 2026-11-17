@@ -637,7 +637,7 @@ open class Program {
                 if bundled == nil || string.IsNullOrEmpty(outputDir) {
                     return
                 }
-                let destination = Path.Combine(outputDir!!, Path.GetFileName(bundled))
+                let destination = Path.Combine(outputDir, Path.GetFileName(bundled))
                 if string.Equals(Path.GetFullPath(bundled), destination, StringComparison.OrdinalIgnoreCase) {
                     return
                 }
@@ -722,7 +722,7 @@ open class Program {
                 using let refStream = if string.IsNullOrEmpty(refOutputPath) {
                     default(FileStream?)
                 } else {
-                    CreateOutput(refOutputPath!!, createdOutputs)
+                    CreateOutput(refOutputPath, createdOutputs)
                 }
                 using let pdbStream = if pdbOutputPath == nil {
                     default(FileStream?)
@@ -732,7 +732,7 @@ open class Program {
                 using let docStream = if string.IsNullOrEmpty(documentationOutputPath) {
                     default(FileStream?)
                 } else {
-                    CreateOutput(documentationOutputPath!!, createdOutputs)
+                    CreateOutput(documentationOutputPath, createdOutputs)
                 }
                 result = compilation.Emit(
                     peStream,
@@ -906,7 +906,7 @@ open class Program {
             let tfm = if string.IsNullOrEmpty(targetFramework) {
                 "net10.0"
             } else {
-                targetFramework!!
+                targetFramework
             }
             let (frameworkName, frameworkVersion) = ResolveFrameworkMoniker(tfm)
             let configPath = Path.ChangeExtension(assemblyPath, ".runtimeconfig.json")
@@ -1071,7 +1071,7 @@ open class Program {
                 "dotnet",
                 StringComparison.OrdinalIgnoreCase
             ) {
-                return processPath!!
+                return processPath
             }
             return "dotnet"
         }
@@ -1452,7 +1452,7 @@ Options:
                             result.LogPath = if string.IsNullOrWhiteSpace(value) {
                                 DiagnosticLogPaths.GetDefaultFilePath("gsharp-compiler-debug.log")
                             } else {
-                                value!!.Trim()
+                                value.Trim()
                             }
                         }
                         case "lib" { }

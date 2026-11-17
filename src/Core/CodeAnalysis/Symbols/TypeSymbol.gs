@@ -558,7 +558,7 @@ open partial class TypeSymbol : Symbol {
                         let boundParameters = Math.Min(definition.TypeParameters.Length, del.TypeArguments.Length)
                         // An unbound definition can still expose used formal slots.
                         visitedDelegates ??= HashSet[(DelegateTypeSymbol, int32)]()
-                        if !visitedDelegates!!.Add((definition, boundParameters)) {
+                        if !visitedDelegates.Add((definition, boundParameters)) {
                             return false
                         }
                         let MatchSignatureParameter = func (parameter TypeParameterSymbol) bool {
@@ -674,6 +674,24 @@ open partial class TypeSymbol : Symbol {
                 ContainsNamedTupleElements
             )
             default: false
+        }
+
+        /// Tests for source tuple identity, including unnamed tuples inside generic arguments.
+        /// @param type The type to inspect.
+        /// @returns Whether CLR reconstruction would discard a source tuple symbol.
+        internal func ContainsTupleType(type TypeSymbol?) bool {
+            if type is TupleTypeSymbol {
+                return true
+            }
+            if type == nil {
+                return false
+            }
+            for inner in GetWrappedTypes(type) {
+                if ContainsTupleType(inner) {
+                    return true
+                }
+            }
+            return false
         }
 
         /// Issue #3962: returns `true` when [`type`](paramref)
