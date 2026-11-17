@@ -6491,7 +6491,7 @@ class Conversion {
         // It deliberately does NOT cover an argument that HAS a real, closed CLR
         // type which is simply not injective — see
         // <see cref="TypeSymbol.ContainsFixedLengthArray"/>.
-        private func RequiresSymbolicTypeArgumentIdentity(type TypeSymbol?) bool {
+        internal func RequiresSymbolicTypeArgumentIdentity(type TypeSymbol?) bool {
             var type = type
             type = type?.StripToBareShape()
             if (type is SequenceTypeSymbol or AsyncSequenceTypeSymbol) &&
