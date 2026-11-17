@@ -841,9 +841,9 @@ internal partial class MethodBodyEmitter {
         // stores as a value-typed nullable).
         if (b.Op.Kind == BoundBinaryOperatorKind.Equals || b.Op.Kind == BoundBinaryOperatorKind.NotEquals) &&
             TryMatchTypeParameterNilCompare(b, out var tpNilOperand) {
-            this.EmitExpression(tpNilOperand!!)
+            this.EmitExpression(tpNilOperand)
             this.il.OpCode(ILOpCode.Box)
-            this.il.Token(this.outer.memberRefs.GetElementTypeToken(tpNilOperand!!.Type))
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(tpNilOperand.Type))
             this.il.OpCode(ILOpCode.Ldnull)
             this.il.OpCode(ILOpCode.Ceq)
             if b.Op.Kind == BoundBinaryOperatorKind.NotEquals {

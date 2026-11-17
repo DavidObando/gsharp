@@ -53,10 +53,10 @@ internal shared class SubmissionBinding {
             preferredArity,
             out var submissionType
         ) ||
-            submissionType!!.IsGenericTypeDefinition {
+            submissionType.IsGenericTypeDefinition {
             return false
         }
-        importedClass = ImportedClassSymbol(submissionType!!, declaration, references: $scope.References)
+        importedClass = ImportedClassSymbol(submissionType, declaration, references: $scope.References)
         return true
     }
 

@@ -353,12 +353,12 @@ class LspServer {
             skipBinding = this.workspaceDiscoveryPending
             filePath = uri.GetFileSystemPath()
             project = if !string.IsNullOrEmpty(filePath) {
-                this.workspaceState.GetProjectForFile(filePath!!)
+                this.workspaceState.GetProjectForFile(filePath)
             } else {
                 default(ProjectState?)
             }
             if this.documentContentService.TryGet(uri.ToString(), out var content) {
-                syntaxTree = content!!.SyntaxTree
+                syntaxTree = content.SyntaxTree
             }
         } finally {
             this.gate.Release()
@@ -1136,7 +1136,7 @@ class LspServer {
             this.workspaceState.SetOpenBuffer(filePath, text)
         }
         let project ProjectState? = if !string.IsNullOrEmpty(filePath) {
-            this.workspaceState.GetProjectForFile(filePath!!)
+            this.workspaceState.GetProjectForFile(filePath)
         } else {
             default(ProjectState?)
         }
@@ -1323,14 +1323,14 @@ class LspServer {
                 continue
             }
             let project = if !string.IsNullOrEmpty(filePath) {
-                this.workspaceState.GetProjectForFile(filePath!!)
+                this.workspaceState.GetProjectForFile(filePath)
             } else {
                 default(ProjectState?)
             }
             // Issue #5024: adopt a matching project tree without changing project source during watcher refreshes.
             // A regenerated file can differ from the buffer until the client synchronizes it.
             let syntaxTree = if project != nil && !string.IsNullOrEmpty(filePath) && project.TryGetSyntaxTree(
-                filePath!!,
+                filePath,
                 out var projectTree
             ) &&
                 projectTree != nil &&
@@ -1360,7 +1360,7 @@ class LspServer {
         // are not part of a multi-file project.
         let filePath = changedUri.GetFileSystemPath()
         let project ProjectState? = if !string.IsNullOrEmpty(filePath) {
-            this.workspaceState.GetProjectForFile(filePath!!)
+            this.workspaceState.GetProjectForFile(filePath)
         } else {
             default(ProjectState?)
         }
@@ -1377,7 +1377,7 @@ class LspServer {
         }
         let changedPath = changedUri.GetFileSystemPath()
         let changedProject ProjectState? = if !string.IsNullOrEmpty(changedPath) {
-            this.workspaceState.GetProjectForFile(changedPath!!)
+            this.workspaceState.GetProjectForFile(changedPath)
         } else {
             default(ProjectState?)
         }
@@ -1391,7 +1391,7 @@ class LspServer {
             let uri DocumentUri? = DocumentUri.From(document.Key)
             let filePath = uri?.GetFileSystemPath()
             if uri == nil || string.IsNullOrEmpty(filePath) || !object.ReferenceEquals(
-                this.workspaceState.GetProjectForFile(filePath!!),
+                this.workspaceState.GetProjectForFile(filePath),
                 changedProject
             ) {
                 continue
@@ -1531,7 +1531,7 @@ class LspServer {
                     ) {
                         request.TextDocument.Uri
                     } else {
-                        DocumentUri.FromFileSystemPath(declaringFile!!) ?? request.TextDocument.Uri
+                        DocumentUri.FromFileSystemPath(declaringFile) ?? request.TextDocument.Uri
                     }
                     locations.Add(Location{Uri: uri, Range: SemanticLookup.ToRange(structDeclaration.Identifier)})
                 }
@@ -1617,25 +1617,25 @@ class LspServer {
                 let rediscovered DiscoveredProject? = ProjectDiscovery.DiscoverProject(filePath)
                 if rediscovered != nil {
                     existing ??= this.workspaceState.AddProject(rediscovered.ProjectFilePath)
-                    existing!!.AssemblyName = rediscovered.AssemblyName
-                    existing!!.TargetFramework = rediscovered.TargetFramework
-                    existing!!.RootNamespace = rediscovered.RootNamespace
-                    existing!!.ProjectReferences = rediscovered.ProjectReferences
-                    existing!!.ReferenceSourcePath = rediscovered.ReferenceSourcePath
-                    existing!!.References = rediscovered.References
+                    existing.AssemblyName = rediscovered.AssemblyName
+                    existing.TargetFramework = rediscovered.TargetFramework
+                    existing.RootNamespace = rediscovered.RootNamespace
+                    existing.ProjectReferences = rediscovered.ProjectReferences
+                    existing.ReferenceSourcePath = rediscovered.ReferenceSourcePath
+                    existing.References = rediscovered.References
                     for source in rediscovered.SourceFiles {
-                        if !existing!!.ContainsFile(source) {
+                        if !existing.ContainsFile(source) {
                             if this.workspaceState.TryGetOpenBuffer(source, out var text) {
-                                existing!!.UpdateFile(source, text!!)
+                                existing.UpdateFile(source, text!!)
                             } else {
-                                existing!!.AddFileFromDisk(source)
+                                existing.AddFileFromDisk(source)
                             }
-                            this.workspaceState.RegisterFile(source, existing!!)
+                            this.workspaceState.RegisterFile(source, existing)
                         }
                     }
-                    for oldFile in existing!!.SourceFiles.ToList() {
+                    for oldFile in existing.SourceFiles.ToList() {
                         if !rediscovered.SourceFiles.Contains(oldFile) {
-                            existing!!.RemoveFile(oldFile)
+                            existing.RemoveFile(oldFile)
                             this.workspaceState.UnregisterFile(oldFile)
                         }
                     }

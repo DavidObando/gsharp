@@ -546,7 +546,7 @@ internal partial class ExpressionBinder {
                         let interfaceRead = BoundFieldAccessExpression(
                             readAnchor,
                             fieldAccess.Field,
-                            fieldAccess.InterfaceType!!,
+                            fieldAccess.InterfaceType,
                             fieldAccess.SubstitutedType,
                             fieldAccess.NarrowedType
                         )

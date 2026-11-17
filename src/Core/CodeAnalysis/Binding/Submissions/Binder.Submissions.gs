@@ -61,7 +61,7 @@ partial class Binder {
         private func ReplayPriorCellImports($scope BoundScope) {
             let submission = $scope.SubmissionOptions
             if submission?.ReplayImports.IsDefaultOrEmpty == false {
-                for replayed in submission!!.ReplayImports {
+                for replayed in submission.ReplayImports {
                     $scope.TryImport(ImportSymbol(replayed.Name, replayed.Target, declaration: nil))
                 }
             }

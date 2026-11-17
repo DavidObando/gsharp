@@ -790,7 +790,7 @@ class CompileStage : IMigrationStage {
             for candidatePath in candidates {
                 let matches = files.Where(
                     (f EmittedGsFile) -> !string.IsNullOrEmpty(f.GsPath) && string.Equals(
-                        Path.GetFullPath(f.GsPath!!),
+                        Path.GetFullPath(f.GsPath),
                         candidatePath,
                         StringComparison.OrdinalIgnoreCase
                     )

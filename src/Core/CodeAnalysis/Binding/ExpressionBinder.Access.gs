@@ -231,8 +231,13 @@ internal partial class ExpressionBinder {
             terminalCall.TypeArgumentList,
             out var clrType,
             out var openGenericDef,
-            out var symbolicArgs
+            out var symbolicArgs,
+            out var constraintFailed
         ) {
+            if constraintFailed {
+                result = BoundErrorExpression(syntax)
+                return true
+            }
             return false
         }
         // Issue #3749: the sibling omission is the final argument below. Every
@@ -244,12 +249,12 @@ internal partial class ExpressionBinder {
         // `DebuggableAttribute.DebuggingModes(2)` had no conversion arm to land
         // on and reported GS0159 instead.
         let constructedTarget = if openGenericDef != nil && !symbolicArgs.IsDefaultOrEmpty {
-            cast[TypeSymbol](ImportedTypeSymbol.GetConstructed(clrType!!, openGenericDef, symbolicArgs))
+            cast[TypeSymbol](ImportedTypeSymbol.GetConstructed(clrType, openGenericDef, symbolicArgs))
         } else {
             TypeSymbol.FromClrTypeWithoutNullability(clrType, NullabilityFreeReason.TypeStructure)
         }
         var handled = TryBindClrConstructorFromType(
-            clrType!!,
+            clrType,
             terminalCall,
             out result,
             out var noApplicableOverload,
@@ -400,13 +405,18 @@ internal partial class ExpressionBinder {
             terminalLiteral.TypeArgumentList,
             out var clrType,
             out var openDefinition,
-            out var symbolicArguments
+            out var symbolicArguments,
+            out var constraintFailed
         ) {
+            if constraintFailed {
+                result = BoundErrorExpression(syntax)
+                return true
+            }
             return false
         }
         result = BindImportedTypeLiteralExpression(
             terminalLiteral,
-            clrType!!,
+            clrType,
             if openDefinition != nil && !symbolicArguments.IsDefaultOrEmpty {
                 ImportedTypeSymbol.GetConstructed(clrType, openDefinition, symbolicArguments)
             } else {
@@ -449,7 +459,7 @@ internal partial class ExpressionBinder {
         if !TryResolveQualifiedSourceType(syntax, out var remainder, out var sourceType) {
             return false
         }
-        result = BindQualifiedSourceTypeRemainder(remainder, sourceType!!)
+        result = BindQualifiedSourceTypeRemainder(remainder, sourceType)
         return true
     }
 
@@ -565,7 +575,7 @@ internal partial class ExpressionBinder {
             arity,
             out sourceType
         ) &&
-            IsUserAggregateType(sourceType!!) &&
+            IsUserAggregateType(sourceType) &&
             !binderCtx.HasUnclosedEnclosingTypeParameters(sourceType, getCurrentFunction())
     }
 
@@ -687,6 +697,7 @@ internal partial class ExpressionBinder {
     /// `null` otherwise.
     /// @param symbolicTypeArgs Issue #671: the original symbolic type arguments in source order when
     /// any user-defined type substitution is in effect; default otherwise.
+    /// @param constraintFailed Whether a resolved type failed a constraint and already reported its diagnostic.
     /// @returns Whether a type was resolved.
     private func TryResolveQualifiedClrType(
         namespacePrefix string,
@@ -694,11 +705,13 @@ internal partial class ExpressionBinder {
         typeArgumentList TypeArgumentListSyntax?,
         @NotNullWhen(true) out clrType Type?,
         out openGenericDefinition Type?,
-        out symbolicTypeArgs ImmutableArray[TypeSymbol]
+        out symbolicTypeArgs ImmutableArray[TypeSymbol],
+        out constraintFailed bool
     ) bool {
         clrType = nil
         openGenericDefinition = nil
         symbolicTypeArgs = default(ImmutableArray[TypeSymbol])
+        constraintFailed = false
         let arity = typeArgumentList?.Arguments.Count ?? 0
         // Build the candidate dotted prefixes (everything before the simple
         // type name), most specific first.
@@ -721,9 +734,9 @@ internal partial class ExpressionBinder {
                 string.Empty
             }
             let expanded = if string.IsNullOrEmpty(rest) {
-                matchedImport!!.Target
+                matchedImport.Target
             } else {
-                matchedImport!!.Target + "." + rest
+                matchedImport.Target + "." + rest
             }
             prefixCandidates.Insert(0, expanded)
         }
@@ -772,12 +785,14 @@ internal partial class ExpressionBinder {
                         clrArgs,
                         symbolic,
                         typeArgumentList.Location,
-                        bindingScope: $scope
+                        bindingScope: $scope,
+                        typeArgumentLocation: (i int32) -> typeArgumentList.Arguments[i].Location
                     ) {
+                        constraintFailed = true
                         return false
                     }
                     try {
-                        clrType = openType!!.MakeGenericType(clrArgs)
+                        clrType = openType.MakeGenericType(clrArgs)
                         if hasSymbolicArg {
                             openGenericDefinition = openType
                             symbolicTypeArgs = symbolic
@@ -789,8 +804,7 @@ internal partial class ExpressionBinder {
                 }
             } else {
                 let fullName = prefix + "." + typeSimpleName
-                if $scope.References!!.TryResolveType(fullName, out var resolved) &&
-                    !resolved!!.IsGenericTypeDefinition {
+                if $scope.References!!.TryResolveType(fullName, out var resolved) && !resolved.IsGenericTypeDefinition {
                     clrType = resolved
                     return true
                 }
@@ -809,7 +823,8 @@ internal partial class ExpressionBinder {
             typeArgumentList,
             out clrType,
             out openGenericDefinition,
-            out symbolicTypeArgs
+            out symbolicTypeArgs,
+            out constraintFailed
         ) {
             return true
         }
@@ -827,8 +842,10 @@ internal partial class ExpressionBinder {
         typeArgumentList TypeArgumentListSyntax?,
         @NotNullWhen(true) out clrType Type?,
         out openGenericDefinition Type?,
-        out symbolicTypeArgs ImmutableArray[TypeSymbol]
+        out symbolicTypeArgs ImmutableArray[TypeSymbol],
+        out constraintFailed bool
     ) bool {
+        constraintFailed = false
         clrType = nil
         openGenericDefinition = nil
         symbolicTypeArgs = default(ImmutableArray[TypeSymbol])
@@ -863,7 +880,7 @@ internal partial class ExpressionBinder {
                     walkFailed = true
                     break
                 }
-                current = next!!
+                current = next
             }
             if walkFailed {
                 continue
@@ -905,8 +922,10 @@ internal partial class ExpressionBinder {
                     clrArgs,
                     symbolic,
                     typeArguments.Location,
-                    bindingScope: $scope
+                    bindingScope: $scope,
+                    typeArgumentLocation: (i int32) -> typeArguments.Arguments[i].Location
                 ) {
+                    constraintFailed = true
                     return false
                 }
                 try {

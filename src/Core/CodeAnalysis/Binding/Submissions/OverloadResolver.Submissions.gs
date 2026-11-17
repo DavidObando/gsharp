@@ -25,7 +25,7 @@ internal partial class OverloadResolver {
             out var submissionProgramType
         ) &&
             submissionProgramType != nil {
-            result = bindImportedClrStaticCall!!(submissionProgramType, syntax)
+            result = bindImportedClrStaticCall(submissionProgramType, syntax)
             return true
         }
         if TryBindSubmissionDelegateGlobalCall(syntax, submissionImports, out var submissionDelegateCall) {
