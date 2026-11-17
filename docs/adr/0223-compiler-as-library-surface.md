@@ -24,7 +24,7 @@ Oats found that every API it calls is public, but the contract around those APIs
 `Compilation.GetMissingEntryPointDiagnostics()` and `Compilation.CreateInternalErrorDiagnostic(Exception)` become `public`. Their behavior does not change.
 
 - `GetMissingEntryPointDiagnostics()` returns GS0634 when the compilation is not a library, has no entry point, and is not a REPL submission. The host decides that the output is an executable, as `gsc` does with `/target:exe`. The host calls it only when no other error stops the output.
-- `CreateInternalErrorDiagnostic(Exception)` converts an exception that escapes the compiler into GS9998. It uses the source anchor of an `EmitDiagnosticException` when one is in the exception chain. A host that catches an exception from `GetDiagnostics` or `Emit` can then report the same diagnostic that `gsc` reports.
+- `CreateInternalErrorDiagnostic(Exception)` converts an exception that escapes the compiler into a diagnostic. It preserves an explicit diagnostic ID from an `EmitDiagnosticException` in the exception chain; otherwise, it returns GS9998. It uses an available `EmitDiagnosticException` source anchor. A host can report the returned diagnostic as `gsc` does.
 
 These are the only changes to code in this ADR.
 
