@@ -146,6 +146,10 @@ Do not replace a nullable contract with throwing assertions or casts.
 Caller constraints may need to propagate the chosen domain.
 A dependent class flag alone is insufficient; use the proof rules above.
 
+Regression fixture migrations retain their original rejected inputs.
+Reference-only `as T`/coalesce calls (#2333), nested-enum interface contracts (#2898), and forwarded nullable interface bounds (#4988) use explicit reference constraints in their accepted controls.
+The nullable iterator families (#2927) split reference and value domains, and dependent-bound controls (#4062) use concrete reference-class roots instead of inherited bare `class` flags.
+
 Adding constraints can reject existing callers.
 Changing an erased value slot to `Nullable<T>` can change method signatures and field layouts.
 Rebuild affected producers and consumers together after an approved compiler release.

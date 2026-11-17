@@ -62,6 +62,15 @@ open class Issue4316NilIntoNonNullableReferenceSlotTests {
     }
 }`, 2)
     func BareClassFlagDoesNotProveDependentNullableKind(source string, count int32) {
+        if count == 1 {
+            let errors = GetErrors(source)
+            Assert.Equal(2, errors.Length)
+            Assert.All(errors, (d Diagnostic) -> Assert.Equal("GS0641", d.Id))
+            Assert.Equal(source.IndexOf("? value", StringComparison.Ordinal), errors[0].Location.Span.Start)
+            Assert.Equal(source.IndexOf("B?", StringComparison.Ordinal) + 1, errors[1].Location.Span.Start)
+            Assert.All(errors, (d Diagnostic) -> Assert.Equal(1, d.Location.Span.Length))
+            return
+        }
         SourceNullableKindAssertions.Reject(source, "B", count)
     }
 

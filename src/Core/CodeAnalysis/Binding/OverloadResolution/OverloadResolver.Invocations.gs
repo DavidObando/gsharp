@@ -135,7 +135,7 @@ internal partial class OverloadResolver {
         }
         let resultType = binderCtx.BindSourceNullable(
             returnType,
-            syntax.NullableQuestionToken!!.Location,
+            syntax.NullableQuestionToken?.Location ?? syntax.OpenParenthesisToken.Location,
             isOperator: true
         )
         if resultType == TypeSymbol.Error {

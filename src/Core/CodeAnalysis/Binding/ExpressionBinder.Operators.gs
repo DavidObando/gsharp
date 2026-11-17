@@ -2218,6 +2218,16 @@ internal partial class ExpressionBinder {
             boundRight.Type is TupleTypeSymbol {
             return BindTupleEquality(syntax, operatorKind, operatorLocation, operatorText, boundLeft, boundRight)
         }
+        if operatorKind == SyntaxKind.QuestionQuestionToken &&
+            boundRight.Type == TypeSymbol.Null &&
+            !binderCtx
+            .ValidateSourceNullableResult(
+            boundLeft.Type,
+            operatorLocation,
+            []TypeSymbol{boundLeft.Type, boundRight.Type}
+        ) {
+            return BoundErrorExpression(nil)
+        }
         var boundOperator BoundBinaryOperator? = BindBinaryOperatorWithNumericAdaptation(
             operatorKind,
             &boundLeft,

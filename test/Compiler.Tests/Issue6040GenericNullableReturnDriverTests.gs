@@ -81,6 +81,7 @@ Console.Write(":" + (Id[string?](nil) == nil).ToString())
     @Theory
     @InlineData("import System\nfunc F[T](read Func[T]?) { let value = read[[?]]() }")
     @InlineData("func F[T](read (() -> T)?) { let value = read[[?]]() }")
+    @InlineData("import System\nfunc F[T](read Func[Func[T]]?) { let value = read?()[[(]]) }")
     @InlineData("class Box[T] { var Value T }\nfunc F[T](box Box[T]?) { let value = box[[?.]]Value }")
     @InlineData("class Box[T] { func Read() T -> default(T) }\nfunc F[T](box Box[T]?) { let value = box[[?.]]Read() }")
     @InlineData("func F[T](values ([]T)?) { let value = values[[?[]]0] }")
@@ -115,6 +116,14 @@ func Reference[T class?](read Func[T]?) {
     let value = read?()
     Console.Write((value == nil).ToString())
 }
+func ChainedValue[T struct](read Func[Func[T]]?) {
+    let value = read?()()
+    Console.Write((value == nil).ToString())
+}
+func ChainedReference[T class?](read Func[Func[T]]?) {
+    let value = read?()()
+    Console.Write((value == nil).ToString())
+}
 open class Animal {}
 class Dog : Animal {}
 func Dependent[A Animal, B A](choose bool, value B) {
@@ -139,7 +148,13 @@ Console.Write(":")
 Dependent[Animal, Dog](false, Dog())
 Console.Write(":")
 Dependent[Animal, Dog](true, Dog())
-`, "True:False:1:True:False:True:True:False")
+Console.Write(":")
+ChainedValue[int32](nil)
+Console.Write(":")
+ChainedValue[int32](() -> Func[int32](() -> 0))
+Console.Write(":")
+ChainedReference[string](nil)
+`, "True:False:1:True:False:True:True:False:True:False:True")
     }
 
     @Fact
