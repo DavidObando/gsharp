@@ -1446,6 +1446,9 @@ class ReferenceResolver : IDisposable {
 
         /// Gets a resolver that searches the runtime's currently loaded
         /// assemblies plus the well-known BCL assemblies.
+        /// @remarks The result depends on the host process (ADR-0223 D3). It contains the assemblies that
+        /// the process has loaded when the call runs, so a test host, a benchmark host, and `gsc` can see
+        /// different types. Use (cref:ForReferencePack) for a reference set that does not depend on the host.
         /// @returns A default resolver.
         func Default() ReferenceResolver {
             for path in ResolveDriverReferencePaths(Array.Empty[string]()) {
@@ -1521,6 +1524,8 @@ class ReferenceResolver : IDisposable {
 
         /// Gets a resolver for evaluated code by loading explicit references into
         /// the runtime context rather than a metadata-only context.
+        /// @remarks The result depends on the host process (ADR-0223 D3). It contains the assemblies that
+        /// the process has loaded when the call runs, in addition to the supplied references.
         /// @param referencePaths Paths to runtime assemblies.
         /// @returns A resolver over the loaded assemblies and host BCL.
         func WithRuntimeReferences(referencePaths IEnumerable[string]?) ReferenceResolver -> WithRuntimeReferences(
@@ -1528,10 +1533,21 @@ class ReferenceResolver : IDisposable {
             default(ImmutableArray[Assembly])
         )
 
-        /// Freezes host candidates before compiler workers can load additional implementation dependencies.
-        internal func CaptureHostAssemblies() ImmutableArray[Assembly] -> BuildHostAssemblies()
+        /// Captures the assemblies that the host process has loaded (ADR-0223 D3).
+        /// @remarks Call it once before work starts, as `gsc` does. Compiler work can load more
+        /// implementation assemblies into the process. Give the snapshot to
+        /// (cref:WithRuntimeReferences) so that each resolver sees the same host assemblies.
+        /// @returns The host assemblies that a runtime resolver can use.
+        func CaptureHostAssemblies() ImmutableArray[Assembly] -> BuildHostAssemblies()
 
-        internal func WithRuntimeReferences(
+        /// Gets a resolver for evaluated code over the supplied references and a host snapshot.
+        /// @remarks The result depends on the host process (ADR-0223 D3). The snapshot fixes which host
+        /// assemblies the resolver contains. A default snapshot captures the host assemblies when the call runs.
+        /// A supplied reference replaces a snapshot assembly that has the same full name.
+        /// @param referencePaths Paths to runtime assemblies.
+        /// @param hostSnapshot The result of (cref:CaptureHostAssemblies), or a default array.
+        /// @returns A resolver over the snapshot and the loaded references.
+        func WithRuntimeReferences(
             referencePaths IEnumerable[string]?,
             hostSnapshot ImmutableArray[Assembly]
         ) ReferenceResolver {
@@ -1788,6 +1804,154 @@ class ReferenceResolver : IDisposable {
         /// @returns A resolver including the supplied references.
         func WithReferences(referencePaths IEnumerable[string]?) ReferenceResolver ->
         WithReferences(referencePaths, GetHostTrustedPlatformAssemblies())
+
+        /// Gets a resolver over a .NET reference pack and the bundled G# runtime assemblies (ADR-0223 D3).
+        /// @remarks The result does not depend on the assemblies that the host process has loaded. The
+        /// factory uses `Microsoft.NETCore.App.Ref/<version>/ref/<tfm>`, the reference closure that the
+        /// .NET SDK gives `gsc`. It selects the newest version of the framework that has the target folder.
+        /// A release version comes before a prerelease version of the same number. The resolver uses no host
+        /// assembly as a fallback.
+        /// @param targetFramework The target framework moniker, for example `net10.0`.
+        /// @param packRoot The folder that contains the versions of `Microsoft.NETCore.App.Ref`. When it is
+        /// `null`, the factory uses `packs/Microsoft.NETCore.App.Ref` under the .NET root. The .NET root is
+        /// `DOTNET_ROOT`, or else the folder of the `dotnet` executable on the `PATH`.
+        /// @returns A resolver over the reference pack and the bundled G# runtime assemblies.
+        /// @exception ArgumentException The target framework is not a .NET moniker such as `net10.0`.
+        /// @exception DirectoryNotFoundException No reference pack for the target framework was found, or its
+        /// folder contains no assemblies.
+        func ForReferencePack(targetFramework string, packRoot string? = nil) ReferenceResolver {
+            let directory = FindReferencePackDirectory(targetFramework, packRoot)
+            let packPaths = Directory
+                .EnumerateFiles(directory, "*.dll")
+                .OrderBy((path string) -> path, StringComparer.Ordinal)
+                .ToList()
+            if packPaths.Count == 0 {
+                // An empty reference set makes WithReferences use the host assemblies.
+                throw DirectoryNotFoundException("The reference pack folder '$directory' contains no assemblies.")
+            }
+            return WithReferences(ResolveDriverReferencePaths(packPaths), Array.Empty[string]())
+        }
+
+        /// Finds the `ref/<tfm>` folder that (cref:ForReferencePack) uses.
+        /// @param targetFramework The target framework moniker, for example `net10.0`.
+        /// @param packRoot The folder that contains the versions of `Microsoft.NETCore.App.Ref`, or `null`.
+        /// @returns The full path of the reference assembly folder.
+        internal func FindReferencePackDirectory(targetFramework string, packRoot string?) string {
+            let frameworkVersion = ParseTargetFrameworkVersion(targetFramework)
+            let packFolders = List[string]()
+            if !string.IsNullOrEmpty(packRoot) {
+                packFolders.Add(Path.GetFullPath(packRoot))
+            } else {
+                let roots = EnumerateDotnetRoots(
+                    Environment.GetEnvironmentVariable("DOTNET_ROOT"),
+                    Environment.GetEnvironmentVariable("PATH")
+                )
+                for dotnetRoot in roots {
+                    packFolders.Add(Path.Combine(dotnetRoot, "packs", "Microsoft.NETCore.App.Ref"))
+                }
+            }
+            let tfm = targetFramework.Trim()
+            for packFolder in packFolders {
+                if !Directory.Exists(packFolder) {
+                    continue
+                }
+                let candidate string? = Directory
+                    .EnumerateDirectories(packFolder)
+                    .Select((directory string) -> Path.GetFileName(directory))
+                    .Where((name string) -> MatchesFrameworkVersion(name, frameworkVersion))
+                    .OrderByDescending((name string) -> ParsePackVersion(name))
+                    .ThenByDescending((name string) -> !name.Contains('-'))
+                    .ThenByDescending((name string) -> name, StringComparer.Ordinal)
+                    .Select((name string) -> Path.Combine(packFolder, name, "ref", tfm))
+                    .FirstOrDefault(Directory.Exists)
+                if candidate != nil {
+                    return Path.GetFullPath(candidate)
+                }
+            }
+            let searched = if packFolders.Count == 0 {
+                "no .NET root (set DOTNET_ROOT or put dotnet on the PATH)"
+            } else {
+                string.Join(", ", packFolders.Select((folder string) -> "'$folder'"))
+            }
+            throw DirectoryNotFoundException(
+                "The Microsoft.NETCore.App.Ref pack for $tfm was not found under $searched."
+            )
+        }
+
+        /// Gives the .NET roots in search order: `DOTNET_ROOT`, then the folder of each `dotnet` executable
+        /// on the `PATH`. A symbolic link to the executable resolves to the installation folder.
+        /// @param dotnetRootVariable The value of `DOTNET_ROOT`, or `null`.
+        /// @param searchPath The value of `PATH`, or `null`.
+        /// @returns The full paths of the .NET roots, without duplicates.
+        internal func EnumerateDotnetRoots(dotnetRootVariable string?, searchPath string?) List[string] {
+            let roots = List[string]()
+            let AddRoot = func (root string?) {
+                if string.IsNullOrEmpty(root) {
+                    return
+                }
+                let fullRoot = Path.GetFullPath(root)
+                if !roots.Contains(fullRoot, StringComparer.Ordinal) {
+                    roots.Add(fullRoot)
+                }
+            }
+            AddRoot(dotnetRootVariable)
+            let executable = if OperatingSystem.IsWindows() {
+                "dotnet.exe"
+            } else {
+                "dotnet"
+            }
+            let entries = (searchPath ?? string.Empty).Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            for directory in entries {
+                try {
+                    let candidate = Path.Combine(directory.Trim(), executable)
+                    if !File.Exists(candidate) {
+                        continue
+                    }
+                    let target = File.ResolveLinkTarget(candidate, returnFinalTarget: true)
+                    AddRoot(Path.GetDirectoryName(target?.FullName ?? Path.GetFullPath(candidate)))
+                } catch (ex Exception) when ex is ArgumentException ||
+                    ex is IOException ||
+                    ex is NotSupportedException ||
+                    ex is UnauthorizedAccessException {
+                    // A PATH entry that cannot be read does not name a .NET root.
+
+                }
+            }
+            return roots
+        }
+
+        // `net10.0` gives 10.0. Other monikers (netstandard2.0, net48) have no Microsoft.NETCore.App.Ref pack.
+        private func ParseTargetFrameworkVersion(targetFramework string) Version {
+            let tfm = targetFramework.Trim()
+            let isNetMoniker = tfm.StartsWith("net", StringComparison.OrdinalIgnoreCase) && tfm.Contains('.')
+            if isNetMoniker && Version.TryParse(tfm.Substring(3), out var version) && version.Major >= 5 {
+                return version
+            }
+            throw ArgumentException(
+                "The target framework '$targetFramework' is not a .NET moniker such as net10.0.",
+                nameof(targetFramework)
+            )
+        }
+
+        private func MatchesFrameworkVersion(packVersion string, frameworkVersion Version) bool {
+            let version = ParsePackVersion(packVersion)
+            return version.Major == frameworkVersion.Major && version.Minor == frameworkVersion.Minor
+        }
+
+        // Semantic order: 10.0.10 is newer than 10.0.9. A name that does not parse sorts last.
+        private func ParsePackVersion(name string) Version {
+            let dash = name.IndexOf('-')
+            let core = if dash < 0 {
+                name
+            } else {
+                name.Substring(0, dash)
+            }
+            return if Version.TryParse(core, out var version) {
+                version
+            } else {
+                Version(0, 0)
+            }
+        }
 
         internal func WithReferences(
             referencePaths IEnumerable[string]?,
