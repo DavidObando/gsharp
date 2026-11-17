@@ -89,8 +89,8 @@ The rule is: a diagnostic is final unless its premise can still change. The bind
 | `guard let` else block does not exit (`GS0297`), `async let` never awaited (`GS0559`) | the statement binder | `FutureDependent` (`rest-of-body`) when the else block or the `scope` block is open |
 | Unknown simple name (`GS0125`, `GS0130`, `GS0113`, and `GS0157` for a name used as a type receiver) | the failed-lookup reports of `DiagnosticBag` | `FutureDependent` (`later-declaration`) when a later declaration can declare the name; otherwise final |
 | Unknown member (`GS0158`, `GS0159`) | the failed-lookup reports of `DiagnosticBag` | `FutureDependent` (`later-member`) with `Nothing`; `Final` with `KeepDeclarations` |
-| A parse diagnostic that reaches the cut (an unfinished token or construct), or one before the cut that the host's tree does not report | `BindPrefix` | `Artifact` (`cut`): text after the cut can complete it, or the seal caused it |
-| A diagnostic in the text that the bind removed (at or after the cut, before the kept text) | `BindPrefix` | `Artifact` (`cut`) |
+| A lexer diagnostic on a token that the cut ends (an unterminated string), or a parse diagnostic before the cut that the host's tree does not report | `BindPrefix` | `Artifact` (`cut`): text after the cut can complete the token, or the seal caused the diagnostic |
+| A diagnostic in the text that the bind removed (at or after the cut, before the kept text; with `Nothing`, everything at or after the cut, also when the host's text ends there) | `BindPrefix` | `Artifact` (`cut`) |
 | A diagnostic located on a construct that is open at the cut (the whole span of a call whose argument list the seal closed) | `BindPrefix` | `FutureDependent` (`rest-of-statement`) |
 | A diagnostic in kept text that the host's compilation does not report | `BindPrefix` | `FutureDependent` (`rest-of-body`): it depends on the removed text |
 | Every other diagnostic | | `Final` |
