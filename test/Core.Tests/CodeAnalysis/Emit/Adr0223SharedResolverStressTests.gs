@@ -59,15 +59,28 @@ open class Adr0223SharedResolverStressTests {
         // The control: the samples include programs that emit and programs with errors.
         Assert.Contains(serialResults, (result string) -> result.StartsWith("emitted ", StringComparison.Ordinal))
         Assert.Contains(serialResults, (result string) -> result.Contains("GS", StringComparison.Ordinal))
+        // An exception is a failure in either pass, also when both passes throw the same exception.
+        let exceptions = List[string]()
+        for var index = 0; index < samples.Count; index++ {
+            if serialResults[index].StartsWith(ExceptionPrefix, StringComparison.Ordinal) {
+                let sample = samples[index]
+                exceptions.Add("${sample.Key} (serial): ${serialResults[index]}")
+            }
+        }
         let mismatches = List[string]()
         for var slot = 0; slot < jobs.Count; slot++ {
             let expected = serialResults[jobs[slot]]
             let actual = parallelResults[slot]
+            if actual.StartsWith(ExceptionPrefix, StringComparison.Ordinal) {
+                let sample = samples[jobs[slot]]
+                exceptions.Add("${sample.Key} (parallel): $actual")
+            }
             if !string.Equals(expected, actual, StringComparison.Ordinal) {
                 let sample = samples[jobs[slot]]
                 mismatches.Add("${sample.Key}:\n  serial:   $expected\n  parallel: $actual")
             }
         }
+        Assert.True(exceptions.Count == 0, "The compiler threw:\n" + string.Join("\n", exceptions.Take(10)))
         Assert.True(
             mismatches.Count == 0,
             "${mismatches.Count} of ${jobs.Count} parallel compilations (workers: $workerCount) differ from the serial run:\n" +
@@ -77,6 +90,7 @@ open class Adr0223SharedResolverStressTests {
 
     shared {
         private const Rounds int32 = 3
+        private const ExceptionPrefix string = "exception "
         private const MinimumWorkers int32 = 8
         // The compiler recurses deeply on some samples. Use the stack size of the main thread.
         private const WorkerStackSize int32 = 16777216
@@ -88,6 +102,7 @@ open class Adr0223SharedResolverStressTests {
             workerCount int32
         )[]string {
             let results = [jobs.Count]string
+            // Disposed only after every worker stops (ADR-0223 D5 item 2).
             using let shared = SampleReferences.CreateResolver()
             let queue = ConcurrentQueue[int32](Enumerable.Range(0, jobs.Count))
             using let start = Barrier(workerCount)
@@ -108,8 +123,11 @@ open class Adr0223SharedResolverStressTests {
                 workers.Add(worker)
                 worker.Start()
             }
+            // Wait with no time limit. A worker that is still running when the resolver is disposed, or
+            // when a later test collection starts, would make the results of other tests incorrect. A
+            // compilation that does not stop is stopped by the time limit of the test job.
             for worker in workers {
-                Assert.True(worker.Join(TimeSpan.FromMinutes(10)), "A stress worker did not finish.")
+                worker.Join()
             }
             return results
         }
@@ -176,7 +194,7 @@ open class Adr0223SharedResolverStressTests {
                         .Append(diagnostic.Message)
                 }
             } catch (ex Exception) {
-                builder.Append("exception ").Append(ex.GetType().FullName).Append(": ").Append(ex.Message)
+                builder.Append(ExceptionPrefix).Append(ex.GetType().FullName).Append(": ").Append(ex.Message)
             }
             return builder.ToString()
         }
