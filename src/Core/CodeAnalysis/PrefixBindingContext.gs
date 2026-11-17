@@ -83,8 +83,9 @@ internal sealed class PrefixCut {
         if !object.ReferenceEquals(location.Text, Text) || location.Span.Start < Cut {
             return false
         }
-        // With nothing after the cut, everything at or after it is removed, also when the text ends there.
-        return Remainder == PrefixRemainder.Nothing || location.Span.Start < KeptStart
+        // When nothing follows the cut or nothing is kept, everything at or after the cut is removed,
+        // also when the text ends there.
+        return Remainder == PrefixRemainder.Nothing || !HasKeptText || location.Span.Start < KeptStart
     }
 
     /// Gets the lexer diagnostics of the prefix tree. The parser sets them with (cref:Tree).
@@ -102,6 +103,25 @@ internal sealed class PrefixCut {
     }
 
     private var lexerDiagnostics ImmutableArray[Diagnostic]
+
+    /// Gets or sets the span of the last source token before the cut, or an empty span at 0.
+    internal prop LastToken TextSpan {
+        get;
+        set;
+    }
+
+    /// Gets or sets a value that tells whether the last source token before the cut is a word (a name,
+    /// a keyword or a number) that more text after the cut can extend.
+    internal prop LastTokenIsWord bool {
+        get;
+        set;
+    }
+
+    /// Gets or sets a value that tells whether the prefix tree keeps text after the cut.
+    internal prop HasKeptText bool {
+        get;
+        set;
+    }
 
     /// Gets the prefix tree. The parser sets it after the parse.
     internal prop Tree SyntaxTree? {

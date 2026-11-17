@@ -312,15 +312,96 @@ func F(p int32) {
 
     @Fact
     func PrefixOnlyTree_UnfinishedTextAtTheEnd_IsAnArtifact() {
-        for text in[]string{"package P\nfunc Main() {\n    let x =", "package P\nfunc Main() {\n    let s = \"abc"} {
-            let tree = SyntaxTree.Parse(SourceText.From(text, "prefix.gs"))
-            let result = Compilation(tree).BindPrefix(tree, text.Length, PrefixBindOptions(PrefixRemainder.Nothing))
-            Assert.NotEmpty(result.Diagnostics)
-            Assert.All(
-                result.Diagnostics,
-                (d ClassifiedDiagnostic) -> Assert.NotEqual(DiagnosticFinality.Final, d.Finality)
-            )
+        let texts = []string{
+            "package P\nfunc Main() {\n    let x =",
+            "package P\nfunc Main() {\n    let s = \"abc",
+            "package P\n/* unfinished"
         }
+        for text in texts {
+            let tree = SyntaxTree.Parse(SourceText.From(text, "prefix.gs"))
+            for remainder in[]PrefixRemainder{PrefixRemainder.Nothing, PrefixRemainder.KeepDeclarations} {
+                let result = Compilation(tree).BindPrefix(tree, text.Length, PrefixBindOptions(remainder))
+                Assert.NotEmpty(result.Diagnostics)
+                Assert.All(
+                    result.Diagnostics,
+                    (d ClassifiedDiagnostic) -> {
+                        Assert.Equal(DiagnosticFinality.Artifact, d.Finality)
+                        Assert.Equal("cut", d.Reason)
+                    }
+                )
+            }
+        }
+    }
+
+    @Fact
+    func PrefixOnlyTree_OpenTypeWithoutItsClosingBrace_IsSealed() {
+        let text = "package P\nclass Holder : System.IDisposable {"
+        let tree = SyntaxTree.Parse(SourceText.From(text, "prefix.gs"))
+        let result = Compilation(tree).BindPrefix(
+            tree,
+            text.Length,
+            PrefixBindOptions(PrefixRemainder.KeepDeclarations)
+        )
+        let diagnostic = Assert.Single(result.Diagnostics)
+        Assert.Equal("GS0187", diagnostic.Diagnostic.Id)
+        Assert.Equal(DiagnosticFinality.FutureDependent, diagnostic.Finality)
+        let construct = Assert.Single(result.OpenConstructs)
+        Assert.Equal(SyntaxKind.StructDeclaration, construct.Kind)
+        Assert.Equal("Holder", construct.Symbol?.Name)
+    }
+
+    @Fact
+    func WordSplitByTheCut_IsNotFinal() {
+        const source = `package P
+
+func Main() {
+    let value = 1
+    let copy = val/*CUT*/ue
+}
+`
+        for remainder in[]PrefixRemainder{PrefixRemainder.Nothing, PrefixRemainder.KeepDeclarations} {
+            let diagnostic = Assert.Single(Bind(source, remainder).Diagnostics)
+            Assert.Equal("GS0125", diagnostic.Diagnostic.Id)
+            Assert.Equal(DiagnosticFinality.FutureDependent, diagnostic.Finality)
+        }
+    }
+
+    @Fact
+    func DuplicateExplicitImplementation_InAnOpenType_IsFinal() {
+        const source = `package P
+
+interface IFoo {
+    func Bar() int32;
+}
+
+class Impl : IFoo {
+    private func (IFoo) Bar() int32 { return 1 }
+
+    private func (IFoo) Bar() int32 { return 2 }
+/*CUT*/
+}
+`
+        let diagnostic = Assert.Single(Bind(source, PrefixRemainder.Nothing).Diagnostics)
+        Assert.Equal("GS0495", diagnostic.Diagnostic.Id)
+        Assert.Equal(DiagnosticFinality.Final, diagnostic.Finality)
+    }
+
+    @Fact
+    func OpenFunctionLiteral_ReportsItsReturnType() {
+        const source = `package P
+
+func Main() {
+    let f = func () int32 {
+        let n = 1
+/*CUT*/
+        return n
+    }
+}
+`
+        let result = Bind(source, PrefixRemainder.Nothing)
+        Assert.Equal(SyntaxKind.FunctionLiteralExpression, result.OpenConstructs[0].Kind)
+        Assert.Equal(TypeSymbol.Int32, result.OpenConstructs[0].ExpectedType)
+        Assert.Equal(SyntaxKind.FunctionDeclaration, result.OpenConstructs[1].Kind)
     }
 
     @Fact

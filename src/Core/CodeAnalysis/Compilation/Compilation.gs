@@ -852,11 +852,28 @@ open class Compilation {
         if owner == nil {
             return nil
         }
-        if owner is BlockStatementSyntax && prefixTree.GetParent(owner) is {} declaration && model.GetDeclaredSymbol(
-            declaration,
-            cancellationToken
-        ) != nil {
-            owner = declaration
+        if owner is BlockStatementSyntax && prefixTree.GetParent(owner) is {} parent {
+            if parent is FunctionLiteralExpressionSyntax || parent is LambdaExpressionSyntax {
+                // The semantic model does not index a function literal. A literal that initializes a local
+                // gets its function and return type from the bound declaration; another literal gets neither.
+                var literalReturn TypeSymbol? = nil
+                var literalFunction Symbol? = nil
+                if prefixTree.GetParent(parent) is VariableDeclarationSyntax declaration && model.GetBoundNode(
+                    declaration,
+                    cancellationToken
+                ) is BoundVariableDeclaration bound {
+                    if bound.Initializer is BoundFunctionLiteralExpression boundLiteral {
+                        literalFunction = boundLiteral.Function
+                    }
+                    if bound.Variable.Type is FunctionTypeSymbol functionType {
+                        literalReturn = functionType.ReturnType
+                    }
+                }
+                return OpenConstruct(parent.Kind, literalFunction, literalReturn)
+            }
+            if model.GetDeclaredSymbol(parent, cancellationToken) != nil {
+                owner = parent
+            }
         }
         let symbol = model.GetDeclaredSymbol(owner, cancellationToken)
         let expectedType = if symbol is FunctionSymbol function {

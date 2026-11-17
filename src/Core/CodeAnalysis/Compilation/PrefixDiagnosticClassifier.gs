@@ -51,14 +51,32 @@ internal sealed class PrefixDiagnosticClassifier {
             return ClassifiedDiagnostic(diagnostic, DiagnosticFinality.Artifact, "cut")
         }
         let inPrefixText = object.ReferenceEquals(location.Text, prefixCut.Text)
-        // A lexer diagnostic on a token that reaches the cut, such as an unterminated string, is on a
-        // token that the cut ended. Text after the cut can complete the token.
+        // A lexer diagnostic in the last token before the cut or after it (an unterminated string or
+        // comment) is on text that the cut ended. Text after the cut can complete it.
         if inPrefixText && prefixLexer.Contains(diagnostic) &&
             location
             .Span
             .Start < prefixCut.Cut &&
-            TokenReachesCut(location.Span.Start) {
+            location
+            .Span
+            .Start >= prefixCut
+            .LastToken
+            .Start {
             return ClassifiedDiagnostic(diagnostic, DiagnosticFinality.Artifact, "cut")
+        }
+        // A diagnostic that ends with a name, keyword or number at the cut depends on its spelling, and
+        // text after the cut can extend the word. With kept text, that happens only when the word goes on.
+        if inPrefixText &&
+            diagnostic.PrefixFinality == DiagnosticFinality.Final &&
+            location
+            .Span
+            .End == prefixCut.Cut &&
+            prefixCut.LastTokenIsWord &&
+            prefixCut
+            .LastToken
+            .End == prefixCut.Cut &&
+            WordContinuesAfterCut() {
+            return ClassifiedDiagnostic(diagnostic, DiagnosticFinality.FutureDependent, "rest-of-statement")
         }
         // The tokens before the cut are the same in both parses. A parse diagnostic that the source tree
         // does not report there comes from the closing tokens at the cut.
@@ -101,24 +119,12 @@ internal sealed class PrefixDiagnosticClassifier {
         return ClassifiedDiagnostic(diagnostic, diagnostic.PrefixFinality, diagnostic.PrefixReason)
     }
 
-    // Returns true when the token that starts at [`position`](paramref) ends at the cut, such as an
-    // unterminated string whose diagnostic marks only its first character.
-    private func TokenReachesCut(position int32) bool {
-        var node SyntaxNode = prefixTree.Root
-        while node is not SyntaxToken {
-            var next SyntaxNode? = nil
-            for child in node.GetChildren() {
-                if child.Span.Start <= position && position < child.Span.End {
-                    next = child
-                    break
-                }
-            }
-            if next == nil {
-                return false
-            }
-            node = next
+    private func WordContinuesAfterCut() bool {
+        if prefixCut.Remainder == PrefixRemainder.Nothing {
+            return true
         }
-        return node.Span.Start == position && node.Span.End >= prefixCut.Cut
+        let text = prefixCut.Text
+        return prefixCut.Cut < text.Length && PrefixTokenStream.IsWordCharacter(text[prefixCut.Cut])
     }
 
     // Returns true when a node with exactly this span is open at the cut.

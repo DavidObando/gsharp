@@ -100,6 +100,11 @@ internal sealed class PrefixTokenStream {
                     laterDeclarationsPossible = true
                 }
             }
+            let lastToken = if tokens.Count > 0 {
+                tokens[tokens.Count - 1]
+            } else {
+                default(SyntaxToken?)
+            }
             let sealedTokens = ImmutableArray.CreateBuilder[SyntaxToken]()
             for var i = openers.Count - 1; i >= sealFrom; i-- {
                 let token = SyntaxToken.SealedAtCut(prefixTree, CloserOf(openers[i].Kind), cut)
@@ -126,6 +131,14 @@ internal sealed class PrefixTokenStream {
                 openMemberStart,
                 sealedTokens.ToImmutable()
             )
+            if lastToken != nil {
+                facts.LastToken = lastToken.Span
+                facts.LastTokenIsWord = lastToken
+                    .Text
+                    .Length > 0 &&
+                    IsWordCharacter(lastToken.Text[lastToken.Text.Length - 1])
+            }
+            facts.HasKeptText = kept.Count > 0
             return PrefixTokenStream(
                 tokens.ToImmutableArray(),
                 documentationTokens.ToImmutable(),
@@ -189,6 +202,11 @@ internal sealed class PrefixTokenStream {
             }
             return openers
         }
+
+        /// Returns a value that tells whether [`c`](paramref) can continue a name, a keyword or a number.
+        /// @param c A character.
+        /// @returns `true` for a letter, a digit or `_`.
+        internal func IsWordCharacter(c char) bool -> char.IsLetterOrDigit(c) || c == '_'
 
         private func StartsWith(openers List[SyntaxToken], positions List[int32]) bool {
             for var i = 0; i < positions.Count; i++ {
@@ -257,7 +275,8 @@ internal sealed class CutLayout {
                     break
                 }
                 let brace = BodyOpenBrace(child)
-                if brace != nil && !brace.IsMissing && brace.Position < cut {
+                // A body whose closing brace the source does not have is sealed like any open construct.
+                if brace != nil && !brace.IsMissing && brace.Position < cut && !EndsWithMissingToken(child) {
                     braces.Add(brace.Position)
                     container = child
                     continue

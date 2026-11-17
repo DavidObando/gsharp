@@ -555,6 +555,25 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         premises!!.Add(premise)
     }
 
+    /// Gets or sets a value that tells whether the type that the binder verifies can still get members
+    /// after the cut of a prefix bind (ADR-0225). A missing-member report is then future-dependent.
+    internal prop MissingMembersCanFollow bool {
+        get;
+        set;
+    }
+
+    // ADR-0225: a report that a type misses a member. Another member that a later declaration adds can
+    // remove it; a mismatch or a duplicate cannot, so those reports do not use this funnel.
+    private func ReportMissingMember(
+        location TextLocation,
+        descriptor DiagnosticDescriptor,
+        messageArguments ...object
+    ) {
+        let pushed = PushPremiseIf(MissingMembersCanFollow, PrefixPremise.RestOfType)
+        Report(location, descriptor, descriptor.Severity, messageArguments)
+        PopPremiseIf(pushed)
+    }
+
     /// Starts [`premise`](paramref) when [`holds`](paramref) is true (ADR-0225).
     /// @param holds Whether the premise holds at the cut.
     /// @param premise The premise.
