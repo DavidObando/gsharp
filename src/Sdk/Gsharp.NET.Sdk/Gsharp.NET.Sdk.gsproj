@@ -204,6 +204,11 @@
         <GsharpSdkPackSource>%(FullPath)</GsharpSdkPackSource>
         <!-- ADR-0210: all tool copies use the SDK-owned ABI, not the bootstrap runtime. -->
         <GsharpSdkPackSource Condition="'%(Filename)' == 'Gsharp.Runtime.Values'">$(BaseOutputPath)Gsharp.Runtime.Values/%(Filename)%(Extension)</GsharpSdkPackSource>
+        <!-- ADR-0223 D2: the SDK ships one copy of each G# runtime assembly. A tool publish copies
+             the bootstrap SDK's Extensions and Channels files. Pack the files of this build instead,
+             which are also the files under tools/extensions/ and tools/channels/. -->
+        <GsharpSdkPackSource Condition="'%(Filename)' == 'Gsharp.Extensions'">$(BaseOutputPath)Gsharp.Extensions/%(Filename)%(Extension)</GsharpSdkPackSource>
+        <GsharpSdkPackSource Condition="'%(Filename)' == 'Gsharp.Runtime.Channels'">$(BaseOutputPath)Gsharp.Runtime.Channels/%(Filename)%(Extension)</GsharpSdkPackSource>
       </_GsharpSdkPackagePayload>
     </ItemGroup>
     <Error Condition="!Exists('%(_GsharpSdkPackagePayload.GsharpSdkPackSource)')"

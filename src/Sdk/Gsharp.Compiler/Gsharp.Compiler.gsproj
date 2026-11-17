@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?><Project Sdk="Gsharp.NET.Sdk">
+
+  <!-- ADR-0223 D2: the Gsharp.Compiler package gives GSharp.Core to library hosts. It comes from the
+       same build as Gsharp.NET.Sdk and has the same version. The package contains:
+         lib/net10.0/GSharp.Core.dll, .xml and .pdb   (the build output of src/Core)
+         runtimes/gsharp/*.dll                        (the G# runtime assemblies of the SDK tools/ folder)
+       The nuspec dependencies come from the PackageReference items below, which are the
+       package references of src/Core. The runtime assemblies are not references of a host. A host
+       gives their folder to the compiler as the bundled runtime directory. -->
+  <PropertyGroup>
+    <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
+    <GsharpNoExtensions>true</GsharpNoExtensions>
+    <GsharpNoChannelsRuntime>true</GsharpNoChannelsRuntime>
+    <GsharpNoValuesRuntime>true</GsharpNoValuesRuntime>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <IncludeSymbols>false</IncludeSymbols>
+    <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <EnableDefaultEmbeddedResourceItems>false</EnableDefaultEmbeddedResourceItems>
+    <EnableDefaultNoneItems>false</EnableDefaultNoneItems>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <IsPackable>true</IsPackable>
+    <NoPackageAnalysis>true</NoPackageAnalysis>
+    <PackageId>Gsharp.Compiler</PackageId>
+    <Title>G# compiler library</Title>
+    <Description>The G# compiler (GSharp.Core) as a library for hosts that parse, bind, and emit G# programs. Gsharp.NET.Sdk builds G# projects; reference this package only to host the compiler.</Description>
+    <PackageTags>gsharp;compiler;library</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/DavidObando/gsharp</PackageProjectUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)..\..\..\assets\PACKAGE_README.md" Pack="true" PackagePath="README.md" Visible="false" />
+    <None Include="$(MSBuildThisFileDirectory)..\..\..\assets\gsharp-icon.png" Pack="true" PackagePath="icon.png" Visible="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Keep in step with src/Core/Core.gsproj. Microsoft.VisualStudio.Validation comes from
+         build/gsharp.build.props for both projects. -->
+    <PackageReference Include="@(SystemReflectionMetadataLoadContextPackageReference)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Build-only references that order the library and the runtime projects before packing. -->
+    <ProjectReference Include="../../Core/Core.gsproj" Private="false" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" />
+    <ProjectReference Include="../Gsharp.Extensions/Gsharp.Extensions.csproj" Private="false" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" />
+    <ProjectReference Include="../Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.gsproj" Private="false" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" />
+    <ProjectReference Include="../Gsharp.Runtime.Values/Gsharp.Runtime.Values.gsproj" Private="false" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" />
+  </ItemGroup>
+
+  <Target Name="PackGsharpCompilerLibrary" BeforeTargets="_GetPackageFiles" DependsOnTargets="Build">
+    <PropertyGroup>
+      <_GsharpCoreOutDir>$(BaseOutputPath)/Core/</_GsharpCoreOutDir>
+    </PropertyGroup>
+    <ItemGroup>
+      <_GsharpCompilerLibrary Include="$(_GsharpCoreOutDir)GSharp.Core.dll;$(_GsharpCoreOutDir)GSharp.Core.xml;$(_GsharpCoreOutDir)GSharp.Core.pdb" />
+      <!-- The same files that Gsharp.NET.Sdk packs under tools/extensions/, tools/channels/ and tools/values/. -->
+      <_GsharpCompilerRuntime Include="$(BaseOutputPath)/Gsharp.Extensions/Gsharp.Extensions.dll;$(BaseOutputPath)/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.dll;$(BaseOutputPath)/Gsharp.Runtime.Values/Gsharp.Runtime.Values.dll" />
+    </ItemGroup>
+    <Error Condition="!Exists('%(_GsharpCompilerLibrary.FullPath)')" Text="Expected GSharp.Core build output '%(_GsharpCompilerLibrary.FullPath)' is missing." />
+    <Error Condition="!Exists('%(_GsharpCompilerRuntime.FullPath)')" Text="Expected G# runtime build output '%(_GsharpCompilerRuntime.FullPath)' is missing." />
+    <ItemGroup>
+      <None Include="@(_GsharpCompilerLibrary)" Pack="true" PackagePath="lib/$(TargetFramework)/" Visible="false" />
+      <None Include="@(_GsharpCompilerRuntime)" Pack="true" PackagePath="runtimes/gsharp/" Visible="false" />
+    </ItemGroup>
+  </Target>
+
+</Project>

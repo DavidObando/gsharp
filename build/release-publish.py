@@ -31,10 +31,17 @@ from pathlib import Path
 RIDS = ("linux-x64", "linux-arm64", "win-x64", "win-arm64", "osx-x64", "osx-arm64")
 COMPILER_PACKAGES = tuple(f"Gsharp.NET.Sdk.Compiler.{rid}" for rid in RIDS)
 # Gsharp.NET.Sdk comes first: the group is pushed in this order.
-SDK_PACKAGES = ("Gsharp.NET.Sdk", "Gsharp.Templates", "Gsharp.Repl", "Gsharp.Gsfmt", "Gsharp.Cs2Gs",
+SDK_PACKAGES = ("Gsharp.NET.Sdk", "Gsharp.Compiler", "Gsharp.Templates", "Gsharp.Repl", "Gsharp.Gsfmt", "Gsharp.Cs2Gs",
                 "GSharp.CodeAnalysis.Analyzers.Testing")
-# Gsharp.Templates has no symbols (Gsharp.Templates.gsproj) and the RID packages set IncludeSymbols=false.
-SYMBOL_PACKAGES = tuple(p for p in SDK_PACKAGES if p != "Gsharp.Templates")
+# Gsharp.Templates has no symbols (Gsharp.Templates.gsproj). Gsharp.Compiler carries GSharp.Core.pdb in lib/
+# (Gsharp.Compiler.gsproj), and the RID packages set IncludeSymbols=false.
+SYMBOL_PACKAGES = tuple(p for p in SDK_PACKAGES if p not in ("Gsharp.Templates", "Gsharp.Compiler"))
+# ADR-0223 D2: the G# runtime assemblies and the SDK folder of each. The SDK ships one copy of each file,
+# and Gsharp.Compiler ships the same file under runtimes/gsharp/.
+RUNTIME_ASSEMBLIES = {"Gsharp.Extensions.dll": "extensions", "Gsharp.Runtime.Channels.dll": "channels",
+                      "Gsharp.Runtime.Values.dll": "values"}
+COMPILER_LIBRARY_FILES = ("lib/net10.0/GSharp.Core.dll", "lib/net10.0/GSharp.Core.xml")
+COMPILER_LIBRARY_DEPENDENCIES = ("System.Reflection.MetadataLoadContext",)
 VSCODE_VSIX = "vscode-gsharp.vsix"
 VISUAL_STUDIO_VSIX = "GSharp.VisualStudio.vsix"
 PRERELEASE_PROPERTY = "Microsoft.VisualStudio.Code.PreRelease"
@@ -109,7 +116,64 @@ def check_nuget_packages(nupkgs: Path) -> tuple[list[str], str | None]:
     sdk_file = nupkgs / f"Gsharp.NET.Sdk.{version}.nupkg"
     if sdk_file.is_file():
         errors += check_sdk_props(sdk_file, version)
+        compiler_file = nupkgs / f"Gsharp.Compiler.{version}.nupkg"
+        errors += check_runtime_copies(sdk_file, compiler_file if compiler_file.is_file() else None)
     return errors, version
+
+
+def entry_path(name: str) -> str:
+    """A package entry name with forward slashes and no empty segments: `dotnet pack` can write `tools/x//a.dll`."""
+    return re.sub(r"/+", "/", name.replace("\\", "/"))
+
+
+def check_runtime_copies(sdk_file: Path, compiler_file: Path | None) -> list[str]:
+    """ADR-0223 D2: one copy of each G# runtime assembly in the SDK, and the same bytes in Gsharp.Compiler.
+
+    Each runtime file anywhere under tools/ of the SDK must equal the file in its own tools/<folder>/.
+    Gsharp.Compiler must carry GSharp.Core, the same runtime files under runtimes/gsharp/, and the
+    package dependencies of GSharp.Core.
+    """
+    errors: list[str] = []
+    try:
+        with zipfile.ZipFile(sdk_file) as archive:
+            sdk_entries = {entry_path(name): archive.read(name) for name in archive.namelist()
+                           if entry_path(name).startswith("tools/")
+                           and entry_path(name).rsplit("/", 1)[-1] in RUNTIME_ASSEMBLIES}
+    except (OSError, zipfile.BadZipFile, RuntimeError) as error:
+        return [f"{sdk_file.name}: cannot read the runtime assemblies: {error}"]
+    canonical: dict[str, bytes] = {}
+    for file_name, folder in sorted(RUNTIME_ASSEMBLIES.items()):
+        own = f"tools/{folder}/{file_name}"
+        if own not in sdk_entries:
+            errors.append(f"{sdk_file.name}: {own} is missing")
+            continue
+        canonical[file_name] = sdk_entries[own]
+        errors += [f"{sdk_file.name}: {name} differs from {own}" for name, data in sorted(sdk_entries.items())
+                   if name.rsplit("/", 1)[-1] == file_name and data != sdk_entries[own]]
+    if compiler_file is None:
+        return errors
+    try:
+        with zipfile.ZipFile(compiler_file) as archive:
+            names = {entry_path(name): name for name in archive.namelist()}
+            entries = set(names)
+            runtimes = {name: archive.read(names[f"runtimes/gsharp/{name}"]) for name in RUNTIME_ASSEMBLIES
+                        if f"runtimes/gsharp/{name}" in entries}
+            nuspecs = [name for name in entries if "/" not in name and name.endswith(".nuspec")]
+            nuspec = ET.fromstring(archive.read(nuspecs[0])) if len(nuspecs) == 1 else None
+    except (OSError, zipfile.BadZipFile, RuntimeError, ET.ParseError) as error:
+        return errors + [f"{compiler_file.name}: cannot read the package: {error}"]
+    errors += [f"{compiler_file.name}: {name} is missing" for name in COMPILER_LIBRARY_FILES if name not in entries]
+    for file_name in sorted(RUNTIME_ASSEMBLIES):
+        if file_name not in runtimes:
+            errors.append(f"{compiler_file.name}: runtimes/gsharp/{file_name} is missing")
+        elif file_name in canonical and runtimes[file_name] != canonical[file_name]:
+            errors.append(f"{compiler_file.name}: runtimes/gsharp/{file_name} differs from the SDK's "
+                          f"tools/{RUNTIME_ASSEMBLIES[file_name]}/{file_name}")
+    dependencies = set() if nuspec is None else {
+        element.get("id", "") for element in nuspec.iter() if local(element.tag) == "dependency"}
+    errors += [f"{compiler_file.name}: the .nuspec has no dependency on {name}"
+               for name in COMPILER_LIBRARY_DEPENDENCIES if name not in dependencies]
+    return errors
 
 
 def check_package_metadata(nupkg: Path, package_id: str, version: str) -> list[str]:
@@ -426,7 +490,7 @@ def cmd_finalize(args: argparse.Namespace) -> int:
         skipped_ok = job == "publish-visual-studio-marketplace" and prerelease and result == "skipped"
         row(f"job {job}", result == "success" or skipped_ok, result)
     missing_ids = [p for p in (*COMPILER_PACKAGES, *SDK_PACKAGES) if not feed_has(args.feed_url, p, args.version)]
-    row("nuget.org (12 packages)", not missing_ids, ", ".join(missing_ids))
+    row(f"nuget.org ({len(COMPILER_PACKAGES) + len(SDK_PACKAGES)} packages)", not missing_ids, ", ".join(missing_ids))
     wait_for = [("VS Code Marketplace", VSCODE_ID, args.vscode_version, "prerelease" if prerelease else "release")]
     if not prerelease:
         wait_for.append(("Visual Studio Marketplace", VISUAL_STUDIO_ID, args.visual_studio_version, "any"))

@@ -45,6 +45,7 @@
     <Project Path="src/Analyzers/InternalAnalyzers/InternalAnalyzers.gsproj" Type="C#" />
   </Folder>
   <Folder Name="/src/Sdk/">
+    <Project Path="src/Sdk/Gsharp.Compiler/Gsharp.Compiler.gsproj" Type="C#" />
     <Project Path="src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj" />
     <Project Path="src/Sdk/Gsharp.HotReload.Runtime/Gsharp.HotReload.Runtime.gsproj" Type="C#" />
     <Project Path="src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj" Type="C#" />
