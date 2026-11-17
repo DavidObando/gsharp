@@ -226,21 +226,23 @@ open class Issue5633ConditionalLocalQueryTests {
                 }
             }
             let chain = body.ToString() + "return x$links;\n"
-            let printed = this.TranslateWithinBound(
-                "#nullable enable\nusing System; using System.Linq; using System.Collections.Generic;\n" +
-                    "namespace Demo { public static class P {\n" +
-                    if queryBinding {
-                    "static IEnumerable<Func<T?>> Chain<T>(T p, int choice) {\n" +
-                        "return from item in new[] { 0 } select new Func<T?>(() => {\n" +
-                        chain +
-                        "});\n} } }"
-                } else {
-                    "static T? Chain<T>(T p, int choice) {\n" + chain + "} } }"
-                },
-                enabled: true,
-                measureWork: true
-            )
+            let source = "#nullable enable\nusing System; using System.Linq; using System.Collections.Generic;\n" +
+                "namespace Demo { public static class P {\n" +
+                if queryBinding {
+                "static IEnumerable<Func<T?>> Chain<T>(T p, int choice) {\n" +
+                    "return from item in new[] { 0 } select new Func<T?>(() => {\n" +
+                    chain +
+                    "});\n} } }"
+            } else {
+                "static T? Chain<T>(T p, int choice) {\n" + chain + "} } }"
+            }
+            let printed = this.TranslateWithinBound(source, enabled: true, measureWork: true)
             if links == 16 {
+                let supported = this.TranslateWithinBound(
+                    source.Replace("Chain<T>(T p, int choice) {", "Chain<T>(T p, int choice) where T : class {"),
+                    enabled: true
+                )
+                TranslationTestValidation.AssertBinds(supported)
                 continue
             }
             metrics.Add(this.translationOriginMetrics)
@@ -282,7 +284,7 @@ open class Issue5633ConditionalLocalQueryTests {
                 },
                 printed
             )
-            TranslationTestValidation.AssertBinds(printed)
+            TranslationTestValidation.AssertSourceNullableKindRejection(printed, "T")
         }
         Assert.True(
             aliasVisits[0] > 0 && aliasVisits[1] <= aliasVisits[0] * 3 && aliasVisits[2] <= aliasVisits[1] * 3,
@@ -685,7 +687,7 @@ namespace Demo
 
     @Fact
     func TupleUnboxingCycle_PreservesDefaultEvidenceAndTupleLeaves() {
-        let printed = this.TranslateWithinBound(`
+        const source = `
 #nullable enable
 namespace Demo
 {
@@ -709,12 +711,18 @@ namespace Demo
             return result;
         }
     }
-}`, enabled: true)
+}`
+        let printed = this.TranslateWithinBound(source, enabled: true)
         Assert.Contains("observed T?", printed)
         Assert.DoesNotContain("other T?", printed)
-        TranslationTestValidation.AssertBinds(printed)
+        TranslationTestValidation.AssertSourceNullableKindRejection(printed, "T")
+        let supported = this.TranslateWithinBound(
+            source.Replace("Run<T>(T replacement, bool flag)", "Run<T>(T replacement, bool flag) where T : class"),
+            enabled: true
+        )
+        TranslationTestValidation.AssertBinds(supported)
         LocalFunctionHoistTranslationTests.CompileAndRun(
-            printed,
+            supported,
             "System.Console.WriteLine(P.Run(\"value\", true))\n" + "System.Console.WriteLine(P.Run(\"value\", false))",
             "False:False;True:False;" + Environment.NewLine + "False:False;True:False;"
         )
@@ -761,7 +769,7 @@ namespace Demo
 
     @Fact
     func DeconstructedCallback_RetainsCapturedDefaultProvenance() {
-        let printed = this.TranslateWithinBound(`
+        const source = `
 #nullable enable
 namespace Demo
 {
@@ -782,10 +790,20 @@ namespace Demo
             return result;
         }
     }
-}`, enabled: true)
+}`
+        let printed = this.TranslateWithinBound(source, enabled: true)
         Assert.Contains("captured T?", printed)
-        TranslationTestValidation.AssertBinds(printed)
-        LocalFunctionHoistTranslationTests.CompileAndRun(printed, "System.Console.WriteLine(P.Run(\"value\"))", "True")
+        TranslationTestValidation.AssertSourceNullableKindRejection(printed, "T")
+        let supported = this.TranslateWithinBound(
+            source.Replace("Run<T>(T replacement)", "Run<T>(T replacement) where T : class"),
+            enabled: true
+        )
+        TranslationTestValidation.AssertBinds(supported)
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            supported,
+            "System.Console.WriteLine(P.Run(\"value\"))",
+            "True"
+        )
     }
 
     @Fact
@@ -828,7 +846,7 @@ namespace Demo
 
     @Fact
     func TruncatedTupleAlias_DoesNotCacheAMissingDefault() {
-        let printed = this.TranslateWithinBound(`
+        const source = `
 #nullable enable
 namespace Demo
 {
@@ -846,9 +864,19 @@ namespace Demo
             return IsNull(end);
         }
     }
-}`, enabled: true)
+}`
+        let printed = this.TranslateWithinBound(source, enabled: true)
         Assert.Contains("let end T? = if flag { b.Item1 } else { d }\n", printed)
-        TranslationTestValidation.AssertBinds(printed)
+        TranslationTestValidation.AssertSourceNullableKindRejection(printed, "T")
+        TranslationTestValidation.AssertBinds(
+            this.TranslateWithinBound(
+                source.Replace(
+                    "Probe<T>(T replacement, bool flag)",
+                    "Probe<T>(T replacement, bool flag) where T : class"
+                ),
+                enabled: true
+            )
+        )
     }
 
     @Theory
@@ -875,7 +903,7 @@ namespace Demo
 
     @Fact
     func LaterWritesOnBackedges_StillReachEarlierReads() {
-        let printed = this.TranslateWithinBound(`
+        const source = `
 #nullable enable
 namespace Demo
 {
@@ -905,10 +933,24 @@ namespace Demo
             }
         }
     }
-}`, enabled: true)
+}`
+        let printed = this.TranslateWithinBound(source, enabled: true)
         Assert.Contains("let loopRead T? = value\n", printed)
         Assert.Contains("let jumpRead T? = value\n", printed)
-        TranslationTestValidation.AssertBinds(printed)
+        TranslationTestValidation.AssertSourceNullableKindRejection(printed, "T")
+        TranslationTestValidation.AssertBinds(
+            this.TranslateWithinBound(
+                source.Replace(
+                    "Loop<T>(T replacement, bool again)",
+                    "Loop<T>(T replacement, bool again) where T : class"
+                )
+                    .Replace(
+                    "Jump<T>(T replacement, bool again)",
+                    "Jump<T>(T replacement, bool again) where T : class"
+                ),
+                enabled: true
+            )
+        )
     }
 
     private func ScopeCensusWork() int64 {

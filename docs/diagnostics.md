@@ -1550,6 +1550,7 @@ ADR-0149 adds a dedicated qualifier clause for explicit interface implementation
 | GS0638 | Error | Cannot take the pointer value of a fixed-size buffer in movable storage outside a `fixed` statement; pin it with `fixed` or index an element directly (`name[i]`).  | |
 | GS0639 | Error | Lazy declaration dependencies exceed the available execution stack. | Reduce or split cross-declaration attribute dependencies. The compiler reports this error instead of terminating the process. |
 | GS0640 | Error | A property declaration has an initializer (`prop X T = value`). The `PropertyDecl` grammar has no initializer. | Declare a field (`var X T = value`) or assign the property in `init`. |
+| GS0641 | Error | A source annotation or nullable-producing operator requires `T?`, but `T` has no proven reference or nonnullable value kind. | Constrain the actual domain with `class`, `class?`, a sufficient reference-class bound, `struct`, or `unmanaged`. `notnull`, interface-only bounds, and a dependent parameter's bare class bound are insufficient. Use bare `T` for a complete nullable type argument. See ADR-0224. |
 | GS0499 | Error | A field assignment targets a temporary struct value rather than writable storage.  | |
 | GS0500 | Error | A user-defined compound-assignment operator is not an instance method with exactly one parameter and no return value.  | |
 | GS0501 | Error | Imported metadata exposes multiple public parameterless members with the same name, so reflection lookup is ambiguous.  | |
@@ -1598,7 +1599,7 @@ types are `System.Int32` and `System.Nullable<System.Int32>`.
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| GS0505 | Error | A call cannot choose between compiler-generated reference-type and value-type variants of a nullable iterator because the caller's type parameter is unconstrained.  | |
+| GS0505 | Error | Historical nullable-iterator specialization diagnostic. Unsupported source annotations now report GS0641. | |
 
 Add a `struct`, `class`, or base-class constraint to the named type parameter.
 Ordinary user-written overload ambiguities continue to report GS0266.
@@ -1634,7 +1635,7 @@ nothing to pin; use the buffer directly as a `*T` pointer instead
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| GS0508 | Error | A nullable sequence element uses a type parameter that is not constrained to `struct` or a reference type. |
+| GS0508 | Error | Historical iterator-only diagnostic; source nullable type parameters now use GS0641. |
 
 `sequence[T?]` needs one stable CLR element representation. Iterator return
 types are specialized into `class` and `struct` variants automatically.

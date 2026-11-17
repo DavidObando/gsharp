@@ -2218,7 +2218,7 @@ nothing to pin; use the buffer directly as a `*T` pointer instead
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| GS0508 | Reserved | Historical iterator-only diagnostic; source nullable type parameters now use GS0641. |
+| GS0508 | Error | Historical iterator-only diagnostic; source nullable type parameters now use GS0641. |
 
 `sequence[T?]` needs one stable CLR element representation.
 ADR-0224 applies the same source eligibility rule as other `T?` positions.
@@ -2403,7 +2403,7 @@ above retain their longer explanations and examples.
 | GS0499 | Error | A field assignment targets a temporary struct value rather than writable storage.  | |
 | GS0500 | Error | A user-defined compound-assignment operator is not an instance method with exactly one parameter and no return value.  | |
 | GS0501 | Error | Imported metadata exposes multiple public parameterless members with the same name, so reflection lookup is ambiguous.  | |
-| GS0505 | Reserved | Historical nullable-iterator specialization diagnostic. Unsupported source annotations now report GS0641. | |
+| GS0505 | Error | Historical nullable-iterator specialization diagnostic. Unsupported source annotations now report GS0641. | |
 | GS9008 | Error | A pointer bound by `fixed` cannot be captured by a closure because the closure may outlive the pin. | A lambda inside `fixed p *int32 = xs` captures `p`. |
 
 ## Rethrow outside a catch handler (GS0570, GS0571)

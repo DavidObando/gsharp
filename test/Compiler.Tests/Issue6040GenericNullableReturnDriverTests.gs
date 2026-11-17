@@ -11,6 +11,16 @@ import System.Text.RegularExpressions
 import Xunit
 
 class Issue6040GenericNullableReturnDriverTests {
+    @Fact
+    func PartialHeaders_ReportEachUnsupportedAnnotationExactlyOnce() {
+        CheckRejectedAnnotations(
+            "partial class C[T System.IComparable[T?]] {}\npartial class C[T System.IComparable[T?]] {}",
+            []string{"T"},
+            2,
+            isLibrary: true
+        )
+    }
+
     @Theory
     @InlineData("func F[T](value T[?]) {}")
     @InlineData("func F[T]() { let value T[?] = default(T) }")

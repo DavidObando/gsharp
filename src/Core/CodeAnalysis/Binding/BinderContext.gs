@@ -85,16 +85,18 @@ internal class BinderContext {
     var ConstructorInitializerDepth int32
 
     internal var SourceNullableConstraintDepth int32
-    private var pendingSourceNullableAnnotations List[
+    internal let PendingSourceNullableAnnotations List[
         (Location TextLocation, Parameter TypeParameterSymbol, IsOperator bool)
-    ]?
+    ] = List[(TextLocation, TypeParameterSymbol, bool)]()
+    private let sourceNullableAnnotationErrors HashSet[TypeParameterSymbol] = HashSet[TypeParameterSymbol](
+        ReferenceEqualityComparer.Instance
+    )
 
     internal func BindSourceNullable(type TypeSymbol, location TextLocation, isOperator bool = false) TypeSymbol {
         let nullable = NullableTypeSymbol.Get(type)
         if nullable.UnderlyingType is TypeParameterSymbol parameter {
             if SourceNullableConstraintDepth > 0 {
-                pendingSourceNullableAnnotations ??= List[(TextLocation, TypeParameterSymbol, bool)]()
-                pendingSourceNullableAnnotations!!.Add((location, parameter, isOperator))
+                PendingSourceNullableAnnotations.Add((location, parameter, isOperator))
             } else {
                 if !ValidateSourceNullable(location, parameter, isOperator) && isOperator {
                     return TypeSymbol.Error
@@ -106,13 +108,13 @@ internal class BinderContext {
 
     internal func CompleteSourceNullableConstraints() {
         SourceNullableConstraintDepth--
-        if SourceNullableConstraintDepth != 0 || pendingSourceNullableAnnotations == nil {
+        if SourceNullableConstraintDepth != 0 {
             return
         }
-        for (location, parameter, isOperator) in pendingSourceNullableAnnotations!! {
+        for (location, parameter, isOperator) in PendingSourceNullableAnnotations {
             ValidateSourceNullable(location, parameter, isOperator)
         }
-        pendingSourceNullableAnnotations = nil
+        PendingSourceNullableAnnotations.Clear()
     }
 
     private func ValidateSourceNullable(
@@ -121,11 +123,11 @@ internal class BinderContext {
         isOperator bool = false
     ) bool {
         if !parameter.HasKnownSourceNullableKind {
-            if !isOperator || !parameter.HasSourceNullableAnnotationError {
+            if !isOperator || !sourceNullableAnnotationErrors.Contains(parameter) {
                 Diagnostics.ReportNullableTypeParameterRequiresKind(location, parameter.Name)
             }
             if !isOperator {
-                parameter.HasSourceNullableAnnotationError = true
+                sourceNullableAnnotationErrors.Add(parameter)
             }
             return false
         }

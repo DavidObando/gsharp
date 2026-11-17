@@ -295,9 +295,6 @@ class TypeParameterSymbol : TypeSymbol {
     internal prop HasKnownSourceNullableKind bool ->
     NullabilityImportRule.ClassifyArgument(this) != TypeArgumentKind.Unknown
 
-    /// Records a primary annotation error so operator recovery does not repeat it.
-    internal prop HasSourceNullableAnnotationError bool
-
     internal prop RequiresNullableGenericParamAttribute bool -> !HasValueTypeConstraint &&
         !HasUnmanagedConstraint &&
         (

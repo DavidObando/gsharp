@@ -245,7 +245,20 @@ open class Issue4445DefaultDeconstructionNullabilityTests {
         Assert.Contains("suppressed = default(T)!!", printed, StringComparison.Ordinal)
         Assert.Contains("annotated T? = default(T)", printed, StringComparison.Ordinal)
         Assert.DoesNotContain("let _ =", printed, StringComparison.Ordinal)
-        let result = EmittedOracle.Evaluate(printed + Environment.NewLine + "Defaults.Run()")
+        let rejected = EmittedOracle.Evaluate(printed + Environment.NewLine + "Defaults.Run()")
+        let errors = rejected.Diagnostics.Where((d Diagnostic) -> d.IsError).ToArray()
+        Assert.NotEmpty(errors)
+        Assert.All(errors, (d Diagnostic) -> Assert.Equal("GS0641", d.Id))
+        Assert.Contains(
+            errors,
+            (d Diagnostic) -> d.Location.Span.Start == printed.IndexOf("T?", StringComparison.Ordinal) +
+                1 &&
+                d
+                .Location
+                .Span
+                .Length == 1
+        )
+        let result = EmittedOracle.Evaluate(Translate(KnownReferenceSource) + Environment.NewLine + "Defaults.Run()")
         Assert.DoesNotContain(
             result.Diagnostics,
             (diagnostic GSharp.Core.CodeAnalysis.Diagnostic) -> diagnostic.IsError
@@ -3176,6 +3189,28 @@ public static class Defaults
         private func Translate() string {
             return Translate(Source)
         }
+
+        private prop KnownReferenceSource string -> Source
+            .Replace(
+            "Fill<T>(ref T? value, T replacement) =>",
+            "Fill<T>(ref T? value, T replacement) where T : class =>"
+        )
+            .Replace("NullablePair<T>() =>", "NullablePair<T>() where T : class =>")
+            .Replace("class FieldCallbacks<T>", "class FieldCallbacks<T> where T : class")
+            .Replace("class ReceiverContainer<T>", "class ReceiverContainer<T> where T : class")
+            .Replace(
+            "Unconstrained<T>(T replacement, bool choose)",
+            "Unconstrained<T>(T replacement, bool choose) where T : class"
+        )
+            .Replace("IncrementorControl<T>(T replacement)", "IncrementorControl<T>(T replacement) where T : class")
+            .Replace(
+            "NestedFunctionControls<T>(T replacement)",
+            "NestedFunctionControls<T>(T replacement) where T : class"
+        )
+            .Replace(
+            "private static int Controls<T>(T replacement)",
+            "private static int Controls<T>(T replacement) where T : class"
+        )
 
         private func Translate(source string, outputKind OutputKind = OutputKind.DynamicallyLinkedLibrary) string {
             let project = Load(source, outputKind)

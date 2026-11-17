@@ -1346,15 +1346,26 @@ internal partial class DeclarationBinder {
         // has to roll back with them, or a discarded candidate's check would
         // still be reported at flush time.
         let pendingConstraintChecks = binderCtx.RootScope.GetPendingUserGenericConstraintChecks()
+        let pendingNullableChecks = binderCtx.PendingSourceNullableAnnotations
         // Both speculative binds below roll back identically, so the rollback
         // lives in one place. Two copies of a predicate in one method is how
         // #4124 started.
-        let RollbackSpeculativeBind = func (diagnosticCount int32, pendingCheckCount int32) {
+        let RollbackSpeculativeBind = func (
+            diagnosticCount int32,
+            pendingCheckCount int32,
+            pendingNullableCount int32
+        ) {
             Diagnostics.TruncateTo(diagnosticCount)
             if pendingConstraintChecks.Count > pendingCheckCount {
                 pendingConstraintChecks.RemoveRange(
                     pendingCheckCount,
                     pendingConstraintChecks.Count - pendingCheckCount
+                )
+            }
+            if pendingNullableChecks.Count > pendingNullableCount {
+                pendingNullableChecks.RemoveRange(
+                    pendingNullableCount,
+                    pendingNullableChecks.Count - pendingNullableCount
                 )
             }
         }
@@ -1363,32 +1374,37 @@ internal partial class DeclarationBinder {
             (PartIndex int32, Syntax TypeParameterListSyntax, Symbols ImmutableArray[TypeParameterSymbol])
         ]()
         let diagnosticsByPart = List[ImmutableArray[Diagnostic]](matchingPartialLists.Length)
+        let nullableChecksByPart = List[(TextLocation, TypeParameterSymbol, bool)]()
         for var partIndex = 0; partIndex < matchingPartialLists.Length; partIndex++ {
             let candidate = matchingPartialLists[partIndex]
             let diagnosticCount = Diagnostics.Count
             let pendingCheckCount = pendingConstraintChecks.Count
+            let pendingNullableCount = pendingNullableChecks.Count
             let candidateSymbols = CreateTypeParameterSymbols(candidate)
             var candidateDiagnostics ImmutableArray[Diagnostic]
             try {
                 ResolveTypeParameterConstraints(candidate, candidateSymbols)
                 candidateDiagnostics = Diagnostics.VisibleSince(diagnosticCount)
+                nullableChecksByPart.AddRange(pendingNullableChecks.Skip(pendingNullableCount))
             } finally {
-                RollbackSpeculativeBind(diagnosticCount, pendingCheckCount)
+                RollbackSpeculativeBind(diagnosticCount, pendingCheckCount, pendingNullableCount)
             }
             diagnosticsByPart.Add(candidateDiagnostics)
             if !candidateDiagnostics.Any((diagnostic Diagnostic) -> diagnostic.IsError) {
                 successfulBindings.Add((partIndex, candidate, candidateSymbols))
             }
         }
+        pendingNullableChecks.AddRange(nullableChecksByPart)
         if successfulBindings.Count == 0 {
             // Preserve primary-part recovery state, but surface each part's own
             // constraint diagnostics exactly once.
             let diagnosticCount = Diagnostics.Count
             let pendingCheckCount = pendingConstraintChecks.Count
+            let pendingNullableCount = pendingNullableChecks.Count
             try {
                 ResolveTypeParameterConstraints(primarySyntax, symbols)
             } finally {
-                RollbackSpeculativeBind(diagnosticCount, pendingCheckCount)
+                RollbackSpeculativeBind(diagnosticCount, pendingCheckCount, pendingNullableCount)
             }
             for candidateDiagnostics in diagnosticsByPart {
                 Diagnostics.AddRange(candidateDiagnostics)
@@ -1406,7 +1422,11 @@ internal partial class DeclarationBinder {
                 Diagnostics.ReportPartialTypeParameterMismatch(location, typeName)
             }
         }
+        // Each part already owns its deferred nullable checks; rebinding the selected
+        // header must not enqueue that annotation a second time.
+        let pendingNullableCount = pendingNullableChecks.Count
         ResolveTypeParameterConstraints(baseline.Syntax, symbols)
+        pendingNullableChecks.RemoveRange(pendingNullableCount, pendingNullableChecks.Count - pendingNullableCount)
     }
 
     /// Resolves a non-keyword type-parameter constraint (anything other than
