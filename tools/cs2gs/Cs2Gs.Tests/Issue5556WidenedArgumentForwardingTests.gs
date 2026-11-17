@@ -51,6 +51,47 @@ public class Holder {
     }
 
     @Fact
+    func TransitiveHandoffs_PreserveNullValuesAndEveryEvaluation() {
+        let source = `
+#nullable enable
+using System;
+public class Node { }
+public class Holder {
+    private readonly Node stored;
+    private static string trace = "";
+    public Holder(Node value) { stored = value; }
+    private Holder Receiver() { trace += "r"; return this; }
+    private Node Relay(Node value) { trace += "l"; return value; }
+    private Node Value { get { trace += "g"; return Relay(stored); } }
+    private static int Before() { trace += "b"; return 1; }
+    private static int After() { trace += "a"; return 2; }
+    private static string Sink(int first, Node value, int last) {
+        trace += "s";
+        return value == null ? "null" : "value";
+    }
+    private string Use() => Sink(Before(), Receiver().Value, After());
+    public static void Main() {
+        Console.Write(new Holder(null!).Use() + "|" + new Holder(new Node()).Use() + "|" + trace);
+    }
+}
+`
+        Issue5581ExpandedParamsNullElementsTests.WithTranslation(
+            source,
+            (directory string, printed string, compiled ProcessRunResult) -> {
+                Issue5581ExpandedParamsNullElementsTests.AssertSuccessfulTarget(
+                    directory,
+                    compiled,
+                    "null|value|brglasbrglas"
+                )
+                Assert.Contains("Relay(value Node?) Node?", printed)
+                Assert.Contains("stored Node?", printed)
+                Assert.DoesNotContain("!!", printed)
+            },
+            "null|value|brglasbrglas"
+        )
+    }
+
+    @Fact
     func WidenedOrigins_ForwardIntoReducedReceiverAndExpandedElements() {
         let source = `
 #nullable enable
