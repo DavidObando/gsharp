@@ -58,11 +58,18 @@ Add explicit factories to `ReferenceResolver`:
 
 `packRoot` is the folder that contains the versions of `Microsoft.NETCore.App.Ref`. The factory selects the newest version, in semantic version order, that has the `ref/<tfm>` folder. It adds no host assembly as a fallback. It throws `DirectoryNotFoundException` when it finds no pack, or when the pack folder contains no assemblies.
 
-### D4. Bundled runtime directory (design only)
+### D4. Bundled runtime directory (implemented, #6066)
 
 Replace the `internal` static `SdkToolsDirectory` with an explicit option. `ReferenceResolver` factories take an optional `runtimeDirectory` argument, and `ResolveDriverReferencePaths` takes the same argument. The search order is: the argument, then the folder beside the application, then `GSHARP_SDK_TOOLS_DIR`. A process-wide setter is not added, because two hosts in one process can need different SDK versions.
 
 ### D5. Thread-safety contract (stress test added; item 1 not supported, see #6070)
+Implementation notes:
+
+- `Default(runtimeDirectory)`, `ForReferencePack(targetFramework, packRoot, runtimeDirectory)`, and `ResolveDriverReferencePaths(referencePaths, runtimeDirectory)` take the argument. `Default()` and the one-argument `ResolveDriverReferencePaths` stay, and use no runtime directory. `WithReferences` and `WithRuntimeReferences` take explicit paths and do not add bundled runtimes, so a host gives them the result of `ResolveDriverReferencePaths`.
+- In the runtime directory, the search uses the SDK layout (`extensions/`, `channels/`, `values/`) first, then the folder itself. The folder itself is the layout of `runtimes/gsharp/` in the D2 package.
+- `gsc` gives the `/sdktoolsdir:` switch, else `GSHARP_SDK_TOOLS_DIR`, as the argument, and turns off the resolver's own variable fallback. Its order does not change: the switch or the variable, then the folder beside `gsc`; a switch hides the variable.
+- `Default(runtimeDirectory)` loads the runtimes into a context that the resolver owns, and they replace host assemblies with the same simple name, so the resolver uses the files that it found. `Default()` keeps its behavior. Each request of a compiler worker has its own value. `gsi` gives `GSHARP_SDK_TOOLS_DIR` as the argument, so its order does not change either.
+- A library host that sets only the variable now gets the files beside the application first. Before, the variable came first.
 
 These statements describe the current code:
 

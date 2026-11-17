@@ -398,7 +398,6 @@ namespace GscAnalyzerFlagTestGenerators
             }
         } finally {
             Environment.SetEnvironmentVariable("GSHARP_SDK_TOOLS_DIR", prevEnvironment)
-            ReferenceResolver.SdkToolsDirectory = nil
             try {
                 Directory.Delete(tools, recursive: true)
             } catch (IOException) { }
@@ -406,6 +405,7 @@ namespace GscAnalyzerFlagTestGenerators
     }
 
     /// ADR-0207: the bundled runtime lookup takes the portable copy from the SDK tools folder first.
+    /// ADR-0223 D4: the caller gives the folder as the runtime directory argument.
     @Fact
     func BundledRuntime_SdkToolsDirectory_ReturnsThePortableCopy() {
         let tools = Directory.CreateTempSubdirectory("gsc_sdkruntime_").FullName
@@ -414,11 +414,9 @@ namespace GscAnalyzerFlagTestGenerators
             Directory.CreateDirectory(folder)
             let copy = Path.Combine(folder, "Gsharp.Runtime.Channels.dll")
             File.Copy(PortableStandIn, copy)
-            ReferenceResolver.SdkToolsDirectory = tools
-            let found = ReferenceResolver.FindBundledChannelsRuntimePath("/nonexistent/gsc-dir")
+            let found = ReferenceResolver.FindBundledChannelsRuntimePath("/nonexistent/gsc-dir", tools)
             Assert.Equal(Path.GetFullPath(copy), found)
         } finally {
-            ReferenceResolver.SdkToolsDirectory = nil
             Directory.Delete(tools, recursive: true)
         }
     }
@@ -439,10 +437,8 @@ namespace GscAnalyzerFlagTestGenerators
             bytes[peOffset + 4] = uint8(0x1D)
             bytes[peOffset + 5] = uint8(0xFD)
             File.WriteAllBytes(copy, bytes)
-            ReferenceResolver.SdkToolsDirectory = tools
-            Assert.Null(ReferenceResolver.FindBundledChannelsRuntimePath("/nonexistent/gsc-dir"))
+            Assert.Null(ReferenceResolver.FindBundledChannelsRuntimePath("/nonexistent/gsc-dir", tools))
         } finally {
-            ReferenceResolver.SdkToolsDirectory = nil
             Directory.Delete(tools, recursive: true)
         }
     }
