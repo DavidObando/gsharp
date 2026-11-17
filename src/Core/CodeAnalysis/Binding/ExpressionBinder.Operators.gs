@@ -4522,7 +4522,9 @@ internal partial class ExpressionBinder {
                     nativeTarget = nativeTarget.GetElementPositions()[0]
                 }
                 // Symbolic conversions must not depend on the caller's CLR erasure surrogate.
-                if !clrParameterType.IsByRef && TypeSymbol.ContainsSameCompilationUserType(nativeTarget) {
+                if !clrParameterType.IsByRef && TypeSymbol.ContainsSameCompilationUserType(sourceType) &&
+                    TypeSymbol
+                    .ContainsSameCompilationUserType(nativeTarget) {
                     let symbolicConversion = Conversion.ClassifyNonStructural(sourceType, nativeTarget)
                     if symbolicConversion.IsIdentity {
                         return ClrOverloadResolution.ImplicitConversionKind.Identity

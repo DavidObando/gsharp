@@ -12,11 +12,11 @@ class Issue6055SymbolicArgumentApplicabilityTests {
         let contract = fixture.CompileCSharp(`using System.Collections.Generic;
 namespace Contracts6055;
 public sealed class Sink<T> {
-    public Sink(IDictionary<string, T> values) { Count = values.Count; }
-    public Sink(object values) { Count = -1; }
+    public Sink(IDictionary<string, T>? values) { Count = values?.Count ?? 99; }
+    public Sink(object? values) { Count = -1; }
     public int Count { get; }
-    public static int Read(IDictionary<string, T> values) => values.Count;
-    public static int Read(object values) => -1;
+    public static int Read(IDictionary<string, T>? values) => values?.Count ?? 99;
+    public static int Read(object? values) => -1;
     public static void Clear(ref Dictionary<string, T> values) => values.Clear();
 }`, "Contract6055")
         let dll = fixture.Compile(`import System
@@ -49,6 +49,7 @@ Console.WriteLine(Sink[Failure](state.Failures).Count)
 Console.WriteLine(Sink[Failure].Read(state.Failures))
 Console.WriteLine(Sink[Failure](local).Count)
 Console.WriteLine(Sink[Failure].Read(local))
+Console.WriteLine(Sink[Failure].Read(nil))
 Console.WriteLine(object.ReferenceEquals(copy.Comparer, StringComparer.Ordinal))
 copy.Clear()
 Console.WriteLine(state.Failures.Count)
@@ -82,6 +83,7 @@ class P {
         Console.WriteLine(Sink<Failure>.Read(state.Failures));
         Console.WriteLine(new Sink<Failure>(local).Count);
         Console.WriteLine(Sink<Failure>.Read(local));
+        Console.WriteLine(Sink<Failure>.Read(null));
         Console.WriteLine(ReferenceEquals(copy.Comparer, StringComparer.Ordinal));
         copy.Clear();
         Console.WriteLine(state.Failures.Count);
@@ -91,17 +93,17 @@ class P {
     }
 }
 public sealed class Sink<T> {
-    public Sink(IDictionary<string, T> values) { Count = values.Count; }
-    public Sink(object values) { Count = -1; }
+    public Sink(IDictionary<string, T>? values) { Count = values?.Count ?? 99; }
+    public Sink(object? values) { Count = -1; }
     public int Count { get; }
-    public static int Read(IDictionary<string, T> values) => values.Count;
-    public static int Read(object values) => -1;
+    public static int Read(IDictionary<string, T>? values) => values?.Count ?? 99;
+    public static int Read(object? values) => -1;
     public static void Clear(ref Dictionary<string, T> values) => values.Clear();
 }`, "Native6055")
         IlVerifier.Verify(native)
         File.Copy(Path.ChangeExtension(dll, ".runtimeconfig.json"), Path.ChangeExtension(native, ".runtimeconfig.json"))
         let expected = Encoding.UTF8.GetBytes(
-            "0\nTrue\nTrue\n1\n1\n1\n1\n1\nTrue\n1\n0\n".Replace("\n", Environment.NewLine)
+            "0\nTrue\nTrue\n1\n1\n1\n1\n1\n99\nTrue\n1\n0\n".Replace("\n", Environment.NewLine)
         )
         Assert.Equal(expected, fixture.RunBytes(native))
         Assert.Equal(expected, fixture.RunBytes(dll))
