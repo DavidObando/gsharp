@@ -16,9 +16,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
-<<<<<<< HEAD
 - Preserve the inferred platform reference type in `x ?? nil`. Oblivious imported references retain their null values and evaluation order. (Fixes #5565)
-=======
+
 - **Symbolic imported-call arguments** (Fixes #6055, #6056). Constructor and method overload selection uses source type conversions when CLR erasure surrogates differ or falsely agree. Enum-valued dictionary properties bind matching copy constructors; incompatible invariant enum-to-integer generics are rejected instead of emitting invalid IL. Genuine generic identities retain their overload rank, while unrelated implicit operators do not block structural projections.
 
 - **Fewer cascading parse diagnostics** (Oats). The parser reports `GS0005` once for each token where it stops, so `func f( int32 {` gives one `GS0005`, not two. The binder does not report `GS0113` "Type ''" for a type name token that the parser synthesized.
@@ -68,7 +67,6 @@ The published **0.5** documentation snapshot and all current installation/downlo
 - Construct expanded List and span variadic carriers over source-declared elements and generic type parameters. Preserve symbolic element types through ordinary constructor emission, including nullable elements and nested collections. Normal-form arguments retain their carrier identity. (Fixes #6010)
 
 - Reject release packages whose embedded nuspec ID or version differs from the filename. Reuse package metadata verification before publishing. (Fixes #5550)
->>>>>>> origin/main
 
 - Preserve nullable scalar storage in oblivious `cs2gs` jagged-array allocations. Reuse depth-aware storage contracts for allocations, declarations, aliases, and element reads. Keep nullable array references separate from nullable elements. Range slices keep the array depth; scalar indices consume an element position. Preserve allocation, copy, and row-assignment order. (Fixes #6006)
 
