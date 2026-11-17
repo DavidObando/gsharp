@@ -29,6 +29,7 @@ import Xunit
 /// Issue #6036: writable shared-storage `ref` arguments need a required assertion when gsc drops an unrelated local's proof.
 /// On 426306d887, field-ref cases fail with GS0159 without it; local-ref controls compile without `plan!!`.
 /// On 1ea2e1e14, array and tuple refs produce GS0300/GS0536; conditional refs retain their required assertion.
+/// On 1868ce45d, writable-ref extension calls on fields fail with GS0158/GS0116; local and array receivers stay bare.
 /// Each test also compares the translated program's output with C#.
 open class Issue5706NarrowedConditionalIndexTests {
     @Theory
@@ -118,6 +119,39 @@ public static class Demo
     }
 }
 `.Replace("__CALL__", refCall), strictIl: true, rejectConditionalIndexWarnings: true, expectedOutput: "1:a:1")
+        if expectAssertion {
+            Assert.Contains("s!!", printed, StringComparison.Ordinal)
+        } else {
+            Assert.DoesNotContain("s!!", printed, StringComparison.Ordinal)
+        }
+    }
+
+    @Theory
+    @InlineData("counter", true)
+    @InlineData("local", false)
+    @InlineData("counters[0]", false)
+    func AssignedLocalNarrowing_AfterWritableRefExtensionReceiver(receiver string, expectAssertion bool) {
+        let printed = Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+public struct Counter { public int N; }
+public static class Ext
+{
+    public static void Bump(this ref Counter value) { value.N++; }
+}
+public static class Demo
+{
+    static Counter counter;
+    public static string Run()
+    {
+        Counter local = default;
+        Counter[] counters = new Counter[1];
+        string? s = null;
+        s = "a";
+        __RECEIVER__.Bump();
+        return s.Length + ":" + s?[0] + ":" + __RECEIVER__.N;
+    }
+}
+`.Replace("__RECEIVER__", receiver), strictIl: true, rejectConditionalIndexWarnings: true, expectedOutput: "1:a:1")
         if expectAssertion {
             Assert.Contains("s!!", printed, StringComparison.Ordinal)
         } else {

@@ -1192,13 +1192,9 @@ partial class CSharpToGSharpTranslator {
             (byReference && this.NodeRunsStaticTypeInitializer(node)) ||
             (byReference && this.NodeMayWriteReferenceStorage(node)) ||
             (
-            node is ArgumentSyntax argument &&
-                (
-                argument.RefKindKeyword.IsKind(SyntaxKind.RefKeyword) || argument.RefKindKeyword.IsKind(
-                    SyntaxKind.OutKeyword
-                )
-            ) &&
-                this.WritableReferenceMayInvalidateAnyRoot(argument.Expression)
+            this.WritableReferenceArgumentTarget(node) is {} target && this.WritableReferenceMayInvalidateAnyRoot(
+                target
+            )
         )
 
         // RecordWritableReference preserves unrelated roots for variables, tuple storage, array elements, and stable member paths.
