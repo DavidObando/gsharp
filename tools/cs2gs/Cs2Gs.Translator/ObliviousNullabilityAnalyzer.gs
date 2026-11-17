@@ -2760,7 +2760,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 // A declaration seen through a run project's emitted reference is
                 // read in its source, so the source declaration joins it.
                 if entry.Value.DeclaringSyntaxReferences.Length == 0 {
-                    symbols.AddRange(SourceDeclarationsInRun(entry.Value, run.Members))
+                    symbols.AddRange(SourceDeclarationsInRun(entry.Value, run))
                 }
             }
         }
@@ -2815,9 +2815,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                     }
                     if !declarations.ContainsKey(target) && run.Slots.TryGetValue(target, out var slot) {
                         let symbols = List[ISymbol]{slot}
-                        if slot.DeclaringSyntaxReferences.Length == 0 {
-                            symbols.AddRange(SourceDeclarationsInRun(slot, run.Members))
-                        }
+                        symbols.AddRange(SourceDeclarationsInRun(slot, run))
                         declarations[target] = symbols
                     }
                     if !IsEmitted(target) {
@@ -4103,12 +4101,27 @@ internal shared class ObliviousNullabilityAnalyzer {
             IsEmittedByRun(slot.OriginalDefinition, graphs)
     }
 
-    // Issue #5574: the source declarations, in the run's compilations, that a
-    // declaration seen through a run project's emitted reference stands for.
-    private func SourceDeclarationsInRun(symbol ISymbol, graphs List[NullArgumentGraph]) List[ISymbol] {
+    // Collect every source alias before deciding whether all reads preserve evaluation order.
+    private func SourceDeclarationsInRun(symbol ISymbol, run NullArgumentRun) List[ISymbol] {
         let sources = List[ISymbol]()
-        for source in RunSourceDeclarations(symbol, graphs.Select((graph NullArgumentGraph) -> graph.Owner)) {
-            sources.Add(OriginalNullArgumentDeclaration(source) ?? source)
+        let declaration = OriginalNullArgumentDeclaration(symbol) ?? symbol
+        let keys = NullArgumentKeys(declaration)
+        if keys.Count == 0 || NullArgumentId(declaration) is not{} id {
+            return sources
+        }
+        let canonical = CanonicalNullArgumentKey(keys[0], run)
+        // Canonicalization records every assembly and linked-source alias before read collection.
+        for graph in run.Members {
+            let key = graph.Owner.Assembly.Identity.GetDisplayName() + "|" + id
+            if run.Canonical.TryGetValue(key, out var candidate) &&
+                candidate == canonical &&
+                graph.Owner is CSharpCompilation compilation &&
+                DeclarationOfNullArgumentId(id, compilation) is {} source &&
+                source
+                .DeclaringSyntaxReferences
+                .Length != 0 {
+                sources.Add(OriginalNullArgumentDeclaration(source) ?? source)
+            }
         }
         return sources
     }

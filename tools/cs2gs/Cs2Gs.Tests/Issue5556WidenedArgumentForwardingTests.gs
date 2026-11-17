@@ -6,6 +6,7 @@ import Cs2Gs.Pipeline
 import System
 import System.IO
 import System.Linq
+import System.Text.Json
 import System.Text.RegularExpressions
 import Xunit
 
@@ -89,6 +90,142 @@ public class Holder {
             },
             "null|value|brglasbrglas"
         )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func LinkedPartialImplementations_PinEveryAliasRegardlessOfProjectOrder(effectfulFirst bool) {
+        let directory = Path.Combine(AppContext.BaseDirectory, "issue-5556-linked", Guid.NewGuid().ToString("N"))
+        let native = Path.Combine(directory, "native")
+        Directory.CreateDirectory(native)
+        try {
+            GsharpTestProjectRunner.WriteIsolationBoundary(native)
+            File.WriteAllText(Path.Combine(native, "Shared.cs"), `
+#nullable enable
+using System;
+public class Node { public void Touch(int value) { } }
+public partial class Holder {
+    private readonly Node stored;
+    private static string trace = "";
+    public Holder(Node value) { stored = value; }
+    private void Use() => Sink(stored);
+    private static partial void Sink(Node value);
+    private static int Argument() { trace += "a"; return 1; }
+    public static void Main() {
+        try { new Holder(null!).Use(); }
+        catch (NullReferenceException) { Console.Write(trace); }
+    }
+}
+`)
+            for effectful in[]bool{false, true} {
+                let name = if effectful {
+                    "Effectful"
+                } else {
+                    "Safe"
+                }
+                let prefix = if effectful == effectfulFirst {
+                    "01"
+                } else {
+                    "02"
+                }
+                let project = Path.Combine(native, "$prefix-$name")
+                Directory.CreateDirectory(project)
+                File.WriteAllText(
+                    Path.Combine(project, "Probe.csproj"),
+                    `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><OutputType>Exe</OutputType><Nullable>enable</Nullable><TreatWarningsAsErrors>true</TreatWarningsAsErrors></PropertyGroup><ItemGroup><Compile Include="../Shared.cs" Link="Shared.cs" /></ItemGroup></Project>`
+                )
+                let argument = if effectful {
+                    "Argument()"
+                } else {
+                    "1"
+                }
+                File.WriteAllText(
+                    Path.Combine(project, "Implementation.cs"),
+                    `public partial class Holder { private static partial void Sink(Node value) { trace += "s"; value.Touch(` +
+                        argument +
+                        `); } }`
+                )
+                Issue5581ExpandedParamsNullElementsTests.AssertProcess(
+                    ProcessRunner.Run("dotnet", []string{"build", "Probe.csproj", "-c", "Release", "--nologo"}, project)
+                )
+                Issue5581ExpandedParamsNullElementsTests.AssertOutput(
+                    ProcessRunner.Run(
+                        "dotnet",
+                        []string{Path.Combine(project, "bin", "Release", "net10.0", "Probe.dll")}
+                    ),
+                    if effectful {
+                        "sa"
+                    } else {
+                        "s"
+                    }
+                )
+            }
+            Issue5581ExpandedParamsNullElementsTests.AssertProcess(
+                ProcessRunner.Run("git", []string{"init", "--quiet"}, native)
+            )
+            let compiler = GscInvoker.Resolve(nil, "Release", AppContext.BaseDirectory)
+            Assert.NotNull(compiler)
+            using let global = JsonDocument.Parse(
+                File.ReadAllText(Path.Combine(IlVerifyRunner().RepoRoot, "global.json"))
+            )
+            let sdk = global.RootElement.GetProperty("msbuild-sdks").GetProperty("Gsharp.NET.Sdk").GetString()
+            let translated = Path.Combine(directory, "translated")
+            Issue5581ExpandedParamsNullElementsTests.AssertProcess(
+                ProcessRunner.Run(
+                    "dotnet",
+                    []string{
+                        typeof(Cs2Gs.Cli.Program).Assembly.Location,
+                        "migrate",
+                        "--corpus",
+                        native,
+                        "--out",
+                        translated,
+                        "--artifacts",
+                        Path.Combine(directory, "artifacts"),
+                        "--sdk-version",
+                        sdk!!,
+                        "--sdk-pin",
+                        "global-json",
+                        "--translate-only",
+                        "--gsc",
+                        compiler!!
+                    },
+                    native
+                )
+            )
+            let shared = Path.Combine(translated, "Shared.gs")
+            let printed = File.ReadAllText(shared)
+            Assert.Contains("stored Node\n", printed)
+            Assert.Contains("init(value Node)", printed)
+            Assert.Contains("Sink(value Node)", printed)
+            Assert.DoesNotContain("!!", printed)
+            let projects = Directory
+                .EnumerateDirectories(translated)
+                .Where((path string) -> File.Exists(Path.Combine(path, "Implementation.gs")))
+                .ToArray()
+            Assert.Equal(2, projects.Length)
+            for project in projects {
+                let implementation = Path.Combine(project, "Implementation.gs")
+                Assert.DoesNotContain("!!", File.ReadAllText(implementation))
+                AssertPinnedNil(
+                    project,
+                    printed,
+                    ProcessRunner.Run(
+                        "dotnet",
+                        []string{
+                            compiler!!,
+                            "/target:exe",
+                            "/out:" + Path.Combine(project, "Target.dll"),
+                            shared,
+                            implementation
+                        }
+                    )
+                )
+            }
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
     }
 
     @Fact

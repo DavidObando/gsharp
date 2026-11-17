@@ -546,13 +546,13 @@ public class Bag<T> : List<string> { }
             AssertProcess(ProcessRunner.Run("dotnet", arguments, IlVerifyRunner().RepoRoot))
         }
 
-        private func AssertOutput(result ProcessRunResult, expected string) {
+        internal func AssertOutput(result ProcessRunResult, expected string) {
             AssertProcess(result)
             Assert.Equal(string.Empty, result.Stderr)
             Assert.Equal(Encoding.UTF8.GetBytes(expected), Encoding.UTF8.GetBytes(result.Stdout))
         }
 
-        private func AssertProcess(result ProcessRunResult) {
+        internal func AssertProcess(result ProcessRunResult) {
             Assert.False(result.TimedOut, result.Output)
             Assert.True(result.ExitCode == 0, result.Output)
         }
