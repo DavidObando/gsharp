@@ -21501,6 +21501,17 @@ partial class CSharpToGSharpTranslator {
                     .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.RefKeyword) || argument.RefKindKeyword.IsKind(
                     Microsoft.CodeAnalysis.CSharp.SyntaxKind.OutKeyword
                 ) {
+                    if argument
+                        .Parent
+                        ?.Parent is InvocationExpressionSyntax call &&
+                        this
+                        .context
+                        .GetSymbolInfo(call)
+                        .Symbol is IMethodSymbol method &&
+                        this.TryGetRewrittenSourceExtensionReceiver(call, method, out var receiver) &&
+                        object.ReferenceEquals(argument.Expression, receiver) {
+                        return nil
+                    }
                     return argument.Expression
                 }
                 case invocation is InvocationExpressionSyntax when invocation.Expression is MemberAccessExpressionSyntax receiverAccess &&
@@ -21514,7 +21525,14 @@ partial class CSharpToGSharpTranslator {
                     .Length > 0 &&
                     method.ReducedFrom!!
                     .Parameters[0]
-                    .RefKind == RefKind.Ref {
+                    .RefKind == RefKind.Ref &&
+                    (
+                    method.ReducedFrom!!.DeclaringSyntaxReferences.IsDefaultOrEmpty || this.TryGetStaticExtensionHelper(
+                        method,
+                        out _,
+                        out _
+                    )
+                ) {
                     return receiverAccess.Expression
                 }
                 default {

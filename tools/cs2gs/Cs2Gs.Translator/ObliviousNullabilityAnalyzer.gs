@@ -4486,7 +4486,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
     }
 
-    private func CallArgumentList(node SyntaxNode) ArgumentListSyntax? -> switch node {
+    internal func CallArgumentList(node SyntaxNode) ArgumentListSyntax? -> switch node {
         case invocation is InvocationExpressionSyntax: invocation.ArgumentList
         case creation is BaseObjectCreationExpressionSyntax: creation.ArgumentList
         case initializer is ConstructorInitializerSyntax: initializer.ArgumentList

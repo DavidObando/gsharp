@@ -30,6 +30,8 @@ import Xunit
 /// On 426306d887, field-ref cases fail with GS0159 without it; local-ref controls compile without `plan!!`.
 /// On 1ea2e1e14, array and tuple refs produce GS0300/GS0536; conditional refs retain their required assertion.
 /// On 1868ce45d, writable-ref extension calls on fields fail with GS0158/GS0116; local and array receivers stay bare.
+/// On f955ef24e, later arguments to calls and constructors report GS0300/GS0536 before call completion.
+/// Without emitted-receiver classification, reduced, qualified, and bare extension calls lowered by value produce GS0300/GS0536.
 /// Each test also compares the translated program's output with C#.
 open class Issue5706NarrowedConditionalIndexTests {
     @Theory
@@ -157,6 +159,65 @@ public static class Demo
         } else {
             Assert.DoesNotContain("s!!", printed, StringComparison.Ordinal)
         }
+    }
+
+    @Theory
+    @InlineData("Ext.Bump(ref counter, s.Length, s?[0]);")
+    @InlineData("counter.Bump(s.Length, s?[0]);")
+    @InlineData("new Box(ref counter, s.Length, s?[0]);")
+    @InlineData("Box box = new(ref counter, s.Length, s?[0]);")
+    @InlineData("var box = new Box(ref counter, s.Length, s?[0]) { Length = s.Length };")
+    func AssignmentProof_WritableReferenceCallCompletesAfterArguments(call string) {
+        Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+public struct Counter { public int N; public char Letter; }
+public static class Ext
+{
+    public static void Bump(this ref Counter value, int length, char? first)
+    {
+        value.N += length;
+        value.Letter = first ?? '_';
+    }
+}
+public class Box
+{
+    public int Length;
+    public Box(ref Counter value, int length, char? first) { Ext.Bump(ref value, length, first); }
+}
+public static class Demo
+{
+    static Counter counter;
+    public static string Run()
+    {
+        string? s = null;
+        s = "a";
+        __CALL__
+        return s.Length + ":" + counter.Letter + ":" + counter.N;
+    }
+}
+`.Replace("__CALL__", call), strictIl: true, rejectConditionalIndexWarnings: true, expectedOutput: "1:a:1")
+    }
+
+    @Theory
+    @InlineData("counter.Keep();")
+    @InlineData("Demo.Keep(ref counter);")
+    @InlineData("Keep(ref counter);")
+    func AssignmentProof_ReferenceEffectsMatchExtensionLowering(call string) {
+        Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+public static class Demo
+{
+    static int counter;
+    public static void Keep(this ref int value) {}
+    public static string Run()
+    {
+        string? s = null;
+        s = "a";
+        __CALL__
+        return s.Length + ":" + s?[0];
+    }
+}
+`.Replace("__CALL__", call), strictIl: true, rejectConditionalIndexWarnings: true, expectedOutput: "1:a")
     }
 
     @Fact

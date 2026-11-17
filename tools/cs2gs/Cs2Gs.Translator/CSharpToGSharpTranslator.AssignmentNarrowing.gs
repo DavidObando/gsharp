@@ -1191,11 +1191,24 @@ partial class CSharpToGSharpTranslator {
         (closureAssigned && this.NodeMayRunEscapedClosure(node)) ||
             (byReference && this.NodeRunsStaticTypeInitializer(node)) ||
             (byReference && this.NodeMayWriteReferenceStorage(node)) ||
-            (
-            this.WritableReferenceArgumentTarget(node) is {} target && this.WritableReferenceMayInvalidateAnyRoot(
-                target
+            this.CallMayInvalidateAnyRoot(node)
+
+        private func CallMayInvalidateAnyRoot(node SyntaxNode) bool {
+            if ObliviousNullabilityAnalyzer.CallArgumentList(node) is not{} arguments {
+                return false
+            }
+            return (
+                this.WritableReferenceArgumentTarget(node) is {} receiver && this.WritableReferenceMayInvalidateAnyRoot(
+                    receiver
+                )
+            ) ||
+                arguments
+                .Arguments
+                .Any(
+                (argument ArgumentSyntax) -> this.WritableReferenceArgumentTarget(argument) is {} target &&
+                    this.WritableReferenceMayInvalidateAnyRoot(target)
             )
-        )
+        }
 
         // RecordWritableReference preserves unrelated roots for variables, tuple storage, array elements, and stable member paths.
         private func WritableReferenceMayInvalidateAnyRoot(target ExpressionSyntax) bool {
