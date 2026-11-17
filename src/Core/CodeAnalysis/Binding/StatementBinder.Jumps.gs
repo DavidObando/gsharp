@@ -891,7 +891,7 @@ internal partial class StatementBinder {
                     out var userLabel
                 ) {
                     targetUserLabels ??= Dictionary[string, BoundLabel](StringComparer.Ordinal)
-                    targetUserLabels!![labelName] = userLabel
+                    targetUserLabels[labelName] = userLabel
                 }
             }
             targetLabels = deltas
@@ -2787,7 +2787,7 @@ internal partial class StatementBinder {
                     case BlockExpressionSyntax {
                         if current.Parent is not LambdaExpressionSyntax {
                             builder ??= ImmutableArray.CreateBuilder[SyntaxNode]()
-                            builder!!.Add(current)
+                            builder.Add(current)
                         }
                     }
                 }

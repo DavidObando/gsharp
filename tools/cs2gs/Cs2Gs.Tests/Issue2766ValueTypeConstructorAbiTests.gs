@@ -20,12 +20,12 @@ class Issue2766ValueTypeConstructorAbiTests {
     func Translation_PreservesPlainStructConstructorsAndMemberKinds() {
         let unit = Translate()
         let policy = FindType(unit, "ValuePolicy")
-        Assert.True(policy.PrimaryConstructorParameters == nil || policy.PrimaryConstructorParameters!!.Count == 0)
+        Assert.True(policy.PrimaryConstructorParameters == nil || policy.PrimaryConstructorParameters.Count == 0)
         Assert.Equal("level", Assert.Single(policy.Members.OfType[ConstructorDeclaration]()).Parameters.Single().Name)
         Assert.Equal(Visibility.Private, Assert.Single(policy.Members.OfType[FieldDeclaration]()).Visibility)
         Assert.Equal("Level", Assert.Single(policy.Members.OfType[PropertyDeclaration]()).Name)
         let mixed = FindType(unit, "MixedValue")
-        Assert.True(mixed.PrimaryConstructorParameters == nil || mixed.PrimaryConstructorParameters!!.Count == 0)
+        Assert.True(mixed.PrimaryConstructorParameters == nil || mixed.PrimaryConstructorParameters.Count == 0)
         Assert.Equal(
             []string{"publicValue", "privateValue", "propertyValue"},
             mixed.Members.OfType[ConstructorDeclaration]().First().Parameters.Select((p Parameter) -> p.Name)
@@ -56,7 +56,7 @@ class Issue2766ValueTypeConstructorAbiTests {
         let unit = Translate()
         let classControl = FindType(unit, "ClassControl")
         Assert.True(
-            classControl.PrimaryConstructorParameters == nil || classControl.PrimaryConstructorParameters!!.Count == 0
+            classControl.PrimaryConstructorParameters == nil || classControl.PrimaryConstructorParameters.Count == 0
         )
         Assert.Equal(
             "value",

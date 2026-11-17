@@ -710,7 +710,7 @@ internal class BinderContext {
                 default: 0
             }
         }
-        let explicitAlias = $scope.TryLookupImport(importedName, out var import_) && import_!!.IsAlias
+        let explicitAlias = $scope.TryLookupImport(importedName, out var import_) && import_.IsAlias
         if !explicitAlias && !(importedType != nil && importedType.IsNested == false) {
             return false
         }
@@ -812,7 +812,7 @@ internal class BinderContext {
                     continue
                 }
                 seen ??= HashSet[StructSymbol]()
-                if seen!!.Add(s) {
+                if seen.Add(s) {
                     (
                         (
                             if builder == nil {
@@ -1131,7 +1131,7 @@ internal class BinderContext {
         /// ```
         func Dispose() {
             if owner != nil {
-                owner!!.LeaveConstructorInitializerContext()
+                owner.LeaveConstructorInitializerContext()
             }
         }
     }

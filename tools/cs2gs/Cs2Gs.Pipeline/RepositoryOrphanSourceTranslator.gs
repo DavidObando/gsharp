@@ -46,7 +46,7 @@ internal shared class RepositoryOrphanSourceTranslator {
         for relativePath in sourceFiles!!.Where(
             (path string) -> Path.GetExtension(path).Equals(".cs", StringComparison.OrdinalIgnoreCase)
         ) {
-            if excludedScope!!.IsExcluded(relativePath) ||
+            if excludedScope.IsExcluded(relativePath) ||
                 (verbatim.Contains(relativePath) && !copyAndTranslate.Contains(relativePath)) {
                 continue
             }

@@ -178,7 +178,7 @@ internal partial class ExpressionBinder {
                 "bool && / || is always defined",
                 expression: "BoundBinaryOperator.Bind(foldKind, TypeSymbol.Bool, TypeSymbol.Bool)"
             )
-            result = BoundBinaryExpression(nil, result!!, foldOperator, elementComparison, binderCtx.IsCheckedContext)
+            result = BoundBinaryExpression(nil, result, foldOperator, elementComparison, binderCtx.IsCheckedContext)
         }
         return if failed {
             default(BoundExpression?)

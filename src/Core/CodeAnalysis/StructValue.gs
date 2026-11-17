@@ -140,7 +140,7 @@ class StructValue {
             // explicitLayoutValue is assigned by the same constructor branch
             // that sets explicitLayout, tested non-null just above.
             lock explicitLayoutValue!! {
-                if explicitLayout!!.TrySetField(explicitLayoutValue, name, value) {
+                if explicitLayout.TrySetField(explicitLayoutValue, name, value) {
                     explicitLayout!!.ReadFields(explicitLayoutValue, Fields)
                     return
                 }

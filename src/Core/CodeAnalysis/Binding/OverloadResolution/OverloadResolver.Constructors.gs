@@ -448,15 +448,15 @@ internal partial class OverloadResolver {
                 let fieldInitializersV = ImmutableArray.CreateBuilder[BoundFieldInitializer](parameters.Length)
                 for var i = 0; i < parameters.Length; i++ {
                     if classType.TryGetField(parameters[i].Name, out var field) {
-                        fieldInitializersV.Add(BoundFieldInitializer(field!!, packedArgs[i]))
+                        fieldInitializersV.Add(BoundFieldInitializer(field, packedArgs[i]))
                         continue
                     }
                     // Issue #2291: an imported C# `record struct`'s positional
                     // members are auto-properties, not plain fields — fall
                     // back to a settable property with the same name.
                     if TypeMemberModel.TryGetProperty(classType, parameters[i].Name, out var propertyV) &&
-                        propertyV!!.HasSetter {
-                        fieldInitializersV.Add(BoundFieldInitializer(propertyV!!, packedArgs[i]))
+                        propertyV.HasSetter {
+                        fieldInitializersV.Add(BoundFieldInitializer(propertyV, packedArgs[i]))
                     }
                 }
                 return BoundStructLiteralExpression(syntax, classType, fieldInitializersV.ToImmutable())
@@ -787,15 +787,15 @@ internal partial class OverloadResolver {
             let fieldInitializers = ImmutableArray.CreateBuilder[BoundFieldInitializer](parameters.Length)
             for var i = 0; i < parameters.Length; i++ {
                 if classType.TryGetField(parameters[i].Name, out var field) {
-                    fieldInitializers.Add(BoundFieldInitializer(field!!, finalArguments[i]))
+                    fieldInitializers.Add(BoundFieldInitializer(field, finalArguments[i]))
                     continue
                 }
                 // Issue #2291: an imported C# `record struct`'s positional
                 // members are auto-properties, not plain fields — fall back
                 // to a settable property with the same name.
                 if TypeMemberModel.TryGetProperty(classType, parameters[i].Name, out var property) &&
-                    (property!!.HasSetter || classType.UsesConstructorOwnedDataConstruction) {
-                    fieldInitializers.Add(BoundFieldInitializer(property!!, finalArguments[i]))
+                    (property.HasSetter || classType.UsesConstructorOwnedDataConstruction) {
+                    fieldInitializers.Add(BoundFieldInitializer(property, finalArguments[i]))
                 }
             }
             return BoundStructLiteralExpression(syntax, classType, fieldInitializers.ToImmutable())
@@ -939,7 +939,7 @@ internal partial class OverloadResolver {
                 MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(paramTypeForArg, out lambdaTarget)
             }
             if boundArgument == nil && lambdaArgument != nil && lambdaTarget != nil && bindLambdaWithTarget != nil {
-                boundArgument = bindLambdaWithTarget!!(lambdaArgument, lambdaTarget)
+                boundArgument = bindLambdaWithTarget(lambdaArgument, lambdaTarget)
             }
             if boundArgument == nil &&
                 lambdaArgument != nil &&
@@ -949,7 +949,7 @@ internal partial class OverloadResolver {
             }
             boundArgument ??= BindOverloadArgumentValue(argument)
             ApplySubExpressionNarrowingEffects(argument, boundArgument)
-            boundArgumentsBuilder.Add(boundArgument!!)
+            boundArgumentsBuilder.Add(boundArgument)
         }
         let initialArguments = boundArgumentsBuilder.ToImmutable()
         let overloadDiagMark = Diagnostics.Count
@@ -1367,7 +1367,7 @@ internal partial class OverloadResolver {
                 bindLambdaWithTarget != nil &&
                 MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(paramType, out var deferredTarget) &&
                 !TypeSymbol
-                .ContainsTypeParameter(deferredTarget!!) {
+                .ContainsTypeParameter(deferredTarget) {
                 if MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(paramType, out _) {
                     let targetedTree = bindExpressionWithTargetType(deferredLambda, paramType)
                     let targetedTreeArgument = if isImplicitIn {
@@ -1379,7 +1379,7 @@ internal partial class OverloadResolver {
                     convertedArguments.Add(targetedTreeArgument)
                     continue
                 }
-                let targeted = bindLambdaWithTarget!!(deferredLambda, deferredTarget!!)
+                let targeted = bindLambdaWithTarget!!(deferredLambda, deferredTarget)
                 let targetedArgument = if isImplicitIn {
                     conversions.BindImplicitInArgument(argLocation, targeted, paramType, parameter)
                 } else {
@@ -1918,7 +1918,7 @@ internal partial class OverloadResolver {
             }
             if isVariadic && parameterIndex == parameters.Length - 1 {
                 variadicArgumentIndices ??= List[int32]()
-                variadicArgumentIndices!!.Add(i)
+                variadicArgumentIndices.Add(i)
                 continue
             }
             if argumentTypes[i] is {} argumentType {
@@ -2630,12 +2630,12 @@ internal partial class OverloadResolver {
             let initializers = ImmutableArray.CreateBuilder[BoundFieldInitializer](parameters.Length)
             for var i = 0; i < parameters.Length && i < ctorCall.Arguments.Length; i++ {
                 if classType.TryGetField(parameters[i].Name, out var field) {
-                    initializers.Add(BoundFieldInitializer(field!!, ctorCall.Arguments[i]))
+                    initializers.Add(BoundFieldInitializer(field, ctorCall.Arguments[i]))
                     continue
                 }
                 if TypeMemberModel.TryGetProperty(classType, parameters[i].Name, out var property) &&
-                    (property!!.HasSetter || classType.IsClass || classType.UsesConstructorOwnedDataConstruction) {
-                    initializers.Add(BoundFieldInitializer(property!!, ctorCall.Arguments[i]))
+                    (property.HasSetter || classType.IsClass || classType.UsesConstructorOwnedDataConstruction) {
+                    initializers.Add(BoundFieldInitializer(property, ctorCall.Arguments[i]))
                 }
             }
             return BoundStructLiteralExpression(ctorCall.Syntax, classType, initializers.ToImmutable())
@@ -2670,7 +2670,7 @@ internal partial class OverloadResolver {
                         {IsInlineDeclaration: true}
                 ) {
                     indices ??= ImmutableArray.CreateBuilder[int32]()
-                    indices!!.Add(i)
+                    indices.Add(i)
                 }
             }
             return indices?.ToImmutable() ?? default(ImmutableArray[int32])

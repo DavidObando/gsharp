@@ -249,12 +249,12 @@ internal partial class ExpressionBinder {
         // `DebuggableAttribute.DebuggingModes(2)` had no conversion arm to land
         // on and reported GS0159 instead.
         let constructedTarget = if openGenericDef != nil && !symbolicArgs.IsDefaultOrEmpty {
-            cast[TypeSymbol](ImportedTypeSymbol.GetConstructed(clrType!!, openGenericDef, symbolicArgs))
+            cast[TypeSymbol](ImportedTypeSymbol.GetConstructed(clrType, openGenericDef, symbolicArgs))
         } else {
             TypeSymbol.FromClrTypeWithoutNullability(clrType, NullabilityFreeReason.TypeStructure)
         }
         var handled = TryBindClrConstructorFromType(
-            clrType!!,
+            clrType,
             terminalCall,
             out result,
             out var noApplicableOverload,
@@ -416,7 +416,7 @@ internal partial class ExpressionBinder {
         }
         result = BindImportedTypeLiteralExpression(
             terminalLiteral,
-            clrType!!,
+            clrType,
             if openDefinition != nil && !symbolicArguments.IsDefaultOrEmpty {
                 ImportedTypeSymbol.GetConstructed(clrType, openDefinition, symbolicArguments)
             } else {
@@ -459,7 +459,7 @@ internal partial class ExpressionBinder {
         if !TryResolveQualifiedSourceType(syntax, out var remainder, out var sourceType) {
             return false
         }
-        result = BindQualifiedSourceTypeRemainder(remainder, sourceType!!)
+        result = BindQualifiedSourceTypeRemainder(remainder, sourceType)
         return true
     }
 
@@ -575,7 +575,7 @@ internal partial class ExpressionBinder {
             arity,
             out sourceType
         ) &&
-            IsUserAggregateType(sourceType!!) &&
+            IsUserAggregateType(sourceType) &&
             !binderCtx.HasUnclosedEnclosingTypeParameters(sourceType, getCurrentFunction())
     }
 
@@ -734,9 +734,9 @@ internal partial class ExpressionBinder {
                 string.Empty
             }
             let expanded = if string.IsNullOrEmpty(rest) {
-                matchedImport!!.Target
+                matchedImport.Target
             } else {
-                matchedImport!!.Target + "." + rest
+                matchedImport.Target + "." + rest
             }
             prefixCandidates.Insert(0, expanded)
         }
@@ -792,7 +792,7 @@ internal partial class ExpressionBinder {
                         return false
                     }
                     try {
-                        clrType = openType!!.MakeGenericType(clrArgs)
+                        clrType = openType.MakeGenericType(clrArgs)
                         if hasSymbolicArg {
                             openGenericDefinition = openType
                             symbolicTypeArgs = symbolic
@@ -804,8 +804,7 @@ internal partial class ExpressionBinder {
                 }
             } else {
                 let fullName = prefix + "." + typeSimpleName
-                if $scope.References!!.TryResolveType(fullName, out var resolved) &&
-                    !resolved!!.IsGenericTypeDefinition {
+                if $scope.References!!.TryResolveType(fullName, out var resolved) && !resolved.IsGenericTypeDefinition {
                     clrType = resolved
                     return true
                 }
@@ -881,7 +880,7 @@ internal partial class ExpressionBinder {
                     walkFailed = true
                     break
                 }
-                current = next!!
+                current = next
             }
             if walkFailed {
                 continue

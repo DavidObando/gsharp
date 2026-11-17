@@ -723,7 +723,7 @@ partial class TypeClauseSyntax : SyntaxNode {
             if Identifier == nil {
                 return string.Empty
             }
-            let identifier = Identifier!!
+            let identifier = Identifier
             if QualifierIdentifierTokens.IsDefaultOrEmpty {
                 return identifier.Text
             }

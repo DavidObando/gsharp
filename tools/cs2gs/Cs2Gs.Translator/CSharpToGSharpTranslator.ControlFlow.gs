@@ -1729,18 +1729,9 @@ partial class CSharpToGSharpTranslator {
             return conditionPrologue
         }
 
-        private func TranslateForStatement(forStatement ForStatementSyntax) GStatement {
+        private func ForRequiresWhileLowering(forStatement ForStatementSyntax) bool {
             let declaratorCount = forStatement.Declaration?.Variables.Count ?? 0
-            // G#'s `for` carries a SINGLE init clause and a SINGLE incrementor, so
-            // a C-style `for` with multiple declarators/initializers or multiple
-            // incrementors cannot be represented directly. Lower those to a block
-            // + `while` so every init runs once up front and every incrementor runs
-            // at the end of each iteration (issue #914). A condition needing clause
-            // hoisting (a value-position assignment, e.g. `for (…; (c = Next()) !=
-            // -1; …)`, or an is-pattern requiring a scrutinee local) has the same
-            // problem — G#'s single-expression `for` condition has nowhere to place
-            // the hoisted statement — so it takes the same lowering (issue #1723).
-            if declaratorCount > 1 ||
+            return declaratorCount > 1 ||
                 forStatement
                 .Initializers
                 .Count > 1 ||
@@ -1753,7 +1744,20 @@ partial class CSharpToGSharpTranslator {
                 .Any(
                 (expr ExpressionSyntax) -> ClauseContainsAssignment(expr) || this.ClauseRequiresOutPredeclaration(expr)
             ) ||
-                this.ForConditionRequiresHoist(forStatement.Condition) {
+                this.ForConditionRequiresHoist(forStatement.Condition)
+        }
+
+        private func TranslateForStatement(forStatement ForStatementSyntax) GStatement {
+            // G#'s `for` carries a SINGLE init clause and a SINGLE incrementor, so
+            // a C-style `for` with multiple declarators/initializers or multiple
+            // incrementors cannot be represented directly. Lower those to a block
+            // + `while` so every init runs once up front and every incrementor runs
+            // at the end of each iteration (issue #914). A condition needing clause
+            // hoisting (a value-position assignment, e.g. `for (…; (c = Next()) !=
+            // -1; …)`, or an is-pattern requiring a scrutinee local) has the same
+            // problem — G#'s single-expression `for` condition has nowhere to place
+            // the hoisted statement — so it takes the same lowering (issue #1723).
+            if this.ForRequiresWhileLowering(forStatement) {
                 return this.LowerForToWhile(forStatement)
             }
             var initializer GStatement? = nil
@@ -1844,18 +1848,7 @@ partial class CSharpToGSharpTranslator {
                 condition = this.TranslateExpression(forStatement.Condition)
                 conditionPrologue = List[GStatement]()
             }
-            let incrementorExpressions = forStatement.Incrementors.ToList()
-            let incrementorStatements = List[GStatement]()
-            this.state.PendingSpillPrologue = incrementorStatements
-            this.state.FunctionArgumentOutDeclarations = incrementorStatements
-            try {
-                for inc in incrementorExpressions {
-                    incrementorStatements.AddRange(this.TranslateExpressionStatements(inc)!!)
-                }
-            } finally {
-                this.state.PendingSpillPrologue = outerSpillPrologue
-                this.state.FunctionArgumentOutDeclarations = outerOutDeclarations
-            }
+            let incrementorStatements = this.TranslateForIncrementors(forStatement)
             var translatedBody BlockStatement? = this.TranslateStatementAsBlock(forStatement.Statement)
             let bodyStatements = List[GStatement](conditionPrologue!!)
             let hasOwnContinue = incrementorStatements.Count > 0 && BodyContainsOwnLoopContinue(forStatement.Statement)
@@ -1871,8 +1864,7 @@ partial class CSharpToGSharpTranslator {
                 )
                 bodyStatements.AddRange(translatedBody!!.Statements)
                 bodyStatements.AddRange(incrementorStatements)
-            } else if hasOwnContinue &&
-                (forHasPredeclaredOut || OwnLoopContinueCrossesTryOrUsing(forStatement.Statement)) {
+            } else if hasOwnContinue && this.ForUsesSharedContinueIncrementors(forStatement) {
                 let continueLabel = this.SyntheticLabelName("forContinue", forStatement)
                 translatedBody = cast[BlockStatement](
                     this.RewriteOwnLoopContinue(
@@ -1908,8 +1900,46 @@ partial class CSharpToGSharpTranslator {
             return BlockStatement(outer)
         }
 
-        /// Duplicates a `for` loop's already-translated incrementor
-        /// statements immediately ahead of every `continue` that targets
+        private let continueSources Dictionary[GStatement, ContinueStatementSyntax] =
+        Dictionary[GStatement, ContinueStatementSyntax](ReferenceEqualityComparer.Instance)
+        private var incrementorLoop ForStatementSyntax?
+        private var incrementorContinue ContinueStatementSyntax?
+
+        private func TranslateForIncrementors(
+            loop ForStatementSyntax,
+            continuation ContinueStatementSyntax? = nil
+        ) List[GStatement] {
+            let statements = List[GStatement]()
+            let oldSpills = this.state.PendingSpillPrologue
+            let oldDeclarations = this.state.FunctionArgumentOutDeclarations
+            let oldLoop = this.incrementorLoop
+            let oldContinue = this.incrementorContinue
+            this.state.PendingSpillPrologue = statements
+            this.state.FunctionArgumentOutDeclarations = statements
+            this.incrementorLoop = loop
+            this.incrementorContinue = continuation
+            try {
+                for incrementor in loop.Incrementors {
+                    statements.AddRange(this.TranslateExpressionStatements(incrementor)!!)
+                }
+            } finally {
+                this.state.PendingSpillPrologue = oldSpills
+                this.state.FunctionArgumentOutDeclarations = oldDeclarations
+                this.incrementorLoop = oldLoop
+                this.incrementorContinue = oldContinue
+            }
+            return statements
+        }
+
+        private func ForUsesSharedContinueIncrementors(loop ForStatementSyntax) bool ->
+        this.ClauseRequiresOutPredeclaration(loop.Condition) ||
+            loop
+            .Initializers
+            .Concat(loop.Incrementors)
+            .Any(this.ClauseRequiresOutPredeclaration) ||
+            OwnLoopContinueCrossesTryOrUsing(loop.Statement)
+
+        /// Emits a `for` loop's incrementor statements immediately ahead of every `continue` that targets
         /// THIS loop. G#'s while-lowering ((cref:LowerForToWhile)) appends
         /// the incrementors as trailing statements in the lowered `while`
         /// body, but a G# `continue` is a goto straight past the WHOLE body
@@ -1924,7 +1954,8 @@ partial class CSharpToGSharpTranslator {
         /// later `SemanticModel.GetSymbolInfo` call on them
         /// ((cref:ArgumentException) "Syntax node is not within syntax
         /// tree"). The G# AST has no such constraint, so the rewrite happens
-        /// here, after translation.
+        /// here, after translation. Incrementors retain their original Roslyn nodes and are translated for each
+        /// source continue site, whose assignment facts can differ from the normal body exit.
         ///
         /// Descent stops at a nested loop ((cref:WhileStatement),
         /// (cref:ForStatement), (cref:DoWhileStatement),
@@ -1949,12 +1980,20 @@ partial class CSharpToGSharpTranslator {
             replacement GStatement? = nil
         ) GStatement? {
             switch statement {
-                case ContinueStatement {
+                case continuation is ContinueStatement {
                     {
                         if replacement != nil {
                             return replacement
                         }
-                        let replaced = List[GStatement](incrementorStatements){statement}
+                        let incrementors IReadOnlyList[GStatement] = if forStatement is ForStatementSyntax loop &&
+                            this
+                            .continueSources
+                            .TryGetValue(continuation, out var source) {
+                            this.TranslateForIncrementors(loop, source)
+                        } else {
+                            incrementorStatements
+                        }
+                        let replaced = List[GStatement](incrementors){statement}
                         return BlockStatement(replaced)
                     }
                 }
@@ -2206,7 +2245,9 @@ partial class CSharpToGSharpTranslator {
             public let Declarations Dictionary[string, List[ISymbol]] = Dictionary[string, List[ISymbol]](
                 StringComparer.Ordinal
             )
-            public let AddressNames HashSet[ISymbol] = HashSet[ISymbol](SymbolEqualityComparer.Default)
+            public let AddressNames Dictionary[ISymbol, List[SyntaxNode]] = Dictionary[ISymbol, List[SyntaxNode]](
+                SymbolEqualityComparer.Default
+            )
         }
 
         private func GetScopeWriteIndex(scope_ SyntaxNode) ScopeWriteIndex {
@@ -2270,7 +2311,11 @@ partial class CSharpToGSharpTranslator {
                             bindings,
                             name
                         ) is {} addressed {
-                            index.AddressNames.Add(addressed)
+                            if !index.AddressNames.TryGetValue(addressed, out var addresses) {
+                                addresses = List[SyntaxNode]()
+                                index.AddressNames.Add(addressed, addresses)
+                            }
+                            addresses.Add(node)
                         }
                     }
                 }
@@ -2357,26 +2402,25 @@ partial class CSharpToGSharpTranslator {
                     if !includeSelf && object.ReferenceEquals(candidate, scope_) {
                         continue
                     }
-                    var withinScope = true
-                    if excludeNested {
-                        for var ancestor SyntaxNode? = candidate.Parent; ancestor != nil && !object.ReferenceEquals(
-                            ancestor,
-                            scope_
-                        );
-                            ancestor = ancestor!!
-                            .Parent {
-                            CompilationMeasurements.Count("translation.scope_boundary_visits")
-                            if this.IsClosureBoundary(ancestor) {
-                                withinScope = false
-                                break
-                            }
-                        }
-                    }
-                    if withinScope {
+                    if this.IsEmittedScopeCandidate(candidate, scope_, excludeNested) {
                         yield candidate
                     }
                 }
             }
+        }
+
+        private func IsEmittedScopeCandidate(candidate SyntaxNode, scope_ SyntaxNode, excludeNested bool = false) bool {
+            for var ancestor SyntaxNode? = candidate; ancestor != nil; ancestor = ancestor!!.Parent {
+                CompilationMeasurements.Count("translation.scope_boundary_visits")
+                if this.IsDroppedStatementOrLoopClause(ancestor) ||
+                    (excludeNested && !object.ReferenceEquals(ancestor, scope_) && this.IsClosureBoundary(ancestor)) {
+                    return false
+                }
+                if object.ReferenceEquals(ancestor, scope_) {
+                    break
+                }
+            }
+            return true
         }
 
         // Issue #4709: whether an uninitialized struct local is written through

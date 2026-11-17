@@ -180,7 +180,7 @@ class TypeParameterSymbol : TypeSymbol {
                     return true
                 }
                 visited ??= HashSet[TypeParameterSymbol](ReferenceEqualityComparer.Instance)
-                if !visited!!.Add(bound) {
+                if !visited.Add(bound) {
                     // Revisited: the chain is cyclic. #4043 reports GS0581 for
                     // this and clears the bound; answering "no" here is the
                     // conservative direction — `nil` stays refused rather than
@@ -301,7 +301,7 @@ class TypeParameterSymbol : TypeSymbol {
                     break
                 }
                 visited ??= HashSet[TypeParameterSymbol](ReferenceEqualityComparer.Instance)
-                if !visited!!.Add(p) {
+                if !visited.Add(p) {
                     break
                 }
                 current = p.TypeParameterBound

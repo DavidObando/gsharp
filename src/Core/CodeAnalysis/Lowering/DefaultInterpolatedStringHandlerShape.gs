@@ -193,40 +193,40 @@ internal class DefaultInterpolatedStringHandlerShape {
             missingMember = nil
             if !references.TryResolveType(HandlerTypeFullName, out var handlerType) ||
                 (
-                references.IsHostFallback(handlerType!!) &&
+                references.IsHostFallback(handlerType) &&
                     (
                     !references.TryResolveType("System.Object", out var objectType) || !references.IsHostFallback(
-                        objectType!!
+                        objectType
                     )
                 )
             ) {
                 missingMember = HandlerTypeFullName
                 return false
             }
-            let constructor ConstructorInfo? = FindConstructor(handlerType!!)
+            let constructor ConstructorInfo? = FindConstructor(handlerType)
             if constructor == nil {
                 missingMember = HandlerTypeFullName + ".ctor(int, int)"
                 return false
             }
-            let appendLiteral MethodInfo? = FindAppendLiteral(handlerType!!)
+            let appendLiteral MethodInfo? = FindAppendLiteral(handlerType)
             if appendLiteral == nil {
                 missingMember = HandlerTypeFullName + ".AppendLiteral(string)"
                 return false
             }
-            let toStringAndClear MethodInfo? = FindToStringAndClear(handlerType!!)
+            let toStringAndClear MethodInfo? = FindToStringAndClear(handlerType)
             if toStringAndClear == nil {
                 missingMember = HandlerTypeFullName + ".ToStringAndClear()"
                 return false
             }
             shape = DefaultInterpolatedStringHandlerShape(
-                handlerType!!,
+                handlerType,
                 constructor,
                 appendLiteral,
                 toStringAndClear,
-                FindAppendFormatted(handlerType!!, secondParam: nil, thirdParam: nil),
-                FindAppendFormatted(handlerType!!, secondParam: typeof(int32), thirdParam: nil),
-                FindAppendFormatted(handlerType!!, secondParam: typeof(string), thirdParam: nil),
-                FindAppendFormatted(handlerType!!, secondParam: typeof(int32), thirdParam: typeof(string))
+                FindAppendFormatted(handlerType, secondParam: nil, thirdParam: nil),
+                FindAppendFormatted(handlerType, secondParam: typeof(int32), thirdParam: nil),
+                FindAppendFormatted(handlerType, secondParam: typeof(string), thirdParam: nil),
+                FindAppendFormatted(handlerType, secondParam: typeof(int32), thirdParam: typeof(string))
             )
             return true
         }

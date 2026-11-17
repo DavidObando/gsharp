@@ -245,7 +245,7 @@ stderr:
             return if string.IsNullOrEmpty(value) {
                 Enumerable.Empty[string]()
             } else {
-                value!!.Split(Path.PathSeparator).Where(File.Exists)
+                value.Split(Path.PathSeparator).Where(File.Exists)
             }
         }
 
@@ -256,7 +256,7 @@ stderr:
                     cast[IReadOnlyList[string]](Array.Empty[string]())
                 } else {
                     cast[IReadOnlyList[string]](
-                        Directory.EnumerateFiles(runtimeDirectory!!, "*.dll", SearchOption.TopDirectoryOnly).ToList()
+                        Directory.EnumerateFiles(runtimeDirectory, "*.dll", SearchOption.TopDirectoryOnly).ToList()
                     )
                 }
             }

@@ -221,7 +221,7 @@ internal shared class MagicCollectionZeroValue {
             let index = owner.PrimaryConstructorParameters.IndexOf(parameter)
             let field = owner.GetDataConstructionPrimaryField(imported, index)
             if field != nil && ImportedAssemblySemantics.TryGetMagicCollectionFields(imported, out var kinds) &&
-                kinds!!
+                kinds
                 .TryGetValue(field.Name, out var kind) {
                 let zero = TrySynthesizeEmptyInstanceFromMarker(
                     field,
@@ -508,7 +508,7 @@ internal shared class MagicCollectionZeroValue {
             )
             reflectedFields[field.Name] = field
         }
-        if requiresDeclarationShape && magicFieldKinds!!.Keys.Any((name string) -> !reflectedFields.ContainsKey(name)) {
+        if requiresDeclarationShape && magicFieldKinds.Keys.Any((name string) -> !reflectedFields.ContainsKey(name)) {
             missingDeclarationShape = true
             return nil
         }
@@ -528,7 +528,7 @@ internal shared class MagicCollectionZeroValue {
         )
         var inits ImmutableArray[BoundFieldInitializer].Builder? = nil
         for fieldSymbol in nestedStruct.Fields {
-            if !magicFieldKinds!!.TryGetValue(fieldSymbol.Name, out var kind) || !reflectedFields.TryGetValue(
+            if !magicFieldKinds.TryGetValue(fieldSymbol.Name, out var kind) || !reflectedFields.TryGetValue(
                 fieldSymbol.Name,
                 out var reflectedField
             ) {
@@ -547,7 +547,7 @@ internal shared class MagicCollectionZeroValue {
                 continue
             }
             inits ??= ImmutableArray.CreateBuilder[BoundFieldInitializer]()
-            inits!!.Add(BoundFieldInitializer(fieldSymbol, zeroValue))
+            inits.Add(BoundFieldInitializer(fieldSymbol, zeroValue))
         }
         if inits == nil {
             return nil
@@ -689,7 +689,7 @@ internal shared class MagicCollectionZeroValue {
         // walked (an open struct can only cycle back to its own definition).
         let visitKey = structType.Definition ?? structType
         visiting ??= HashSet[StructSymbol]()
-        if !visiting!!.Add(visitKey) {
+        if !visiting.Add(visitKey) {
             return nil
         }
         try {
@@ -732,7 +732,7 @@ internal shared class MagicCollectionZeroValue {
                     continue
                 }
                 inits ??= ImmutableArray.CreateBuilder[BoundFieldInitializer]()
-                inits!!.Add(BoundFieldInitializer(field, fieldZeroValue))
+                inits.Add(BoundFieldInitializer(field, fieldZeroValue))
             }
             if !needsZeroValue {
                 return nil
@@ -762,7 +762,7 @@ internal shared class MagicCollectionZeroValue {
                 isZeroInitialization: true
             )
         } finally {
-            visiting!!.Remove(visitKey)
+            visiting.Remove(visitKey)
         }
     }
 

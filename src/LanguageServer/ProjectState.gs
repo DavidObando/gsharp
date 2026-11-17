@@ -185,7 +185,7 @@ open class ProjectState {
                 if rawBytes == nil {
                     existing.Text.RawBytes == nil || !HasRawByteEncodingDiagnostic(existing)
                 } else {
-                    existing.Text.RawBytes != nil && rawBytes.SequenceEqual(existing.Text.RawBytes!!)
+                    existing.Text.RawBytes != nil && rawBytes.SequenceEqual(existing.Text.RawBytes)
                 }
             ) {
                 return existing
@@ -343,13 +343,13 @@ open class ProjectState {
             }
             var mtime DateTime
             try {
-                mtime = File.GetLastWriteTimeUtc(rspPath!!)
+                mtime = File.GetLastWriteTimeUtc(rspPath)
             } catch (IOException) {
                 loadDiagnostics = gsAnalyzerLoadDiagnostics
                 return cachedGsAnalyzers
             }
             if mtime != gsAnalyzerSourceMtimeUtc {
-                let paths = ProjectDiscovery.ParseGsAnalyzersFromResponseFile(rspPath!!)
+                let paths = ProjectDiscovery.ParseGsAnalyzersFromResponseFile(rspPath)
                 cachedGsAnalyzers = GSharpAnalyzerHost.Load(paths, out gsAnalyzerLoadDiagnostics)
                 gsAnalyzerSourceMtimeUtc = mtime
             }
@@ -433,7 +433,7 @@ open class ProjectState {
         var changedUpdated SyntaxTree? = nil
         for tree in trees {
             let name = tree.Text?.FileName
-            if string.IsNullOrEmpty(name) || !previousByPath.TryGetValue(NormalizePath(name!!), out var prevTree) {
+            if string.IsNullOrEmpty(name) || !previousByPath.TryGetValue(NormalizePath(name), out var prevTree) {
                 return nil
             }
             if object.ReferenceEquals(prevTree, tree) {

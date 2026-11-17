@@ -276,7 +276,7 @@ internal partial class StatementBinder {
                     keyType = TypeSymbol.Int32
                     valueType = MemberLookup.DereferenceByRefElement(
                         MemberLookup.GetClrMemberValueTypeSymbol(
-                            aPatternCurrent!!,
+                            aPatternCurrent,
                             pattern.OpenDefinition,
                             pattern.TypeArguments
                         )
@@ -1331,7 +1331,7 @@ internal partial class StatementBinder {
                     return true
                 }
             }
-            return type!!.ClrType == nil || !type!!.ClrType!!.IsValueType
+            return type.ClrType == nil || !type.ClrType.IsValueType
         }
 
         internal func IsLabelableLoop(stmt SyntaxNode) bool {
