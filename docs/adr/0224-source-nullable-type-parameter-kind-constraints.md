@@ -170,9 +170,9 @@ Additional compatibility corrections preserve the original source as rejection w
 | ADR-0186, ADR-0213 | The nullable container probe uses a reference constraint. The loop probes constrain `Box` to their actual `DateTimeOffset` value argument and retain GS0158 independently. |
 | Generator copy-constructor projection | The nullable open-argument control requires reference kind. Concrete nullable-value arguments to ordinary unrestricted `Target[T]` remain covered separately. |
 | cs2gs #1072, #3676, #3770, ADR-0161 | Original interface-only or unrestricted annotations are rejection witnesses. Explicit reference-constrained neighbors retain nullable returns, fields, assertions, and coalesce lowering. These examples do not establish reference-only production APIs. |
-| cs2gs #4445 | The runtime fixture instantiates its affected helpers only with `string`. Reference constraints propagate through those fixture helpers; ordinary `Keep`, `Next`, and await contracts remain unrestricted. The concrete value control remains unchanged. |
+| cs2gs #4445 | The runtime fixture instantiates its affected helpers only with `string`. Reference constraints propagate through those fixture helpers. Mutable slots that receive `default(T)` explicitly permit nullable references; ordinary `Keep`, `Next`, and await contracts remain unrestricted. The concrete value control remains unchanged. |
 | cs2gs managed-reference records, #5574, #5684 | Actual nullable arguments are reference-class managed handles, `Node`, and `List[int32]`. Reference-constrained controls retain the original alias, null-flow, and runtime assertions. |
-| cs2gs #5633 | Original unrestricted inputs retain translation-shape and work/allocation checks, plus exact source-annotation rejections. Reference-constrained neighbors retain the string runtime oracles or valid binding controls. The captured-default runtime neighbor remains blocked as described below. The measured inputs remain unchanged. |
+| cs2gs #5633 | Original unrestricted inputs retain translation-shape and work/allocation checks, plus exact source-annotation rejections. Reference-constrained neighbors retain the string runtime oracles or valid binding controls. The captured-default neighbor explicitly declares its nullable tuple slot. The measured inputs remain unchanged. |
 
 These are test-program migrations, not additional compiler-host API changes.
 No production translator declarations gain constraints.
@@ -211,32 +211,40 @@ Those observed callers justify `class?`, not `class`, without changing their beh
 Twenty-three other open-parameter annotations already had reference proofs.
 
 The first inventory predicted annotation eligibility with semantic symbols.
-An expanded measurement applied the new public driver to the same complete, unchanged Core and CLI source sets.
-It reported exactly three GS0641 diagnostics at `Guarded`'s annotations; CLI compilation succeeded.
-After integrating main `a2a005ba56e170346361ce1ecd65e810fad16585`, the public driver repeated this result against a separate read-only archive of that exact main commit: all 783 normal tracked compiler inputs, the same three locations, and no CLI diagnostic.
-The same measurement was repeated against exact main `96d51f80dd40ebc29193ca9d252baa2b360bd38a`, using fresh normal MSBuild response files and unchanged read-only source bytes: 780 Core inputs produced the same three GS0641 diagnostics; the three CLI inputs compiled without diagnostics.
-As before, Core declaration errors prevent this untouched-source driver run from proving that all Core bodies are clean; the independent body observer remains a prediction, not a successful untouched-baseline full build.
+An independent semantic observer also inspected all bodies, including wrapped expression types, with the sound canonical kind proof.
+Its zero-additional-operator result was a prediction, not a successful new-policy compilation.
+The 60-file dependency appendix belongs to that earlier semantic measurement.
 
-### Remaining compatibility validation blockers
+The final public-driver measurement used immutable tracked source from exact main `e5160f2d49fbeb795a784b7e0e47fe0532ad432c`.
+Its untouched Core inputs produced exactly three GS0641 diagnostics at `Guarded`'s annotations; CLI compilation succeeded.
+Those declaration errors prevented complete Core body validation.
+A separate shadow then applied only `Guarded[T]` to `Guarded[T class?]`, justified by the observed callers above.
+All 783 tracked compiler inputs, four normal generated inputs, and normal dependency references remained present.
+The public compiler from `176f9924084540b44a7b74ca10901b2e1224298a` completed Core and CLI binding and emission with every `NoWarn` flag removed.
+Both projects emitted successfully without diagnostics.
+There were no additional rejected annotations, nullable-producing operators, or caller constraints after that one-line migration.
 
-The reference-constrained runtime neighbors for cs2gs #4445 and the captured-default case in #5633 are not green.
-Explicit Roslyn compilation of both the original and constrained C# prints `20` and `True`, respectively.
-The translated constrained programs instead throw on both the published 0.5.698 public driver and this compiler.
-Changing `class` to `class?` does not correct this result.
-The translated tuple/default stores introduce runtime `!!` checks; these controls must not be made green by deleting the checks or weakening their runtime oracles.
-The original unrestricted sources remain exact GS0641 rejection witnesses.
-Resolving this pre-existing translation boundary requires a separate scope decision before this PR can be mergeable.
-Core declaration errors prevented complete body validation by that driver.
-An independent baseline semantic observer completed all bodies with no errors and inspected recursively wrapped expression types.
-It reused the existing sound reference-kind proof rather than propagating bare class flags.
-Six unknown-nullable expression nodes all belonged to `Guarded`'s three annotations and their derived uses.
-It observed no additional source-operator site or caller propagation requirement.
-The zero-additional-operator result is a semantic prediction, not a fully green new-policy baseline build.
-The first shared-dependency appendix covered annotations only.
-An expanded semantic pass also bound all 60 dependency files and found no unknown-nullable expression node.
-Neither inventory certifies the full graph or downstream consumers.
+This is complete body validation of the specified migrated shadow, not a green untouched-baseline build.
+The generated inputs and retained reference binaries were hash-recorded; the measurement did not rebuild all shared dependencies.
 It did not inventory tools, test projects, or test-program strings.
-Subsequent implementation validation must establish those results separately.
+Their build and compatibility tests are separate implementation validation.
+This analysis used the public driver as a measurement tool, not an unpublished SDK for the ordinary host build.
+
+### Fixture contract validation
+
+The original unmodified main #4445 and #5633 test methods passed before this change.
+Their new reference-constrained neighbors initially failed; those failures were not previously failing main tests.
+Adding `class` alone left mutable C# slots declared non-null while later storing `default(T)`.
+The corrected runtime neighbors declare those slots nullable, retaining the original source and its rejection witness.
+Their native and translated runtime oracles remain `20` and `True`, respectively.
+The larger #4445 fixture is not a warning-free control; its unused negative-contract probes remain present.
+
+The warning-free #5633 neighbor explicitly declares `(T?, int)` storage.
+Actual main's public translator independently reproduced an incorrect assertion on its inferred generic call.
+The separate narrow correction in [#6062](https://github.com/DavidObando/gsharp/pull/6062) preserves that complete nullable argument.
+This decision does not broaden its eligibility or the generic-store policy in #4612.
+Necessary checks for non-null storage, fixed owners, and authored forgiveness remain unchanged.
+No translated assertion is deleted to make these runtime controls pass.
 
 ## Consequences
 

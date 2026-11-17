@@ -6,6 +6,7 @@ package Cs2Gs.Tests
 
 import System
 import System.Linq
+import System.Text.RegularExpressions
 import Cs2Gs.CodeModel.Printing
 import Cs2Gs.Translator
 import Cs2Gs.Translator.Loading
@@ -3201,7 +3202,7 @@ public static class Defaults
             return Translate(Source)
         }
 
-        private prop KnownReferenceSource string -> Source
+        private prop KnownReferenceSource string -> NullableReferenceStorage(Source)
             .Replace(
             "Fill<T>(ref T? value, T replacement) =>",
             "Fill<T>(ref T? value, T replacement) where T : class =>"
@@ -3222,6 +3223,25 @@ public static class Defaults
             "private static int Controls<T>(T replacement)",
             "private static int Controls<T>(T replacement) where T : class"
         )
+
+        private func NullableReferenceStorage(source string) string {
+            // Mutable reference slots that receive default(T) must permit nil in the constrained neighbor.
+            return Regex
+                .Replace(
+                source,
+                "\\bvar (\\w+) = \\(replacement, replacement\\)",
+                "(T?, T?) $1 = (replacement, replacement)"
+            )
+                .Replace("T assignmentSource", "T? assignmentSource")
+                .Replace("T initializerless", "T? initializerless")
+                .Replace("T repeatedSource", "T? repeatedSource")
+                .Replace("T conditionalCycleSource", "T? conditionalCycleSource")
+                .Replace("T switchCycleSource", "T? switchCycleSource")
+                .Replace("default((T, T))", "default((T?, T?))")
+                .Replace("default(((T, T), T))", "default(((T?, T?), T?))")
+                .Replace("((T, T))(default(T), default(T))", "((T?, T?))(default(T), default(T))")
+                .Replace("(T, T)? nullablePair", "(T?, T?)? nullablePair")
+        }
 
         private func Translate(source string, outputKind OutputKind = OutputKind.DynamicallyLinkedLibrary) string {
             let project = Load(source, outputKind)

@@ -804,7 +804,10 @@ namespace Demo
         Assert.Contains("captured T?", printed)
         TranslationTestValidation.AssertSourceNullableKindRejection(printed, "T")
         let supported = this.TranslateWithinBound(
-            source.Replace("Run<T>(T replacement)", "Run<T>(T replacement) where T : class"),
+            source.Replace("Run<T>(T replacement)", "Run<T>(T replacement) where T : class").Replace(
+                "var pair = (replacement, 0);",
+                "(T?, int) pair = (replacement, 0);"
+            ),
             enabled: true
         )
         TranslationTestValidation.AssertBinds(supported)
