@@ -3445,10 +3445,16 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return false
             }
-            if EnclosingInvocationArgument(value)
-                ?.Parent
+            if OutermostTransparentNode(value, stopAtAssignment: true)?.Parent is not ArgumentSyntax argument ||
+                argument
+                .Parent
                 ?.Parent is not InvocationExpressionSyntax invocation ||
-                this.InvocationEmitsTypeArguments(invocation, method) {
+                !SymbolEqualityComparer
+                .Default
+                .Equals(this.GetArgumentParameter(argument), parameter) || this.InvocationEmitsTypeArguments(
+                invocation,
+                method
+            ) {
                 return false
             }
             // Roslyn's constructed argument can omit the nullable annotation on captured storage.

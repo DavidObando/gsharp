@@ -329,6 +329,29 @@ static class P {
         )
     }
 
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func NestedAssignments_KeepTheirOwnFixedStorageContract(recursive bool) {
+        let callee = if recursive {
+            "Run"
+        } else {
+            "Consume"
+        }
+        let source = `#nullable enable
+static class P {
+    static void Consume<U>(U value) { }
+    static void Run<T>(T slot) where T : class? {
+        T? value = default;
+        CALL(slot = value);
+    }
+}`.Replace("CALL", callee)
+        let (printed, sites) = Translate(source)
+        Assert.Contains("value!!", printed)
+        let site = Assert.Single(sites)
+        Assert.Equal(Expected(source, "value);"), Position(site))
+    }
+
     @Fact
     func ExplicitNullableInference_KeepsFixedResultOwnerConstraintAndForgivenContracts() {
         let (printed, sites) = Translate(`#nullable enable
