@@ -84,6 +84,107 @@ internal class BinderContext {
     /// Instance access is unavailable until the selected constructor has run.
     var ConstructorInitializerDepth int32
 
+    internal var SourceNullableConstraintDepth int32
+    private var pendingSourceNullableAnnotations List[
+        (Location TextLocation, Parameter TypeParameterSymbol, IsOperator bool)
+    ]?
+
+    internal func BindSourceNullable(type TypeSymbol, location TextLocation, isOperator bool = false) TypeSymbol {
+        let nullable = NullableTypeSymbol.Get(type)
+        if nullable.UnderlyingType is TypeParameterSymbol parameter {
+            if SourceNullableConstraintDepth > 0 {
+                pendingSourceNullableAnnotations ??= List[(TextLocation, TypeParameterSymbol, bool)]()
+                pendingSourceNullableAnnotations!!.Add((location, parameter, isOperator))
+            } else {
+                if !ValidateSourceNullable(location, parameter, isOperator) && isOperator {
+                    return TypeSymbol.Error
+                }
+            }
+        }
+        return nullable
+    }
+
+    internal func CompleteSourceNullableConstraints() {
+        SourceNullableConstraintDepth--
+        if SourceNullableConstraintDepth != 0 || pendingSourceNullableAnnotations == nil {
+            return
+        }
+        for (location, parameter, isOperator) in pendingSourceNullableAnnotations!! {
+            ValidateSourceNullable(location, parameter, isOperator)
+        }
+        pendingSourceNullableAnnotations = nil
+    }
+
+    private func ValidateSourceNullable(
+        location TextLocation,
+        parameter TypeParameterSymbol,
+        isOperator bool = false
+    ) bool {
+        if !parameter.HasKnownSourceNullableKind {
+            if !isOperator || !parameter.HasSourceNullableAnnotationError {
+                Diagnostics.ReportNullableTypeParameterRequiresKind(location, parameter.Name)
+            }
+            if !isOperator {
+                parameter.HasSourceNullableAnnotationError = true
+            }
+            return false
+        }
+        return true
+    }
+
+    internal func ValidateSourceNullableResult(
+        type TypeSymbol?,
+        location TextLocation,
+        inputs IEnumerable[TypeSymbol]? = nil
+    ) bool {
+        if type == nil {
+            return true
+        }
+        if type is NullableTypeSymbol{UnderlyingType: TypeParameterSymbol} nullable {
+            let parameter = cast[TypeParameterSymbol](nullable.UnderlyingType)
+            if inputs != nil && !inputs.Contains(TypeSymbol.Null) && inputs.Any(
+                (input TypeSymbol) -> ContainsNullableParameter(input, parameter)
+            ) {
+                return true
+            }
+            return ValidateSourceNullable(location, parameter, isOperator: true)
+        }
+        if type is NullableTypeSymbol nullableResult {
+            return ValidateSourceNullableResult(
+                nullableResult.UnderlyingType,
+                location,
+                inputs?.Where((input TypeSymbol) -> input != TypeSymbol.Null).Select(
+                    (input TypeSymbol) -> if input is NullableTypeSymbol existing {
+                        existing.UnderlyingType
+                    } else {
+                        input
+                    }
+                )
+            )
+        }
+        if type is not TupleTypeSymbol tuple {
+            return true
+        }
+        for var i = 0; i < tuple.ElementTypes.Length; i++ {
+            let ordinal = i
+            let elements = inputs
+                ?.OfType[TupleTypeSymbol]()
+                .Where((input TupleTypeSymbol) -> input.Arity == tuple.Arity)
+                .Select((input TupleTypeSymbol) -> input.ElementTypes[ordinal])
+            if !ValidateSourceNullableResult(tuple.ElementTypes[i], location, elements) {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func ContainsNullableParameter(type TypeSymbol, parameter TypeParameterSymbol) bool {
+        if type is NullableTypeSymbol nullable && object.ReferenceEquals(nullable.UnderlyingType, parameter) {
+            return true
+        }
+        return TypeSymbol.GetWrappedTypes(type).Any((inner TypeSymbol) -> ContainsNullableParameter(inner, parameter))
+    }
+
     /// Issue #4383: the member-name syntax node currently permitted to decay a
     /// movable fixed-size buffer field (`fixed p *T = buf` or `buf[i]`).
     var AllowedMovableFixedBufferSyntax SyntaxNode?
@@ -194,9 +295,6 @@ internal class BinderContext {
 
     /// Gets a value indicating whether constructor-initializer arguments are being bound.
     prop InConstructorInitializer bool -> ConstructorInitializerDepth > 0
-
-    /// Gets or sets the iterator return clause allowed to carry an unconstrained nullable sequence element.
-    prop UnconstrainedNullableSequenceElementReturn TypeClauseSyntax?
 
     /// Gets a value indicating whether the current `checked`/`unchecked`
     /// arithmetic context is checked (issue #1881): `true` inside

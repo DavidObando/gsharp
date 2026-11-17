@@ -1420,16 +1420,19 @@ internal partial class ExpressionBinder {
         if receiver is BoundErrorExpression {
             return receiver
         }
-        return BindPossiblySkippedOperand(() -> BindNullConditionalAccessExpressionCore(receiver, syntax.RightPart))
+        return BindPossiblySkippedOperand(
+            () -> BindNullConditionalAccessExpressionCore(receiver, syntax.RightPart, syntax.DotToken.Location)
+        )
     }
 
     private func BindNullConditionalAccessExpressionCore(
         receiver BoundExpression,
-        rightPart ExpressionSyntax
+        rightPart ExpressionSyntax,
+        operatorLocation TextLocation
     ) BoundExpression {
         var receiver = receiver
         if rightPart is UnaryExpressionSyntax unary && unary.OperatorToken.Kind == SyntaxKind.BangBangToken {
-            let liftedOperand = BindNullConditionalAccessExpressionCore(receiver, unary.Operand)
+            let liftedOperand = BindNullConditionalAccessExpressionCore(receiver, unary.Operand, operatorLocation)
             if liftedOperand is BoundErrorExpression {
                 return liftedOperand
             }
@@ -1541,10 +1544,9 @@ internal partial class ExpressionBinder {
                 resultSlot: nil
             )
         }
-        let resultType = if whenNotNull.Type is NullableTypeSymbol {
-            whenNotNull.Type
-        } else {
-            cast[TypeSymbol](NullableTypeSymbol.Get(whenNotNull.Type))
+        let resultType = binderCtx.BindSourceNullable(whenNotNull.Type, operatorLocation, isOperator: true)
+        if resultType == TypeSymbol.Error {
+            return BoundErrorExpression(rightPart)
         }
         // P2-7 / Issue #421: when the access result is a value type, the
         // bound result type is `Nullable<T>` but the not-null branch pushes
@@ -2282,7 +2284,7 @@ internal partial class ExpressionBinder {
                     return head
                 }
                 if nested.IsNullConditional {
-                    return BindNullConditionalAccessExpressionCore(head, nested.RightPart)
+                    return BindNullConditionalAccessExpressionCore(head, nested.RightPart, nested.DotToken.Location)
                 }
                 return BindAccessorStep(head, nil, nested.RightPart, nested.LeftPart)
             }

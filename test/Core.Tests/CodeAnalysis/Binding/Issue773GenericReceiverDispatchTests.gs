@@ -114,7 +114,8 @@ func (self T?) MyOrElse[T](fb T) T {
 var s string? = nil
 s.MyOrElse("def")
 `
-        let result = Evaluate(source)
+        SourceNullableKindAssertions.Reject(source, "T", 1)
+        let result = Evaluate(source.Replace("[T]", "[T class?]"))
         Assert.Empty(result.Diagnostics.Where((d Diagnostic) -> d.IsError))
         Assert.Equal("def", result.Value)
     }
@@ -133,10 +134,8 @@ func (self T?) MyOrElse[T](fb T) T {
 var v int32? = nil
 v.MyOrElse(99)
 `
-        // #3226: the emitted oracle handles the T? extension receiver on
-        // Nullable<int32> through the unconstrained-nullable lift (MethodSpec
-        // at Nullable<int32>).
-        let result = Evaluate(source)
+        SourceNullableKindAssertions.Reject(source, "T", 1)
+        let result = Evaluate(source.Replace("[T]", "[T struct]"))
         Assert.Empty(result.Diagnostics.Where((d Diagnostic) -> d.IsError))
         Assert.Equal(99, result.Value)
     }
@@ -162,10 +161,8 @@ var def = Point{X: 1, Y: 2}
 var r = pt.MyOrElse(def)
 r.X
 `
-        // #3226: the nil user-struct Nullable receiver now dispatches to the
-        // fallback on the emitted path too (the lift boxes Nullable<Point> for
-        // the nil probe instead of reinterpreting it as a bare Point).
-        let result = Evaluate(source)
+        SourceNullableKindAssertions.Reject(source, "T", 1)
+        let result = Evaluate(source.Replace("[T]", "[T struct]"))
         Assert.Empty(result.Diagnostics.Where((d Diagnostic) -> d.IsError))
         Assert.Equal(1, result.Value)
     }

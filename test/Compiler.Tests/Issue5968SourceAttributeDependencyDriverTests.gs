@@ -553,7 +553,15 @@ class Holder {
         } else {
             "35"
         }
-        Assert.Equal([]string{"GS0508@3," + column + ",3," + endColumn}, DiagnosticLocations(invalidOutput))
+        let questionColumn = if asynchronous {
+            "40"
+        } else {
+            "34"
+        }
+        Assert.Equal(
+            []string{"GS0508@3," + column + ",3," + endColumn, "GS0641@3," + questionColumn + ",3," + endColumn},
+            DiagnosticLocations(invalidOutput)
+        )
         Assert.False(File.Exists(invalidDll))
     }
 

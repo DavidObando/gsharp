@@ -122,7 +122,13 @@ internal partial class MethodBodyEmitter {
             }
             case call is BoundCallExpression {
                 this.EmitCallExpressionCore(call)
-                // Issue #3879: a by-ref return is a
+                // ADR-0087 §3 R3+R4: after R2/R3, every G# call (MethodSpec'd
+                // or plain MethodDef) returns the method's reified signature.
+                // No erasure-widening is required at the call boundary; the
+                // surrounding code path (assignment, return, argument
+                // conversion) handles any further coercion.
+                //
+                // Issue #3879: except for the by-ref return, which is a
                 // representation difference the call boundary DOES have to
                 // settle — a `ref`-returning function or static property
                 // accessor leaves `T&` where the bound tree says `T`.
@@ -1740,6 +1746,21 @@ internal partial class MethodBodyEmitter {
         let end = this.il.DefineLabel()
         let nonNull = this.il.DefineLabel()
         this.EmitNullConditionalReceiverProbe(nc, nonNull)
+        if nc.ResultSlot != nil &&
+            nc.Type is NullableTypeSymbol referenceResult &&
+            !NullableLifting
+            .IsAnyValueTypeNullable(referenceResult) {
+            let slot = this.locals[nc.ResultSlot]
+            this.il.LoadLocalAddress(slot)
+            this.il.OpCode(ILOpCode.Initobj)
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(nc.Type))
+            this.il.LoadLocal(slot)
+            this.il.Branch(ILOpCode.Br, end)
+            this.il.MarkLabel(nonNull)
+            this.EmitExpression(nc.WhenNotNull)
+            this.il.MarkLabel(end)
+            return
+        }
         if nc.ResultSlot != nil {
             // P2-7 / Issue #421: value-type access result. The bound type
             // is Nullable<T> but the access sub-tree pushes a raw T. The
@@ -2124,22 +2145,6 @@ internal partial class MethodBodyEmitter {
             }
             this.il.OpCode(ILOpCode.Call)
             this.il.Token(invokeToken)
-            if call
-                .Function
-                .IsGeneric ||
-                call.StaticGenericOwnerType != nil ||
-                call.StaticGenericInterfaceOwnerType != nil {
-                this.EmitErasedGenericNullableReturnLift(
-                    call.Function,
-                    call.Type,
-                    if call.Function.IsGeneric {
-                        nullableLift?.TypeArguments ?? this.outer.userTokens.ResolveGenericCallTypeArguments(call)
-                    } else {
-                        Array.Empty[TypeSymbol]()
-                    },
-                    cast[TypeSymbol?](call.StaticGenericOwnerType) ?? call.StaticGenericInterfaceOwnerType
-                )
-            }
             return
         }
         for var i = 0; i < call.Arguments.Length; i++ {
@@ -2226,22 +2231,6 @@ internal partial class MethodBodyEmitter {
         // the X the bound tree types the call as.
         if nullableLift?.ReturnUnwrap is {} liftUnwrap {
             this.EmitUnconstrainedNullableLiftUnwrap(liftUnwrap)
-        }
-        if call
-            .Function
-            .IsGeneric ||
-            call.StaticGenericOwnerType != nil ||
-            call.StaticGenericInterfaceOwnerType != nil {
-            this.EmitErasedGenericNullableReturnLift(
-                call.Function,
-                call.Type,
-                if call.Function.IsGeneric {
-                    nullableLift?.TypeArguments ?? this.outer.userTokens.ResolveGenericCallTypeArguments(call)
-                } else {
-                    Array.Empty[TypeSymbol]()
-                },
-                cast[TypeSymbol?](call.StaticGenericOwnerType) ?? call.StaticGenericInterfaceOwnerType
-            )
         }
     }
 

@@ -133,10 +133,13 @@ internal partial class OverloadResolver {
                 resultSlot: nil
             )
         }
-        let resultType = if returnType is NullableTypeSymbol {
-            returnType
-        } else {
-            cast[TypeSymbol](NullableTypeSymbol.Get(returnType))
+        let resultType = binderCtx.BindSourceNullable(
+            returnType,
+            syntax.NullableQuestionToken!!.Location,
+            isOperator: true
+        )
+        if resultType == TypeSymbol.Error {
+            return BoundErrorExpression(syntax)
         }
         var resultSlot LocalVariableSymbol? = nil
         if resultType is NullableTypeSymbol nullableResult && ReflectionMetadataEmitter.IsValueTypeSymbol(
@@ -237,10 +240,14 @@ internal partial class OverloadResolver {
             )
             return true
         }
-        let resultType = if functionType.ReturnType is NullableTypeSymbol {
-            functionType.ReturnType
-        } else {
-            cast[TypeSymbol](NullableTypeSymbol.Get(functionType.ReturnType))
+        let resultType = binderCtx.BindSourceNullable(
+            functionType.ReturnType,
+            syntax.NullableQuestionToken!!.Location,
+            isOperator: true
+        )
+        if resultType == TypeSymbol.Error {
+            result = BoundErrorExpression(syntax)
+            return true
         }
         var resultSlot LocalVariableSymbol? = nil
         if resultType is NullableTypeSymbol nullableResult && ReflectionMetadataEmitter.IsValueTypeSymbol(

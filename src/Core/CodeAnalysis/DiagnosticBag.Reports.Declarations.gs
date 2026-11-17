@@ -13,6 +13,12 @@ import System.Collections.Immutable
 import System.Linq
 
 partial class DiagnosticBag : IEnumerable[Diagnostic] {
+    internal func ReportNullableTypeParameterRequiresKind(location TextLocation, parameterName string) -> Report(
+        location,
+        DiagnosticDescriptors.NullableTypeParameterRequiresKind,
+        parameterName
+    )
+
     /// Reports that a parameter with the given name already exists.
     /// @param location The text location where the error was found.
     /// @param parameterName The name of the parameter.

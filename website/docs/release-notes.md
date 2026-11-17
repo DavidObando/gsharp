@@ -14,9 +14,12 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ## Unreleased (0.5 line)
 
+### Breaking Changes
+
+- **Source nullable type parameters require a known kind** (Fixes #6040, #6057, #6060; addresses the same unsupported storage root in #6043; ADR-0224). Source `T?` annotations and operators that create nullable results report `GS0641` unless constraints prove reference kind or nonnullable value kind. Diagnostics point to the annotation or source operator. Use `class`/`class?`, a sufficient reference-class bound, `struct`, or `unmanaged` for the API's actual domain. `notnull`, interface-only bounds, and a dependent parameter's bare `class` bound are insufficient. Use ordinary unconstrained `T` when callers supply a complete nullable argument, such as `Id[int32?]`. Mixed APIs can require separate reference/value contracts. Imported CLR nullable annotations and the repository's published SDK pin are unchanged. This restriction replaces the draft return adapter and unimplemented companion proposal; it introduces no new nullable ABI.
+
 ### Bug Fixes
 
-- Lift erased generic nullable results into the caller's declared nullable representation. Preserve default values, nullable arguments, reference null flow, and struct-constrained nullable returns. (Fixes #6040)
 - **Fewer cascading parse diagnostics** (Oats). The parser reports `GS0005` once for each token where it stops, so `func f( int32 {` gives one `GS0005`, not two. The binder does not report `GS0113` "Type ''" for a type name token that the parser synthesized.
 
 - **Public entry-point and internal-error diagnostics for library hosts** (Oats, ADR-0223). `Compilation.GetMissingEntryPointDiagnostics()` (`GS0634`) and `Compilation.CreateInternalErrorDiagnostic(Exception)` (`GS9998`) are public, so a host can report them as `gsc` does. ADR-0223 proposes packaging, hermetic reference sets, an explicit runtime directory, and a thread-safety contract.

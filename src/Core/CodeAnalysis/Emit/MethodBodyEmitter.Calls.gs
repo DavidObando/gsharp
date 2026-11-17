@@ -108,7 +108,6 @@ internal partial class MethodBodyEmitter {
             for var i = 0; i < call.Arguments.Length; i++ {
                 this.EmitExpression(call.Arguments[i])
             }
-            var returnOwner = referenceOwner
             var constrainedMethodToken EntityHandle
             if constraintInterface != nil {
                 let (slotIface, openMethod) = ResolveInterfaceSlotOwner(constraintInterface, call.Method)
@@ -116,7 +115,6 @@ internal partial class MethodBodyEmitter {
                     .outer
                     .userTokens
                     .ResolveUserInterfaceInstanceMethodToken(slotIface, openMethod)
-                returnOwner = slotIface
             } else if constraintOwner != nil {
                 constrainedMethodToken = this
                     .outer
@@ -137,16 +135,6 @@ internal partial class MethodBodyEmitter {
             }
             this.il.OpCode(ILOpCode.Callvirt)
             this.il.Token(constrainedMethodToken)
-            this.EmitErasedGenericNullableReturnLift(
-                call.Method,
-                call.Type,
-                if call.Method.IsGeneric {
-                    this.outer.userTokens.ResolveGenericInstanceCallTypeArguments(call)
-                } else {
-                    Array.Empty[TypeSymbol]()
-                },
-                returnOwner
-            )
             return
         }
         // ADR-0087 §3 R3+R4: when the receiver is a constructed
@@ -181,14 +169,12 @@ internal partial class MethodBodyEmitter {
         // open method on the definition and produce a MemberRef parented
         // at the constructed TypeSpec via <see cref="ResolveUserInterfaceInstanceMethodToken"/>.
         let receiverIface InterfaceSymbol? = call.Receiver.Type as InterfaceSymbol
-        var returnOwner TypeSymbol? = methodOwner
         var methodHandle EntityHandle
         if genericOwner != nil {
             methodHandle = this.outer.userTokens.ResolveUserInstanceMethodToken(genericOwner, call.Method)
         } else if receiverIface != nil {
             let (slotIface, openMethod) = ResolveInterfaceSlotOwner(receiverIface, call.Method)
             methodHandle = this.outer.userTokens.ResolveUserInterfaceInstanceMethodToken(slotIface, openMethod)
-            returnOwner = slotIface
         } else if call.Method.ReceiverType is StructSymbol importedReceiver && importedReceiver.ClrType != nil {
             methodHandle = this.outer.userTokens.ResolveUserInstanceMethodToken(importedReceiver, call.Method)
         } else if this.outer.cache.MethodHandles.TryGetValue(call.Method, out var defHandle) {
@@ -223,16 +209,10 @@ internal partial class MethodBodyEmitter {
             }
         )
         this.il.Token(methodHandle)
-        this.EmitErasedGenericNullableReturnLift(
-            call.Method,
-            call.Type,
-            if call.Method.IsGeneric {
-                this.outer.userTokens.ResolveGenericInstanceCallTypeArguments(call)
-            } else {
-                Array.Empty[TypeSymbol]()
-            },
-            returnOwner
-        )
+        // ADR-0087 §3 R3+R4: after R2, a user-instance call returns the
+        // method's reified signature (substituted at the TypeSpec / MethodSpec
+        // level). No erasure-widening is required at the call boundary.
+
     }
 
     private func EmitClrConstructorCall(ctorCall BoundClrConstructorCallExpression) {
@@ -433,7 +413,6 @@ internal partial class MethodBodyEmitter {
         this.il.Token(typeParamToken)
         this.il.OpCode(ILOpCode.Call)
         this.il.Token(slotHandle)
-        this.EmitErasedGenericNullableReturnLift(interfaceMethod, call.Type, Array.Empty[TypeSymbol](), constraintIface)
     }
 
     /// ADR-0091: emits an explicit-base interface call
@@ -460,47 +439,6 @@ internal partial class MethodBodyEmitter {
         // that issued the base-call.
         this.il.OpCode(ILOpCode.Call)
         this.il.Token(methodToken)
-    }
-
-    private func EmitErasedGenericNullableReturnLift(
-        function FunctionSymbol,
-        resultType TypeSymbol,
-        typeArguments[]TypeSymbol,
-        declaringType TypeSymbol? = nil
-    ) {
-        let declaration = if declaringType is InterfaceSymbol ownerInterface {
-            ResolveOpenInterfaceMethod(ownerInterface, function)
-        } else {
-            function
-        }
-        if function.ReturnRefKind != RefKind.None ||
-            declaration.Type is not NullableTypeSymbol declaredNullable ||
-            declaredNullable.UnderlyingType is not TypeParameterSymbol parameter ||
-            NullableLifting.IsAnyValueTypeNullable(declaredNullable) ||
-            resultType is not NullableTypeSymbol resultNullable ||
-            !NullableLifting.IsAnyValueTypeNullable(resultNullable) {
-            return
-        }
-        var argument TypeSymbol? = nil
-        for var i = 0; i < declaration.TypeParameters.Length && i < typeArguments.Length; i++ {
-            if !object.ReferenceEquals(declaration.TypeParameters[i], parameter) {
-                continue
-            }
-            argument = typeArguments[i]
-            break
-        }
-        argument ??= switch declaringType {
-            case ownerClass is StructSymbol: ownerClass.SubstituteMemberType(parameter)
-            case ownerInterface is InterfaceSymbol: ownerInterface.SubstituteMemberType(parameter)
-            default: default(TypeSymbol?)
-        }
-        if argument != nil && NullabilityImportRule.ClassifyArgument(argument) == TypeArgumentKind.Value &&
-            !NullableLifting.IsAnyValueTypeNullable(argument as NullableTypeSymbol) &&
-            !NullableLifting
-            .IsValueTypeNullableClr(argument.ClrType) {
-            // Unconstrained T? returns bare T. Preserve its value when materializing the caller's Nullable<T> (#6040).
-            this.EmitUnconstrainedNullableLiftWrap(resultNullable)
-        }
     }
 
     // Issue #986: emits `base.M(args)` (and `base[BaseClass].M(args)`) as a
@@ -554,7 +492,6 @@ internal partial class MethodBodyEmitter {
         // call. Without it the call named the open method and pushed an
         // argument where `!!0` was expected (ILVerify StackUnexpected,
         // InvalidProgramException at run time).
-        var typeArguments = Array.Empty[TypeSymbol]()
         if !call.IsPropertyAccessor && call.Method!!.IsGeneric {
             let asInstanceCall = BoundUserInstanceCallExpression(
                 call.Syntax,
@@ -564,15 +501,11 @@ internal partial class MethodBodyEmitter {
                 call.Type
             ){MethodTypeArguments = call.MethodTypeArguments}
             methodToken = this.outer.userTokens.BuildMethodSpecForGenericInstanceCall(methodToken, asInstanceCall)
-            typeArguments = this.outer.userTokens.ResolveGenericInstanceCallTypeArguments(asInstanceCall)
         }
         // Issue #986: non-virtual `call`, NOT `callvirt`. callvirt would
         // re-dispatch through the v-table and re-enter the derived override.
         this.il.OpCode(ILOpCode.Call)
         this.il.Token(methodToken)
-        if !call.IsPropertyAccessor {
-            this.EmitErasedGenericNullableReturnLift(call.Method!!, call.Type, typeArguments, baseClass)
-        }
     }
 
     /// Issue #3226: the per-call plan for lifting an unconstrained generic
@@ -730,10 +663,30 @@ internal partial class MethodBodyEmitter {
         return plan
     }
 
-    // Generic argument and return boundaries use the shared nullable constructor selector (#3226, #6040).
+    // Issue #3226: X → Nullable<X> wrap for a lifted argument slot. Mirrors
+    // the Issue #504/#1298 lifts in EmitConversion: a symbolic underlying
+    // (user struct/enum/tuple) routes through the TypeSpec-parented ctor
+    // MemberRef; a CLR-backed underlying closes System.Nullable`1 through the
+    // ReferenceResolver (Issue #571) and refs its single-arg ctor.
     private func EmitUnconstrainedNullableLiftWrap(lifted NullableTypeSymbol) {
         this.il.OpCode(ILOpCode.Newobj)
-        this.il.Token(this.GetNullableResultConstructor(lifted))
+        if NullableLifting.RequiresSymbolicNullableGetValue(lifted) {
+            this.il.Token(this.outer.memberRefs.GetNullableCtorMemberRefForUserValueType(lifted))
+            return
+        }
+        let innerClr = lifted
+            .UnderlyingType
+            .ClrType ??
+            throw InvalidOperationException("Nullable<${lifted.UnderlyingType.Name}> lift has no CLR underlying type.")
+        if !NullableLifting.TryConstructNullable(this.outer.emitCtx.References, innerClr, out var nullableClr) {
+            throw InvalidOperationException(
+                "Cannot construct Nullable<${innerClr.FullName}>: System.Nullable`1 is not resolvable in the reference set."
+            )
+        }
+        let nullableInnerArg = nullableClr.GetGenericArguments()[0]
+        let ctor = nullableClr.GetConstructor([]Type{nullableInnerArg}) ??
+            throw InvalidOperationException("Nullable<${nullableInnerArg.FullName}> has no single-arg constructor.")
+        this.il.Token(this.outer.memberRefs.GetCtorReference(ctor))
     }
 
     // Issue #3226: Nullable<X> → X unwrap for a lifted bare-T return.

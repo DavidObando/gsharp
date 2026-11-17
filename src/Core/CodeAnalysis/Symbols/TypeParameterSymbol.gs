@@ -122,77 +122,9 @@ class TypeParameterSymbol : TypeSymbol {
     /// `ImportedMemberRefFactory.GetElementTypeToken`.
     prop TypeParameterBound TypeParameterSymbol?
 
-    /// Gets a value indicating whether this parameter's DEPENDENT bound chain
-    /// proves it is a reference type in every instantiation (issue #4062) —
-    /// `[TBase class, TDerived TBase]`, or a longer chain, whose ROOT
-    /// carries `class` or a base-class bound. C# propagates a bounding
-    /// parameter's special constraints to the bounded one, so `csc`
-    /// accepts `TDerived x = null;` there; before this, G# reported
-    /// `GS0155`.
-    /// @remarks Deliberately a SEPARATE question from
-    /// (cref:HasReferenceTypeConstraint) / (cref:ClassConstraint)
-    /// rather than a widening of either slot. Roughly forty consumers read
-    /// `ClassConstraint != null` as "this parameter is a reference type"
-    /// AND as "this is the type it derives from" — the second reading drives
-    /// boxing and `callvirt` decisions in the emitter, and a dependent
-    /// bound supplies no such type. Merging the slots is #4027's defect shape;
-    /// this property answers only the reference-ness half, and exactly one
-    /// consumer reads it (`NullabilityImportRule`).
-    ///
-    /// Terminated by VISITED-SYMBOL cycle detection, not by a depth
-    /// limit (review of PR #4088). A semantic depth cap answers "no" for a
-    /// chain that is merely long — `[T0 class, T1 T0, … T33 T32]` proves
-    /// `T33` is a reference type after 33 hops, and a 32-hop cap would
-    /// report `GS0155` on it — so the only thing that may stop the walk
-    /// is actually revisiting a parameter. #4043 already rejects and CLEARS a
-    /// cyclic bound (`GS0581`,
-    /// `DeclarationBinder.Functions.cs`), so this set is belt-and-braces
-    /// for a chain reached before that clearing.
-    ///
-    /// The set is keyed on REFERENCE identity, which is well-defined for
-    /// an open type parameter and needs no name at all. That is deliberate:
-    /// PR #4068's first attempt at the same replacement keyed on
-    /// `ClrTypeUtilities.IsSameAs`, whose `Type.FullName` is
-    /// `null` for an open constructed generic, so every nested
-    /// `List<…>` compared equal and a FALSE cycle fired at the first
-    /// argument — strictly worse than the cap it replaced while looking like a
-    /// fix. A (cref:TypeParameterSymbol) is a single binder-allocated
-    /// instance per declared parameter, so identity is exactly the right key
-    /// and no name is consulted. This is the same idiom
-    /// `Binder.SatisfiesClassConstraint` adopted for #4091/#4102 — a
-    /// DIFFERENT question (does this argument satisfy one named base class,
-    /// following `ClassConstraint ?? TypeParameterBound`) reached
-    /// independently, so the two walks stay separate but agree on how a chain
-    /// is terminated.
-    prop DependentBoundProvesReferenceType bool {
-        get {
-            var bound TypeParameterSymbol? = TypeParameterBound
-            if bound == nil {
-                return false
-            }
-            // Allocated only once a chain is actually being walked, and only
-            // grown past the first hop — the overwhelmingly common shape is
-            // `[TBase class, TDerived TBase]`, one hop, which answers before
-            // the set is ever added to twice.
-            var visited HashSet[TypeParameterSymbol]? = nil
-            while bound != nil {
-                if bound.HasReferenceTypeConstraint || bound.ClassConstraint != nil {
-                    return true
-                }
-                visited ??= HashSet[TypeParameterSymbol](ReferenceEqualityComparer.Instance)
-                if !visited.Add(bound) {
-                    // Revisited: the chain is cyclic. #4043 reports GS0581 for
-                    // this and clears the bound; answering "no" here is the
-                    // conservative direction — `nil` stays refused rather than
-                    // being admitted on the strength of a chain that has no
-                    // root.
-                    return false
-                }
-                bound = bound.TypeParameterBound
-            }
-            return false
-        }
-    }
+    /// Gets whether a dependent bound has a concrete reference-kind proof.
+    prop DependentBoundProvesReferenceType bool ->
+    TypeParameterBound != nil && ProvesNonUniversalReferenceConstraint
 
     /// Gets the single interface bound carried by this type parameter, if any —
     /// either the G# (cref:InterfaceConstraint) or the imported
@@ -360,6 +292,12 @@ class TypeParameterSymbol : TypeSymbol {
         }
     }
 
+    internal prop HasKnownSourceNullableKind bool ->
+    NullabilityImportRule.ClassifyArgument(this) != TypeArgumentKind.Unknown
+
+    /// Records a primary annotation error so operator recovery does not repeat it.
+    internal prop HasSourceNullableAnnotationError bool
+
     internal prop RequiresNullableGenericParamAttribute bool -> !HasValueTypeConstraint &&
         !HasUnmanagedConstraint &&
         (
@@ -401,18 +339,13 @@ class TypeParameterSymbol : TypeSymbol {
                 return structSym.IsClass
             }
             if unwrapped.ClrType is {} clr {
-                if !clr.IsClass || clr.IsValueType {
-                    return false
-                }
-                let fullName = clr.FullName
-                return !string.Equals(fullName, "System.Object", StringComparison.Ordinal) && !string.Equals(
-                    fullName,
-                    "System.ValueType",
-                    StringComparison.Ordinal
-                ) &&
-                    !string.Equals(fullName, "System.Enum", StringComparison.Ordinal)
+                return IsNonUniversalReferenceClassConstraint(clr)
             }
             return false
         }
+
+        internal func IsNonUniversalReferenceClassConstraint(clr Type) bool ->
+        !clr.IsGenericParameter && clr.IsClass && !clr.IsValueType && !ClrTypeUtilities.AreSame(clr, typeof(object)) &&
+            !ClrTypeUtilities.AreSame(clr, typeof(ValueType)) && !ClrTypeUtilities.AreSame(clr, typeof(Enum))
     }
 }

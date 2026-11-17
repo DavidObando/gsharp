@@ -49,7 +49,8 @@ class PlainShower() : MaybeShower {
 let s MaybeShower = PlainShower()
 s.Show[string]("x")
 `
-        let result = Evaluate(source)
+        SourceNullableKindAssertions.Reject(source, "T", 2)
+        let result = Evaluate(source.Replace("[T]", "[T class?]"))
         Assert.Empty(result.Diagnostics)
         Assert.Equal("value", result.Value)
     }
@@ -72,7 +73,8 @@ class PlainShower() : MaybeShower {
 let s MaybeShower = PlainShower()
 s.Show("x")
 `
-        let result = Evaluate(source)
+        SourceNullableKindAssertions.Reject(source, "T", 2)
+        let result = Evaluate(source.Replace("[T]", "[T class?]"))
         Assert.Empty(result.Diagnostics)
         Assert.Equal("value", result.Value)
     }
@@ -94,7 +96,8 @@ class PlainShower() : MaybeShower {
 
 PlainShower()
 `
-        let result = Evaluate(source)
+        SourceNullableKindAssertions.Reject(source, "T", 2)
+        let result = Evaluate(source.Replace("[T]", "[T class?]"))
         Assert.Empty(result.Diagnostics)
     }
 

@@ -54,6 +54,7 @@ internal partial class ExpressionBinder {
         canBeVoid bool,
         deferOnFailure bool
     ) BoundExpression {
+        let sourceNullableDiagnosticMark = Diagnostics.Count
         let suppressionMark = Diagnostics.SuppressionCount
         var discriminant = BindExpression(syntax.Expression)
         if discriminant.Type is TupleTypeSymbol{HasNilElement: true} unresolvedDiscriminantTuple {
@@ -317,6 +318,18 @@ internal partial class ExpressionBinder {
             Diagnostics.ReportSwitchExpressionMissingDefault(syntax.SwitchKeyword.Location)
         }
         var resultType = ComputeSwitchExpressionResultType(boundArmBuilders, targetType)
+        if !binderCtx.ValidateSourceNullableResult(
+            resultType,
+            syntax.SwitchKeyword.Location,
+            boundArmBuilders.Select((arm) -> arm.Result.Type).Append(targetType ?? TypeSymbol.Error)
+        ) {
+            if deferOnFailure {
+                Diagnostics.TruncateTo(sourceNullableDiagnosticMark)
+                Diagnostics.RestoreSuppressionsTo(suppressionMark)
+                return BoundErrorExpression(syntax)
+            }
+            return BoundErrorExpression(nil)
+        }
         if targetType == nil {
             resultType = MaterializeSynthesizedRefDelegateResultType(
                 resultType,

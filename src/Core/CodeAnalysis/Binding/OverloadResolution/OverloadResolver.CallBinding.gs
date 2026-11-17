@@ -935,7 +935,10 @@ internal partial class OverloadResolver {
             // wrap the resolved type in NullableTypeSymbol so the conversion
             // targets the nullable form.
             if syntax.NullableQuestionToken != nil {
-                explicitConversionType = NullableTypeSymbol.Get(explicitConversionType)
+                explicitConversionType = binderCtx.BindSourceNullable(
+                    explicitConversionType,
+                    syntax.NullableQuestionToken.Location
+                )
             }
             // A class exposing a one-argument constructor shape reserves
             // `T(value)` for construction. `cast[T](value)` is the unambiguous

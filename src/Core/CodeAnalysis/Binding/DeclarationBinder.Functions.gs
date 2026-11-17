@@ -408,7 +408,7 @@ internal partial class DeclarationBinder {
             function.SetAttributes(functionAttributes)
             ValidateInlineDataNilArguments(functionAttributes, function.Parameters)
             ValidateUnscopedRefPlacement(function)
-            let methodCandidates = ExpandNullableSequenceIteratorSpecializations(function)
+            let methodCandidates = ImmutableArray.Create(function)
             // ADR-0063 §11: detect duplicate-signature against existing methods on the receiver.
             for candidate in methodCandidates {
                 for existingMethod in methodReceiverStruct.Methods {
@@ -474,7 +474,7 @@ internal partial class DeclarationBinder {
         if !isPInvoke {
             PInvokeBinder.ReportMarshalAsOnNonPInvokeFunction(syntax, Diagnostics)
         }
-        let functions = ExpandNullableSequenceIteratorSpecializations(function)
+        let functions = ImmutableArray.Create(function)
         if syntax.IsExtension {
             // Issue #4234: cs2gs lifts a migrated C# static extension
             // class's methods to top-level G# extension functions (a
@@ -485,8 +485,7 @@ internal partial class DeclarationBinder {
             // owner-specific recognition that key off the exact declaring
             // type. `@ExtensionOwner(typeof(T))` lets cs2gs say which
             // same-package class to host the method on instead;
-            // resolve it once, up front, since it does not vary per
-            // nullable-sequence-iterator specialization below.
+            // Resolve the owner before registering the extension.
             let explicitOwner StructSymbol? = TryResolveExtensionOwnerAnnotation(syntax, $package)
             let declaredOnOwner = if explicitOwner == nil {
                 default(ImmutableArray[FunctionSymbol].Builder?)
@@ -560,177 +559,11 @@ internal partial class DeclarationBinder {
         }
     }
 
-    private func ExpandNullableSequenceIteratorSpecializations(function FunctionSymbol) ImmutableArray[FunctionSymbol] {
-        if function.Declaration?.Body == nil {
-            return ImmutableArray.Create(function)
-        }
-        if !IteratorDetection.ContainsYield(function.Declaration!!.Body!!) {
-            return ImmutableArray.Create(function)
-        }
-        let elementType = switch function.Type {
-            case sequence_ is SequenceTypeSymbol: sequence_.ElementType
-            case sequence_ is AsyncSequenceTypeSymbol: sequence_.ElementType
-            default: default(TypeSymbol?)
-        }
-        if !(elementType is NullableTypeSymbol{UnderlyingType: TypeParameterSymbol target}) ||
-            target.HasValueTypeConstraint ||
-            target.HasReferenceTypeConstraint ||
-            target.ClassConstraint != nil {
-            return ImmutableArray.Create(function)
-        }
-        let targetIndex = function.TypeParameters.IndexOf(target)
-        if targetIndex < 0 {
-            Diagnostics.ReportUnconstrainedNullableSequenceElement(
-                function.Declaration!!
-                    .Type
-                    ?.SequenceElementType
-                    ?.Location ??
-                    function.Declaration!!
-                    .Identifier
-                    .Location,
-                target.Name
-            )
-            return ImmutableArray.Create(function)
-        }
-        return ImmutableArray.Create(
-            CreateNullableSequenceIteratorSpecialization(function, targetIndex, isValueType: false),
-            CreateNullableSequenceIteratorSpecialization(function, targetIndex, isValueType: true)
-        )
-    }
-
-    private func CreateNullableSequenceIteratorSpecialization(
-        function FunctionSymbol,
-        targetIndex int32,
-        isValueType bool
-    ) FunctionSymbol {
-        let typeParameters = SynthesizedClosureReifier.CloneWithRemappedConstraints(function.TypeParameters)
-        typeParameters[targetIndex].HasReferenceTypeConstraint = !isValueType
-        typeParameters[targetIndex].HasValueTypeConstraint = isValueType
-        let substitution = BuildTypeParameterSubstitution(function.TypeParameters, typeParameters)
-        let parameters = ImmutableArray.CreateBuilder[ParameterSymbol](function.Parameters.Length)
-        for parameter in function.Parameters {
-            let clone = ParameterSymbol(
-                parameter,
-                Binder.SubstituteType(parameter.Type, substitution),
-                parameter.DeclaringSyntax
-            )
-            if parameter.HasExplicitDefaultValue {
-                clone.SetExplicitDefaultValue(parameter.ExplicitDefaultValue)
-            } else if (parameter.DeclaringSyntax?.Parent is ParameterSyntax and {HasDefaultValue: true}) {
-                // Issue #4192 (Copilot finding on #4183): a struct/class
-                // method's own default-value expressions are bound lazily
-                // (pendingParameterDefaultValueBindings), so `parameter`'s
-                // default is still PENDING here — specialization runs during
-                // the same per-struct declaration-body pass that registers
-                // the deferred closure, well before
-                // BindPendingParameterDefaultValues drains it. `parameter`
-                // itself is discarded once specialization replaces the
-                // original method with its clones (the caller `continue`s
-                // past adding it), so the original's own deferred closure
-                // would resolve a default value nobody reads. Queue a
-                // follow-up copy from the original onto this clone; it is
-                // appended to the SAME list after the original's own
-                // deferred bind (registered earlier, in the parameter-
-                // creation loop above this method's caller), so drain order
-                // guarantees `parameter.HasExplicitDefaultValue` is already
-                // true by the time this runs.
-                //
-                // `parameter.DeclaringSyntax` is set to the parameter's
-                // IDENTIFIER token, not the enclosing `ParameterSyntax` (see
-                // the ParameterSymbol construction sites in
-                // DeclarationBinder.Structs.cs), so the default-value clause
-                // is found via the token's parent, not the token itself.
-                let originalParameter = parameter
-                let clonedParameter = clone
-                pendingParameterDefaultValueBindings.Add(
-                    () -> {
-                        if originalParameter.HasExplicitDefaultValue {
-                            clonedParameter.SetExplicitDefaultValue(originalParameter.ExplicitDefaultValue)
-                        }
-                    }
-                )
-            }
-            clone.SetAttributes(parameter.Attributes)
-            parameters.Add(clone)
-        }
-        let specializedParameters = parameters.MoveToImmutable()
-        var specializedExplicitReceiver ParameterSymbol? = nil
-        if function.ExplicitReceiverParameter != nil {
-            for var i = 0; i < function.Parameters.Length; i++ {
-                if object.ReferenceEquals(function.Parameters[i], function.ExplicitReceiverParameter) {
-                    specializedExplicitReceiver = specializedParameters[i]
-                    break
-                }
-            }
-        }
-        let specializedReceiverType = if function.ReceiverType is {} receiverType {
-            Binder.SubstituteType(receiverType, substitution)
-        } else {
-            default(TypeSymbol?)
-        }
-        let specialized = FunctionSymbol(
-            function.Name,
-            specializedParameters,
-            Binder.SubstituteType(function.Type, substitution),
-            function.Declaration,
-            function.Package,
-            function.Accessibility,
-            specializedReceiverType,
-            specializedExplicitReceiver,
-            function.IsOpen,
-            function.IsOverride
-        )
-        specialized.TypeParameters = typeParameters
-        specialized.OverriddenMethod = function.OverriddenMethod
-        specialized.ExternalOverriddenMethod = function.ExternalOverriddenMethod
-        specialized.ExternalOverrideContainingType = if function.ExternalOverrideContainingType is {} externalOverrideContainingType {
-            Binder.SubstituteType(externalOverrideContainingType, substitution)
-        } else {
-            default(TypeSymbol?)
-        }
-        specialized.IsAsync = function.IsAsync
-        specialized.IsAsyncVoid = function.IsAsyncVoid
-        specialized.SuspendingKind = function.SuspendingKind
-        specialized.AsyncReturnsValueTask = function.AsyncReturnsValueTask
-        specialized.IsUnsafe = function.IsUnsafe
-        specialized.ReturnRefKind = function.ReturnRefKind
-        specialized.IsStatic = function.IsStatic
-        specialized.StaticOwnerType = if function.StaticOwnerType is {} staticOwnerType {
-            Binder.SubstituteType(staticOwnerType, substitution)
-        } else {
-            default(TypeSymbol?)
-        }
-        specialized.IsSpecialName = function.IsSpecialName
-        specialized.SetAttributes(function.Attributes)
-        if function.GetDocumentation() is {} documentation {
-            specialized.SetDocumentation(documentation)
-        }
-        specialized.NullableSequenceSpecialization = if isValueType {
-            NullableSequenceSpecializationKind.ValueType
-        } else {
-            NullableSequenceSpecializationKind.ReferenceType
-        }
-        return specialized
-    }
-
     private func BindIteratorReturnType(syntax FunctionDeclarationSyntax) TypeSymbol {
-        let previous = binderCtx.UnconstrainedNullableSequenceElementReturn
-        this
-            .binderCtx
-            .UnconstrainedNullableSequenceElementReturn = if syntax.Body != nil &&
-            IteratorDetection.ContainsYield(syntax.Body) {
-            syntax.Type
+        return if syntax.Type is {} returnType {
+            bindReturnTypeClause(returnType, syntax.IsAsync) ?? TypeSymbol.Void
         } else {
-            default(TypeClauseSyntax?)
-        }
-        try {
-            return if syntax.Type is {} returnType {
-                bindReturnTypeClause(returnType, syntax.IsAsync) ?? TypeSymbol.Void
-            } else {
-                TypeSymbol.Void
-            }
-        } finally {
-            this.binderCtx.UnconstrainedNullableSequenceElementReturn = previous
+            TypeSymbol.Void
         }
     }
 
@@ -1296,6 +1129,8 @@ internal partial class DeclarationBinder {
             constraintScope[s.Name] = s
         }
         this.binderCtx.CurrentTypeParameters = constraintScope
+        // A nullable constraint can reference a later parameter whose kind is not bound yet.
+        binderCtx.SourceNullableConstraintDepth++
         try {
             // Pass 2: resolve each constraint against the published scope.
             for var i = 0; i < count; i++ {
@@ -1443,6 +1278,7 @@ internal partial class DeclarationBinder {
             ReportCircularConstraints(syntax, symbols)
         } finally {
             this.binderCtx.CurrentTypeParameters = previousTypeParameters
+            binderCtx.CompleteSourceNullableConstraints()
         }
     }
 

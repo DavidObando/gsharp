@@ -44,6 +44,27 @@ import Xunit
 /// `T?` as well. M1 to M4 fail the rows that name their kind and M5 fails every
 /// accepted row; the per-row result is in the PR description.
 open class Issue4316NilIntoNonNullableReferenceSlotTests {
+    @Theory
+    @InlineData(`class Fixture {
+    shared {
+        func F[A class, B A](c bool, value B) {
+            let x = c ? value : nil
+            let y B? = x
+        }
+    }
+}`, 1)
+    @InlineData(`class Fixture {
+    shared {
+        func F[A class, B A](value B?) {
+            let x = value ?? nil
+            let y B? = x
+        }
+    }
+}`, 2)
+    func BareClassFlagDoesNotProveDependentNullableKind(source string, count int32) {
+        SourceNullableKindAssertions.Reject(source, "B", count)
+    }
+
     /// A `nil` into a non-nullable slot reports the expected diagnostic at the
     /// `nil`; a nullable slot reports nothing.
     /// @param name The row name.
@@ -52,6 +73,10 @@ open class Issue4316NilIntoNonNullableReferenceSlotTests {
     @Theory
     @MemberData("Rows")
     func ANilLiteral_IsAssignableOnlyToANullableSlot(name string, source string, expectedId string) {
+        if expectedId == "GS0641" {
+            SourceNullableKindAssertions.Reject(source, "T", 1)
+            return
+        }
         let errors = GetErrors(source)
         if expectedId == "" {
             Assert.True(errors.IsEmpty, (`'` + name + `' must compile. Got: ` + Describe(errors)))
@@ -264,11 +289,11 @@ func F() int32 -> Sink(nil)`, "GS0154")
         func F[T class]() T? -> nil
     }
 }`, "")
-            yield Row("ok-typeparam-unconstrained-nullable", `class Fixture {
+            yield Row("unsupported-typeparam-unconstrained-nullable", `class Fixture {
     shared {
         func F[T]() T? -> nil
     }
-}`, "")
+}`, "GS0641")
             yield Row("ok-typeparam-struct-nullable", `class Fixture {
     shared {
         func F[T struct]() T? -> nil
@@ -395,17 +420,19 @@ class H {
             yield Row("ok-coalesce-nil-in-field-initializer", `class H(value Box?) {
     public var f Box? = value ?? nil
 }`, "")
-            yield Row("ok-dependent-bound-join", `class Fixture {
+            yield Row("ok-dependent-bound-join", `open class Base {}
+class Fixture {
     shared {
-        func F[A class, B A](c bool, value B) {
+        func F[A Base, B A](c bool, value B) {
             let x = c ? value : nil
             let y B? = x
         }
     }
 }`, "")
-            yield Row("ok-dependent-bound-coalesce", `class Fixture {
+            yield Row("ok-dependent-bound-coalesce", `open class Base {}
+class Fixture {
     shared {
-        func F[A class, B A](value B?) {
+        func F[A Base, B A](value B?) {
             let x = value ?? nil
             let y B? = x
         }
