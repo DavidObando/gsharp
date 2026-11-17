@@ -1189,7 +1189,19 @@ partial class CSharpToGSharpTranslator {
             byReference bool
         ) bool ->
         (closureAssigned && this.NodeMayRunEscapedClosure(node)) ||
-            (byReference && (this.NodeRunsStaticTypeInitializer(node) || this.NodeMayWriteReferenceStorage(node)))
+            (byReference && this.NodeRunsStaticTypeInitializer(node)) ||
+            (
+            (
+                byReference ||
+                    node is ArgumentSyntax argument &&
+                    (
+                    argument.RefKindKeyword.IsKind(SyntaxKind.RefKeyword) || argument.RefKindKeyword.IsKind(
+                        SyntaxKind.OutKeyword
+                    )
+                )
+            ) &&
+                this.NodeMayWriteReferenceStorage(node)
+        )
 
         // Chained stores complete conversions, setters, and reference-storage effects after their inner assignment.
         private func AssignmentStoreCompletesAfterProof(

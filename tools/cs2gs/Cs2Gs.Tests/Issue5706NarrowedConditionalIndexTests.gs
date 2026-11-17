@@ -26,8 +26,72 @@ import Xunit
 /// On 36d50e65c, declaration-style for headers and argument mutations in expression statements leave GS0300.
 /// Elision and custom-handler traversal mutants cause GS0116 in both review regressions.
 /// The C# output oracle also rejects erased null guards and throwing bridges on nullable stores.
+/// Issue #6036: writable shared-storage `ref` arguments need a required assertion when gsc drops an unrelated local's proof.
+/// On 426306d887, field-ref cases fail with GS0159 without it; local-ref controls compile without `plan!!`.
 /// Each test also compares the translated program's output with C#.
 open class Issue5706NarrowedConditionalIndexTests {
+    @Theory
+    @InlineData("static int counter;", "", "Interlocked.Increment(ref counter);", true)
+    @InlineData("static int counter;", "", "Bump(ref counter);", true)
+    @InlineData("", "int counter = 0;", "Interlocked.Increment(ref counter);", false)
+    @InlineData("", "int counter = 0;", "Bump(ref counter);", false)
+    func OutLocalPatternNarrowing_AfterWritableRefArgument(
+        fieldDeclaration string,
+        localDeclaration string,
+        refCall string,
+        expectAssertion bool
+    ) {
+        let printed = Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System;
+using System.Collections.Generic;
+using System.Threading;
+public static class Demo
+{
+    __FIELD__
+
+    sealed class Plan
+    {
+        public string[] Names { get; } = new[] { "a" };
+    }
+
+    static bool TryCreate(out Plan? plan, out string? failure)
+    {
+        plan = new Plan();
+        failure = null;
+        return true;
+    }
+
+    static void Bump(ref int value) { value++; }
+
+    public static string Run()
+    {
+        __LOCAL__
+        if (!TryCreate(out var plan, out var failure) || plan is not { } resolvedPlan)
+        {
+            return "0";
+        }
+        plan = resolvedPlan;
+        __CALL__
+        var statements = new List<string>();
+        statements.Add("after assignment");
+        return plan.Equals(plan).ToString();
+    }
+}
+`.Replace(
+                "__FIELD__",
+                fieldDeclaration
+            ).Replace(
+                "__LOCAL__",
+                localDeclaration
+            ).Replace("__CALL__", refCall), strictIl: true, expectedOutput: "True")
+        if expectAssertion {
+            Assert.Contains("plan!!", printed, StringComparison.Ordinal)
+        } else {
+            Assert.DoesNotContain("plan!!", printed, StringComparison.Ordinal)
+        }
+    }
+
     @Fact
     func ContinueEntry_IncludesBracedAndUnbracedRootConditions() {
         Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
