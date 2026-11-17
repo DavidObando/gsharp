@@ -51,7 +51,11 @@ internal sealed class PrefixDiagnosticClassifier {
         let inPrefixText = object.ReferenceEquals(location.Text, prefixCut.Text)
         // A parse diagnostic that reaches the cut is on a token or a construct that the cut ended, such
         // as an unterminated string. Text after the cut can complete it.
-        if inPrefixText && prefixParse.Contains(diagnostic) && location.Span.End >= prefixCut.Cut {
+        if inPrefixText && prefixParse.Contains(diagnostic) &&
+            location
+            .Span
+            .Start < prefixCut.Cut &&
+            (location.Span.End >= prefixCut.Cut || TokenReachesCut(location.Span.Start)) {
             return ClassifiedDiagnostic(diagnostic, DiagnosticFinality.Artifact, "cut")
         }
         // The tokens before the cut are the same in both parses. A parse diagnostic that the source tree
@@ -93,6 +97,26 @@ internal sealed class PrefixDiagnosticClassifier {
             }
         }
         return ClassifiedDiagnostic(diagnostic, diagnostic.PrefixFinality, diagnostic.PrefixReason)
+    }
+
+    // Returns true when the token that starts at [`position`](paramref) ends at the cut, such as an
+    // unterminated string whose diagnostic marks only its first character.
+    private func TokenReachesCut(position int32) bool {
+        var node SyntaxNode = prefixTree.Root
+        while node is not SyntaxToken {
+            var next SyntaxNode? = nil
+            for child in node.GetChildren() {
+                if child.Span.Start <= position && position < child.Span.End {
+                    next = child
+                    break
+                }
+            }
+            if next == nil {
+                return false
+            }
+            node = next
+        }
+        return node.Span.Start == position && node.Span.End >= prefixCut.Cut
     }
 
     // Returns true when a node with exactly this span is open at the cut.
