@@ -16,6 +16,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- **Fewer cascading parse diagnostics** (Oats). The parser reports `GS0005` once for each token where it stops, so `func f( int32 {` gives one `GS0005`, not two. The binder does not report `GS0113` "Type ''" for a type name token that the parser synthesized.
+
 - **Public entry-point and internal-error diagnostics for library hosts** (Oats, ADR-0223). `Compilation.GetMissingEntryPointDiagnostics()` (`GS0634`) and `Compilation.CreateInternalErrorDiagnostic(Exception)` (`GS9998`) are public, so a host can report them as `gsc` does. ADR-0223 proposes packaging, hermetic reference sets, an explicit runtime directory, and a thread-safety contract.
 
 - **One diagnostic for a property initializer** (Oats). `prop X T = value` reports the new `GS0640` once at the `=` token. Before, the `=` started a field declaration and caused `GS0113` (`Type ''`), `GS0288`, and `GS0005`. The `PropertyDecl` grammar still has no initializer.
