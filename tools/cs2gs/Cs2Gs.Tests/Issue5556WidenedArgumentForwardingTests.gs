@@ -93,9 +93,11 @@ public class Holder {
     }
 
     @Theory
-    @InlineData(false)
-    @InlineData(true)
-    func LinkedPartialImplementations_PinEveryAliasRegardlessOfProjectOrder(effectfulFirst bool) {
+    @InlineData(false, false)
+    @InlineData(true, false)
+    @InlineData(false, true)
+    @InlineData(true, true)
+    func LinkedPartialImplementations_PinEveryAliasRegardlessOfProjectOrder(effectfulFirst bool, prepopulated bool) {
         let directory = Path.Combine(AppContext.BaseDirectory, "issue-5556-linked", Guid.NewGuid().ToString("N"))
         let native = Path.Combine(directory, "native")
         Directory.CreateDirectory(native)
@@ -111,6 +113,13 @@ public partial class Holder {
     public Holder(Node value) { stored = value; }
     private void Use() => Sink(stored);
     private static partial void Sink(Node value);
+` + (
+                    if prepopulated {
+                        "    private static void Forward(Node value) { }\n"
+                    } else {
+                        ""
+                    }
+                ) + `
     private static int Argument() { trace += "a"; return 1; }
     public static void Main() {
         try { new Holder(null!).Use(); }
@@ -140,9 +149,16 @@ public partial class Holder {
                 } else {
                     "1"
                 }
+                let forwarding = if prepopulated && !effectful {
+                    "Forward(value); "
+                } else {
+                    ""
+                }
                 File.WriteAllText(
                     Path.Combine(project, "Implementation.cs"),
-                    `public partial class Holder { private static partial void Sink(Node value) { trace += "s"; value.Touch(` +
+                    `public partial class Holder { private static partial void Sink(Node value) { ` +
+                        forwarding +
+                        `trace += "s"; value.Touch(` +
                         argument +
                         `); } }`
                 )

@@ -2753,14 +2753,10 @@ internal shared class ObliviousNullabilityAnalyzer {
             for entry in graph.Symbols {
                 let canonical = CanonicalNullArgumentKey(entry.Key, run)
                 if !declarations.TryGetValue(canonical, out var symbols) {
-                    symbols = List[ISymbol]()
+                    symbols = NullArgumentDeclarationsInRun(entry.Value, run)
                     declarations[canonical] = symbols
-                }
-                symbols.Add(entry.Value)
-                // A declaration seen through a run project's emitted reference is
-                // read in its source, so the source declaration joins it.
-                if entry.Value.DeclaringSyntaxReferences.Length == 0 {
-                    symbols.AddRange(SourceDeclarationsInRun(entry.Value, run))
+                } else {
+                    symbols.Add(entry.Value)
                 }
             }
         }
@@ -2814,9 +2810,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                         continue
                     }
                     if !declarations.ContainsKey(target) && run.Slots.TryGetValue(target, out var slot) {
-                        let symbols = List[ISymbol]{slot}
-                        symbols.AddRange(SourceDeclarationsInRun(slot, run))
-                        declarations[target] = symbols
+                        declarations[target] = NullArgumentDeclarationsInRun(slot, run)
                     }
                     if !IsEmitted(target) {
                         continue
@@ -4101,13 +4095,13 @@ internal shared class ObliviousNullabilityAnalyzer {
             IsEmittedByRun(slot.OriginalDefinition, graphs)
     }
 
-    // Collect every source alias before deciding whether all reads preserve evaluation order.
-    private func SourceDeclarationsInRun(symbol ISymbol, run NullArgumentRun) List[ISymbol] {
-        let sources = List[ISymbol]()
+    // Resolve every canonical declaration's aliases, regardless of how its first symbol enters the run.
+    private func NullArgumentDeclarationsInRun(symbol ISymbol, run NullArgumentRun) List[ISymbol] {
+        let declarations = List[ISymbol]{symbol}
         let declaration = OriginalNullArgumentDeclaration(symbol) ?? symbol
         let keys = NullArgumentKeys(declaration)
         if keys.Count == 0 || NullArgumentId(declaration) is not{} id {
-            return sources
+            return declarations
         }
         let canonical = CanonicalNullArgumentKey(keys[0], run)
         // Canonicalization records every assembly and linked-source alias before read collection.
@@ -4120,10 +4114,10 @@ internal shared class ObliviousNullabilityAnalyzer {
                 source
                 .DeclaringSyntaxReferences
                 .Length != 0 {
-                sources.Add(OriginalNullArgumentDeclaration(source) ?? source)
+                declarations.Add(OriginalNullArgumentDeclaration(source) ?? source)
             }
         }
-        return sources
+        return declarations
     }
 
     // Issue #5577: the source declarations that `symbol` stands for when it is
