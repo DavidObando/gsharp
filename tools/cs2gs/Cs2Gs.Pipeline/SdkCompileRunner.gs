@@ -143,7 +143,13 @@ class SdkCompileRunner {
                 diagnostics = diagnostics.Concat(relayed).ToList()
             }
             let assemblyPath string? = if result.ExitCode == 0 {
-                ResolveTargetPath(generatedProjectPath, projectDirectory, config, artifactDirectory)
+                ResolveTargetPath(
+                    generatedProjectPath,
+                    projectDirectory,
+                    buildWorkingDirectory,
+                    config,
+                    artifactDirectory
+                )
             } else {
                 default(string?)
             }
@@ -1030,7 +1036,7 @@ class SdkCompileRunner {
                         "--",
                         CSharpTestOracle.RunSettingsArgument
                     },
-                    projectDirectory,
+                    BuildWorkingDirectory(repoRoot, projectDirectory!!),
                     timeout,
                     MirroredTestEnvironment(SharedMirroredNugetRoot(artifactDirectory), sourceRoot)
                 )
@@ -1403,6 +1409,7 @@ class SdkCompileRunner {
         private func ResolveTargetPath(
             projectPath string,
             projectDirectory string?,
+            workingDirectory string,
             config string,
             artifactDirectory string
         ) string? {
@@ -1415,7 +1422,7 @@ class SdkCompileRunner {
                     "-p:Configuration=" + (config ?? "Release"),
                     "-p:Cs2GsArtifactRoot=" + artifactDirectory
                 },
-                projectDirectory,
+                workingDirectory,
                 TimeSpan.FromMinutes(2),
                 IsolatedNugetEnvironment(SharedMirroredNugetRoot(artifactDirectory))
             )

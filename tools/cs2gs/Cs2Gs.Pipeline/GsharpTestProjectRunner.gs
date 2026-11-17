@@ -147,7 +147,7 @@ open class GsharpTestProjectRunner {
         let result = ProcessRunner.Run(
             "dotnet",
             arguments,
-            workingDirectory,
+            SdkCompileRunner.BuildWorkingDirectory(this.RepoRoot, workingDirectory),
             TimeSpan.FromMinutes(10),
             Dictionary[string, string]{["NUGET_PACKAGES"] = Path.Combine(workingDirectory, ".nuget-packages")}
         )
