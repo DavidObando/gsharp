@@ -140,6 +140,23 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// #1238 target-typed conditional arguments).
     prop Count int32 -> diagnostics.Count
 
+    /// Gets the diagnostic added last, or `null` when the bag is empty.
+    /// (cref:TruncateTo) removes rolled-back entries, so this is never a speculative diagnostic.
+    internal prop LastAdded Diagnostic? -> if diagnostics.Count == 0 {
+        default(Diagnostic?)
+    } else {
+        diagnostics[diagnostics.Count - 1]
+    }
+
+    /// Gets a value that tells whether [`diagnostic`](paramref) is still at [`index`](paramref).
+    /// It is `false` after (cref:TruncateTo) or a duplicate suppression removes that entry.
+    /// @param index The index where the diagnostic was added.
+    /// @param diagnostic The diagnostic that was added.
+    /// @returns `true` when the same diagnostic object is at the index.
+    internal func ContainsAt(index int32, diagnostic Diagnostic) bool -> index >= 0 &&
+        index < diagnostics.Count &&
+        object.ReferenceEquals(diagnostics[index], diagnostic)
+
     /// Creates an immutable snapshot of the diagnostics currently held in the bag.
     /// @returns An immutable array of diagnostics in insertion order.
     func ToImmutableArray() ImmutableArray[Diagnostic] -> Visible().ToImmutableArray()

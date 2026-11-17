@@ -2404,6 +2404,7 @@ above retain their longer explanations and examples.
 | GS0636 | Error | A `goto` enters a nested block from outside that block.  | |
 | GS0638 | Error | Cannot take the pointer value of a fixed-size buffer in movable storage outside a `fixed` statement; pin it with `fixed` or index an element directly (`name[i]`).  | |
 | GS0639 | Error | Lazy declaration dependencies exceed the available execution stack. | Reduce or split cross-declaration attribute dependencies. The compiler reports this error instead of terminating the process. |
+| GS0640 | Error | A property declaration has an initializer (`prop X T = value`). The `PropertyDecl` grammar has no initializer. | Declare a field (`var X T = value`) or assign the property in `init`. |
 | GS0499 | Error | A field assignment targets a temporary struct value rather than writable storage.  | |
 | GS0500 | Error | A user-defined compound-assignment operator is not an instance method with exactly one parameter and no return value.  | |
 | GS0501 | Error | Imported metadata exposes multiple public parameterless members with the same name, so reflection lookup is ambiguous.  | |

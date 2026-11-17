@@ -2623,6 +2623,11 @@ internal shared class DiagnosticDescriptors {
         DiagnosticSeverity.Error,
         "Not enough execution stack to bind declaration dependencies; reduce the attribute dependency chain."
     )
+    internal let PropertyInitializerNotSupported DiagnosticDescriptor = DiagnosticDescriptor(
+        "GS0640",
+        DiagnosticSeverity.Error,
+        "Property initializers are not supported. Declare a field ('var {0} T = value') or assign the property in 'init'."
+    )
     internal let FatalCompilerIOError DiagnosticDescriptor = DiagnosticDescriptor(
         "GS9997",
         DiagnosticSeverity.Error,
