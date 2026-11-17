@@ -9,6 +9,7 @@ import System.Collections.Generic
 import System.Diagnostics
 import System.IO
 import System.Linq
+import System.Text.Json
 import System.Threading.Tasks
 import Cs2Gs.Pipeline
 import Cs2Gs.Translator
@@ -24,6 +25,58 @@ import System.Xml.Linq
 /// a live NuGet cache or a real `dotnet build`; the SDK-availability and
 /// end-to-end build paths are covered by the cs2gs pipeline's own corpus runs.
 open class SdkCompileRunnerTests {
+    @Fact
+    func WriteFailureArtifacts_PreservesBuildInvocationAndSeparateStreamsOnlyOnFailure() {
+        let directory = Path.Combine(Path.GetTempPath(), "cs2gs-sdk-failure-" + Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let arguments = []string{"build", "Demo.gsproj", "-p:Value=one two"}
+            let workingDirectory = Path.Combine(directory, "work")
+            let sdkResult = ProcessRunResult(0, "10.0.404\n", string.Empty, false)
+            SdkCompileRunner.WriteFailureArtifacts(
+                directory,
+                arguments,
+                workingDirectory,
+                "0.5.702",
+                ProcessRunResult(0, string.Empty, string.Empty, false),
+                sdkResult
+            )
+            Assert.Empty(Directory.GetFiles(directory))
+
+            let buildResult = ProcessRunResult(1, "build stdout\n", "build stderr\n", false)
+            SdkCompileRunner.WriteFailureArtifacts(
+                directory,
+                arguments,
+                workingDirectory,
+                "0.5.702",
+                buildResult,
+                sdkResult
+            )
+
+            Assert.Equal("build stdout\n", File.ReadAllText(Path.Combine(directory, "sdk.build.stdout.log")))
+            Assert.Equal("build stderr\n", File.ReadAllText(Path.Combine(directory, "sdk.build.stderr.log")))
+            using let diagnostics = JsonDocument.Parse(
+                File.ReadAllText(Path.Combine(directory, "sdk.build.diagnostics.json"))
+            )
+            let root = diagnostics.RootElement
+            Assert.Equal("dotnet", root.GetProperty("fileName").GetString())
+            Assert.Equal(workingDirectory, root.GetProperty("workingDirectory").GetString())
+            Assert.Equal("0.5.702", root.GetProperty("gsharpSdkVersion").GetString())
+            Assert.Equal(1, root.GetProperty("exitCode").GetInt32())
+            Assert.False(root.GetProperty("timedOut").GetBoolean())
+            let savedArguments = root.GetProperty("arguments")
+            Assert.Equal(arguments.Length, savedArguments.GetArrayLength())
+            Assert.Equal(
+                arguments,
+                savedArguments.EnumerateArray().Select((argument JsonElement) -> argument.GetString()).ToArray()
+            )
+            Assert.Equal("10.0.404", root.GetProperty("dotnetSdkVersion").GetString())
+            Assert.Equal(0, root.GetProperty("dotnetSdkExitCode").GetInt32())
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
     @Fact
     func PartitionReferences_ReconstructsPackageReference_FromNugetPackagesRootPath() {
         let references = []string{PackagesRoot + "/communitytoolkit.mvvm/8.4.0/lib/net8.0/CommunityToolkit.Mvvm.dll"}

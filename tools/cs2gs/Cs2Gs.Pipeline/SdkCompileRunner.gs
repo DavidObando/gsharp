@@ -10,6 +10,7 @@ import System.IO
 import System.Linq
 import System.Reflection
 import System.Text
+import System.Text.Json
 import System.Text.RegularExpressions
 import System.Runtime.InteropServices
 import System.Xml.Linq
@@ -109,14 +110,17 @@ class SdkCompileRunner {
                 projectNugetConfig,
                 warningsNotAsErrors
             )
-            let result = ProcessRunner.Run(
-                "dotnet",
-                args,
-                projectDirectory,
-                MirroredBuildTimeout,
-                IsolatedNugetEnvironment(SharedMirroredNugetRoot(artifactDirectory))
-            )
+            let buildEnvironment = IsolatedNugetEnvironment(SharedMirroredNugetRoot(artifactDirectory))
+            let result = ProcessRunner.Run("dotnet", args, projectDirectory, MirroredBuildTimeout, buildEnvironment)
             File.WriteAllText(Path.Combine(artifactDirectory, "sdk.build.log"), result.Output ?? string.Empty)
+            this.CaptureFailureArtifacts(
+                artifactDirectory,
+                args,
+                projectDirectory!!,
+                sdkMoniker,
+                buildEnvironment,
+                result
+            )
             var diagnostics = GscInvoker.ParseDiagnostics(result.Output)
             if result.ExitCode != 0 && !diagnostics.Any((d GscDiagnostic) -> d.IsError) {
                 // Issue #3634: surface MSBuild-relayed GSxxxx errors (.targets-
@@ -330,14 +334,10 @@ class SdkCompileRunner {
             // restore/build alike (mirrors GsharpTestProjectRunner.Run).
             args.Add("-p:RestoreConfigFile=" + repoNugetConfig)
         }
-        let result = ProcessRunner.Run(
-            "dotnet",
-            args,
-            appRunDir,
-            TimeSpan.FromMinutes(10),
-            IsolatedNugetEnvironment(appRunDir)
-        )
+        let buildEnvironment = IsolatedNugetEnvironment(appRunDir)
+        let result = ProcessRunner.Run("dotnet", args, appRunDir, TimeSpan.FromMinutes(10), buildEnvironment)
         File.WriteAllText(Path.Combine(appRunDir, "sdk.build.log"), result.Output ?? string.Empty)
+        this.CaptureFailureArtifacts(appRunDir, args, appRunDir, sdkVersion, buildEnvironment, result)
         var diagnostics = GscInvoker.ParseDiagnostics(result.Output)
         if result.ExitCode != 0 && diagnostics.Count((d GscDiagnostic) -> d.IsError) == 0 {
             // Issue #3634: before synthesizing an opaque fallback, surface any
@@ -379,7 +379,57 @@ class SdkCompileRunner {
         return SdkCompileResult.Completed(result.ExitCode, result.Output, diagnostics, assemblyPath)
     }
 
+    private func CaptureFailureArtifacts(
+        artifactDirectory string,
+        arguments IReadOnlyList[string],
+        workingDirectory string,
+        gsharpSdkVersion string?,
+        environment IReadOnlyDictionary[string, string],
+        buildResult ProcessRunResult
+    ) {
+        if buildResult.ExitCode == 0 && !buildResult.TimedOut {
+            return
+        }
+        let sdkResult = ProcessRunner.Run(
+            "dotnet",
+            []string{"--version"},
+            workingDirectory,
+            TimeSpan.FromSeconds(10),
+            environment
+        )
+        SdkCompileRunner.WriteFailureArtifacts(
+            artifactDirectory,
+            arguments,
+            workingDirectory,
+            gsharpSdkVersion,
+            buildResult,
+            sdkResult
+        )
+    }
+
     shared {
+        internal func WriteFailureArtifacts(
+            artifactDirectory string,
+            arguments IReadOnlyList[string],
+            workingDirectory string,
+            gsharpSdkVersion string?,
+            buildResult ProcessRunResult,
+            sdkResult ProcessRunResult
+        ) {
+            if buildResult.ExitCode == 0 && !buildResult.TimedOut {
+                return
+            }
+            File.WriteAllText(Path.Combine(artifactDirectory, "sdk.build.stdout.log"), buildResult.Stdout)
+            File.WriteAllText(Path.Combine(artifactDirectory, "sdk.build.stderr.log"), buildResult.Stderr)
+            File.WriteAllText(
+                Path.Combine(artifactDirectory, "sdk.build.diagnostics.json"),
+                JsonSerializer.Serialize(
+                    SdkBuildFailureDiagnostics(arguments, workingDirectory, gsharpSdkVersion, buildResult, sdkResult),
+                    JsonSerializerOptions{WriteIndented: true, PropertyNamingPolicy: JsonNamingPolicy.CamelCase}
+                )
+            )
+        }
+
         /// Issue #4498: the wall-clock budget for a mirrored `dotnet build`.
         /// It is separate from (cref:MirroredTestRunTimeout), which it used to
         /// share. One build invocation compiles the app AND its whole project-reference
@@ -1715,6 +1765,72 @@ class SdkCompileRunner {
                 " and no parseable diagnostic."
             return GscDiagnostic("GS9999", fallbackMessage, "error", relativeFile, 1, 1)
         }
+    }
+}
+
+internal class SdkBuildFailureDiagnostics {
+    init(
+        arguments IReadOnlyList[string],
+        workingDirectory string,
+        gsharpSdkVersion string?,
+        buildResult ProcessRunResult,
+        sdkResult ProcessRunResult
+    ) {
+        this.FileName = "dotnet"
+        this.Arguments = arguments.ToArray()
+        this.WorkingDirectory = workingDirectory
+        this.GsharpSdkVersion = gsharpSdkVersion
+        this.ExitCode = buildResult.ExitCode
+        this.TimedOut = buildResult.TimedOut
+        this.DotnetSdkVersion = sdkResult.Stdout.Trim()
+        this.DotnetSdkExitCode = sdkResult.ExitCode
+        this.DotnetSdkTimedOut = sdkResult.TimedOut
+        this.DotnetSdkStdout = sdkResult.Stdout
+        this.DotnetSdkStderr = sdkResult.Stderr
+    }
+
+    prop FileName string {
+        get;
+    }
+
+    prop Arguments[]string {
+        get;
+    }
+
+    prop WorkingDirectory string {
+        get;
+    }
+
+    prop GsharpSdkVersion string? {
+        get;
+    }
+
+    prop ExitCode int32 {
+        get;
+    }
+
+    prop TimedOut bool {
+        get;
+    }
+
+    prop DotnetSdkVersion string {
+        get;
+    }
+
+    prop DotnetSdkExitCode int32 {
+        get;
+    }
+
+    prop DotnetSdkTimedOut bool {
+        get;
+    }
+
+    prop DotnetSdkStdout string {
+        get;
+    }
+
+    prop DotnetSdkStderr string {
+        get;
     }
 }
 

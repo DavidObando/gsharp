@@ -15484,6 +15484,12 @@ partial class CSharpToGSharpTranslator {
             if this.IsErasedNameOf(node) {
                 return false
             }
+            if this.WritableReferenceArgumentTarget(node) is {} referenceTarget && this.WritesThroughStorage(
+                referenceTarget,
+                isArgument: true
+            ) {
+                return true
+            }
             switch node {
                 case assignment is Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax {
                     // A member initializer is part of the construction (#5562): a field keeps the fact, and a
@@ -15526,17 +15532,6 @@ partial class CSharpToGSharpTranslator {
                     .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.PostDecrementExpression) {
                     return this.WritesThroughStorage(postfix.Operand, isArgument: false)
                 }
-                case argument is Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .ArgumentSyntax when argument
-                    .RefKindKeyword
-                    .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.RefKeyword) || argument.RefKindKeyword.IsKind(
-                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.OutKeyword
-                ) {
-                    return this.WritesThroughStorage(argument.Expression, isArgument: true)
-                }
                 case addressOf is Microsoft
                     .CodeAnalysis
                     .CSharp
@@ -15545,23 +15540,6 @@ partial class CSharpToGSharpTranslator {
                     .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AddressOfExpression) {
                     // The address of a member or an element names storage that a later write can change.
                     return this.WritesThroughStorage(addressOf.Operand, isArgument: true)
-                }
-                case invocation is InvocationExpressionSyntax when invocation.Expression is MemberAccessExpressionSyntax receiverAccess &&
-                    this
-                    .context
-                    .GetSymbolInfo(invocation)
-                    .Symbol is IMethodSymbol method &&
-                    method.ReducedFrom != nil &&
-                    method.ReducedFrom!!
-                    .Parameters
-                    .Length > 0 &&
-                    method.ReducedFrom!!
-                    .Parameters[0]
-                    .RefKind == RefKind
-                    .Ref {
-                    // cs2gs passes the receiver of a `this ref` extension as `&receiver`, a writable reference.
-                    return this.WritesThroughStorage(receiverAccess.Expression, isArgument: true) ||
-                        this.InvocationStorageMayWriteType(invocation, rootType)
                 }
                 case invocation is InvocationExpressionSyntax {
                     return this.InvocationStorageMayWriteType(invocation, rootType)
@@ -21572,6 +21550,62 @@ partial class CSharpToGSharpTranslator {
             }
             let operation = this.context.SemanticModel.GetOperation(recursive) as IRecursivePatternOperation
             return this.AccessorRunsUserCode(property, operation?.NarrowedType)
+        }
+
+        // A reduced `this ref` receiver is an emitted argument, even without C# argument syntax.
+        private func WritableReferenceArgumentTarget(node Microsoft.CodeAnalysis.SyntaxNode) Microsoft
+            .CodeAnalysis
+            .CSharp
+            .Syntax
+            .ExpressionSyntax? {
+            switch node {
+                case argument is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ArgumentSyntax when argument
+                    .RefKindKeyword
+                    .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.RefKeyword) || argument.RefKindKeyword.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.OutKeyword
+                ) {
+                    if argument
+                        .Parent
+                        ?.Parent is InvocationExpressionSyntax call &&
+                        this
+                        .context
+                        .GetSymbolInfo(call)
+                        .Symbol is IMethodSymbol method &&
+                        this.TryGetRewrittenSourceExtensionReceiver(call, method, out var receiver) &&
+                        object.ReferenceEquals(argument.Expression, receiver) {
+                        return nil
+                    }
+                    return argument.Expression
+                }
+                case invocation is InvocationExpressionSyntax when invocation.Expression is MemberAccessExpressionSyntax receiverAccess &&
+                    this
+                    .context
+                    .GetSymbolInfo(invocation)
+                    .Symbol is IMethodSymbol method &&
+                    method.ReducedFrom != nil &&
+                    method.ReducedFrom!!
+                    .Parameters
+                    .Length > 0 &&
+                    method.ReducedFrom!!
+                    .Parameters[0]
+                    .RefKind == RefKind.Ref &&
+                    (
+                    method.ReducedFrom!!.DeclaringSyntaxReferences.IsDefaultOrEmpty || this.TryGetStaticExtensionHelper(
+                        method,
+                        out _,
+                        out _
+                    )
+                ) {
+                    return receiverAccess.Expression
+                }
+                default {
+                    return nil
+                }
+            }
         }
 
         /// Whether a write to [`target`](paramref) can change storage that a by-reference variable names (ADR-0208
