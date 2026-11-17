@@ -183,6 +183,7 @@ Twenty-three other open-parameter annotations already had reference proofs.
 The first inventory predicted annotation eligibility with semantic symbols.
 An expanded measurement applied the new public driver to the same complete, unchanged Core and CLI source sets.
 It reported exactly three GS0641 diagnostics at `Guarded`'s annotations; CLI compilation succeeded.
+After integrating main `a2a005ba56e170346361ce1ecd65e810fad16585`, the public driver repeated this result against a separate read-only archive of that exact main commit: all 783 normal tracked compiler inputs, the same three locations, and no CLI diagnostic.
 Core declaration errors prevented complete body validation by that driver.
 An independent baseline semantic observer completed all bodies with no errors and inspected recursively wrapped expression types.
 It reused the existing sound reference-kind proof rather than propagating bare class flags.
