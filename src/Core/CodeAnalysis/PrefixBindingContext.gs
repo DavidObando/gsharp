@@ -87,6 +87,22 @@ internal sealed class PrefixCut {
         return Remainder == PrefixRemainder.Nothing || location.Span.Start < KeptStart
     }
 
+    /// Gets the lexer diagnostics of the prefix tree. The parser sets them with (cref:Tree).
+    internal prop LexerDiagnostics ImmutableArray[Diagnostic] {
+        get {
+            return if lexerDiagnostics.IsDefault {
+                ImmutableArray[Diagnostic].Empty
+            } else {
+                lexerDiagnostics
+            }
+        }
+        set {
+            lexerDiagnostics = value
+        }
+    }
+
+    private var lexerDiagnostics ImmutableArray[Diagnostic]
+
     /// Gets the prefix tree. The parser sets it after the parse.
     internal prop Tree SyntaxTree? {
         get;

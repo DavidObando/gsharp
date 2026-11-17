@@ -22,6 +22,7 @@ internal sealed class PrefixDiagnosticClassifier {
     private let cancellationToken CancellationToken
     private let prefixTree SyntaxTree
     private let prefixParse HashSet[Diagnostic]
+    private let prefixLexer HashSet[Diagnostic]
     private var sourceParse HashSet[string]?
     private var sourceDiagnostics HashSet[string]?
 
@@ -38,6 +39,7 @@ internal sealed class PrefixDiagnosticClassifier {
         this.prefixTree = prefixTree
         this.cancellationToken = cancellationToken
         prefixParse = HashSet[Diagnostic](prefixTree.Diagnostics, ReferenceEqualityComparer.Instance)
+        prefixLexer = HashSet[Diagnostic](prefixCut.LexerDiagnostics, ReferenceEqualityComparer.Instance)
     }
 
     /// Returns the classified form of [`diagnostic`](paramref).
@@ -49,13 +51,13 @@ internal sealed class PrefixDiagnosticClassifier {
             return ClassifiedDiagnostic(diagnostic, DiagnosticFinality.Artifact, "cut")
         }
         let inPrefixText = object.ReferenceEquals(location.Text, prefixCut.Text)
-        // A parse diagnostic that reaches the cut is on a token or a construct that the cut ended, such
-        // as an unterminated string. Text after the cut can complete it.
-        if inPrefixText && prefixParse.Contains(diagnostic) &&
+        // A lexer diagnostic on a token that reaches the cut, such as an unterminated string, is on a
+        // token that the cut ended. Text after the cut can complete the token.
+        if inPrefixText && prefixLexer.Contains(diagnostic) &&
             location
             .Span
             .Start < prefixCut.Cut &&
-            (location.Span.End >= prefixCut.Cut || TokenReachesCut(location.Span.Start)) {
+            TokenReachesCut(location.Span.Start) {
             return ClassifiedDiagnostic(diagnostic, DiagnosticFinality.Artifact, "cut")
         }
         // The tokens before the cut are the same in both parses. A parse diagnostic that the source tree
