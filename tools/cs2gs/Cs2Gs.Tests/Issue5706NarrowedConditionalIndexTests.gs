@@ -28,6 +28,7 @@ import Xunit
 /// The C# output oracle also rejects erased null guards and throwing bridges on nullable stores.
 /// Issue #6036: writable shared-storage `ref` arguments need a required assertion when gsc drops an unrelated local's proof.
 /// On 426306d887, field-ref cases fail with GS0159 without it; local-ref controls compile without `plan!!`.
+/// On 1ea2e1e14, array and tuple refs produce GS0300/GS0536; conditional refs retain their required assertion.
 /// Each test also compares the translated program's output with C#.
 open class Issue5706NarrowedConditionalIndexTests {
     @Theory
@@ -89,6 +90,38 @@ public static class Demo
             Assert.Contains("plan!!", printed, StringComparison.Ordinal)
         } else {
             Assert.DoesNotContain("plan!!", printed, StringComparison.Ordinal)
+        }
+    }
+
+    @Theory
+    @InlineData("Interlocked.Increment(ref counters[0]);", false)
+    @InlineData("Bump(ref counters[0]);", false)
+    @InlineData("Set(out counters[0]);", false)
+    @InlineData("Bump(ref (true ? ref counters[0] : ref counters[0]));", true)
+    @InlineData("var pair = (0, 0); Bump(ref pair.Item1); counters[0] = pair.Item1;", false)
+    func AssignedLocalNarrowing_AfterReferenceArgument(refCall string, expectAssertion bool) {
+        let printed = Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System.Threading;
+public static class Demo
+{
+    static void Bump(ref int value) { value++; }
+    static void Set(out int value) { value = 1; }
+
+    public static string Run()
+    {
+        int[] counters = new int[1];
+        string? s = null;
+        s = "a";
+        __CALL__
+        return s.Length + ":" + s?[0] + ":" + counters[0];
+    }
+}
+`.Replace("__CALL__", refCall), strictIl: true, rejectConditionalIndexWarnings: true, expectedOutput: "1:a:1")
+        if expectAssertion {
+            Assert.Contains("s!!", printed, StringComparison.Ordinal)
+        } else {
+            Assert.DoesNotContain("s!!", printed, StringComparison.Ordinal)
         }
     }
 

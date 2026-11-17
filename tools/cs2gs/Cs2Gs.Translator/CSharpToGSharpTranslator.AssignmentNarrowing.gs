@@ -1190,18 +1190,37 @@ partial class CSharpToGSharpTranslator {
         ) bool ->
         (closureAssigned && this.NodeMayRunEscapedClosure(node)) ||
             (byReference && this.NodeRunsStaticTypeInitializer(node)) ||
+            (byReference && this.NodeMayWriteReferenceStorage(node)) ||
             (
-            (
-                byReference ||
-                    node is ArgumentSyntax argument &&
-                    (
-                    argument.RefKindKeyword.IsKind(SyntaxKind.RefKeyword) || argument.RefKindKeyword.IsKind(
-                        SyntaxKind.OutKeyword
-                    )
+            node is ArgumentSyntax argument &&
+                (
+                argument.RefKindKeyword.IsKind(SyntaxKind.RefKeyword) || argument.RefKindKeyword.IsKind(
+                    SyntaxKind.OutKeyword
                 )
             ) &&
-                this.NodeMayWriteReferenceStorage(node)
+                this.WritableReferenceMayInvalidateAnyRoot(argument.Expression)
         )
+
+        // RecordWritableReference preserves unrelated roots for variables, tuple storage, array elements, and stable member paths.
+        private func WritableReferenceMayInvalidateAnyRoot(target ExpressionSyntax) bool {
+            let stripped = UnwrapParenthesesAndSuppressions(target)!!
+            if stripped is MemberAccessExpressionSyntax member &&
+                this
+                .context
+                .GetSymbolInfo(member)
+                .Symbol is IFieldSymbol{ContainingType: {IsTupleType: true}} {
+                return this.WritableReferenceMayInvalidateAnyRoot(member.Expression)
+            }
+            return this.WritesThroughStorage(stripped, isArgument: true) &&
+                !(
+                stripped is ElementAccessExpressionSyntax element &&
+                    this
+                    .context
+                    .GetTypeInfo(element.Expression)
+                    .Type is IArrayTypeSymbol
+            ) &&
+                !this.IsSameStableAccessPath(stripped, stripped)
+        }
 
         // Chained stores complete conversions, setters, and reference-storage effects after their inner assignment.
         private func AssignmentStoreCompletesAfterProof(
