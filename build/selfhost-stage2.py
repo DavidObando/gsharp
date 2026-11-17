@@ -148,7 +148,7 @@ ALLOWED_PROJECT_TARGETS = {
     ("src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj", "PackGsgen"):
         "6260906aff2a33e6700343d5c4611aa074410707a0fdbd2621bd7fad52febde3",
     ("src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj", "_GsharpPackPublishedSdkPayloads"):
-        "ea03b90f923a545feb3ea40b69246ef5282cc95ec9dcd2f67a711beba9a04059",
+        "a5cdae11e88a4cadadc6f9c1e59c713f2f9a8150e14896c6ba5a01ae1d64019c",
     ("src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj", "PackGsharpHotReloadRuntime"):
         "1acb9836d2fd29a80d1afdad36b4b71ebcd0b7d87994268dc1000ad8d4c7d4bd",
     ("src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj", "PackGsharpChannelsRuntime"):
