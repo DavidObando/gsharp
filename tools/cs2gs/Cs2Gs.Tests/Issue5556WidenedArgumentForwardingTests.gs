@@ -356,8 +356,8 @@ public class Holder {
         Issue5581ExpandedParamsNullElementsTests.WithTranslation(
             source,
             (directory string, printed string, compiled ProcessRunResult) -> {
-                // #6024 independently rejects the nullable conversion declaration; keep every diagnostic exact.
-                AssertPinnedNil(directory, printed, compiled, []string{"4,10,4,21,GS0394", "28,23,28,43,GS0159"})
+                // #6027 permits this conversion; the authored nil must still be rejected.
+                AssertPinnedNil(directory, printed, compiled)
             },
             "sa"
         )
