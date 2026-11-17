@@ -1675,6 +1675,56 @@ partial class CSharpToGSharpTranslator {
             )
         }
 
+        /// Issue #6036: whether [`argument`](paramref) passes a nullable variable
+        /// by `ref` or `in` to a non-null parameter of a G#-translated callee at a
+        /// point where csc proved the variable non-null but gsc does not narrow it
+        /// (a guard through a user-defined `==`, for example). csc does not warn
+        /// there, gsc reports GS0612, and G# cannot spell the proof on a variable,
+        /// so the statement carries the same suppression as a dropped `!`.
+        /// @param argument The C# argument.
+        /// @returns `true` when the statement must suppress GS0612.
+        private func FlowProvenByRefArgumentNeedsSuppression(argument ArgumentSyntax) bool {
+            if !argument.RefKindKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.RefKeyword) &&
+                !argument
+                .RefKindKeyword
+                .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.InKeyword) {
+                return false
+            }
+            let operand = Unparenthesize(argument.Expression)
+            let symbol ISymbol? = this.context.GetSymbolInfo(operand).Symbol
+            let storageType ITypeSymbol? = switch symbol {
+                case ILocalSymbol{RefKind: RefKind.None} local: local.Type
+                case IParameterSymbol{RefKind: RefKind.None} parameter: parameter.Type
+                default: default(ITypeSymbol?)
+            }
+            let boundParameter IParameterSymbol? = this.GetArgumentParameter(argument)
+            return operand is IdentifierNameSyntax &&
+                storageType != nil &&
+                storageType.IsReferenceType &&
+                (
+                storageType.NullableAnnotation == NullableAnnotation.Annotated || this.IsTranslatorWidenedDeclaration(
+                    symbol
+                )
+            ) &&
+                boundParameter != nil &&
+                !boundParameter
+                .ContainingSymbol
+                .DeclaringSyntaxReferences
+                .IsDefaultOrEmpty &&
+                boundParameter
+                .Type
+                .IsReferenceType &&
+                boundParameter
+                .Type
+                .NullableAnnotation == NullableAnnotation.NotAnnotated &&
+                this
+                .context
+                .GetTypeInfo(operand)
+                .Nullability
+                .FlowState == NullableFlowState.NotNull &&
+                !this.GSharpExpressionIsStaticallyNonNull(operand)
+        }
+
         /// The parameter a call argument binds to, read from the called
         /// method's symbol (the argument's own operation is not always
         /// available for a `ref x!` operand).
@@ -1859,11 +1909,18 @@ partial class CSharpToGSharpTranslator {
 
         private func TranslateArgumentValue(argument ArgumentSyntax) GExpression? {
             let refKind = argument.RefKindKeyword.Kind()
-            if refKind != Microsoft.CodeAnalysis.CSharp.SyntaxKind.None && this.DropsByRefNullabilitySuppression(
-                argument
+            if refKind != Microsoft
+                .CodeAnalysis
+                .CSharp
+                .SyntaxKind
+                .None &&
+                (
+                this.DropsByRefNullabilitySuppression(argument) || this.FlowProvenByRefArgumentNeedsSuppression(
+                    argument
+                )
             ) {
-                // Issue #4422: carry the dropped `!` across as a statement-scoped
-                // suppression of the warning it silenced.
+                // Issues #4422 and #6036: carry a dropped `!`, or a csc flow proof that
+                // gsc does not narrow, across as a statement-scoped suppression of GS0612.
                 this.state.PendingStatementSuppressions?.Add("GS0612")
             }
             if refKind == Microsoft.CodeAnalysis.CSharp.SyntaxKind.OutKeyword {
