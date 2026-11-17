@@ -1717,6 +1717,11 @@ partial class CSharpToGSharpTranslator {
                 boundParameter
                 .Type
                 .NullableAnnotation == NullableAnnotation.NotAnnotated &&
+                // GS0612 also reports nested differences, which the top-level flow state does not prove away.
+            SymbolEqualityComparer.IncludeNullability.Equals(
+                storageType.WithNullableAnnotation(NullableAnnotation.NotAnnotated),
+                boundParameter.Type
+            ) &&
                 this
                 .context
                 .GetTypeInfo(operand)

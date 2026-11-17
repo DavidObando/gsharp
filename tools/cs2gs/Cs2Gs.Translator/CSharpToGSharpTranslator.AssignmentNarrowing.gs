@@ -1211,10 +1211,22 @@ partial class CSharpToGSharpTranslator {
         }
 
         // A value local or parameter that the translator emits as `var` (a reassigned parameter gets a `var` shadow).
-        private func IsEmittedMutableVariable(symbol ISymbol?) bool ->
-        symbol is ILocalSymbol{RefKind: RefKind.None} or
-            IParameterSymbol{RefKind: RefKind.None} &&
-            this.IsSymbolReassigned(symbol, this.state.CurrentBodyScope)
+        // Writes are counted in the declaring scope, so a capture read in a lambda or local function sees outer writes.
+        private func IsEmittedMutableVariable(symbol ISymbol?) bool {
+            let declaration Microsoft
+                .CodeAnalysis
+                .SyntaxNode? = symbol
+                ?.DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax()
+            return declaration != nil &&
+                symbol is ILocalSymbol{RefKind: RefKind.None} or
+                IParameterSymbol{RefKind: RefKind.None} &&
+                this.IsSymbolReassigned(
+                symbol,
+                this.EnclosingFlowScope(declaration) ?? declaration.SyntaxTree.GetRoot()
+            )
+        }
 
         private let anyRootInvalidations Dictionary[(SemanticModel, SyntaxNode), HashSet[SyntaxNode]] = Dictionary[
             (SemanticModel, SyntaxNode),

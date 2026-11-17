@@ -57,6 +57,9 @@ class SdkCompileRunner {
         analyzerVerifierPackageVersion string?,
         warningsNotAsErrors string? = nil
     ) SdkCompileResult {
+        // The child runs from the repository root (#6029), so keep relative paths' meaning.
+        let generatedProjectPath = Path.GetFullPath(generatedProjectPath)
+        let artifactDirectory = Path.GetFullPath(artifactDirectory)
         let repoRoot string? = GsharpTestProjectRunner.TryFindRepoRoot()
         if sdkMoniker == nil {
             return SdkCompileResult.Unavailable(
@@ -231,6 +234,8 @@ class SdkCompileRunner {
         if string.IsNullOrEmpty(appRunDir) {
             throw ArgumentException("An app run directory is required.", "appRunDir")
         }
+        // The child runs from the repository root (#6029), so keep a relative run directory's meaning.
+        let appRunDir = Path.GetFullPath(appRunDir)
         if string.IsNullOrWhiteSpace(projectName) {
             throw ArgumentException("A project name is required.", "projectName")
         }
@@ -995,6 +1000,9 @@ class SdkCompileRunner {
             sourceRoot string?,
             timeout TimeSpan
         ) ProcessRunResult {
+            // The child runs from the repository root (#6029), so keep relative paths' meaning.
+            let generatedProjectPath = Path.GetFullPath(generatedProjectPath)
+            let artifactDirectory = Path.GetFullPath(artifactDirectory)
             let projectDirectory string? = Path.GetDirectoryName(Path.GetFullPath(generatedProjectPath))
             let repoRoot string? = GsharpTestProjectRunner.TryFindRepoRoot()
             let projectNugetConfig = Directory.EnumerateFiles(projectDirectory!!).FirstOrDefault(

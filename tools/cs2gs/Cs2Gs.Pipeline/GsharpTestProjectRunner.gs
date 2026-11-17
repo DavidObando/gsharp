@@ -55,6 +55,8 @@ open class GsharpTestProjectRunner {
         if string.IsNullOrEmpty(workDir) {
             throw ArgumentException("A work directory is required.", "workDir")
         }
+        // The child runs from the repository root (#6029), so keep a relative work directory's meaning.
+        let workDir = Path.GetFullPath(workDir)
         let sdk = if project.SdkVersion != nil {
             (FindNupkgForVersion(project.SdkVersion), project.SdkVersion!!)
         } else {
