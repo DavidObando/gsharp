@@ -132,6 +132,7 @@ description: "Index of the G# design decisions."
 | [0027](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0027-roslyn-fork-decision.md) | Roslyn-fork decision for v1.0 — stay on the bespoke emitter | Keeps the direct metadata emitter instead of adopting a Roslyn fork for v1.0. |
 | [0028](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0028-multi-package-emit.md) | Multi-package emit model — Option B, C#-faithful | Defines how multiple packages map to emitted CLR namespaces/types. |
 | [0048](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0048-portable-pdb-emit.md) | Portable PDB emit | Adds portable PDB, source mapping, and debug-symbol policy to the emitter. |
+| [0223](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0223-compiler-as-library-surface.md) | Compiler-as-library surface | Makes entry-point and internal-error diagnostics public and proposes packaging, hermetic references, runtime discovery, and a thread-safety contract for `GSharp.Core` hosts. |
 
 ## 0.3 ADRs (0105-0146)
 
