@@ -17,6 +17,7 @@ description: "Index of the G# design decisions."
 | ADR | Title | Summary |
 | --- | --- | --- |
 | [0001](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0001-null-model.md) | Absence / null model — Kotlin-style nullable types | Uses explicit nullable `T?`, `nil`, safe access, and assertion instead of a universal null. |
+| [0223](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0223-structural-nullable-type-companions.md) | Structural nullable types through native CLR type companions | **Proposed, not implemented:** carry normalized native nullable types as companion generic arguments. Requires approval of the breaking ABI, foreign-slot limits, and rebuild boundary. |
 | [0073](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0073-null-conditional-indexing.md) | Null-conditional indexing `a?[i]` | Adds the `?[` token; result lifts to the nullable form of the indexer's return type; receiver evaluated exactly once; rejected as assignment LHS. |
 | [0008](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0008-variable-bindings.md) | Variable bindings — keep Go's `var`/`const`/`:=`, add `let` | Original decision; the `:=` short-declaration leg was superseded by ADR-0077. |
 | [0077](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0077-drop-colon-equals-short-variable-declaration.md) | Drop `:=` short variable declaration | Removes `:=` from the language; the parser hard-rejects it with `GS0305` and a context-sensitive `let`/`var`/`for … in …` migration suggestion. |
