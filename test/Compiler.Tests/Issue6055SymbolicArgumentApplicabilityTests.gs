@@ -169,6 +169,68 @@ let copy = Exact[int32](ARGUMENTS)
         AssertNativeRejects("Exact<int>", arguments.Replace("State()", "new State()"), contract)
     }
 
+    @Fact
+    func GenericArrayArgument_RetainsIdentityRankAcrossImportedAnnotations() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`import System
+import System.Collections.Immutable
+class Item {}
+let items = []Item{Item(), Item()}
+let values = ImmutableArray.Create(items)
+Console.WriteLine(values.Length)
+Console.WriteLine(values[0].GetType().Name)
+`, "Bulk6056", executable: true)
+        let native = fixture.CompileCSharpExecutable(`using System;
+using System.Collections.Immutable;
+class Item {}
+class P {
+    static void Main() {
+        var items = new Item[] { new(), new() };
+        var values = ImmutableArray.Create(items);
+        Console.WriteLine(values.Length);
+        Console.WriteLine(values[0].GetType().Name);
+    }
+}`, "NativeBulk6056")
+        IlVerifier.Verify(dll)
+        IlVerifier.Verify(native)
+        File.Copy(Path.ChangeExtension(dll, ".runtimeconfig.json"), Path.ChangeExtension(native, ".runtimeconfig.json"))
+        let expected = Encoding.UTF8.GetBytes("2\nItem\n".Replace("\n", Environment.NewLine))
+        Assert.Equal(expected, fixture.RunBytes(native))
+        Assert.Equal(expected, fixture.RunBytes(dll))
+    }
+
+    @Fact
+    func UnrelatedImplicitOperator_DoesNotVetoContextualProjection() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(ContractSource, "ProjectionContract6056")
+        let dll = fixture.Compile(`import System
+import Contracts6055
+class PtSource {
+    var x int32
+    var y int32
+    func operator implicit(value PtSource) int32 -> -1
+}
+Console.WriteLine(Projection.Read(PtSource{x: 3, y: 4}))
+Console.WriteLine(Projection.ReadMany(PtSource{x: 3, y: 4}, PtSource{x: 5, y: 6}))
+Console.WriteLine(object.Equals(default(PtSource?), nil))
+`, "Projection6056", executable: true, "/r:" + contract)
+        let native = fixture.CompileCSharpExecutable(ContractSource + `
+class PtSource { public static implicit operator int(PtSource value) => -1; }
+class P {
+    static void Main() {
+        System.Console.WriteLine(Projection.Read(new Point(3, 4)));
+        System.Console.WriteLine(Projection.ReadMany(new Point(3, 4), new Point(5, 6)));
+        System.Console.WriteLine(object.Equals(default(PtSource), null));
+    }
+}`, "NativeProjection6056")
+        IlVerifier.Verify(dll, []string{contract})
+        IlVerifier.Verify(native)
+        File.Copy(Path.ChangeExtension(dll, ".runtimeconfig.json"), Path.ChangeExtension(native, ".runtimeconfig.json"))
+        let expected = Encoding.UTF8.GetBytes("7\n18\nTrue\n".Replace("\n", Environment.NewLine))
+        Assert.Equal(expected, fixture.RunBytes(native))
+        Assert.Equal(expected, fixture.RunBytes(dll))
+    }
+
     shared {
         private func AssertNativeRejects(target string, arguments string, contract string) {
             let source = `using System;
@@ -213,6 +275,19 @@ public sealed class Exact<T> {
     public Exact(Dictionary<string, T>? values) { Count = values?.Count ?? 99; }
     public Exact(params Dictionary<string, T>[] values) { Count = values.Length; }
     public int Count { get; }
+}
+public sealed class Point {
+    public Point(int x, int y) { X = x; Y = y; }
+    public int X { get; }
+    public int Y { get; }
+}
+public static class Projection {
+    public static int Read(Point value) => value.X + value.Y;
+    public static int ReadMany(params Point[] values) {
+        int total = 0;
+        foreach (var value in values) total += Read(value);
+        return total;
+    }
 }`
     }
 }

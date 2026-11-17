@@ -4574,7 +4574,11 @@ internal partial class ExpressionBinder {
                     .ContainsSameCompilationUserType(sourceType) {
                     let symbolicConversion = Conversion.ClassifyNonStructural(sourceType, nativeTarget)
                     if TypeSymbol.ContainsSameCompilationUserType(nativeTarget) {
-                        if symbolicConversion.IsIdentity {
+                        if symbolicConversion.IsIdentity ||
+                            (
+                            symbolicConversion.IsImplicit &&
+                                TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(sourceType, nativeTarget)
+                        ) {
                             return ClrOverloadResolution.ImplicitConversionKind.Identity
                         }
                         if symbolicConversion.IsImplicit {
@@ -4633,7 +4637,7 @@ internal partial class ExpressionBinder {
                         if hasUserDefined {
                             ClrOverloadResolution.ImplicitConversionKind.UserDefinedImplicit
                         } else {
-                            ClrOverloadResolution.ImplicitConversionKind.None
+                            nil
                         }
                     )
                 }
