@@ -3434,8 +3434,14 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return false
             }
-            // Roslyn can narrow a captured read while its declared storage remains nullable.
-            // G# infers the complete nullable argument from that storage, not Roslyn's flow-narrowed substitution.
+            if EnclosingInvocationArgument(value)
+                ?.Parent
+                ?.Parent is not InvocationExpressionSyntax invocation ||
+                this.InvocationEmitsTypeArguments(invocation, method) {
+                return false
+            }
+            // Roslyn's constructed argument can omit the nullable annotation on captured storage.
+            // G# infers the complete nullable argument from storage when the emitted call permits inference.
             let declared = this.GetDeclaredValueType(Unparenthesize(value))
             return declared?.IsReferenceType == true &&
                 declared.NullableAnnotation == Microsoft

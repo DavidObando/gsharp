@@ -197,6 +197,42 @@ static class P {
     }
 
     @Fact
+    func SynthesizedTypeArguments_KeepRequiredGenericInputAssertionAndOverload() {
+        let source = ExplicitNullableCapture
+            .Replace("public static class P", "public sealed class Marker { }\n    public static class P")
+            .Replace("static string IsNull<T>(T value) => (value is null).ToString();", `static string IsNull<A, B>(A value, System.Collections.Generic.List<B> marker) =>
+            "generic:" + (value is null).ToString();
+        static string IsNull(object value, System.Collections.Generic.List<object> marker) => "wrong";`)
+            .Replace("IsNull(captured)", "IsNull(captured, new System.Collections.Generic.List<Marker>())")
+            .Replace("pair = (default(T), 0);", "")
+            .Replace("public static string Run<T>", `public static void Main() => System.Console.Write(Run("value"));
+        public static string Run<T>`)
+        let native = CSharpProjectLoader.LoadInMemory(
+            [](string, string){("Probe.cs", source)},
+            outputKind: OutputKind.ConsoleApplication
+        )
+        Assert.Empty(
+            native
+                .Compilation
+                .GetDiagnostics()
+                .Where(
+                (diagnostic Diagnostic) -> diagnostic.Severity is DiagnosticSeverity.Error or DiagnosticSeverity.Warning
+            )
+        )
+        let (printed, sites) = Translate(source)
+        Assert.Contains("IsNull[T, Marker](captured!!,", printed)
+        Assert.Single(sites)
+        LiteralConstructionRuntimeParity.AssertMatches(
+            source,
+            verifyTranslation: (raw string) -> Assert.Equal(printed, raw),
+            verifyAssembly: (assembly string) -> {
+                AssertStrictIl(assembly)
+                Assert.Equal(Encoding.UTF8.GetBytes("generic:False"), RunOutputBytes(assembly))
+            }
+        )
+    }
+
+    @Fact
     func ExplicitNullableInference_KeepsFixedResultOwnerConstraintAndForgivenContracts() {
         let (printed, sites) = Translate(`#nullable enable
 class Box<T> where T : class { public void Store(T value) { } }
