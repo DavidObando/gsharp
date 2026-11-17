@@ -86,8 +86,8 @@ internal class BinderContext {
 
     internal var SourceNullableConstraintDepth int32
     internal let PendingSourceNullableAnnotations List[
-        (Location TextLocation, Parameter TypeParameterSymbol, IsOperator bool)
-    ] = List[(TextLocation, TypeParameterSymbol, bool)]()
+        (Location TextLocation, Parameter TypeParameterSymbol, CanonicalParameter TypeParameterSymbol, IsOperator bool)
+    ] = List[(TextLocation, TypeParameterSymbol, TypeParameterSymbol, bool)]()
     private let sourceNullableAnnotationErrors HashSet[TypeParameterSymbol] = HashSet[TypeParameterSymbol](
         ReferenceEqualityComparer.Instance
     )
@@ -102,7 +102,7 @@ internal class BinderContext {
         let nullable = NullableTypeSymbol.Get(type)
         if nullable.UnderlyingType is TypeParameterSymbol parameter {
             if SourceNullableConstraintDepth > 0 {
-                PendingSourceNullableAnnotations.Add((location, parameter, isOperator))
+                PendingSourceNullableAnnotations.Add((location, parameter, parameter, isOperator))
             } else {
                 if !ValidateSourceNullable(location, parameter, isOperator) && isOperator {
                     return TypeSymbol.Error
@@ -117,8 +117,8 @@ internal class BinderContext {
         if SourceNullableConstraintDepth != 0 {
             return
         }
-        for (location, parameter, isOperator) in PendingSourceNullableAnnotations {
-            ValidateSourceNullable(location, parameter, isOperator)
+        for (location, parameter, canonicalParameter, isOperator) in PendingSourceNullableAnnotations {
+            ValidateSourceNullable(location, parameter, isOperator, canonicalParameter)
         }
         PendingSourceNullableAnnotations.Clear()
     }
@@ -126,7 +126,8 @@ internal class BinderContext {
     private func ValidateSourceNullable(
         location TextLocation,
         parameter TypeParameterSymbol,
-        isOperator bool = false
+        isOperator bool = false,
+        canonicalParameter TypeParameterSymbol? = nil
     ) bool {
         if !parameter.HasKnownSourceNullableKind {
             if !isOperator ||
@@ -139,7 +140,7 @@ internal class BinderContext {
                 Diagnostics.ReportNullableTypeParameterRequiresKind(location, parameter.Name)
             }
             if !isOperator {
-                sourceNullableAnnotationErrors.Add(parameter)
+                sourceNullableAnnotationErrors.Add(canonicalParameter ?? parameter)
             }
             return false
         }

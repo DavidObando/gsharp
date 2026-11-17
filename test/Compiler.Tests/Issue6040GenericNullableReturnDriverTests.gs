@@ -11,14 +11,13 @@ import System.Text.RegularExpressions
 import Xunit
 
 class Issue6040GenericNullableReturnDriverTests {
-    @Fact
-    func PartialHeaders_ReportEachUnsupportedAnnotationExactlyOnce() {
-        CheckRejectedAnnotations(
-            "partial class C[T System.IComparable[T?]] {}\npartial class C[T System.IComparable[T?]] {}",
-            []string{"T"},
-            2,
-            isLibrary: true
-        )
+    @Theory
+    @InlineData("partial class C[T System.IComparable[T?]] {}\npartial class C[T System.IComparable[T?]] {}")
+    @InlineData(
+        "partial class C[T System.IComparable[T?]] { func F(reader (() -> T)?) { let x = reader?() } }\npartial class C[T System.IComparable[T?]] {}"
+    )
+    func PartialHeaders_ReportEachUnsupportedAnnotationExactlyOnce(source string) {
+        CheckRejectedAnnotations(source, []string{"T"}, 2, isLibrary: true)
     }
 
     @Theory

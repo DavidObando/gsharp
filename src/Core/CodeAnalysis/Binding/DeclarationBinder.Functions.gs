@@ -1374,7 +1374,7 @@ internal partial class DeclarationBinder {
             (PartIndex int32, Syntax TypeParameterListSyntax, Symbols ImmutableArray[TypeParameterSymbol])
         ]()
         let diagnosticsByPart = List[ImmutableArray[Diagnostic]](matchingPartialLists.Length)
-        let nullableChecksByPart = List[(TextLocation, TypeParameterSymbol, bool)]()
+        let nullableChecksByPart = List[(TextLocation, TypeParameterSymbol, TypeParameterSymbol, bool)]()
         for var partIndex = 0; partIndex < matchingPartialLists.Length; partIndex++ {
             let candidate = matchingPartialLists[partIndex]
             let diagnosticCount = Diagnostics.Count
@@ -1385,7 +1385,17 @@ internal partial class DeclarationBinder {
             try {
                 ResolveTypeParameterConstraints(candidate, candidateSymbols)
                 candidateDiagnostics = Diagnostics.VisibleSince(diagnosticCount)
-                nullableChecksByPart.AddRange(pendingNullableChecks.Skip(pendingNullableCount))
+                for check in pendingNullableChecks.Skip(pendingNullableCount) {
+                    var canonicalParameter = check.CanonicalParameter
+                    for var i = 0; i < candidateSymbols.Length; i++ {
+                        if object.ReferenceEquals(check.Parameter, candidateSymbols[i]) {
+                            canonicalParameter = symbols[i]
+                            break
+                        }
+                    }
+                    // Validate each part's own constraints, but recover bodies against the retained declaration.
+                    nullableChecksByPart.Add((check.Location, check.Parameter, canonicalParameter, check.IsOperator))
+                }
             } finally {
                 RollbackSpeculativeBind(diagnosticCount, pendingCheckCount, pendingNullableCount)
             }

@@ -67,6 +67,7 @@ Declaration failures are snapshotted with the global scope and shared read-only 
 Body-local failures remain local to the current body bind, so incremental body edits cannot retain stale suppression.
 Speculative partial-header checks roll back with ordinary diagnostics.
 Each retained partial declaration reports its annotation once.
+Each part is checked using its own resolved constraints, but recovery is associated with the retained declaration's parameter symbols rather than discarded speculative symbols.
 
 All source paths use one source-binding funnel.
 The general nullable-symbol factory and imported signature readers do not perform this source eligibility check.
