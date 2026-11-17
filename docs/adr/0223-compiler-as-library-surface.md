@@ -52,7 +52,7 @@ Add explicit factories to `ReferenceResolver`:
 
 Replace the `internal` static `SdkToolsDirectory` with an explicit option. `ReferenceResolver` factories take an optional `runtimeDirectory` argument, and `ResolveDriverReferencePaths` takes the same argument. The search order is: the argument, then the folder beside the application, then `GSHARP_SDK_TOOLS_DIR`. A process-wide setter is not added, because two hosts in one process can need different SDK versions.
 
-### D5. Thread-safety contract (documentation now, stress test before "supported")
+### D5. Thread-safety contract (stress test added; item 1 not supported, see #6070)
 
 These statements describe the current code:
 
@@ -67,6 +67,8 @@ The proposed contract is:
 3. A host must not change process-wide state (`GSHARP_SDK_TOOLS_DIR`, and `SdkToolsDirectory` until D4) while a compilation runs.
 
 Item 1 is not yet verified. Before the documentation calls it supported, add a stress test that binds and emits many compilations in parallel against one resolver and compares each result with a serial run. Until then, hosts must serialize compilations that share a resolver, as Oats does.
+
+Result (#6068): `Adr0223SharedResolverStressTests` binds and emits each repository sample three times on parallel workers against one new resolver, then compares each result with a serial run. The compilations use one assembly name. The test passed in 40 of 40 separate test processes. The same work found #6070: `ReferenceResolver.CurrentAssemblyName` is state of the resolver, and each `Compilation` writes its assembly name to it. When compilations with different assembly names share a resolver, a compilation can bind its bodies with the name of another compilation, and its `InternalsVisibleTo` results are wrong. This occurs on one thread when the steps of two compilations interleave. Item 1 is therefore not supported. Until #6070 is fixed, a host serializes compilations that share a resolver: it runs each compilation from construction to its last query before it creates the next compilation. A host that needs concurrent compilations uses one resolver for each compilation.
 
 ### D6. Diagnostics that a host sees once
 
