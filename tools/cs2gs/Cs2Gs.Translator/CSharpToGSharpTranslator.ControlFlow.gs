@@ -2208,6 +2208,18 @@ partial class CSharpToGSharpTranslator {
             .ReadonlyAddresses
             .ContainsKey(local)
 
+        private func PatternBindingStorageType(local ILocalSymbol) ITypeSymbol ->
+        if this
+            .state
+            .ManagedReferenceArrayNullable
+            .ManagedReferenceArrayProjectedLocalType
+            .TryGetValue(local, out var projectedType) &&
+            projectedType != nil {
+            projectedType
+        } else {
+            local.Type
+        }
+
         private func BindsTo(expression ExpressionSyntax?, target ISymbol?) bool -> CSharpToGSharpTranslator.BindsTo(
             expression,
             target,
@@ -2288,20 +2300,6 @@ partial class CSharpToGSharpTranslator {
                 if target != nil {
                     this.IndexScopeWriteTarget(index.Writes, bindings, node, target)
                 }
-                if node is ArgumentSyntax argument &&
-                    (
-                    argument.RefKindKeyword.IsKind(SyntaxKind.InKeyword) ||
-                        (
-                        this
-                            .context
-                            .SemanticModel
-                            .GetOperation(argument) is IArgumentOperation{Parameter: {} parameter} &&
-                            (parameter.RefKind == RefKind.In || parameter.RefKind == RefKind.RefReadOnlyParameter) &&
-                            this.PassesInArgumentWithoutConversion(argument)
-                    )
-                ) {
-                    this.IndexScopeWriteTarget(index.ReadonlyAddresses, bindings, node, argument.Expression)
-                }
                 let declaredName string? = switch node {
                     case declaration is VariableDeclaratorSyntax: declaration.Identifier.ValueText
                     case designation is SingleVariableDesignationSyntax: designation.Identifier.ValueText
@@ -2344,9 +2342,60 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
             }
+            this.IndexReadonlyScopeStorage(scope_, index, bindings)
             this.scopeWriteCandidates.Add(key, index)
             CompilationMeasurements.Count("translation.scope_write_indexes")
             return index
+        }
+
+        private func IndexReadonlyScopeStorage(
+            scope_ SyntaxNode,
+            index ScopeWriteIndex,
+            bindings Dictionary[ExpressionSyntax, ISymbol?]
+        ) {
+            let syntax = Stack[SyntaxNode]()
+            let operations = Stack[IOperation]()
+            syntax.Push(scope_)
+            while syntax.Count > 0 {
+                let node = syntax.Pop()
+                if this.context.SemanticModel.GetOperation(node) is {} operation {
+                    operations.Push(operation)
+                } else {
+                    for child in node.ChildNodes() {
+                        syntax.Push(child)
+                    }
+                }
+            }
+            while operations.Count > 0 {
+                let operation = operations.Pop()
+                if operation is IArgumentOperation{Parameter: {} parameter, Value: {} value} argument &&
+                    (parameter.RefKind == RefKind.In || parameter.RefKind == RefKind.RefReadOnlyParameter) &&
+                    (
+                    argument.Syntax is ArgumentSyntax explicitArgument && explicitArgument.RefKindKeyword.IsKind(
+                        SyntaxKind.InKeyword
+                    ) ||
+                        this.PassesInArgumentWithoutConversion(argument)
+                ) &&
+                    value.Syntax is ExpressionSyntax operand {
+                    this.IndexScopeWriteTarget(index.ReadonlyAddresses, bindings, operation.Syntax, operand)
+                }
+                let receiver IOperation? = switch operation {
+                    case invocation is IInvocationOperation when invocation.TargetMethod.IsReadOnly: invocation.Instance
+                    case property is IPropertyReferenceOperation when property.Property.GetMethod?.IsReadOnly == true:
+                    property.Instance
+                    default: default(IOperation?)
+                }
+                if receiver
+                    ?.Type
+                    ?.IsValueType == true &&
+                    IsVariableStorageOperation(receiver) &&
+                    receiver.Syntax is ExpressionSyntax operand {
+                    this.IndexScopeWriteTarget(index.ReadonlyAddresses, bindings, operation.Syntax, operand)
+                }
+                for child in operation.ChildOperations {
+                    operations.Push(child)
+                }
+            }
         }
 
         private func ScopeBoundSymbol(

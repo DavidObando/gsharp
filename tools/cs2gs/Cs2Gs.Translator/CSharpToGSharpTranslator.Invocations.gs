@@ -2264,21 +2264,26 @@ partial class CSharpToGSharpTranslator {
         private func PassesInArgumentWithoutConversion(argument ArgumentSyntax) bool -> this
             .context
             .SemanticModel
-            .GetOperation(argument) is IArgumentOperation{Parameter: {} parameter, Value: {} value} &&
-            (
-            value is ILocalReferenceOperation &&
-                value
-                .Local
-                .IsConst == false ||
-                value is IParameterReferenceOperation ||
-                value is IFieldReferenceOperation &&
-                value
-                .Field
-                .IsConst == false
-        ) &&
+            .GetOperation(argument) is IArgumentOperation operation &&
+            this.PassesInArgumentWithoutConversion(operation)
+
+        private func PassesInArgumentWithoutConversion(argument IArgumentOperation) bool ->
+        argument is {Parameter: {} parameter, Value: {} value} &&
+            IsVariableStorageOperation(value) &&
             SymbolEqualityComparer
             .IncludeNullability
             .Equals(value.Type, parameter.Type)
+
+        private func IsVariableStorageOperation(value IOperation?) bool ->
+        value is ILocalReferenceOperation &&
+            value
+            .Local
+            .IsConst == false ||
+            value is IParameterReferenceOperation ||
+            value is IFieldReferenceOperation &&
+            value
+            .Field
+            .IsConst == false
 
         // Issue #3414: Roslyn has already fixed the converted delegate signature
         // at a direct argument. Preserve it when the callable's natural signature

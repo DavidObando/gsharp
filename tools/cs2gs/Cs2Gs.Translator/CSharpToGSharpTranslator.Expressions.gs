@@ -9891,6 +9891,25 @@ partial class CSharpToGSharpTranslator {
             return this.ExpressionCarriesNilableOnlyAtSlotChainCore(value, Array.Empty[ITypeParameterSymbol](), nil)
         }
 
+        private func IsLiftedCaptureParameter(symbol ISymbol) bool {
+            for var scope_ = this.state.CurrentBodyScope; scope_ != nil; scope_ = scope_?.Parent {
+                if scope_ is LocalFunctionStatementSyntax localFunction && this.context.GetDeclaredSymbol(
+                    localFunction
+                ) is IMethodSymbol method &&
+                    this
+                    .state
+                    .LiftedRecursiveLocalFunctions
+                    .TryGetValue(method, out var lifted) {
+                    for capture in lifted.Captures {
+                        if SymbolEqualityComparer.Default.Equals(capture.Symbol, symbol) {
+                            return true
+                        }
+                    }
+                }
+            }
+            return false
+        }
+
         private func IsActivePatternBinding(expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?) bool {
             var expression = expression
             while expression is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax parenthesized {
@@ -9903,7 +9922,8 @@ partial class CSharpToGSharpTranslator {
             if symbol == nil ||
                 !(
                 this.state.PatternBindings.ContainsKey(symbol) || this.state.NativePatternVariables.Contains(symbol)
-            ) {
+            ) ||
+                this.IsLiftedCaptureParameter(symbol) {
                 return false
             }
             if this.state.PatternBindings.TryGetValue(symbol, out var replacement) && !object.ReferenceEquals(
@@ -9925,7 +9945,7 @@ partial class CSharpToGSharpTranslator {
                 expression = parenthesized.Expression
             }
             let capture = this.context.GetSymbolInfo(expression).Symbol as ILocalSymbol
-            if capture == nil {
+            if capture == nil || this.IsLiftedCaptureParameter(capture) {
                 return nil
             }
             if this.state.PatternBindings.TryGetValue(capture, out var replacement) {

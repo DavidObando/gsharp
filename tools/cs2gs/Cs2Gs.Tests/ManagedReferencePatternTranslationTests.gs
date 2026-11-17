@@ -957,7 +957,9 @@ public class Probe {
         Assert.Empty(context.Diagnostics)
         Assert.Contains("rest[0]!!.Borrow()", text, StringComparison.Ordinal)
         Assert.Contains("__spill0 = buffer[1..]", text, StringComparison.Ordinal)
-        Assert.Contains("__spill0[0]!!.Borrow()", text, StringComparison.Ordinal)
+        Assert.Contains("var bufferRest Span[managed[int32]?]", text, StringComparison.Ordinal)
+        Assert.Contains("bufferRest = __spill0", text, StringComparison.Ordinal)
+        Assert.Contains("bufferRest[0]!!.Borrow()", text, StringComparison.Ordinal)
         let result = EmittedOracle.Evaluate(
             text + "\nProbe.Run()",
             []string{typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location}

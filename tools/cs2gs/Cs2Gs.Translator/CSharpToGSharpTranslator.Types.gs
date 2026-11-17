@@ -1045,13 +1045,7 @@ partial class CSharpToGSharpTranslator {
             var guard_ GExpression? = nil
             let sharesGuardStorage = whenClause != nil && mutableBindings.Any(
                 (binding(Symbol ILocalSymbol, MatchedValue GExpression)) ->
-                whenClause
-                    .Condition
-                    .DescendantNodesAndSelf()
-                    .Any(
-                    (node Microsoft.CodeAnalysis.SyntaxNode) ->
-                    this.IsClosureBoundary(node) && this.ReadsSymbol(node, binding.Symbol)
-                )
+                this.ReadsSymbol(whenClause.Condition, binding.Symbol)
             )
             let assignments = List[GStatement]()
             if sharesGuardStorage {
@@ -1147,9 +1141,11 @@ partial class CSharpToGSharpTranslator {
                     .CSharp
                     .Syntax
                     .VarPatternSyntax {
-                    symbol.Type.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated)
+                    this.PatternBindingStorageType(symbol).WithNullableAnnotation(
+                        Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated
+                    )
                 } else {
-                    symbol.Type
+                    this.PatternBindingStorageType(symbol)
                 }
                 var declaredType = this.typeMapper.Map(symbolType, this.context, pattern.GetLocation())
                 if nullableCapture && symbol.Type.IsReferenceType {

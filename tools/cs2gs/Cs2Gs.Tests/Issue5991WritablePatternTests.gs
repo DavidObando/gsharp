@@ -483,6 +483,130 @@ public static class P {
             ).Replace("CAPTURETYPE", captureType).Replace("WRITE", write).Replace("RESULT", result), expected)
     }
 
+    @Theory
+    @InlineData("Counter", "p.Same(in x)", "x.Same(in x)")
+    @InlineData("Outer", "p.Inner.Same(x.Inner)", "x.Inner.Same(x.Inner)")
+    func ReadonlyReceivers_KeepPatternCopyAddressIdentity(type string, read string, control string) {
+        AssertParity(`
+using System;
+using System.Runtime.CompilerServices;
+public struct Counter { }
+public struct Outer { public Counter Inner; }
+public static class Extensions {
+    public static bool Same(this in Counter left, in Counter right) =>
+        Unsafe.AreSame(ref Unsafe.AsRef(in left), ref Unsafe.AsRef(in right));
+}
+public static class P {
+    static string Read() {
+        TYPE x = default;
+        bool matched = x is var p;
+        return READ + "|" + CONTROL;
+    }
+    public static void Main() { Console.Write(Read()); }
+}
+`.Replace("TYPE", type).Replace("READ", read).Replace("CONTROL", control), "False|True")
+    }
+
+    @Theory
+    @InlineData("p.Read()", "node|3;nil|3")
+    @InlineData("p == null ? \"guarded\" : p.Read()", "node|3;guarded|3")
+    func LiftedCaptureReceivers_UseTheirParameterContractAndLocalGuards(read string, expected string) {
+        AssertParity(`
+#nullable disable
+using System;
+public class Node { public string Read() => "node"; }
+public class Holder { public Node Item = new Node(); }
+public static class P {
+    static int entered;
+    static string Read(bool clear) {
+        entered = 0;
+        var holder = new Holder();
+        if (holder is { Item: Node p }) {
+            if (clear) { p = null; }
+            try { return First(2) + "|" + entered; }
+            catch (NullReferenceException) { return "nil|" + entered; }
+            string First(int n) { entered++; return n == 0 ? READ : Second<int>(n - 1); }
+            string Second<T>(int n) { entered++; return n == 0 ? READ : First(n - 1); }
+        }
+        return "miss";
+    }
+    public static void Main() { Console.Write(Read(false) + ";" + Read(true)); }
+}
+`.Replace(
+                "READ",
+                read
+            ), expected, (
+                translated string
+            ) -> {
+                Assert.Contains(
+                    "ref p Node?",
+                    translated,
+                    StringComparison.Ordinal
+                )
+                Assert.DoesNotContain(
+                    "ref p Node)",
+                    translated,
+                    StringComparison.Ordinal
+                )
+                Assert.Equal(
+                    read == "p.Read()",
+                    translated.Contains("p!!.Read()", StringComparison.Ordinal)
+                )
+            })
+    }
+
+    @Theory
+    @InlineData("p.Same(x)", "x.Same(x)")
+    @InlineData("p.Offset == x.Offset", "x.Offset == x.Offset")
+    func ReadonlyInstanceReceivers_KeepPatternCopyAddressIdentity(probe string, control string) {
+        AssertParity(`using System;
+using System.Runtime.CompilerServices;
+struct Counter {
+    public readonly bool Same(in Counter other) =>
+        Unsafe.AreSame(ref Unsafe.AsRef(this), ref Unsafe.AsRef(other));
+    public readonly IntPtr Offset =>
+        Unsafe.ByteOffset(ref P.anchor, ref Unsafe.AsRef(this));
+}
+class P {
+    internal static Counter anchor;
+    static void Main() {
+        Counter x = default;
+        bool matched = x is var p;
+        Console.Write(matched ? $"{PROBE}|{CONTROL}" : "unmatched");
+    }
+}`.Replace("PROBE", probe).Replace("CONTROL", control), "False|True")
+    }
+
+    @Theory
+    @InlineData("var p")
+    @InlineData("Counter p")
+    func GuardReads_KeepTheSelectedBodyStorageAddress(pattern string) {
+        AssertParity(`using System;
+using System.Runtime.CompilerServices;
+struct Counter { }
+class P {
+    static Counter anchor;
+    static IntPtr saved;
+    static int remembered, compared;
+    static bool Remember(in Counter value) {
+        remembered++;
+        saved = Unsafe.ByteOffset(ref anchor, ref Unsafe.AsRef(in value));
+        return true;
+    }
+    static bool Same(in Counter value) {
+        compared++;
+        return saved == Unsafe.ByteOffset(ref anchor, ref Unsafe.AsRef(in value));
+    }
+    static bool Read(Counter input) {
+        switch (input) {
+            case PATTERN when Remember(in p): return Same(in p);
+            default: return false;
+        }
+    }
+    static void Main() => Console.Write($"{Read(default)}|{remembered}|{compared}");
+}`.Replace("PATTERN", pattern), "True|1|1")
+    }
+
     shared {
         private func AssertParity(source string, expected string, verifyTranslation Action[string]? = nil) {
             let root = IlVerifyRunner().RepoRoot ?? throw DirectoryNotFoundException("Repository root not found.")

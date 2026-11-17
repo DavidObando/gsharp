@@ -1213,7 +1213,7 @@ partial class CSharpToGSharpTranslator {
                     replacement = this.BuildNegatedPatternBindingValue(binder, receiver, isPattern.Expression)
                 }
                 var storageType GTypeReference? = this.typeMapper.Map(
-                    binder.Type,
+                    this.PatternBindingStorageType(binder),
                     this.context,
                     isPattern.Pattern.GetLocation()
                 )
