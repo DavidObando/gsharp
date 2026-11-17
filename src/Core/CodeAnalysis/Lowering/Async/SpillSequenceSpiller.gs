@@ -267,7 +267,7 @@ shared class SpillSequenceSpiller {
                 builder.Add(decl)
                 return false
             }
-            let spilled = SpillExpression(decl.Initializer!!)
+            let spilled = SpillExpression(decl.Initializer)
             FlushSideEffects(spilled, builder)
             builder.Add(BoundVariableDeclaration(decl.Syntax, decl.Variable, spilled.Value))
             return true
@@ -318,7 +318,7 @@ shared class SpillSequenceSpiller {
             // recognize the await as a top-level variable-declaration shape.
             // Leaving a BoundAwaitExpression as the direct return expression
             // would leak an un-rewritten await to the emitter (issue #132).
-            let spilled = SpillExpression(ret.Expression!!)
+            let spilled = SpillExpression(ret.Expression)
             FlushSideEffects(spilled, builder)
             builder.Add(BoundReturnStatement(ret.Syntax, spilled.Value))
             return true
@@ -1001,7 +1001,7 @@ shared class SpillSequenceSpiller {
                     }
                     return SpillTwoOperand(
                         clrEventSub,
-                        clrEventSub.Receiver!!,
+                        clrEventSub.Receiver,
                         clrEventSub.Handler,
                         func (recv BoundExpression, handler BoundExpression) BoundExpression {
                             return BoundClrEventSubscriptionExpression(
@@ -1037,7 +1037,7 @@ shared class SpillSequenceSpiller {
                     }
                     return SpillTwoOperand(
                         eventSub,
-                        eventSub.Receiver!!,
+                        eventSub.Receiver,
                         eventSub.Handler,
                         func (recv BoundExpression, handler BoundExpression) BoundExpression {
                             return BoundEventSubscriptionExpression(
@@ -1071,7 +1071,7 @@ shared class SpillSequenceSpiller {
                     }
                     return SpillOneOperand(
                         propAccess,
-                        propAccess.Receiver!!,
+                        propAccess.Receiver,
                         func (receiver BoundExpression) BoundExpression {
                             return BoundPropertyAccessExpression(
                                 nil,
@@ -1105,7 +1105,7 @@ shared class SpillSequenceSpiller {
                     }
                     return SpillTwoOperand(
                         propAssign,
-                        propAssign.Receiver!!,
+                        propAssign.Receiver,
                         propAssign.Value,
                         func (recv BoundExpression, val BoundExpression) BoundExpression {
                             return BoundPropertyAssignmentExpression(
@@ -3340,7 +3340,7 @@ shared class SpillSequenceSpiller {
             }
             return SpillOneOperand(
                 access,
-                access.Receiver!!,
+                access.Receiver,
                 func (recv BoundExpression) BoundExpression {
                     return access.WithSyntaxAndReceiver(nil, recv)
                 }
@@ -3354,7 +3354,7 @@ shared class SpillSequenceSpiller {
             }
             return SpillOneOperand(
                 fieldAccess,
-                fieldAccess.Receiver!!,
+                fieldAccess.Receiver,
                 func (recv BoundExpression) BoundExpression {
                     return BoundFieldAccessExpression(
                         nil,

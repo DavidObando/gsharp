@@ -230,7 +230,7 @@ open class PdbSourceLocatorCacheTests {
             try {
                 let dir string? = Path.GetDirectoryName(asmPath)
                 if !string.IsNullOrEmpty(dir) && Directory.Exists(dir) {
-                    Directory.Delete(dir!!, recursive: true)
+                    Directory.Delete(dir, recursive: true)
                 }
             } catch (IOException) {
                 // Best-effort cleanup; leftover temp files don't affect test correctness.

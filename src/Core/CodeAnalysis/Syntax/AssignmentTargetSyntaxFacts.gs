@@ -119,14 +119,14 @@ internal shared class AssignmentTargetSyntaxFacts {
                 expression.SyntaxTree,
                 accessor.LeftPart,
                 accessor.DotToken,
-                inner!!.Target
+                inner.Target
             )
             canonical = IndexExpressionSyntax(
                 expression.SyntaxTree,
                 rebuiltReceiver,
-                inner!!.OpenBracketToken,
-                inner!!.Indices,
-                inner!!.CloseBracketToken
+                inner.OpenBracketToken,
+                inner.Indices,
+                inner.CloseBracketToken
             )
             return true
         }
@@ -162,7 +162,7 @@ internal shared class AssignmentTargetSyntaxFacts {
                     expression.SyntaxTree,
                     accessor.LeftPart,
                     accessor.DotToken,
-                    innerReceiver!!
+                    innerReceiver
                 )
                 dotToken = innerDotToken
                 fieldIdentifier = innerFieldIdentifier

@@ -374,10 +374,10 @@ shared class ProjectDiscovery {
             if trimmed.Length >= 2 && trimmed[0] == '"' && trimmed[trimmed.Length - 1] == '"' {
                 trimmed = trimmed.Substring(1, trimmed.Length - 2)
             }
-            if !(trimmed!![0] == '/' || trimmed!![0] == '-') {
+            if !(trimmed[0] == '/' || trimmed[0] == '-') {
                 continue
             }
-            let body = trimmed!!.Substring(1)
+            let body = trimmed.Substring(1)
             let colon = body.IndexOf(':')
             if colon < 0 {
                 continue

@@ -1283,7 +1283,7 @@ partial class SemanticModel {
 
         /// Whether a name is one a user wrote, as opposed to a synthesized one.
         private func IsListable(name string?) bool {
-            return !string.IsNullOrEmpty(name) && name!![0] != '<' && name!![0] != '$' && name != "_"
+            return !string.IsNullOrEmpty(name) && name[0] != '<' && name[0] != '$' && name != "_"
         }
 
         /// Whether [`symbol`](paramref) is a local function declared in a statement block.

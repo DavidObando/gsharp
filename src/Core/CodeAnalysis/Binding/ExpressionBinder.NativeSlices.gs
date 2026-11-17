@@ -231,7 +231,7 @@ internal partial class ExpressionBinder {
                 }
             }
             if sourceElement != nil && !NullableFlagsBuilder.Build(sourceElement).SequenceEqual(
-                NullableFlagsBuilder.Build(targetElement!!)
+                NullableFlagsBuilder.Build(targetElement)
             ) {
                 Diagnostics.ReportNativeSliceType(
                     argument.Syntax?.Location ?? syntax.Location,
@@ -538,9 +538,9 @@ internal partial class ExpressionBinder {
         let upperBound = BindRangeBound($range.UpperBound)
         var call BoundImportedInstanceCallExpression
         if lowerBound != nil &&
-            lowerBound!!.IsIndexValue == true ||
+            lowerBound.IsIndexValue == true ||
             upperBound != nil &&
-            upperBound!!.IsIndexValue == true {
+            upperBound.IsIndexValue == true {
             // ADR-0187: a saved `System.Index` bound (`s[i..j]`, `s[(^2)..]`)
             // resolves through the runtime's Range overload, exactly like a
             // saved `System.Range` index.

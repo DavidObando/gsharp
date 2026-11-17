@@ -185,7 +185,7 @@ public sealed class FieldBackedPolicy
             propertyNames[]string
         ) {
             let type = unit.Members.OfType[TypeDeclaration]().Single((t TypeDeclaration) -> t.Name == className)
-            Assert.True(type.PrimaryConstructorParameters == nil || type.PrimaryConstructorParameters!!.Count == 0)
+            Assert.True(type.PrimaryConstructorParameters == nil || type.PrimaryConstructorParameters.Count == 0)
             Assert.Equal(
                 parameterNames,
                 Assert.Single(type.Members.OfType[ConstructorDeclaration]()).Parameters.Select((p Parameter) -> p.Name)

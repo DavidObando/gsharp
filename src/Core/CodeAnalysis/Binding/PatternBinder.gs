@@ -302,7 +302,7 @@ internal class PatternBinder {
         var rightInputVariable LocalVariableSymbol? = nil
         if isConjunction && TryGetGuaranteedNarrowingValue(left, out var narrowedVariable) {
             rightInputVariable = narrowedVariable
-            rightInputType = narrowedVariable!!.Type
+            rightInputType = narrowedVariable.Type
         }
         let right = BindPattern(syntax.Right, rightInputType, childBindingContext, preferTypeNames)
         return BoundBinaryPattern(syntax, discriminantType, isConjunction, left, right, rightInputVariable)
@@ -1080,7 +1080,7 @@ internal class PatternBinder {
             )
             if length != nil && indexer != nil {
                 elementType = if NativeSliceTypes.TryGetElement(discriminantType, out var nativeElement, out _) {
-                    nativeElement!!
+                    nativeElement
                 } else {
                     ExpressionBinder.MapErasedIndexerElementType(importedIndexable, indexer)
                 }

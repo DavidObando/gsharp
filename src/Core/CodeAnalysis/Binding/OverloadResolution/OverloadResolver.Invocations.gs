@@ -211,10 +211,10 @@ internal partial class OverloadResolver {
                     result = BoundErrorExpression(nil)
                     return true
                 }
-                whenNotNull = BoundIndirectCallExpression(nil, captureRef, functionType!!, namedArgs, namedRefKinds)
+                whenNotNull = BoundIndirectCallExpression(nil, captureRef, functionType, namedArgs, namedRefKinds)
             } else if !TryBindFunctionTypeArguments(
                 variable.Name,
-                functionType!!,
+                functionType,
                 syntax,
                 boundArguments,
                 variable.CallableParameterNames,
@@ -223,10 +223,10 @@ internal partial class OverloadResolver {
                 result = BoundErrorExpression(nil)
                 return true
             } else {
-                whenNotNull = BoundIndirectCallExpression(nil, captureRef, functionType!!, convertedArgs)
+                whenNotNull = BoundIndirectCallExpression(nil, captureRef, functionType, convertedArgs)
             }
         }
-        if object.ReferenceEquals(functionType!!.ReturnType, TypeSymbol.Void) {
+        if object.ReferenceEquals(functionType.ReturnType, TypeSymbol.Void) {
             result = BoundNullConditionalAccessExpression(
                 syntax,
                 delegateLoad,
@@ -237,10 +237,10 @@ internal partial class OverloadResolver {
             )
             return true
         }
-        let resultType = if functionType!!.ReturnType is NullableTypeSymbol {
-            functionType!!.ReturnType
+        let resultType = if functionType.ReturnType is NullableTypeSymbol {
+            functionType.ReturnType
         } else {
-            cast[TypeSymbol](NullableTypeSymbol.Get(functionType!!.ReturnType))
+            cast[TypeSymbol](NullableTypeSymbol.Get(functionType.ReturnType))
         }
         var resultSlot LocalVariableSymbol? = nil
         if resultType is NullableTypeSymbol nullableResult && ReflectionMetadataEmitter.IsValueTypeSymbol(
@@ -538,7 +538,7 @@ internal partial class OverloadResolver {
                 ) {
                     bindExpressionWithTargetType(argSyntax, functionType.ParameterTypes[i])
                 } else {
-                    bindLambdaWithTarget!!(lambdaSyntax, lambdaTarget!!)
+                    bindLambdaWithTarget!!(lambdaSyntax, lambdaTarget)
                 }
             }
             convertedBuilder.Add(conversions.BindConversion(argLoc, argument, functionType.ParameterTypes[i]))
@@ -724,7 +724,7 @@ internal partial class OverloadResolver {
                             ) {
                                 bindExpressionWithTargetType(argumentSyntax, parameter.Type)
                             } else {
-                                bindLambdaWithTarget!!(inLambdaSyntax, inLambdaTarget!!)
+                                bindLambdaWithTarget!!(inLambdaSyntax, inLambdaTarget)
                             }
                         }
                         let implicitIn = conversions.BindImplicitInArgument(
@@ -806,7 +806,7 @@ internal partial class OverloadResolver {
                 ) {
                     bindExpressionWithTargetType(argumentSyntax, parameter.Type)
                 } else {
-                    bindLambdaWithTarget!!(lambdaSyntax, lambdaTarget!!)
+                    bindLambdaWithTarget!!(lambdaSyntax, lambdaTarget)
                 }
             }
             converted.Add(conversions.BindConversion(argumentLocation, argument, parameter.Type))
@@ -1337,7 +1337,7 @@ internal partial class OverloadResolver {
         }
         var invocation = BindIndirectCallArgumentsAndDispatch()
         if verifyCallArgumentsAfterConversions != nil {
-            invocation = verifyCallArgumentsAfterConversions!!(
+            invocation = verifyCallArgumentsAfterConversions(
                 syntax.Arguments,
                 invocation,
                 BindIndirectCallArgumentsAndDispatch
@@ -2189,7 +2189,7 @@ internal partial class OverloadResolver {
                     functionLiteralArgument!!.FunctionType != targetDelegateFunctionType {
                     permutedArguments = permutedArguments.SetItem(
                         i,
-                        createErasedFunctionLiteralAdapter(functionLiteralArgument!!, targetDelegateFunctionType!!)
+                        createErasedFunctionLiteralAdapter(functionLiteralArgument!!, targetDelegateFunctionType)
                     )
                 }
             }
@@ -2373,7 +2373,7 @@ internal partial class OverloadResolver {
                             arg = resolvedEnc
                         }
                         map_ ??= Dictionary[TypeParameterSymbol, TypeSymbol]()
-                        map_!![enclosingParams[i]] = arg
+                        map_[enclosingParams[i]] = arg
                     }
                 }
                 if c.Definition == nil || object.ReferenceEquals(c.Definition, c) ||
@@ -2395,7 +2395,7 @@ internal partial class OverloadResolver {
                         arg = resolved
                     }
                     map_ ??= Dictionary[TypeParameterSymbol, TypeSymbol]()
-                    map_!![defTps[i]] = arg
+                    map_[defTps[i]] = arg
                 }
             }
             return map_

@@ -403,7 +403,7 @@ internal shared class NullabilityImportRule {
         for constraint in parameter.GetGenericParameterConstraints() {
             if constraint.IsGenericParameter {
                 visited ??= HashSet[Type](ReferenceEqualityComparer.Instance){parameter}
-                if visited!!.Add(constraint) &&
+                if visited.Add(constraint) &&
                     ClassifyGenericParameter(constraint, visited) == TypeArgumentKind.Reference {
                     return TypeArgumentKind.Reference
                 }

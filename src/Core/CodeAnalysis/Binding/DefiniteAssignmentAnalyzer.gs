@@ -219,7 +219,7 @@ internal shared class DefiniteAssignmentAnalyzer {
                             if diagnostics == nil {
                                 return
                             }
-                            let diagnostics = diagnostics!!
+                            let diagnostics = diagnostics
                             let lowered = BodyFacts.LowerLambdaBody(literal.Body)
                             DefiniteAssignmentAnalyzer.AnalyzeWithCaptured(
                                 lowered.PreEmitAnalysisBody ?? lowered,
@@ -2555,14 +2555,14 @@ internal shared class DefiniteAssignmentAnalyzer {
             argument is BoundAddressOfExpression address &&
             TryGetSingleAddressedVariable(address.Operand, out var variable) {
             ProcessAddressEvaluation(address.Operand, assigned, diagnostics, pointerAliases, tracked, flowContext)
-            if refKind == RefKind.Ref && !assigned.Contains(variable!!) {
+            if refKind == RefKind.Ref && !assigned.Contains(variable) {
                 diagnostics?.ReportVariableNotAssignedBeforeRef(
                     argument.Syntax?.Location ?? callSyntax?.Location ?? default(TextLocation),
-                    variable!!.Name
+                    variable.Name
                 )
             }
             if refKind == RefKind.Ref || refKind == RefKind.Out {
-                assignedAfterCall = variable!!
+                assignedAfterCall = variable
             }
             return
         }

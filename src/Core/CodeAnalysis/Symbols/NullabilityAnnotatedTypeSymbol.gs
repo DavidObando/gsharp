@@ -88,7 +88,7 @@ class NullabilityAnnotatedTypeSymbol : TypeSymbol {
         }
         let clr Type? = ClrType
         if clr?.IsArray == true {
-            let elementType Type? = clr!!.GetElementType()
+            let elementType Type? = clr.GetElementType()
             return if elementType != nil &&
                 (
                 elementType == targetClrType ||
@@ -168,7 +168,7 @@ class NullabilityAnnotatedTypeSymbol : TypeSymbol {
             return DecodeSymbolicPositions()
         }
         let clr Type? = ClrType
-        if clr?.IsArray == true && clr!!.GetElementType() is {} element {
+        if clr?.IsArray == true && clr.GetElementType() is {} element {
             return ImmutableArray.Create(GetTypeArgumentSymbolForClrType(element))
         }
         if clr == nil || !clr.IsGenericType || clr.IsGenericTypeDefinition {

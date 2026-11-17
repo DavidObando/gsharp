@@ -447,7 +447,7 @@ class Formatter {
             if string.IsNullOrEmpty(refDirectory) || !Directory.Exists(refDirectory) {
                 throw XunitException("prerequisite missing: netstandard2.0 reference directory '$refDirectory'")
             }
-            return ReferenceResolver.WithReferences(Directory.EnumerateFiles(refDirectory!!, "*.dll"))
+            return ReferenceResolver.WithReferences(Directory.EnumerateFiles(refDirectory, "*.dll"))
         }
 
         private func DotnetRoot() string {
@@ -457,7 +457,7 @@ class Formatter {
                 default(string)
             } else {
                 Directory
-                    .GetParent(runtimeDirectory!!)
+                    .GetParent(runtimeDirectory)
                     ?.Parent
                     ?.Parent
                     ?.FullName ??

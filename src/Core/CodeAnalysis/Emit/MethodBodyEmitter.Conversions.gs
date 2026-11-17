@@ -96,7 +96,7 @@ internal partial class MethodBodyEmitter {
                 }
                 return
             }
-            let elementClr = ResolveChannelElementClrType(targetElement!!)
+            let elementClr = ResolveChannelElementClrType(targetElement)
             let channelClr = typeof(System.Threading.Channels.Channel[_]).MakeGenericType(elementClr)
             let view = BclMember.Getter(
                 channelClr,
@@ -107,7 +107,7 @@ internal partial class MethodBodyEmitter {
                 }
             )
             this.il.OpCode(ILOpCode.Callvirt)
-            this.il.Token(this.GetChannelMethodEntityHandle(view, targetElement!!))
+            this.il.Token(this.GetChannelMethodEntityHandle(view, targetElement))
             return
         }
         // Issue #2840 / #2841: a nullable wrapper over a REFERENCE type is a
@@ -732,7 +732,7 @@ internal partial class MethodBodyEmitter {
             out _
         ) {
             this.il.OpCode(ILOpCode.Call)
-            this.il.Token(this.outer.memberRefs.GetMethodReference(userConvMethod!!))
+            this.il.Token(this.outer.memberRefs.GetMethodReference(userConvMethod))
             return
         }
         // Issue #1441: `string(charArray)` — the G# rendering of C#

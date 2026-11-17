@@ -362,6 +362,7 @@ type class GSharp.Core.CodeAnalysis.Compilation.Compilation : System.Object
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> GetBodyDiagnostics(System.Threading.CancellationToken cancellationToken = null)
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> GetDeclarationDiagnostics(System.Threading.CancellationToken cancellationToken = null)
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> GetDiagnostics(System.Threading.CancellationToken cancellationToken = null)
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> GetMissingEntryPointDiagnostics()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxTree> get_SyntaxTrees()
   method public System.Collections.Immutable.ImmutableArray`1<System.ValueTuple`3<String, Byte[], Boolean>> get_EmbeddedResources()
   method public System.Collections.Immutable.ImmutableHashSet`1<String> get_PreprocessorSymbols()
@@ -383,6 +384,7 @@ type class GSharp.Core.CodeAnalysis.Compilation.Compilation : System.Object
   method public Void set_Submission(GSharp.Core.CodeAnalysis.Binding.SubmissionBindingOptions value)
   method public Void set_WarnOnMissingDocumentation(Boolean value)
   method public Void set_WorkBudget(GSharp.Core.CodeAnalysis.Compilation.CompilationWorkBudget value)
+  method public static GSharp.Core.CodeAnalysis.Diagnostic CreateInternalErrorDiagnostic(System.Exception ex)
   property public Boolean ImplicitSystemImport { get; set; }
   property public Boolean IncrementalBodyReuse { get; set; }
   property public Boolean IsLibrary { get; set; }
@@ -3644,6 +3646,7 @@ type sealed class GSharp.Core.CodeAnalysis.DiagnosticBag : System.Object, System
   method public Void ReportPrivateInterfaceMemberRequiresBody(GSharp.Core.CodeAnalysis.Text.TextLocation location, String methodName)
   method public Void ReportPrivateMemberInaccessible(GSharp.Core.CodeAnalysis.Text.TextLocation location, String memberName, String declaringTypeName)
   method public Void ReportPropertyHasBothSetAndInit(GSharp.Core.CodeAnalysis.Text.TextLocation location, String name)
+  method public Void ReportPropertyInitializerNotSupported(GSharp.Core.CodeAnalysis.Text.TextLocation location, String propertyName)
   method public Void ReportPropertyPatternRequiresStructOrClass(GSharp.Core.CodeAnalysis.Text.TextLocation location, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type)
   method public Void ReportProtectedMemberInaccessible(GSharp.Core.CodeAnalysis.Text.TextLocation location, String memberName, String declaringTypeName)
   method public Void ReportProtectedRequiresOpenType(GSharp.Core.CodeAnalysis.Text.TextLocation location)

@@ -561,7 +561,7 @@ public static class Factory
             return if string.IsNullOrEmpty(tpa) {
                 Enumerable.Empty[string]()
             } else {
-                tpa!!.Split(Path.PathSeparator).Where(File.Exists)
+                tpa.Split(Path.PathSeparator).Where(File.Exists)
             }
         }
     }

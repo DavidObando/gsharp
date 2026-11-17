@@ -357,7 +357,8 @@ async sequence[T]
         // Ensure the token is inside a method body, not in the struct's own declarations.
         let insideMethod = enclosingDecl.Methods.Any(
             (m FunctionDeclarationSyntax) -> m.Body != nil &&
-                m.Body!!
+                m
+                .Body
                 .Span
                 .Start <= token
                 .Span
@@ -1054,7 +1055,7 @@ shared class DocumentSymbolComputer {
         return if string.IsNullOrWhiteSpace(name) {
             fallback
         } else {
-            name!!
+            name
         }
     }
 }

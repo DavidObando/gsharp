@@ -429,14 +429,18 @@ internal partial class StatementBinder {
             // ADR-0177 A: a bare `catch { … }` carries no type clause and means
             // `catch (System.Exception)`, exactly as in C#.
             var catchType = exceptionType
+            // An unresolved clause type already has GS0113. Its real type is
+            // unknown, so it takes no part in the GS0573 coverage check.
+            var catchTypeResolved = true
             if catchSyntax.TypeClause != nil {
                 let declared TypeSymbol? = bindTypeClause(catchSyntax.TypeClause)
                 if declared != nil {
                     catchType = declared
                 }
+                catchTypeResolved = declared != nil && declared != TypeSymbol.Error
             }
             for covered in unfilteredCoverage {
-                if IsCaughtBy(catchType, covered) {
+                if catchTypeResolved && IsCaughtBy(catchType, covered) {
                     Diagnostics.ReportUnreachableCatchClause(
                         (catchSyntax.TypeClause ?? cast[SyntaxNode](catchSyntax.CatchKeyword)).Location,
                         covered,
@@ -492,7 +496,7 @@ internal partial class StatementBinder {
             AddBranchExits(joinExits, body)
             RestoreThenBranchConditionKills(catchOuterKills, catchEntry)
             $scope = $scope.Pop()
-            if filter == nil {
+            if filter == nil && catchTypeResolved {
                 unfilteredCoverage.Add(catchType)
             }
             catches.Add(BoundCatchClause(catchType, variable, filter, body, exitsThroughFinally: false))
@@ -540,7 +544,7 @@ internal partial class StatementBinder {
             let nonNullByRefAfterFinally = CaptureNonNullByRefVariables()
             RestoreNonNullByRefVariables(nonNullByRefExits ?? nonNullByRefEntry)
             let normalFinallyAliases = finallyEntryExternalCallableAliases[syntax.FinallyClause!!]
-            KillNonNullByRefExitEffects(finallyBlock!!, normalFinallyAliases, syntax.FinallyClause)
+            KillNonNullByRefExitEffects(finallyBlock, normalFinallyAliases, syntax.FinallyClause)
             binderCtx.NonNullByRefVariables.UnionWith(nonNullByRefAfterFinally)
         } else {
             RestoreExternalCallableAliases(callableExits ?? callableEntry)
@@ -2405,7 +2409,7 @@ internal partial class StatementBinder {
                 // A receive arm over an `ISelectable[T]` — the library's timers
                 // (ADR-0174 D9), which join a select without pretending to be
                 // channels.
-                shapes[i] = (selectableElement!!, ChannelDirection.In, true)
+                shapes[i] = (selectableElement, ChannelDirection.In, true)
             } else {
                 // A recovery arm: the diagnostic is already reported, and emit
                 // never runs for a program that has one.
@@ -3336,7 +3340,7 @@ internal partial class StatementBinder {
                     openMethod = nil
                 }
                 if openMethod?.ReturnType.IsByRef == true && MemberLookup.GetClrOpenMethodReturnTypeSymbol(
-                    openMethod!!,
+                    openMethod,
                     imported.OpenDefinition,
                     imported.TypeArguments
                 ) is ByRefTypeSymbol pinned {

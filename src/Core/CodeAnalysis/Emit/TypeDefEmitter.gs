@@ -1853,8 +1853,8 @@ internal class TypeDefEmitter {
             "callers either pass an explicit overload from classSym.ExplicitConstructors or rely on the legacy single-constructor fallback, which requires classSym to have declared at least one init(...) constructor",
             expression: "classSym.ExplicitConstructor"
         )
-        let function = ctor!!.Function
-        let init BaseConstructorInitializer? = ctor!!.BaseInitializer
+        let function = ctor.Function
+        let init BaseConstructorInitializer? = ctor.BaseInitializer
         let baseCtorToken = if classSym.IsClass {
             (
                 if init != nil {
@@ -1868,7 +1868,7 @@ internal class TypeDefEmitter {
         }
         var bodyOffset = -1
         if !this.emitCtx.MetadataOnly {
-            bodyOffset = this.emitClassConstructorWithBodyBodyBytes(classSym, ctor!!, init, baseCtorToken)
+            bodyOffset = this.emitClassConstructorWithBodyBodyBytes(classSym, ctor, init, baseCtorToken)
         }
         let ctorSig = BlobBuilder()
         BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true).Parameters(

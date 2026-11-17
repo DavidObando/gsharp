@@ -289,7 +289,7 @@ class ReferenceMetadataIndex {
             while cursor < lines.Count {
                 let line string? = lines[cursor]
                 let trimmed = line?.Trim()
-                if string.IsNullOrEmpty(trimmed) || trimmed!![0] == '#' {
+                if string.IsNullOrEmpty(trimmed) || trimmed[0] == '#' {
                     cursor++
                     continue
                 }
