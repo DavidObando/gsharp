@@ -4491,12 +4491,26 @@ internal partial class ExpressionBinder {
                             parameter.Position
                         )
                     }
-                } else if parameter.Member is ConstructorInfo targetCtor && receiverType != nil {
-                    nativeTarget = MemberLookup.GetClrMethodParameterTypeSymbol(
-                        receiverType,
-                        targetCtor,
-                        parameter.Position
+                } else if parameter.Member is ConstructorInfo targetCtor {
+                    let constructorReceiver = receiverType ??
+                        (
+                        if openGenericDefinition != nil && !symbolicTypeArguments.IsDefaultOrEmpty {
+                            ImportedTypeSymbol.GetConstructed(
+                                targetCtor.DeclaringType,
+                                openGenericDefinition,
+                                symbolicTypeArguments
+                            )
+                        } else {
+                            default(TypeSymbol?)
+                        }
                     )
+                    if constructorReceiver != nil {
+                        nativeTarget = MemberLookup.GetClrMethodParameterTypeSymbol(
+                            constructorReceiver,
+                            targetCtor,
+                            parameter.Position
+                        )
+                    }
                 }
                 if clrParameterType.IsByRef && nativeTarget is ByRefTypeSymbol byRefTarget {
                     nativeTarget = byRefTarget.PointeeType
@@ -4506,6 +4520,20 @@ internal partial class ExpressionBinder {
                     clrParameterType
                 ) {
                     nativeTarget = nativeTarget.GetElementPositions()[0]
+                }
+                // Symbolic conversions must not depend on the caller's CLR erasure surrogate.
+                if !clrParameterType.IsByRef && TypeSymbol.ContainsSameCompilationUserType(nativeTarget) {
+                    let symbolicConversion = Conversion.ClassifyNonStructural(sourceType, nativeTarget)
+                    if symbolicConversion.IsIdentity {
+                        return ClrOverloadResolution.ImplicitConversionKind.Identity
+                    }
+                    if symbolicConversion.IsImplicit {
+                        return if Conversion.IsReferenceLikeTarget(sourceType) {
+                            ClrOverloadResolution.ImplicitConversionKind.Reference
+                        } else {
+                            ClrOverloadResolution.ImplicitConversionKind.Boxing
+                        }
+                    }
                 }
                 if nativeConversions != nil && NativeProtocolOperations.GetProtocol(nativeTarget) != nil {
                     return if nativeConversions.ClassifyArgumentConversion(sourceType, nativeTarget).IsImplicit {
