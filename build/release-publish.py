@@ -160,7 +160,7 @@ def check_runtime_copies(sdk_file: Path, compiler_file: Path | None) -> list[str
                         if f"runtimes/gsharp/{name}" in entries}
             nuspecs = [name for name in entries if "/" not in name and name.endswith(".nuspec")]
             nuspec = ET.fromstring(archive.read(nuspecs[0])) if len(nuspecs) == 1 else None
-    except (OSError, zipfile.BadZipFile, RuntimeError, ET.ParseError) as error:
+    except (OSError, zipfile.BadZipFile, ET.ParseError, RuntimeError, LookupError, ValueError) as error:
         return errors + [f"{compiler_file.name}: cannot read the package: {error}"]
     errors += [f"{compiler_file.name}: {name} is missing" for name in COMPILER_LIBRARY_FILES if name not in entries]
     for file_name in sorted(RUNTIME_ASSEMBLIES):

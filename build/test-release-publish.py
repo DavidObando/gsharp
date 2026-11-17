@@ -240,16 +240,18 @@ class VerifyNugetTests(unittest.TestCase):
                 self.assertIn(f"error: {path.name}: {error}", result.stderr)
 
     def test_unreadable_nuspec_encoding_reports_a_verification_error(self) -> None:
-        name = "Gsharp.Templates"
-        for encoding in ("unknown", "utf-32"):
-            with self.subTest(encoding=encoding):
-                make_packages(self.nupkgs)
-                write_package(self.nupkgs, name, "0.5.212",
-                              files={f"{name}.nuspec": f'<?xml version="1.0" encoding="{encoding}"?><package/>'})
-                result = self.verify()
-                self.assertEqual(result.returncode, 1)
-                self.assertIn(f"error: {name}.0.5.212.nupkg: cannot read the .nuspec:", result.stderr)
-                self.assertNotIn("Traceback", result.stderr)
+        # Gsharp.Compiler's nuspec is read twice: for the metadata and for the dependencies (ADR-0223 D2).
+        for name in ("Gsharp.Templates", "Gsharp.Compiler"):
+            for encoding in ("unknown", "utf-32"):
+                with self.subTest(package=name, encoding=encoding):
+                    make_packages(self.nupkgs)
+                    files = compiler_files() if name == "Gsharp.Compiler" else {}
+                    files[f"{name}.nuspec"] = f'<?xml version="1.0" encoding="{encoding}"?><package/>'
+                    write_package(self.nupkgs, name, "0.5.212", files=files)
+                    result = self.verify()
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn(f"error: {name}.0.5.212.nupkg: cannot read the .nuspec:", result.stderr)
+                    self.assertNotIn("Traceback", result.stderr)
 
     def test_five_rid_packages_fail(self) -> None:
         make_packages(self.nupkgs, skip=("Gsharp.NET.Sdk.Compiler.osx-x64",))
