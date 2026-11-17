@@ -16,6 +16,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Include accessible static members of constructed imported types in language-server completion, including trailing dots and unfinished member names. Keep instance members and constructors out of type-qualified suggestions. (Fixes #6019)
+
 - Reject ref-struct type arguments in ordinary generic constructor calls with GS0219, as in type declarations. Check symbolic arguments before erasure, including source constructors and open generic owners. Preserve imported parameters that allow ref structs. (Fixes #6015)
 
 - Preserve the inferred platform reference type in `x ?? nil`. Oblivious imported references retain their null values and evaluation order. (Fixes #5565)
