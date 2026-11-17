@@ -16,6 +16,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Preserve the inferred platform reference type in `x ?? nil`. Oblivious imported references retain their null values and evaluation order. (Fixes #5565)
+
 - **Symbolic imported-call arguments** (Fixes #6055, #6056). Constructor and method overload selection uses source type conversions when CLR erasure surrogates differ or falsely agree. Enum-valued dictionary properties bind matching copy constructors; incompatible invariant enum-to-integer generics are rejected instead of emitting invalid IL. Genuine generic identities retain their overload rank, while unrelated implicit operators do not block structural projections.
 
 - **Fewer cascading parse diagnostics** (Oats). The parser reports `GS0005` once for each token where it stops, so `func f( int32 {` gives one `GS0005`, not two. The binder does not report `GS0113` "Type ''" for a type name token that the parser synthesized.
