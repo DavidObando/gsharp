@@ -623,16 +623,16 @@ internal class LiftedRecursiveLocalFunction {
 }
 
 internal class LiftedLocalFunctionCapture {
-    init(symbol ISymbol, isByRef bool) {
+    init(symbol ISymbol, refKind RefKind) {
         Symbol = symbol
-        IsByRef = isByRef
+        RefKind = refKind
     }
 
     prop Symbol ISymbol {
         get;
     }
 
-    prop IsByRef bool {
+    prop RefKind RefKind {
         get;
     }
 }

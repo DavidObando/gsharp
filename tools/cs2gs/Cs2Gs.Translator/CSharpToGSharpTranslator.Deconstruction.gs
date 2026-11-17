@@ -4916,7 +4916,7 @@ partial class CSharpToGSharpTranslator {
                 .Contains(unsupportedSuspending) {
                 this.context.ReportUnsupported(
                     localFunction,
-                    "recursive async or iterator local function '${localFunction.Identifier.Text}' captures storage written in its declaring scope; G# forbids the ref parameter needed to preserve that shared storage on a suspending helper."
+                    "recursive async or iterator local function '${localFunction.Identifier.Text}' captures written or address-exposed storage in its declaring scope; G# forbids the by-reference parameter needed to preserve that shared storage on a suspending helper."
                 )
                 return []GStatement{
                     RawStatement(
@@ -5037,10 +5037,10 @@ partial class CSharpToGSharpTranslator {
                         Parameter(
                             this.EmittedName(capture.Symbol, capture.Symbol.Name),
                             this.typeMapper.Map(captureType, this.context, capture.Symbol.Locations.FirstOrDefault()),
-                            refKind: if capture.IsByRef {
-                                "ref"
-                            } else {
-                                default(string?)
+                            refKind: switch capture.RefKind {
+                                case RefKind.Ref: "ref"
+                                case RefKind.In: "in"
+                                default: default(string?)
                             }
                         )
                     )

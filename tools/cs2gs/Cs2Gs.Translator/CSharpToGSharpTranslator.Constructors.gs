@@ -4077,7 +4077,7 @@ partial class CSharpToGSharpTranslator {
             } while changed
             for pair in capturingLocals {
                 if (pair.Symbol.IsAsync || IsIteratorBody(pair.Syntax)) && directCaptures[pair.Symbol].Any(
-                    this.IsCaptureWrittenInDeclaringScope
+                    (symbol ISymbol) -> this.GetCaptureRefKind(symbol) != RefKind.None
                 ) {
                     this.state.UnsupportedSuspendingRefCaptureLocalFunctions.Add(pair.Symbol)
                     this
@@ -4104,12 +4104,7 @@ partial class CSharpToGSharpTranslator {
                 let captures = directCaptures[pair.Symbol]
                     .OrderBy((symbol ISymbol) -> symbol.Locations.FirstOrDefault()?.SourceSpan.Start ?? int32.MaxValue)
                     .ThenBy((symbol ISymbol) -> symbol.Name, StringComparer.Ordinal)
-                    .Select(
-                    (symbol ISymbol) -> LiftedLocalFunctionCapture(
-                        symbol,
-                        this.IsCaptureWrittenInDeclaringScope(symbol)
-                    )
-                )
+                    .Select((symbol ISymbol) -> LiftedLocalFunctionCapture(symbol, this.GetCaptureRefKind(symbol)))
                     .ToList()
                 var containingMethod IMethodSymbol? = pair.Symbol.ContainingSymbol as IMethodSymbol
                 while containingMethod?.MethodKind == MethodKind.LocalFunction {
@@ -4126,14 +4121,21 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
-        // Issue #4302: a lifted helper receives its captures as parameters, so
-        // any write that the original closure cell would observe (a lambda,
-        // another local function, or the member body itself) must keep the
-        // capture by-ref to preserve shared storage.
-        private func IsCaptureWrittenInDeclaringScope(capture ISymbol) bool -> capture
-            .ContainingSymbol
-            .DeclaringSyntaxReferences
-            .Any((reference SyntaxReference) -> this.IsSymbolReassigned(capture, reference.GetSyntax()))
+        // Readonly exposure needs the same slot too, but must not turn an
+        // otherwise immutable capture or parameter into a writable reference.
+        private func GetCaptureRefKind(capture ISymbol) RefKind {
+            var result = RefKind.None
+            for reference in capture.ContainingSymbol.DeclaringSyntaxReferences {
+                let kind = this.GetStorageRefKind(capture, reference.GetSyntax())
+                if kind == RefKind.Ref {
+                    return kind
+                }
+                if kind == RefKind.In {
+                    result = kind
+                }
+            }
+            return result
+        }
 
         // Issues #3399/#4197: ordinary mutual recursion uses nullable
         // function locals so every member is declared before any body binds.

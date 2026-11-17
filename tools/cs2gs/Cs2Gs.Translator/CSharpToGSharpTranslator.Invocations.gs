@@ -166,10 +166,10 @@ partial class CSharpToGSharpTranslator {
                 for capture in recursiveLift.Captures {
                     let captureArgument = this.WritableSymbolStorage(capture.Symbol)
                     recursiveArguments.Add(
-                        if capture.IsByRef {
-                            cast[GExpression](UnaryExpression("&", captureArgument))
-                        } else {
-                            captureArgument
+                        switch capture.RefKind {
+                            case RefKind.Ref: cast[GExpression](UnaryExpression("&", captureArgument))
+                            case RefKind.In: cast[GExpression](UnaryExpression("in ", captureArgument))
+                            default: captureArgument
                         }
                     )
                 }

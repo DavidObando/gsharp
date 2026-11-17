@@ -2202,11 +2202,21 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func PatternBindingNeedsStorage(local ILocalSymbol) bool ->
-        this.IsLocalReassigned(local) || this.IsClosureAssignedVariable(local) ||
-            this
-            .GetScopeWriteIndex(this.state.CurrentBodyScope ?? local.DeclaringSyntaxReferences[0].SyntaxTree.GetRoot())
-            .ReadonlyAddresses
-            .ContainsKey(local)
+        this.IsClosureAssignedVariable(local) || this.GetStorageRefKind(
+            local,
+            this.state.CurrentBodyScope ?? local.DeclaringSyntaxReferences[0].SyntaxTree.GetRoot()
+        ) != RefKind.None
+
+        private func GetStorageRefKind(symbol ISymbol, scope_ SyntaxNode) RefKind -> if this.IsSymbolReassigned(
+            symbol,
+            scope_
+        ) {
+            RefKind.Ref
+        } else if this.GetScopeWriteIndex(scope_).ReadonlyAddresses.ContainsKey(symbol) {
+            RefKind.In
+        } else {
+            RefKind.None
+        }
 
         private func PatternBindingStorageType(local ILocalSymbol) ITypeSymbol ->
         if this

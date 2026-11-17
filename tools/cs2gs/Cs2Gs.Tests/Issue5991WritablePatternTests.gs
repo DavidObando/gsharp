@@ -484,6 +484,39 @@ public static class P {
     }
 
     @Theory
+    @InlineData("Counter x = default; bool matched = x is var p;", "in p")
+    @InlineData("Outer x = default; bool matched = x is var p;", "p.Inner")
+    @InlineData("Counter p = default;", "in p")
+    @InlineData("", "in parameter")
+    func LiftedReadonlyCaptures_KeepTheOriginalStorageAddress(declaration string, argument string) {
+        AssertParity(`using System;
+using System.Runtime.CompilerServices;
+struct Counter { }
+struct Outer { public Counter Inner; }
+class P {
+    static Counter anchor;
+    static IntPtr saved;
+    static int remembered, compared;
+    static void Remember(in Counter value) {
+        remembered++;
+        saved = Unsafe.ByteOffset(ref anchor, ref Unsafe.AsRef(in value));
+    }
+    static bool Same(in Counter value) {
+        compared++;
+        return saved == Unsafe.ByteOffset(ref anchor, ref Unsafe.AsRef(in value));
+    }
+    static string Read(Counter parameter) {
+        DECLARATION
+        Remember(ARGUMENT);
+        return $"{First(2)}|{remembered}|{compared}";
+        bool First(int n) => n == 0 ? Same(ARGUMENT) : Second<int>(n - 1);
+        bool Second<T>(int n) => n == 0 ? Same(ARGUMENT) : First(n - 1);
+    }
+    static void Main() => Console.Write(Read(default));
+}`.Replace("DECLARATION", declaration).Replace("ARGUMENT", argument), "True|1|1")
+    }
+
+    @Theory
     @InlineData("Counter", "p.Same(in x)", "x.Same(in x)")
     @InlineData("Outer", "p.Inner.Same(x.Inner)", "x.Inner.Same(x.Inner)")
     func ReadonlyReceivers_KeepPatternCopyAddressIdentity(type string, read string, control string) {
