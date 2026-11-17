@@ -730,7 +730,7 @@ namespace Demo
 
     @Fact
     func CyclicOrigins_PropagateDefaultsWithoutChangingRuntimeValues() {
-        let printed = this.TranslateWithinBound(`
+        const source = `
 #nullable enable
 namespace Demo
 {
@@ -753,12 +753,21 @@ namespace Demo
             return result;
         }
     }
-}`, enabled: true)
+}`
+        let printed = this.TranslateWithinBound(source, enabled: true)
         Assert.Contains("let a T? = seed", printed)
         Assert.Contains("let joined T? = if flag", printed)
-        TranslationTestValidation.AssertBinds(printed)
+        TranslationTestValidation.AssertSourceNullableKindRejection(printed, "T")
+        let supported = this.TranslateWithinBound(
+            source.Replace(
+                "Run<T>(T replacement, bool flag, bool clear)",
+                "Run<T>(T replacement, bool flag, bool clear) where T : class"
+            ),
+            enabled: true
+        )
+        TranslationTestValidation.AssertBinds(supported)
         LocalFunctionHoistTranslationTests.CompileAndRun(
-            printed,
+            supported,
             "System.Console.WriteLine(P.Run(\"value\", true, true))\n" +
                 "System.Console.WriteLine(P.Run(\"value\", false, true))\n" +
                 "System.Console.WriteLine(P.Run(\"value\", true, false))\n" +

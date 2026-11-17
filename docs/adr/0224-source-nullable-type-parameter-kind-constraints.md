@@ -62,6 +62,11 @@ Existing nullable arguments and imported annotation propagation do not independe
 Declaration annotations are checked after source headers and their complete constraint lists resolve.
 This permits forward references and annotations inside a self-referential, reference-constrained bound.
 Binding can retain an error's type for further analysis, but compilation must not emit an image.
+Diagnostic suppression belongs to the current bind, not reusable type-parameter symbols.
+Declaration failures are snapshotted with the global scope and shared read-only with body binders, including independent workers.
+Body-local failures remain local to the current body bind, so incremental body edits cannot retain stale suppression.
+Speculative partial-header checks roll back with ordinary diagnostics.
+Each retained partial declaration reports its annotation once.
 
 All source paths use one source-binding funnel.
 The general nullable-symbol factory and imported signature readers do not perform this source eligibility check.
@@ -150,6 +155,30 @@ Regression fixture migrations retain their original rejected inputs.
 Reference-only `as T`/coalesce calls (#2333), nested-enum interface contracts (#2898), and forwarded nullable interface bounds (#4988) use explicit reference constraints in their accepted controls.
 The nullable iterator families (#2927) split reference and value domains, and dependent-bound controls (#4062) use concrete reference-class roots instead of inherited bare `class` flags.
 
+Additional compatibility corrections preserve the original source as rejection witnesses:
+
+| Fixture | Accepted control and reason |
+| --- | --- |
+| #1431 | `TResult struct`: the native-function inference call returns `int32`. The empty-result nullable assertion keeps its throwing contract. |
+| #1516, #3409 | Reference constraints apply only to string-only `as T` and nullable `Describe` controls. Other bare generic methods retain value and nullable actual arguments. |
+| #2725 | Add reference proof alongside the existing collection interface constraints; both actual receivers are `List[object]`. |
+| #2962, #3595 | Nullable static-property and cross-assembly property contracts use reference constraints; their actual arguments are `string`. |
+| #4010, #4993 | Value constraints apply to nullable forwarding and `Config` storage instantiated with `int32`. Other open container arguments remain unrestricted. |
+| #773 | Separate reference and value receiver controls retain both nil fallback results. |
+| #3058, #3099 | Out-assignment analysis covers both known kinds. Reflected nullable field storage uses the existing `int32` instantiation with a value constraint. |
+| ADR-0186, ADR-0213 | The nullable container probe uses a reference constraint. The loop probes constrain `Box` to their actual `DateTimeOffset` value argument and retain GS0158 independently. |
+| Generator copy-constructor projection | The nullable open-argument control requires reference kind. Concrete nullable-value arguments to ordinary unrestricted `Target[T]` remain covered separately. |
+| cs2gs #1072, #3676, #3770, ADR-0161 | Original interface-only or unrestricted annotations are rejection witnesses. Explicit reference-constrained neighbors retain nullable returns, fields, assertions, and coalesce lowering. These examples do not establish reference-only production APIs. |
+| cs2gs #4445 | The runtime fixture instantiates its affected helpers only with `string`. Reference constraints propagate through those fixture helpers; ordinary `Keep`, `Next`, and await contracts remain unrestricted. The concrete value control remains unchanged. |
+| cs2gs managed-reference records, #5574, #5684 | Actual nullable arguments are reference-class managed handles, `Node`, and `List[int32]`. Reference-constrained controls retain the original alias, null-flow, and runtime assertions. |
+| cs2gs #5633 | Original unrestricted inputs retain translation-shape and work/allocation checks, plus exact source-annotation rejections. Reference-constrained neighbors retain the string runtime oracles or valid binding controls. The captured-default runtime neighbor remains blocked as described below. The measured inputs remain unchanged. |
+
+These are test-program migrations, not additional compiler-host API changes.
+No production translator declarations gain constraints.
+Some valid unrestricted C# nullable contracts therefore remain translation coverage gaps: their emitted source intentionally receives GS0641.
+The translator must not erase those contracts or silently add production constraints.
+Imported CLR signatures still follow ADR-0193.
+
 Adding constraints can reject existing callers.
 Changing an erased value slot to `Nullable<T>` can change method signatures and field layouts.
 Rebuild affected producers and consumers together after an approved compiler release.
@@ -184,6 +213,18 @@ The first inventory predicted annotation eligibility with semantic symbols.
 An expanded measurement applied the new public driver to the same complete, unchanged Core and CLI source sets.
 It reported exactly three GS0641 diagnostics at `Guarded`'s annotations; CLI compilation succeeded.
 After integrating main `a2a005ba56e170346361ce1ecd65e810fad16585`, the public driver repeated this result against a separate read-only archive of that exact main commit: all 783 normal tracked compiler inputs, the same three locations, and no CLI diagnostic.
+The same measurement was repeated against exact main `96d51f80dd40ebc29193ca9d252baa2b360bd38a`, using fresh normal MSBuild response files and unchanged read-only source bytes: 780 Core inputs produced the same three GS0641 diagnostics; the three CLI inputs compiled without diagnostics.
+As before, Core declaration errors prevent this untouched-source driver run from proving that all Core bodies are clean; the independent body observer remains a prediction, not a successful untouched-baseline full build.
+
+### Remaining compatibility validation blockers
+
+The reference-constrained runtime neighbors for cs2gs #4445 and the captured-default case in #5633 are not green.
+Explicit Roslyn compilation of both the original and constrained C# prints `20` and `True`, respectively.
+The translated constrained programs instead throw on both the published 0.5.698 public driver and this compiler.
+Changing `class` to `class?` does not correct this result.
+The translated tuple/default stores introduce runtime `!!` checks; these controls must not be made green by deleting the checks or weakening their runtime oracles.
+The original unrestricted sources remain exact GS0641 rejection witnesses.
+Resolving this pre-existing translation boundary requires a separate scope decision before this PR can be mergeable.
 Core declaration errors prevented complete body validation by that driver.
 An independent baseline semantic observer completed all bodies with no errors and inspected recursively wrapped expression types.
 It reused the existing sound reference-kind proof rather than propagating bare class flags.

@@ -1599,7 +1599,7 @@ types are `System.Int32` and `System.Nullable<System.Int32>`.
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| GS0505 | Error | Historical nullable-iterator specialization diagnostic. Unsupported source annotations now report GS0641. | |
+| GS0505 | Error | Historical nullable-iterator specialization diagnostic. Unsupported source annotations now report GS0641. |
 
 Add a `struct`, `class`, or base-class constraint to the named type parameter.
 Ordinary user-written overload ambiguities continue to report GS0266.
@@ -1637,18 +1637,12 @@ nothing to pin; use the buffer directly as a `*T` pointer instead
 |----|----------|-------------|
 | GS0508 | Error | Historical iterator-only diagnostic; source nullable type parameters now use GS0641. |
 
-`sequence[T?]` needs one stable CLR element representation. Iterator return
-types are specialized into `class` and `struct` variants automatically.
-Other unconstrained sequence type positions still require an explicit
-`struct`, `class`, or base-class constraint.
-
-A call from another unconstrained generic context cannot select either
-specialized iterator variant. Constrain the enclosing type parameter to
-`struct`, `class`, or a base class. Named or explicit arguments do not resolve
-that call: until [#2958](https://github.com/DavidObando/gsharp/issues/2958),
-it reports GS0266, and a nullable value-type argument may instead report
-GS0152. G# rejects source overloads differentiated only by constraints with
-GS0264, even though iterator specialization synthesizes equivalent variants.
+`sequence[T?]` needs one stable CLR element representation.
+ADR-0224 applies the same source eligibility rule as other `T?` positions.
+The compiler no longer generates implicit reference/value iterator variants.
+Declare the appropriate constrained families explicitly.
+Use different names when their CLR signatures would otherwise collide.
+Source overloads differentiated only by constraints still report GS0264.
 
 ## P/Invoke interpreter boundary (GS0514, retired)
 

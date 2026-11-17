@@ -92,6 +92,12 @@ internal class BinderContext {
         ReferenceEqualityComparer.Instance
     )
 
+    internal prop SourceNullableAnnotationErrors ImmutableHashSet[TypeParameterSymbol] ->
+    ImmutableHashSet.CreateRange[TypeParameterSymbol](
+        ReferenceEqualityComparer.Instance,
+        sourceNullableAnnotationErrors
+    )
+
     internal func BindSourceNullable(type TypeSymbol, location TextLocation, isOperator bool = false) TypeSymbol {
         let nullable = NullableTypeSymbol.Get(type)
         if nullable.UnderlyingType is TypeParameterSymbol parameter {
@@ -123,7 +129,13 @@ internal class BinderContext {
         isOperator bool = false
     ) bool {
         if !parameter.HasKnownSourceNullableKind {
-            if !isOperator || !sourceNullableAnnotationErrors.Contains(parameter) {
+            if !isOperator ||
+                (
+                !sourceNullableAnnotationErrors.Contains(parameter) &&
+                    !Services
+                    .SourceNullableAnnotationErrors
+                    .Contains(parameter)
+            ) {
                 Diagnostics.ReportNullableTypeParameterRequiresKind(location, parameter.Name)
             }
             if !isOperator {

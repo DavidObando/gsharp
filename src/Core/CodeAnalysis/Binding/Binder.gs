@@ -7657,6 +7657,7 @@ partial class Binder {
                 statements.ToImmutable()
             )
             result.References = references ?? binder.$scope.References
+            result.SourceNullableAnnotationErrors = binder.binderCtx.SourceNullableAnnotationErrors
             result.PreprocessorSymbols = preprocessorSymbols ?? ImmutableHashSet[string].Empty
             result.DeclaredTypeAliases = declaredTypeAliases.ToImmutable()
             result.AliasDeclaringPackages = binder.$scope.GetAliasDeclaringPackages()
@@ -7710,6 +7711,7 @@ partial class Binder {
                     statements.ToImmutable()
                 ){
                     References = result.References,
+                    SourceNullableAnnotationErrors = result.SourceNullableAnnotationErrors,
                     PreprocessorSymbols = result.PreprocessorSymbols,
                     DeclaredTypeAliases = result.DeclaredTypeAliases,
                     AliasDeclaringPackages = result.AliasDeclaringPackages,
@@ -11923,6 +11925,7 @@ partial class Binder {
             preserveLatestImportSyntaxTrees bool
         ) BoundScope {
             let parent = CreateRootScope(references ?? globalScope?.References, preprocessorSymbols)
+            parent.GetBindingServices().SourceNullableAnnotationErrors = globalScope.SourceNullableAnnotationErrors
             CopyPriorCellImports(globalScope, parent)
             let scope_ = BoundScope(parent)
             for package_ in globalScope.Packages {

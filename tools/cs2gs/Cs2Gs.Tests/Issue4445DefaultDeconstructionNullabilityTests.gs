@@ -246,22 +246,33 @@ open class Issue4445DefaultDeconstructionNullabilityTests {
         Assert.Contains("annotated T? = default(T)", printed, StringComparison.Ordinal)
         Assert.DoesNotContain("let _ =", printed, StringComparison.Ordinal)
         let rejected = EmittedOracle.Evaluate(printed + Environment.NewLine + "Defaults.Run()")
-        let errors = rejected.Diagnostics.Where((d Diagnostic) -> d.IsError).ToArray()
+        let errors = rejected.Diagnostics.Where((d GSharp.Core.CodeAnalysis.Diagnostic) -> d.IsError).ToArray()
         Assert.NotEmpty(errors)
-        Assert.All(errors, (d Diagnostic) -> Assert.Equal("GS0641", d.Id))
+        Assert.All(errors, (d GSharp.Core.CodeAnalysis.Diagnostic) -> Assert.Equal("GS0641", d.Id))
         Assert.Contains(
             errors,
-            (d Diagnostic) -> d.Location.Span.Start == printed.IndexOf("T?", StringComparison.Ordinal) +
+            (d GSharp.Core.CodeAnalysis.Diagnostic) -> d.Location.Span.Start == printed.IndexOf(
+                "T?",
+                StringComparison.Ordinal
+            ) +
                 1 &&
                 d
                 .Location
                 .Span
                 .Length == 1
         )
-        let result = EmittedOracle.Evaluate(Translate(KnownReferenceSource) + Environment.NewLine + "Defaults.Run()")
-        Assert.DoesNotContain(
-            result.Diagnostics,
-            (diagnostic GSharp.Core.CodeAnalysis.Diagnostic) -> diagnostic.IsError
+        let supported = Translate(KnownReferenceSource)
+        let result = EmittedOracle.Evaluate(supported + Environment.NewLine + "Defaults.Run()")
+        Assert.True(
+            !result.Diagnostics.Any((diagnostic GSharp.Core.CodeAnalysis.Diagnostic) -> diagnostic.IsError),
+            string.Join(
+                Environment.NewLine,
+                result.Diagnostics.Select(
+                    (diagnostic GSharp.Core.CodeAnalysis.Diagnostic) -> diagnostic.Id + ": " + diagnostic.ToString()
+                )
+            ) +
+                Environment.NewLine +
+                supported
         )
         Assert.DoesNotContain(
             result.Diagnostics,
