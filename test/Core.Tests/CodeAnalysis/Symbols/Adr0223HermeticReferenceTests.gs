@@ -109,9 +109,44 @@ open class Adr0223HermeticReferenceTests {
                 Path.Combine(root, "9.0.20", "ref", "net9.0"),
                 ReferenceResolver.FindReferencePackDirectory("net9.0", root)
             )
+            // Numeric prerelease identifiers compare as numbers: preview.10 is newer than preview.9.
+            Directory.CreateDirectory(Path.Combine(root, "10.0.20-preview.9", "ref", "net10.0"))
+            Directory.CreateDirectory(Path.Combine(root, "10.0.20-preview.10", "ref", "net10.0"))
+            Assert.Equal(
+                Path.Combine(root, "10.0.20-preview.10", "ref", "net10.0"),
+                ReferenceResolver.FindReferencePackDirectory("net10.0", root)
+            )
         } finally {
             Directory.Delete(root, recursive: true)
         }
+    }
+
+    /// Pack versions compare in SemVer 2.0 precedence order. Each pair is in ascending order.
+    @Fact
+    func ComparePackVersions_UsesSemVerPrecedence() {
+        let ascending = []string{
+            "10.0.9",
+            "10.0.10-alpha",
+            "10.0.10-alpha.1",
+            "10.0.10-alpha.beta",
+            "10.0.10-beta",
+            "10.0.10-beta.2",
+            "10.0.10-beta.11",
+            "10.0.10-rc.1",
+            "10.0.10",
+            "10.0.11-preview.9",
+            "10.0.11-preview.10",
+            "10.0.11"
+        }
+        for var i = 0; i < ascending.Length - 1; i++ {
+            let older = ascending[i]
+            let newer = ascending[i + 1]
+            Assert.True(ReferenceResolver.ComparePackVersions(older, newer) < 0, "$older < $newer")
+            Assert.True(ReferenceResolver.ComparePackVersions(newer, older) > 0, "$newer > $older")
+        }
+        Assert.Equal(0, ReferenceResolver.ComparePackVersions("10.0.10-rc.1", "10.0.10-rc.1"))
+        // Build metadata does not change precedence. The ordinal tie-breaker keeps the order deterministic.
+        Assert.True(ReferenceResolver.ComparePackVersions("10.0.10-rc.1", "10.0.10-rc.2+build.1") < 0)
     }
 
     /// A missing pack, an empty pack, and a moniker without a reference pack are errors. The factory

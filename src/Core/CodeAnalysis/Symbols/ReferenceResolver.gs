@@ -1855,14 +1855,14 @@ class ReferenceResolver : IDisposable {
                 if !Directory.Exists(packFolder) {
                     continue
                 }
-                let candidate string? = Directory
+                let versions = Directory
                     .EnumerateDirectories(packFolder)
                     .Select((directory string) -> Path.GetFileName(directory))
                     .Where((name string) -> MatchesFrameworkVersion(name, frameworkVersion))
-                    .OrderByDescending((name string) -> ParsePackVersion(name))
-                    .ThenByDescending((name string) -> !name.Contains('-'))
-                    .ThenByDescending((name string) -> name, StringComparer.Ordinal)
-                    .Select((name string) -> Path.Combine(packFolder, name, "ref", tfm))
+                    .ToList()
+                // The newest version first.
+                versions.Sort((left string, right string) -> ComparePackVersions(right, left))
+                let candidate string? = versions.Select((name string) -> Path.Combine(packFolder, name, "ref", tfm))
                     .FirstOrDefault(Directory.Exists)
                 if candidate != nil {
                     return Path.GetFullPath(candidate)
@@ -1940,11 +1940,11 @@ class ReferenceResolver : IDisposable {
 
         // Semantic order: 10.0.10 is newer than 10.0.9. A name that does not parse sorts last.
         private func ParsePackVersion(name string) Version {
-            let dash = name.IndexOf('-')
-            let core = if dash < 0 {
+            let end = name.IndexOfAny([]char{'-', '+'})
+            let core = if end < 0 {
                 name
             } else {
-                name.Substring(0, dash)
+                name.Substring(0, end)
             }
             return if Version.TryParse(core, out var version) {
                 version
@@ -1952,6 +1952,88 @@ class ReferenceResolver : IDisposable {
                 Version(0, 0)
             }
         }
+
+        /// Compares two pack version folder names in SemVer 2.0 precedence order.
+        /// @remarks The numeric version comes first. A release has higher precedence than a prerelease of the
+        /// same version. Prerelease identifiers compare one by one: numeric identifiers as numbers, other
+        /// identifiers in ordinal order, and a numeric identifier before another identifier. More identifiers
+        /// win when all others are equal. Build metadata is ignored. Equal precedence falls back to ordinal
+        /// order, so the result is deterministic.
+        /// @param left A version folder name.
+        /// @param right A version folder name.
+        /// @returns A negative number when `left` is older, zero when the names are equal, else a positive number.
+        internal func ComparePackVersions(left string, right string) int32 {
+            let byNumbers = ParsePackVersion(left).CompareTo(ParsePackVersion(right))
+            if byNumbers != 0 {
+                return byNumbers
+            }
+            let leftLabel = PrereleaseLabel(left)
+            let rightLabel = PrereleaseLabel(right)
+            if leftLabel.Length == 0 || rightLabel.Length == 0 {
+                // No label is a release, which has higher precedence than a prerelease.
+                let byRelease = rightLabel.Length.CompareTo(leftLabel.Length)
+                if byRelease != 0 {
+                    return Math.Sign(byRelease)
+                }
+                return string.CompareOrdinal(left, right)
+            }
+            let leftParts = leftLabel.Split('.')
+            let rightParts = rightLabel.Split('.')
+            let count = Math.Min(leftParts.Length, rightParts.Length)
+            for var i = 0; i < count; i++ {
+                let order = ComparePrereleaseIdentifiers(leftParts[i], rightParts[i])
+                if order != 0 {
+                    return order
+                }
+            }
+            let byCount = leftParts.Length.CompareTo(rightParts.Length)
+            if byCount != 0 {
+                return byCount
+            }
+            return string.CompareOrdinal(left, right)
+        }
+
+        // The prerelease label: the text after the first '-', without build metadata ('+...').
+        private func PrereleaseLabel(name string) string {
+            let plus = name.IndexOf('+')
+            let withoutBuild = if plus < 0 {
+                name
+            } else {
+                name.Substring(0, plus)
+            }
+            let dash = withoutBuild.IndexOf('-')
+            return if dash < 0 {
+                string.Empty
+            } else {
+                withoutBuild.Substring(dash + 1)
+            }
+        }
+
+        private func ComparePrereleaseIdentifiers(left string, right string) int32 {
+            let leftNumeric = IsNumericIdentifier(left)
+            let rightNumeric = IsNumericIdentifier(right)
+            if leftNumeric && rightNumeric {
+                // Compare as numbers without parsing, so a long identifier cannot overflow.
+                let leftDigits = left.TrimStart('0')
+                let rightDigits = right.TrimStart('0')
+                let byLength = leftDigits.Length.CompareTo(rightDigits.Length)
+                if byLength != 0 {
+                    return byLength
+                }
+                return Math.Sign(string.CompareOrdinal(leftDigits, rightDigits))
+            }
+            if leftNumeric {
+                return -1
+            }
+            if rightNumeric {
+                return 1
+            }
+            return Math.Sign(string.CompareOrdinal(left, right))
+        }
+
+        private func IsNumericIdentifier(identifier string) bool -> identifier.Length > 0 && identifier.All(
+            (c char) -> c >= '0' && c <= '9'
+        )
 
         internal func WithReferences(
             referencePaths IEnumerable[string]?,
