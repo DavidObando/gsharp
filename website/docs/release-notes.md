@@ -16,6 +16,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Reject ref-struct type arguments in ordinary generic constructor calls with GS0219, as in type declarations. Check symbolic arguments before erasure, including source constructors and open generic owners. Preserve imported parameters that allow ref structs. (Fixes #6015)
+
 - Preserve the inferred platform reference type in `x ?? nil`. Oblivious imported references retain their null values and evaluation order. (Fixes #5565)
 
 - **Symbolic imported-call arguments** (Fixes #6055, #6056). Constructor and method overload selection uses source type conversions when CLR erasure surrogates differ or falsely agree. Enum-valued dictionary properties bind matching copy constructors; incompatible invariant enum-to-integer generics are rejected instead of emitting invalid IL. Genuine generic identities retain their overload rank, while unrelated implicit operators do not block structural projections.
