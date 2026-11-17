@@ -9,7 +9,7 @@
     <!-- Used by ReferenceResolver to load target-framework reference assemblies
          in an isolated context so emitted type references carry the target's
          assembly identities rather than the gsc host's runtime versions. -->
-    <PackageReference Include="System.Reflection.MetadataLoadContext" Version="9.0.0" />
+    <PackageReference Include="@(SystemReflectionMetadataLoadContextPackageReference)" />
   </ItemGroup>
 
   <ItemGroup>

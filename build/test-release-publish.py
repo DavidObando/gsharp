@@ -26,8 +26,34 @@ REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "build" / "release-publish.py"
 
 RIDS = ("linux-x64", "linux-arm64", "win-x64", "win-arm64", "osx-x64", "osx-arm64")
-OTHERS = ("Gsharp.NET.Sdk", "Gsharp.Templates", "Gsharp.Repl", "Gsharp.Gsfmt", "Gsharp.Cs2Gs",
+OTHERS = ("Gsharp.NET.Sdk", "Gsharp.Compiler", "Gsharp.Templates", "Gsharp.Repl", "Gsharp.Gsfmt", "Gsharp.Cs2Gs",
           "GSharp.CodeAnalysis.Analyzers.Testing")
+NO_SYMBOLS = ("Gsharp.Templates", "Gsharp.Compiler")
+# ADR-0223 D2: the runtime files of the SDK (one copy each) and of Gsharp.Compiler (the same bytes).
+RUNTIMES = {"Gsharp.Extensions.dll": "extensions", "Gsharp.Runtime.Channels.dll": "channels",
+            "Gsharp.Runtime.Values.dll": "values"}
+COMPILER_DEPENDENCIES = ('<dependencies><group targetFramework="net10.0">'
+                         '<dependency id="System.Reflection.MetadataLoadContext" version="9.0.0" />'
+                         '<dependency id="Microsoft.VisualStudio.Validation" version="17.8.8" />'
+                         '</group></dependencies>')
+
+
+def sdk_files(props: str = None, runtimes: dict[str, bytes] | None = None) -> dict[str, str | bytes]:
+    """The SDK's props file and its runtime files: each in its own folder and in each tool folder."""
+    files: dict[str, str | bytes] = {"build/Gsharp.NET.Sdk.props": props if props is not None else PROPS}
+    for name, folder in RUNTIMES.items():
+        data = (runtimes or {}).get(name, name.encode())
+        for owner in (folder, "compiler", "gsgen", "formatter"):
+            # `dotnet pack` writes the SDK's tool folders with a doubled separator.
+            files[f"tools/{owner}//{name}"] = data
+    return files
+
+
+def compiler_files(runtimes: dict[str, bytes] | None = None) -> dict[str, str | bytes]:
+    files: dict[str, str | bytes] = {"lib/net10.0/GSharp.Core.dll": b"core", "lib/net10.0/GSharp.Core.xml": "<doc/>"}
+    for name in RUNTIMES:
+        files[f"runtimes/gsharp/{name}"] = (runtimes or {}).get(name, name.encode())
+    return files
 PROPS = ('<Project><ItemGroup><PackageDownload Include="Gsharp.NET.Sdk.Compiler.$(_GsharpHostRid)"\n'
          '  Version="[$(GsharpSdkVersion)]" /></ItemGroup></Project>')
 SDK = "Gsharp.NET.Sdk"
@@ -86,10 +112,13 @@ def make_packages(folder: Path, version: str = "0.5.212", skip: tuple[str, ...] 
         if name in skip:
             continue
         if name == "Gsharp.NET.Sdk":
-            write_package(folder, name, version, files={"build/Gsharp.NET.Sdk.props": props})
+            write_package(folder, name, version, files=sdk_files(props))
+        elif name == "Gsharp.Compiler":
+            write_package(folder, name, version, files=compiler_files(),
+                          replace={"dependencies": COMPILER_DEPENDENCIES})
         else:
             write_package(folder, name, version)
-        if name != "Gsharp.Templates":
+        if name not in NO_SYMBOLS:
             (folder / f"{name}.{version}.snupkg").write_bytes(b"x")
 
 
@@ -153,7 +182,7 @@ class VerifyNugetTests(unittest.TestCase):
         make_packages(self.nupkgs)
         result = self.verify()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("verified 12 packages and 5 symbol packages at 0.5.212", result.stdout)
+        self.assertIn("verified 13 packages and 5 symbol packages at 0.5.212", result.stdout)
 
     def test_prerelease_version_passes(self) -> None:
         make_packages(self.nupkgs, version="0.5.300-g1a2b3c4")
@@ -211,16 +240,18 @@ class VerifyNugetTests(unittest.TestCase):
                 self.assertIn(f"error: {path.name}: {error}", result.stderr)
 
     def test_unreadable_nuspec_encoding_reports_a_verification_error(self) -> None:
-        name = "Gsharp.Templates"
-        for encoding in ("unknown", "utf-32"):
-            with self.subTest(encoding=encoding):
-                make_packages(self.nupkgs)
-                write_package(self.nupkgs, name, "0.5.212",
-                              files={f"{name}.nuspec": f'<?xml version="1.0" encoding="{encoding}"?><package/>'})
-                result = self.verify()
-                self.assertEqual(result.returncode, 1)
-                self.assertIn(f"error: {name}.0.5.212.nupkg: cannot read the .nuspec:", result.stderr)
-                self.assertNotIn("Traceback", result.stderr)
+        # Gsharp.Compiler's nuspec is read twice: for the metadata and for the dependencies (ADR-0223 D2).
+        for name in ("Gsharp.Templates", "Gsharp.Compiler"):
+            for encoding in ("unknown", "utf-32"):
+                with self.subTest(package=name, encoding=encoding):
+                    make_packages(self.nupkgs)
+                    files = compiler_files() if name == "Gsharp.Compiler" else {}
+                    files[f"{name}.nuspec"] = f'<?xml version="1.0" encoding="{encoding}"?><package/>'
+                    write_package(self.nupkgs, name, "0.5.212", files=files)
+                    result = self.verify()
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn(f"error: {name}.0.5.212.nupkg: cannot read the .nuspec:", result.stderr)
+                    self.assertNotIn("Traceback", result.stderr)
 
     def test_five_rid_packages_fail(self) -> None:
         make_packages(self.nupkgs, skip=("Gsharp.NET.Sdk.Compiler.osx-x64",))
@@ -234,6 +265,53 @@ class VerifyNugetTests(unittest.TestCase):
         result = self.verify()
         self.assertEqual(result.returncode, 1)
         self.assertIn("missing symbol package: Gsharp.Repl", result.stderr)
+
+    def test_symbols_for_the_compiler_library_fail(self) -> None:
+        make_packages(self.nupkgs)
+        (self.nupkgs / "Gsharp.Compiler.0.5.212.snupkg").write_bytes(b"x")
+        self.assertIn("unexpected symbol package: Gsharp.Compiler", self.verify().stderr)
+
+    def test_a_second_runtime_copy_in_the_sdk_fails(self) -> None:
+        # ADR-0223 D2: a tool folder carried the bootstrap SDK's Gsharp.Extensions.dll.
+        make_packages(self.nupkgs)
+        files = sdk_files()
+        files["tools/compiler//Gsharp.Extensions.dll"] = b"bootstrap"
+        write_package(self.nupkgs, SDK, "0.5.212", files=files)
+        result = self.verify()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Gsharp.NET.Sdk.0.5.212.nupkg: tools/compiler/Gsharp.Extensions.dll differs from "
+                      "tools/extensions/Gsharp.Extensions.dll", result.stderr)
+        self.assertNotIn("Gsharp.Runtime.Channels.dll differs", result.stderr)
+
+    def test_a_missing_sdk_runtime_folder_fails(self) -> None:
+        make_packages(self.nupkgs)
+        files = sdk_files()
+        del files["tools/values//Gsharp.Runtime.Values.dll"]
+        write_package(self.nupkgs, SDK, "0.5.212", files=files)
+        self.assertIn("Gsharp.NET.Sdk.0.5.212.nupkg: tools/values/Gsharp.Runtime.Values.dll is missing",
+                      self.verify().stderr)
+
+    def test_compiler_runtimes_must_equal_the_sdk_copies(self) -> None:
+        make_packages(self.nupkgs)
+        write_package(self.nupkgs, "Gsharp.Compiler", "0.5.212",
+                      files=compiler_files({"Gsharp.Runtime.Channels.dll": b"other build"}),
+                      replace={"dependencies": COMPILER_DEPENDENCIES})
+        result = self.verify()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Gsharp.Compiler.0.5.212.nupkg: runtimes/gsharp/Gsharp.Runtime.Channels.dll differs from "
+                      "the SDK's tools/channels/Gsharp.Runtime.Channels.dll", result.stderr)
+
+    def test_compiler_library_files_runtimes_and_dependencies_are_required(self) -> None:
+        make_packages(self.nupkgs)
+        write_package(self.nupkgs, "Gsharp.Compiler", "0.5.212")
+        result = self.verify()
+        self.assertEqual(result.returncode, 1)
+        for message in ("lib/net10.0/GSharp.Core.dll is missing", "lib/net10.0/GSharp.Core.xml is missing",
+                        "runtimes/gsharp/Gsharp.Extensions.dll is missing",
+                        "runtimes/gsharp/Gsharp.Runtime.Values.dll is missing",
+                        "the .nuspec has no dependency on System.Reflection.MetadataLoadContext"):
+            with self.subTest(message=message):
+                self.assertIn(f"Gsharp.Compiler.0.5.212.nupkg: {message}", result.stderr)
 
     def test_symbols_for_templates_fail(self) -> None:
         make_packages(self.nupkgs)
@@ -262,7 +340,7 @@ class VerifyNugetTests(unittest.TestCase):
     def test_each_missing_metadata_field_fails_in_every_package(self) -> None:
         # Issue #5621: the RID packages had no readme or icon, and Gsharp.Templates had no license or project URL.
         names = [f"Gsharp.NET.Sdk.Compiler.{rid}" for rid in RIDS] + list(OTHERS)
-        self.assertEqual(len(names), 12)
+        self.assertEqual(len(names), 13)
         for field in METADATA:
             for name in names:
                 with self.subTest(field=field, package=name):
@@ -477,6 +555,7 @@ class NugetPushTests(unittest.TestCase):
         self.assertEqual(self.push("sdk").returncode, 0)
         self.assertEqual(self.calls(), [
             "Gsharp.NET.Sdk.0.5.212.nupkg", "Gsharp.NET.Sdk.0.5.212.snupkg",
+            "Gsharp.Compiler.0.5.212.nupkg",
             "Gsharp.Templates.0.5.212.nupkg",
             "Gsharp.Repl.0.5.212.nupkg", "Gsharp.Repl.0.5.212.snupkg",
             "Gsharp.Gsfmt.0.5.212.nupkg", "Gsharp.Gsfmt.0.5.212.snupkg",
@@ -494,8 +573,8 @@ class NugetPushTests(unittest.TestCase):
     def test_symbols_are_pushed_only_by_the_explicit_snupkg_push(self) -> None:
         self.assertEqual(self.push("sdk").returncode, 0)
         lines = self.log.read_text().splitlines()
-        # Six packages and five symbol packages; an empty log must not pass.
-        self.assertEqual(sorted(Path(line.split()[0]).suffix for line in lines), [".nupkg"] * 6 + [".snupkg"] * 5)
+        # Seven packages and five symbol packages; an empty log must not pass.
+        self.assertEqual(sorted(Path(line.split()[0]).suffix for line in lines), [".nupkg"] * 7 + [".snupkg"] * 5)
         for line in lines:
             with self.subTest(line=line.split()[0]):
                 self.assertEqual("--no-symbols" in line.split(), line.split()[0].endswith(".nupkg"))
@@ -784,7 +863,7 @@ class FinalizeTests(unittest.TestCase):
         Feed.version = self.VERSION
         result = self.finalize(prerelease="true", vs="skipped", version=version)
         self.assertEqual(result.returncode, 1)
-        self.assertIn("nuget.org (12 packages) | MISSING", result.stdout)
+        self.assertIn("nuget.org (13 packages) | MISSING", result.stdout)
         self.assertEqual(self.edits(), [])
         Feed.version = version
         self.assertEqual(self.finalize(prerelease="true", vs="skipped", version=version).returncode, 0)
