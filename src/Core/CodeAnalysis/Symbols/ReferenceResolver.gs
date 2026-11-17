@@ -1850,7 +1850,8 @@ class ReferenceResolver : IDisposable {
                     packFolders.Add(Path.Combine(dotnetRoot, "packs", "Microsoft.NETCore.App.Ref"))
                 }
             }
-            let tfm = targetFramework.Trim()
+            // Reference pack folders use lowercase monikers; the moniker check above ignores case.
+            let tfm = targetFramework.Trim().ToLowerInvariant()
             for packFolder in packFolders {
                 if !Directory.Exists(packFolder) {
                     continue
