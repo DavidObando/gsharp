@@ -3458,9 +3458,9 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             // Roslyn's constructed argument can omit the nullable annotation on captured storage.
-            // G# infers the complete nullable argument from storage when the emitted call permits inference.
+            // This exception is for an annotated reference type parameter, not flow-narrowed concrete references.
             let declared = this.GetDeclaredValueType(Unparenthesize(value))
-            return declared?.IsReferenceType == true &&
+            return declared is ITypeParameterSymbol{IsReferenceType: true} &&
                 declared.NullableAnnotation == Microsoft
                 .CodeAnalysis
                 .NullableAnnotation

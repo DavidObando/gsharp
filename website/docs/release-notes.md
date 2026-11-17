@@ -20,7 +20,7 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 - Include accessible static members of constructed imported types in language-server completion, including trailing dots and unfinished member names. Keep instance members and constructors out of type-qualified suggestions. (Fixes #6019)
 
-- Preserve explicitly nullable storage passed as a complete inferred method type argument in `cs2gs`. Do not add a throwing assertion when the unconstrained argument does not reach the result. Keep fixed storage, authored forgiveness, synthesized explicit type arguments, constraints, and the broader oblivious generic-store bridge policy unchanged. (Part of #4612; prerequisite for #6044)
+- Preserve explicitly nullable reference type-parameter storage passed as a complete inferred method type argument in `cs2gs`. Do not add a throwing assertion when the unconstrained argument does not reach the result. Keep concrete reference inference, fixed storage, authored forgiveness, synthesized explicit type arguments, constraints, and the broader oblivious generic-store bridge policy unchanged. (Part of #4612; prerequisite for #6044)
 
 - Reject ref-struct type arguments in ordinary generic constructor calls with GS0219, as in type declarations. Check symbolic arguments before erasure, including source constructors and open generic owners. Preserve imported parameters that allow ref structs. (Fixes #6015)
 
