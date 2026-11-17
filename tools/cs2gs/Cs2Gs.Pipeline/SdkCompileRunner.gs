@@ -111,12 +111,19 @@ class SdkCompileRunner {
                 warningsNotAsErrors
             )
             let buildEnvironment = IsolatedNugetEnvironment(SharedMirroredNugetRoot(artifactDirectory))
-            let result = ProcessRunner.Run("dotnet", args, projectDirectory, MirroredBuildTimeout, buildEnvironment)
+            let buildWorkingDirectory = BuildWorkingDirectory(repoRoot, projectDirectory!!)
+            let result = ProcessRunner.Run(
+                "dotnet",
+                args,
+                buildWorkingDirectory,
+                MirroredBuildTimeout,
+                buildEnvironment
+            )
             File.WriteAllText(Path.Combine(artifactDirectory, "sdk.build.log"), result.Output ?? string.Empty)
             this.CaptureFailureArtifacts(
                 artifactDirectory,
                 args,
-                projectDirectory!!,
+                buildWorkingDirectory,
                 sdkMoniker,
                 buildEnvironment,
                 result
@@ -335,9 +342,16 @@ class SdkCompileRunner {
             args.Add("-p:RestoreConfigFile=" + repoNugetConfig)
         }
         let buildEnvironment = IsolatedNugetEnvironment(appRunDir)
-        let result = ProcessRunner.Run("dotnet", args, appRunDir, TimeSpan.FromMinutes(10), buildEnvironment)
+        let buildWorkingDirectory = BuildWorkingDirectory(repoRoot, appRunDir)
+        let result = ProcessRunner.Run(
+            "dotnet",
+            args,
+            buildWorkingDirectory,
+            TimeSpan.FromMinutes(10),
+            buildEnvironment
+        )
         File.WriteAllText(Path.Combine(appRunDir, "sdk.build.log"), result.Output ?? string.Empty)
-        this.CaptureFailureArtifacts(appRunDir, args, appRunDir, sdkVersion, buildEnvironment, result)
+        this.CaptureFailureArtifacts(appRunDir, args, buildWorkingDirectory, sdkVersion, buildEnvironment, result)
         var diagnostics = GscInvoker.ParseDiagnostics(result.Output)
         if result.ExitCode != 0 && diagnostics.Count((d GscDiagnostic) -> d.IsError) == 0 {
             // Issue #3634: before synthesizing an opaque fallback, surface any
@@ -564,6 +578,14 @@ class SdkCompileRunner {
         ]{
             ["NUGET_PACKAGES"] = Path.Combine(root, ".nuget-packages"),
             [GsharpTestProjectRunner.SourceRootEnvironmentVariable] = string.Empty
+        }
+
+        internal func BuildWorkingDirectory(repositoryRoot string?, projectDirectory string) string {
+            // Issue #6029: generated projects sit outside the repo, so use its global.json SDK pin.
+            if !string.IsNullOrEmpty(repositoryRoot) {
+                return repositoryRoot
+            }
+            return projectDirectory
         }
 
         internal func MirroredTestEnvironment(artifactRoot string, sourceRoot string?) IReadOnlyDictionary[

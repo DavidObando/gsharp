@@ -26,6 +26,12 @@ import System.Xml.Linq
 /// end-to-end build paths are covered by the cs2gs pipeline's own corpus runs.
 open class SdkCompileRunnerTests {
     @Fact
+    func BuildWorkingDirectory_UsesRepoRootToHonorGlobalJsonSdkPin() {
+        Assert.Equal("/repo", SdkCompileRunner.BuildWorkingDirectory("/repo", "/tmp/app"))
+        Assert.Equal("/tmp/app", SdkCompileRunner.BuildWorkingDirectory(nil, "/tmp/app"))
+    }
+
+    @Fact
     func WriteFailureArtifacts_PreservesBuildInvocationAndSeparateStreamsOnlyOnFailure() {
         let directory = Path.Combine(Path.GetTempPath(), "cs2gs-sdk-failure-" + Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(directory)
