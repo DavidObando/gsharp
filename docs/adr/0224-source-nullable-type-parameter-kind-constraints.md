@@ -57,6 +57,9 @@ The rule applies to every source annotation: parameters, returns, fields, proper
 An unknown-kind annotation reports **GS0641** at its `?` token.
 An operator that creates such a result reports the same diagnostic at its source operator token.
 This includes conditional access, delegate invocation, nil joins, and inferred lambda returns that introduce absence.
+Nullable binding headers share this check across expression and statement forms of `if let`, `guard let`, and `while let`.
+They report a newly unsupported nullable storage type at the binding's `let` keyword.
+An inferred binding that retains bare `T` storage does not introduce a nullable representation.
 Nested tuple joins apply the same proof at the affected element.
 Existing nullable arguments and imported annotation propagation do not independently construct a new missing-value representation.
 Declaration annotations are checked after source headers and their complete constraint lists resolve.
@@ -223,6 +226,7 @@ All 783 tracked compiler inputs, four normal generated inputs, and normal depend
 The public compiler from `176f9924084540b44a7b74ca10901b2e1224298a` completed Core and CLI binding and emission with every `NoWarn` flag removed.
 Both projects emitted successfully without diagnostics.
 There were no additional rejected annotations, nullable-producing operators, or caller constraints after that one-line migration.
+Repeating full emission with the nullable binding-header check found no additional sites in the same preserved inputs.
 
 This is complete body validation of the specified migrated shadow, not a green untouched-baseline build.
 The generated inputs and retained reference binaries were hash-recorded; the measurement did not rebuild all shared dependencies.

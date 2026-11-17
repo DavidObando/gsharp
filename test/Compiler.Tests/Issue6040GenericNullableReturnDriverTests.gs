@@ -101,6 +101,12 @@ Console.Write(":" + (Id[string?](nil) == nil).ToString())
     @InlineData("func F[T](choose bool, value T) { let result = [[switch]] choose { case true: value\ndefault: nil } }")
     @InlineData("func F[T](input string?, value T) { let result = [[if]] let text = input { value } else { nil } }")
     @InlineData("func F[T](choose bool, value T) { let read = () [[->]] { if choose { return value }\nreturn nil } }")
+    @InlineData("func F[T]() bool -> if [[let]] value T = nil { true } else { false }")
+    @InlineData("func F[T]() { if [[let]] value T = nil {} }")
+    @InlineData("func F[T]() { guard [[let]] value T = nil else { return } }")
+    @InlineData("func F[T]() { while [[let]] value T = nil { break } }")
+    @InlineData("func F[T](input T) bool -> if [[let]] value T = input { true } else { false }")
+    @InlineData("func F[A class, B A]() bool -> if [[let]] value B = nil { true } else { false }")
     func SourceOperators_RequireTheSameKnownKind(marked string) {
         let start = marked.IndexOf("[[", StringComparison.Ordinal)
         let end = marked.IndexOf("]]", start, StringComparison.Ordinal)
@@ -112,6 +118,50 @@ Console.Write(":" + (Id[string?](nil) == nil).ToString())
             marked.Remove(end, 2).Remove(start, 2) + "\nfunc Main() {}",
             []string{"GS0641@${line},${column},${line},${column + width}"}
         )
+    }
+
+    @Fact
+    func KnownKindBindingHeaders_PreserveAbsencePresentZeroAndBareArguments() {
+        Check(`import System
+func Value[T struct](input T?) bool {
+    if let value T = input { return true }
+    return false
+}
+func Reference[T class?](input T?) bool {
+    guard let value T = input else { return false }
+    return true
+}
+func Loop[T struct](read () -> T?) bool {
+    while let value T = read() { return true }
+    return false
+}
+func EmptyValue[T struct]() bool -> if let value T = nil { true } else { false }
+func EmptyReference[T class?]() bool -> if let value T = nil { true } else { false }
+func Bare[T](input T) bool -> if let value = input { true } else { false }
+open class Animal {}
+class Dog : Animal {}
+func Dependent[A Animal, B A]() bool -> if let value B = nil { true } else { false }
+Console.Write(Value[int32](nil))
+Console.Write(":" + Value[int32](0).ToString())
+Console.Write(":" + Reference[string](nil).ToString())
+Console.Write(":" + Reference[string]("").ToString())
+Console.Write(":" + Reference[string?](nil).ToString())
+var reads = 0
+let Read = func() int32? {
+    reads++
+    return 0
+}
+Console.Write(":" + Loop[int32](Read).ToString())
+Console.Write(":" + reads.ToString())
+Console.Write(":" + Loop[int32](() -> nil).ToString())
+Console.Write(":" + EmptyValue[int32]().ToString())
+Console.Write(":" + EmptyReference[string]().ToString())
+Console.Write(":" + Dependent[Animal, Dog]().ToString())
+Console.Write(":" + Bare[int32](0).ToString())
+Console.Write(":" + Bare[int32?](nil).ToString())
+Console.Write(":" + Bare[int32?](0).ToString())
+Console.Write(":" + Bare[string?](nil).ToString())
+`, "False:True:False:True:False:True:1:False:False:False:False:True:False:True:False")
     }
 
     @Fact

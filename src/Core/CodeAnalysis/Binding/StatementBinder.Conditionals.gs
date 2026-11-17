@@ -578,6 +578,7 @@ internal partial class StatementBinder {
             default(((IfLetBindingClauseSyntax, BoundExpression) -> void)?)
         }
         let bound = IfLetBindingSupport.BindBindingClause(
+            binderCtx,
             binding,
             Diagnostics,
             conversions,
