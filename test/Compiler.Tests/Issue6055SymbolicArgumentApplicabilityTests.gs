@@ -23,6 +23,8 @@ public sealed class Sink<T> {
 import System.Collections.Generic
 import Contracts6055
 internal enum Failure { Suspension, NestedClosure }
+class Values : Dictionary[string, Failure] {}
+func ReadNullable(values Values?) int32 -> Sink[Failure].Read(values)
 class State {
     init() { Failures = Dictionary[string, Failure](StringComparer.Ordinal) }
     prop Failures Dictionary[string, Failure] { get; }
@@ -50,6 +52,10 @@ Console.WriteLine(Sink[Failure].Read(state.Failures))
 Console.WriteLine(Sink[Failure](local).Count)
 Console.WriteLine(Sink[Failure].Read(local))
 Console.WriteLine(Sink[Failure].Read(nil))
+Console.WriteLine(ReadNullable(nil))
+Console.WriteLine(ReadNullable(Values()))
+var optional Failure? = Failure.Suspension
+Console.WriteLine(Sink[Failure].Read(optional))
 Console.WriteLine(object.ReferenceEquals(copy.Comparer, StringComparer.Ordinal))
 copy.Clear()
 Console.WriteLine(state.Failures.Count)
@@ -61,12 +67,14 @@ Console.WriteLine(state.Failures.Count)
         let native = fixture.CompileCSharpExecutable(`using System;
 using System.Collections.Generic;
 internal enum Failure { Suspension, NestedClosure }
+class Values : Dictionary<string, Failure> {}
 class State {
     public Dictionary<string, Failure> Failures { get; } = new(StringComparer.Ordinal);
     public int Reads;
     public Dictionary<string, Failure> Snapshot { get { Reads++; return Failures; } }
 }
 class P {
+    static int ReadNullable(Values? values) => Sink<Failure>.Read(values);
     static void Main() {
         var state = new State();
         var empty = new Dictionary<string, Failure>(state.Failures, StringComparer.Ordinal);
@@ -84,6 +92,10 @@ class P {
         Console.WriteLine(new Sink<Failure>(local).Count);
         Console.WriteLine(Sink<Failure>.Read(local));
         Console.WriteLine(Sink<Failure>.Read(null));
+        Console.WriteLine(ReadNullable(null));
+        Console.WriteLine(ReadNullable(new Values()));
+        Failure? optional = Failure.Suspension;
+        Console.WriteLine(Sink<Failure>.Read(optional));
         Console.WriteLine(ReferenceEquals(copy.Comparer, StringComparer.Ordinal));
         copy.Clear();
         Console.WriteLine(state.Failures.Count);
@@ -103,7 +115,7 @@ public sealed class Sink<T> {
         IlVerifier.Verify(native)
         File.Copy(Path.ChangeExtension(dll, ".runtimeconfig.json"), Path.ChangeExtension(native, ".runtimeconfig.json"))
         let expected = Encoding.UTF8.GetBytes(
-            "0\nTrue\nTrue\n1\n1\n1\n1\n1\n99\nTrue\n1\n0\n".Replace("\n", Environment.NewLine)
+            "0\nTrue\nTrue\n1\n1\n1\n1\n1\n99\n99\n0\n-1\nTrue\n1\n0\n".Replace("\n", Environment.NewLine)
         )
         Assert.Equal(expected, fixture.RunBytes(native))
         Assert.Equal(expected, fixture.RunBytes(dll))

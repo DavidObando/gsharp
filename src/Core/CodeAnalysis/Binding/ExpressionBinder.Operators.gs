@@ -4530,7 +4530,7 @@ internal partial class ExpressionBinder {
                         return ClrOverloadResolution.ImplicitConversionKind.Identity
                     }
                     if symbolicConversion.IsImplicit {
-                        return if Conversion.IsReferenceLikeTarget(sourceType) {
+                        return if Conversion.IsReferenceLikeTarget(sourceType.StripToBareShape()) {
                             ClrOverloadResolution.ImplicitConversionKind.Reference
                         } else {
                             ClrOverloadResolution.ImplicitConversionKind.Boxing
