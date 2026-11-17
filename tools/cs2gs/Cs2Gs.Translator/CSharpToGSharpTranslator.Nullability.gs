@@ -3415,7 +3415,7 @@ partial class CSharpToGSharpTranslator {
             return !(targetDeclaredInThisCompilation && this.IsTranslatorWidenedDeclaration(targetSymbol))
         }
 
-        // Other input or result positions retain their existing inference contracts.
+        // The callee must own the slot, with no dependencies elsewhere in its signature contract.
         private func InferredMethodAcceptsDeclaredNullableValue(target ISymbol?, value ExpressionSyntax?) bool {
             if value == nil ||
                 target is not IParameterSymbol{RefKind: RefKind.None} parameter ||
@@ -3423,6 +3423,9 @@ partial class CSharpToGSharpTranslator {
                 .OriginalDefinition
                 .Type is not ITypeParameterSymbol typeParameter ||
                 parameter.ContainingSymbol is not IMethodSymbol{ReducedFrom: nil} method ||
+                !SymbolEqualityComparer
+                .Default
+                .Equals(typeParameter.DeclaringMethod?.OriginalDefinition, method.OriginalDefinition) ||
                 !this.SinkInfersTypeFromValue(parameter, value) ||
                 CallResultMentionsTypeParameter(method, typeParameter) ||
                 method
@@ -3431,6 +3434,14 @@ partial class CSharpToGSharpTranslator {
                 .Any(
                 (other IParameterSymbol) -> other.Ordinal != parameter.Ordinal &&
                     MentionsTypeParameter(other.Type, typeParameter)
+            ) ||
+                method
+                .OriginalDefinition
+                .TypeParameters
+                .Any(
+                (other ITypeParameterSymbol) -> other.ConstraintTypes.Any(
+                    (constraint ITypeSymbol) -> MentionsTypeParameter(constraint, typeParameter)
+                )
             ) {
                 return false
             }

@@ -233,6 +233,103 @@ static class P {
     }
 
     @Fact
+    func SiblingTypeParameterConstraints_KeepRequiredGenericInputAssertion() {
+        let source = ExplicitNullableCapture.Replace("static string IsNull<T>(T value) => (value is null).ToString();", `static string IsNull<A, B>(A value, B marker) where B : System.Collections.Generic.List<A> =>
+            (value is null).ToString();`).Replace(
+            "IsNull(captured)",
+            "IsNull(captured, new System.Collections.Generic.List<T>())"
+        ).Replace("pair = (default(T), 0);", "").Replace("public static string Run<T>", `public static void Main() => System.Console.Write(Run("value"));
+        public static string Run<T>`)
+        let native = CSharpProjectLoader.LoadInMemory(
+            [](string, string){("Probe.cs", source)},
+            outputKind: OutputKind.ConsoleApplication
+        )
+        Assert.Empty(
+            native
+                .Compilation
+                .GetDiagnostics()
+                .Where(
+                (diagnostic Diagnostic) -> diagnostic.Severity is DiagnosticSeverity.Error or DiagnosticSeverity.Warning
+            )
+        )
+        let (printed, sites) = Translate(source)
+        Assert.Contains("IsNull(captured!!,", printed)
+        Assert.Single(sites)
+        LiteralConstructionRuntimeParity.AssertMatches(
+            source,
+            verifyTranslation: (raw string) -> Assert.Equal(printed, raw),
+            verifyAssembly: (assembly string) -> {
+                AssertStrictIl(assembly)
+                Assert.Equal(Encoding.UTF8.GetBytes("False"), RunOutputBytes(assembly))
+            }
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func OuterMethodTypeParameters_AreNotCalleeInferenceSlots(genericLocal bool) {
+        let outerArguments = if genericLocal {
+            "A, T"
+        } else {
+            "T"
+        }
+        let localArguments = if genericLocal {
+            "<U>"
+        } else {
+            ""
+        }
+        let markerParameter = if genericLocal {
+            ", U marker"
+        } else {
+            ""
+        }
+        let markerArgument = if genericLocal {
+            ", 0"
+        } else {
+            ""
+        }
+        let typeArguments = if genericLocal {
+            "int, string"
+        } else {
+            "string"
+        }
+        let source = `#nullable enable
+static class P {
+    static void Run<OUTER>(T? value) where T : class? {
+        void SinkLOCAL(T xMARKER) { System.Console.Write(x is null); }
+        if (value is not null) Sink(valueARGUMENT);
+    }
+    public static void Main() => Run<TYPES>("value");
+}`.Replace(
+            "OUTER",
+            outerArguments
+        ).Replace(
+            "LOCAL",
+            localArguments
+        ).Replace("MARKER", markerParameter).Replace("ARGUMENT", markerArgument).Replace("TYPES", typeArguments)
+        let native = CSharpProjectLoader.LoadInMemory(
+            [](string, string){("Probe.cs", source)},
+            outputKind: OutputKind.ConsoleApplication
+        )
+        Assert.Empty(
+            native
+                .Compilation
+                .GetDiagnostics()
+                .Where(
+                (diagnostic Diagnostic) -> diagnostic.Severity is DiagnosticSeverity.Error or DiagnosticSeverity.Warning
+            )
+        )
+        LiteralConstructionRuntimeParity.AssertMatches(
+            source,
+            verifyAssembly: (assembly string) -> {
+                AssertStrictIl(assembly)
+                Assert.Equal(Encoding.UTF8.GetBytes("False"), RunOutputBytes(assembly))
+            }
+        )
+    }
+
+    @Fact
     func ExplicitNullableInference_KeepsFixedResultOwnerConstraintAndForgivenContracts() {
         let (printed, sites) = Translate(`#nullable enable
 class Box<T> where T : class { public void Store(T value) { } }
