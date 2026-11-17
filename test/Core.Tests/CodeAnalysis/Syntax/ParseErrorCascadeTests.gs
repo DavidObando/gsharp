@@ -48,6 +48,23 @@ func f(x) {
         Assert.Equal(8, diagnostic.Location.StartCharacter)
     }
 
+    /// GS0521 comes between the two failed matches at the `{` token. The parser
+    /// still reports GS0005 only once there, and GS0521 stays.
+    @Fact
+    func InterveningDiagnosticAtStalledToken_ReportsOneGs0005() {
+        const source = `
+package R
+func f(x List[* {}
+`
+        let diagnostics = GetDiagnostics(source)
+        let unexpected = Assert.Single(diagnostics, (d Diagnostic) -> d.Id == "GS0005")
+        Assert.Equal(2, unexpected.Location.StartLine)
+        Assert.Equal(16, unexpected.Location.StartCharacter)
+        let pointerArgument = Assert.Single(diagnostics, (d Diagnostic) -> d.Id == "GS0521")
+        Assert.Equal(2, pointerArgument.Location.StartLine)
+        Assert.Equal(14, pointerArgument.Location.StartCharacter)
+    }
+
     /// Regression guard: separate errors at different tokens are all reported.
     @Fact
     func ErrorsAtDifferentTokens_AreEachReported() {

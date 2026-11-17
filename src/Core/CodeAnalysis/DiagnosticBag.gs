@@ -148,6 +148,15 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         diagnostics[diagnostics.Count - 1]
     }
 
+    /// Gets a value that tells whether [`diagnostic`](paramref) is still at [`index`](paramref).
+    /// It is `false` after (cref:TruncateTo) or a duplicate suppression removes that entry.
+    /// @param index The index where the diagnostic was added.
+    /// @param diagnostic The diagnostic that was added.
+    /// @returns `true` when the same diagnostic object is at the index.
+    internal func ContainsAt(index int32, diagnostic Diagnostic) bool -> index >= 0 &&
+        index < diagnostics.Count &&
+        object.ReferenceEquals(diagnostics[index], diagnostic)
+
     /// Creates an immutable snapshot of the diagnostics currently held in the bag.
     /// @returns An immutable array of diagnostics in insertion order.
     func ToImmutableArray() ImmutableArray[Diagnostic] -> Visible().ToImmutableArray()

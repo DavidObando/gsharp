@@ -25,6 +25,13 @@ open partial class Parser {
 
     private var tokens ImmutableArray[SyntaxToken]
     private var position int32
+
+    // The token index, bag index, and diagnostic of the last GS0005 from MatchToken.
+    // Other diagnostics can come between two failed matches at one token. The bag
+    // check makes a GS0005 that a speculative parse rolled back not count.
+    private var lastUnexpectedTokenPosition int32 = -1
+    private var lastUnexpectedTokenIndex int32 = -1
+    private var lastUnexpectedTokenDiagnostic Diagnostic?
     private var allowedInt64Magnitude SyntaxToken?
 
     private var stopAtTopLevelLogical bool
@@ -613,12 +620,23 @@ open partial class Parser {
         // Report GS0005 once for each token where the parser stops. A second
         // expected-token error at the same token only repeats the first one.
         if !IsRepeatedUnexpectedToken() {
+            let countBefore = Diagnostics.Count
             Diagnostics.ReportUnexpectedToken(TextLocation(syntaxTree.Text, Current.Span), Current.Kind, kind)
+            if Diagnostics.Count > countBefore {
+                lastUnexpectedTokenPosition = position
+                lastUnexpectedTokenIndex = Diagnostics.Count - 1
+                lastUnexpectedTokenDiagnostic = Diagnostics.LastAdded
+            }
         }
         return SyntaxToken.Missing(syntaxTree, kind, Current.Position)
     }
 
     private func IsRepeatedUnexpectedToken() bool {
+        if position == lastUnexpectedTokenPosition &&
+            lastUnexpectedTokenDiagnostic is {} reported &&
+            Diagnostics.ContainsAt(lastUnexpectedTokenIndex, reported) {
+            return true
+        }
         if Diagnostics.LastAdded is not{} last {
             return false
         }
