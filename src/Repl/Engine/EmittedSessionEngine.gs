@@ -270,10 +270,14 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
         // ReferenceResolver.Default(); otherwise a channel constructed in cell
         // one cannot be sent on in cell two ("Chan`1 ... not provided").
         let referencePaths = submissions.Select((s SubmissionState) -> s.DllPath).Concat(userReferences).ToArray()
+        // ADR-0223 D4: keep the bundled runtime order of gsi (Program.SdkToolsDirectory).
+        let runtimeDirectory = Environment.GetEnvironmentVariable("GSHARP_SDK_TOOLS_DIR")
         let resolver = if referencePaths.Length > 0 {
-            ReferenceResolver.WithReferences(ReferenceResolver.ResolveDriverReferencePaths(referencePaths))
+            ReferenceResolver.WithReferences(
+                ReferenceResolver.ResolveDriverReferencePaths(referencePaths, runtimeDirectory)
+            )
         } else {
-            ReferenceResolver.Default()
+            ReferenceResolver.Default(runtimeDirectory)
         }
         var dllPath string? = nil
         var ownershipTransferred = false

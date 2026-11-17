@@ -1304,10 +1304,6 @@ class ReferenceResolver : IDisposable {
         }
         private let DefaultTypeNameIndexGate object = SystemObject()
 
-        /// The folder with the portable runtime files of the SDK package (`channels/`, `values/`,
-        /// `extensions/`). The driver sets it from /sdktoolsdir:. The variable GSHARP_SDK_TOOLS_DIR
-        /// is the fallback (ADR-0207).
-        internal var SdkToolsDirectory string? = nil
         private var defaultTypeNameIndexAssemblies ImmutableArray[Assembly] = ImmutableArray[Assembly].Empty
         private var defaultTypeNameIndex Lazy[ReferenceTypeNameIndex]?
 
@@ -1450,8 +1446,16 @@ class ReferenceResolver : IDisposable {
         /// the process has loaded when the call runs, so a test host, a benchmark host, and `gsc` can see
         /// different types. Use (cref:ForReferencePack) for a reference set that does not depend on the host.
         /// @returns A default resolver.
-        func Default() ReferenceResolver {
-            for path in ResolveDriverReferencePaths(Array.Empty[string]()) {
+        func Default() ReferenceResolver -> Default(nil)
+
+        /// Gets a resolver that searches the runtime's currently loaded assemblies plus the well-known BCL
+        /// assemblies, with the bundled G# runtimes from a runtime directory.
+        /// @remarks The result depends on the host process (ADR-0223 D3). See
+        /// (cref:ResolveDriverReferencePaths) for the search order of the bundled runtimes (ADR-0223 D4).
+        /// @param runtimeDirectory The folder with the bundled G# runtime assemblies, or `null`.
+        /// @returns A default resolver.
+        func Default(runtimeDirectory string?) ReferenceResolver {
+            for path in ResolveDriverReferencePaths(Array.Empty[string](), runtimeDirectory) {
                 try {
                     // Deliberately load here: BuildHostAssemblies excludes DriverReferenceLoadContext assemblies.
                     let _ = AssemblyLoadContext.Default.LoadFromAssemblyPath(path)
@@ -1474,7 +1478,26 @@ class ReferenceResolver : IDisposable {
         /// available.
         /// @param referencePaths Explicit reference paths.
         /// @returns The effective reference paths.
-        func ResolveDriverReferencePaths(referencePaths IEnumerable[string]?) IReadOnlyList[string] {
+        func ResolveDriverReferencePaths(referencePaths IEnumerable[string]?) IReadOnlyList[string] ->
+        ResolveDriverReferencePaths(referencePaths, nil)
+
+        /// Resolves the references supplied to a driver and appends the bundled
+        /// Gsharp.Extensions, Gsharp.Runtime.Channels, and Gsharp.Runtime.Values assemblies when they are
+        /// available.
+        /// @remarks ADR-0223 D4: the bundled runtime search order is the runtime directory, then the folder
+        /// beside the application, then the `GSHARP_SDK_TOOLS_DIR` variable. In the runtime directory, the
+        /// search uses the SDK layout (`extensions/`, `channels/`, and `values/`) first, then the folder
+        /// itself. The variable names an SDK `tools/` folder. A file that is not portable IL is skipped. The
+        /// compiler keeps no process-wide runtime directory, so two hosts in one process can use different
+        /// SDK versions.
+        /// @param referencePaths Explicit reference paths.
+        /// @param runtimeDirectory The folder with the bundled G# runtime assemblies, or `null`. It can be
+        /// the `tools/` folder of the SDK package or the `runtimes/gsharp/` folder of the Gsharp.Compiler
+        /// package.
+        /// @returns The effective reference paths.
+        func ResolveDriverReferencePaths(referencePaths IEnumerable[string]?, runtimeDirectory string?) IReadOnlyList[
+            string
+        ] {
             let paths = List[string]()
             if referencePaths != nil {
                 for path in referencePaths {
@@ -1483,9 +1506,9 @@ class ReferenceResolver : IDisposable {
                     }
                 }
             }
-            AppendBundledPath(paths, FindBundledExtensionPath(AppContext.BaseDirectory))
-            AppendBundledPath(paths, FindBundledChannelsRuntimePath(AppContext.BaseDirectory))
-            AppendBundledPath(paths, FindBundledValuesRuntimePath(AppContext.BaseDirectory))
+            AppendBundledPath(paths, FindBundledExtensionPath(AppContext.BaseDirectory, runtimeDirectory))
+            AppendBundledPath(paths, FindBundledChannelsRuntimePath(AppContext.BaseDirectory, runtimeDirectory))
+            AppendBundledPath(paths, FindBundledValuesRuntimePath(AppContext.BaseDirectory, runtimeDirectory))
             return paths
         }
 
@@ -1815,11 +1838,17 @@ class ReferenceResolver : IDisposable {
         /// @param packRoot The folder that contains the versions of `Microsoft.NETCore.App.Ref`. When it is
         /// `null`, the factory uses `packs/Microsoft.NETCore.App.Ref` under the .NET root. The .NET root is
         /// `DOTNET_ROOT`, or else the folder of the `dotnet` executable on the `PATH`.
+        /// @param runtimeDirectory The folder with the bundled G# runtime assemblies, or `null`. See
+        /// (cref:ResolveDriverReferencePaths) for the search order (ADR-0223 D4).
         /// @returns A resolver over the reference pack and the bundled G# runtime assemblies.
         /// @exception ArgumentException The target framework is not a .NET moniker such as `net10.0`.
         /// @exception DirectoryNotFoundException No reference pack for the target framework was found, or its
         /// folder contains no assemblies.
-        func ForReferencePack(targetFramework string, packRoot string? = nil) ReferenceResolver {
+        func ForReferencePack(
+            targetFramework string,
+            packRoot string? = nil,
+            runtimeDirectory string? = nil
+        ) ReferenceResolver {
             let directory = FindReferencePackDirectory(targetFramework, packRoot)
             let packPaths = Directory
                 .EnumerateFiles(directory, "*.dll")
@@ -1829,7 +1858,7 @@ class ReferenceResolver : IDisposable {
                 // An empty reference set makes WithReferences use the host assemblies.
                 throw DirectoryNotFoundException("The reference pack folder '$directory' contains no assemblies.")
             }
-            return WithReferences(ResolveDriverReferencePaths(packPaths), Array.Empty[string]())
+            return WithReferences(ResolveDriverReferencePaths(packPaths, runtimeDirectory), Array.Empty[string]())
         }
 
         /// Finds the `ref/<tfm>` folder that (cref:ForReferencePack) uses.
@@ -2130,13 +2159,19 @@ class ReferenceResolver : IDisposable {
             }
         }
 
-        internal func FindBundledExtensionPath(baseDirectory string) string? {
+        internal func FindBundledExtensionPath(baseDirectory string, runtimeDirectory string? = nil) string? {
             // Compiler cannot ProjectReference Gsharp.Extensions because its bootstrap
             // build already references Compiler; solution and SDK layouts provide it.
-            return FindBundledRuntimePath(baseDirectory, "Gsharp.Extensions.dll", "Gsharp.Extensions", "extensions")
+            return FindBundledRuntimePath(
+                baseDirectory,
+                runtimeDirectory,
+                "Gsharp.Extensions.dll",
+                "Gsharp.Extensions",
+                "extensions"
+            )
         }
 
-        internal func FindBundledChannelsRuntimePath(baseDirectory string) string? {
+        internal func FindBundledChannelsRuntimePath(baseDirectory string, runtimeDirectory string? = nil) string? {
             // ADR-0174 D1. The compiler core deliberately takes no ProjectReference
             // on the channel runtime (emitted programs bind whichever runtime is in
             // the reference set); gsc/gsi ship it beside themselves, the solution
@@ -2144,14 +2179,19 @@ class ReferenceResolver : IDisposable {
             // the SDK NuGet under tools/channels/.
             return FindBundledRuntimePath(
                 baseDirectory,
+                runtimeDirectory,
                 "Gsharp.Runtime.Channels.dll",
                 "Gsharp.Runtime.Channels",
                 "channels"
             )
         }
 
-        internal func FindBundledValuesRuntimePath(baseDirectory string) string? -> FindBundledRuntimePath(
+        internal func FindBundledValuesRuntimePath(
+            baseDirectory string,
+            runtimeDirectory string? = nil
+        ) string? -> FindBundledRuntimePath(
             baseDirectory,
+            runtimeDirectory,
             "Gsharp.Runtime.Values.dll",
             "Gsharp.Runtime.Values",
             "values"
@@ -2176,21 +2216,27 @@ class ReferenceResolver : IDisposable {
 
         private func FindBundledRuntimePath(
             baseDirectory string,
+            runtimeDirectory string?,
             fileName string,
             projectFolder string,
             sdkFolder string
         ) string? {
-            // ADR-0207: the SDK tools directory comes first. Its files are the portable
-            // copies. A candidate that is not portable IL is skipped, so an R2R image of a
-            // runtime assembly never reaches user output.
+            // ADR-0223 D4: the runtime directory of the caller comes first, then the folder beside the
+            // application, then GSHARP_SDK_TOOLS_DIR. No process-wide directory exists, because two hosts
+            // in one process can need different SDK versions. A candidate that is not portable IL is
+            // skipped, so an R2R image of a runtime assembly never reaches user output (ADR-0207).
             let candidates = List[string]()
-            let sdkToolsDirectory = SdkToolsDirectory ?? Environment.GetEnvironmentVariable("GSHARP_SDK_TOOLS_DIR")
-            if !string.IsNullOrEmpty(sdkToolsDirectory) {
-                candidates.Add(Path.Combine(sdkToolsDirectory, sdkFolder, fileName))
+            if !string.IsNullOrEmpty(runtimeDirectory) {
+                candidates.Add(Path.Combine(runtimeDirectory, sdkFolder, fileName))
+                candidates.Add(Path.Combine(runtimeDirectory, fileName))
             }
             candidates.Add(Path.Combine(baseDirectory, fileName))
             candidates.Add(Path.Combine(baseDirectory, "..", projectFolder, fileName))
             candidates.Add(Path.Combine(baseDirectory, "..", sdkFolder, fileName))
+            let sdkToolsDirectory = Environment.GetEnvironmentVariable("GSHARP_SDK_TOOLS_DIR")
+            if !string.IsNullOrEmpty(sdkToolsDirectory) {
+                candidates.Add(Path.Combine(sdkToolsDirectory, sdkFolder, fileName))
+            }
             return candidates.Select(Path.GetFullPath).FirstOrDefault(IsPortableBundledFile)
         }
 

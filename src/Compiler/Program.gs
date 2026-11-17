@@ -289,7 +289,6 @@ open class Program {
             var parsed CommandLineArgs
             try {
                 parsed = ParseCommandLine(args)
-                ReferenceResolver.SdkToolsDirectory = parsed.SdkToolsDir
             } catch (ex CommandLineException) {
                 Console.Error.WriteLine(ex.Message)
                 return Error
@@ -413,7 +412,10 @@ open class Program {
                     Console.Error.WriteLine(referenceError)
                     return Error
                 }
-                let referencePaths = ReferenceResolver.ResolveDriverReferencePaths(parsed.References)
+                let referencePaths = ReferenceResolver.ResolveDriverReferencePaths(
+                    parsed.References,
+                    ResolveRuntimeDirectory(parsed)
+                )
                 CompilationMeasurements.Count("input.references", referencePaths.Count)
                 using let references = if parsed.OutputPath == nil {
                     ReferenceResolver.WithRuntimeReferences(referencePaths, hostSnapshot)
@@ -620,16 +622,26 @@ open class Program {
         /// A program whose PE has no corresponding AssemblyRef gets nothing extra.
         /// A destination copy is refreshed only when the bundled runtime is newer.
         /// @param outputPath The emitted assembly.
-        private func CopyBundledRuntimeBeside(outputPath string) {
+        /// @param runtimeDirectory The bundled runtime directory from (cref:ResolveRuntimeDirectory).
+        private func CopyBundledRuntimesBeside(outputPath string, runtimeDirectory string?) {
             CopyBundledRuntimeBeside(
                 outputPath,
-                ReferenceResolver.FindBundledChannelsRuntimePath(AppContext.BaseDirectory)
+                ReferenceResolver.FindBundledChannelsRuntimePath(AppContext.BaseDirectory, runtimeDirectory)
             )
             CopyBundledRuntimeBeside(
                 outputPath,
-                ReferenceResolver.FindBundledValuesRuntimePath(AppContext.BaseDirectory)
+                ReferenceResolver.FindBundledValuesRuntimePath(AppContext.BaseDirectory, runtimeDirectory)
             )
         }
+
+        /// Gives the bundled runtime directory of one request (ADR-0223 D4): the /sdktoolsdir: switch, else
+        /// the GSHARP_SDK_TOOLS_DIR variable. The resolver searches it before the folder beside gsc, so
+        /// the order of ADR-0207 does not change. Each request has its own value, so a compiler worker
+        /// keeps no directory from an earlier request.
+        /// @param parsed The parsed command line.
+        /// @returns The folder, or `null` when neither input gives one.
+        private func ResolveRuntimeDirectory(parsed CommandLineArgs) string? ->
+        parsed.SdkToolsDir ?? Environment.GetEnvironmentVariable("GSHARP_SDK_TOOLS_DIR")
 
         private func CopyBundledRuntimeBeside(outputPath string, bundled string?) {
             try {
@@ -794,7 +806,7 @@ open class Program {
             if args.Target == OutputTarget.Exe {
                 WriteRuntimeConfig(outputPath, args.TargetFramework)
             }
-            CopyBundledRuntimeBeside(outputPath)
+            CopyBundledRuntimesBeside(outputPath, ResolveRuntimeDirectory(args))
             Console.WriteLine("Wrote $outputPath")
             if !string.IsNullOrEmpty(refOutputPath) {
                 Console.WriteLine("Wrote $refOutputPath")
