@@ -53,6 +53,12 @@ The single parameter's type is the **source**; the return type is the **target**
 
 These are enforced with diagnostics `GS0393` (wrong parameter count), `GS0394` (neither side is an owned struct, or source == target), and `GS0395` (duplicate source/target pair).
 
+For reference types, nullable annotations do not change the owning declaration or CLR signature.
+Ownership lookup ignores these annotations but keeps the declared parameter and return types.
+The same-type and duplicate checks compare runtime signatures without reference-nullability annotations.
+Nullable value types retain their distinct runtime shape.
+This also applies to class conversions admitted by later work (#6024).
+
 ### Binding & symbols
 
 The parser synthesizes an `IdentifierToken` whose text is the resolved `op_Implicit` / `op_Explicit` name and flags the declaration as a conversion operator. The binder models it as a static `FunctionSymbol` (`IsStatic = true`, `IsSpecialName = true`, no receiver) attached to the owning `StructSymbol` via a new `AddStaticMethods` append (owner struct members are already bound by the time top-level functions bind). No new `SyntaxKind` or `BoundNodeKind` is introduced — the applied conversion reuses `BoundCallExpression(null, op, [operand])`.

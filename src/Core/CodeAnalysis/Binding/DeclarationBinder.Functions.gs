@@ -957,7 +957,7 @@ internal partial class DeclarationBinder {
             return
         }
         // A conversion from a type to itself is never user-definable.
-        if Conversion.Classify(sourceType, targetType).IsIdentity {
+        if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(sourceType, targetType) {
             Diagnostics.ReportConversionOperatorMustInvolveEnclosingType(syntax.Identifier.Location)
             return
         }
@@ -1019,11 +1019,9 @@ internal partial class DeclarationBinder {
             if existing.Parameters.Length != 1 {
                 continue
             }
-            if Conversion.Classify(existing.Parameters[0].Type, sourceType).IsIdentity && Conversion.Classify(
-                existing.Type,
-                targetType
-            )
-                .IsIdentity {
+            if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(existing.Parameters[0].Type, sourceType) &&
+                TypeSymbol
+                .AreRuntimeEquivalentIgnoringReferenceNullability(existing.Type, targetType) {
                 Diagnostics.ReportDuplicateConversionOperator(syntax.Identifier.Location, sourceType, targetType)
                 return
             }
@@ -2150,7 +2148,7 @@ internal partial class DeclarationBinder {
         /// @param package The owning package.
         /// @returns The owning struct definition, or `null`.
         private func TryGetSamePackageOwner(type TypeSymbol, $package PackageSymbol?) StructSymbol? {
-            if type is StructSymbol structSymbol && $package != nil && string.Equals(
+            if type.StripToBareShape() is StructSymbol structSymbol && $package != nil && string.Equals(
                 structSymbol.PackageName,
                 $package.Name,
                 StringComparison.Ordinal

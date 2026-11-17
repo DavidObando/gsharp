@@ -20,6 +20,12 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Admit conversion operators whose owning class appears through a nullable reference type. Preserve nullable operand and return contracts. Reject same-type conversions and duplicate signatures that differ only by reference-nullability annotations. Translator acceptance remains gated on a released compiler SDK pin. (Fixes #6024)
+
+- Include accessible static members of constructed imported types in language-server completion, including trailing dots and unfinished member names. Keep instance members and constructors out of type-qualified suggestions. (Fixes #6019)
+
+- Preserve explicitly nullable reference type-parameter storage passed as a complete inferred method type argument in `cs2gs`. Do not add a throwing assertion when the unconstrained argument does not reach the result. Keep concrete reference inference, fixed storage, authored forgiveness, synthesized explicit type arguments, constraints, and the broader oblivious generic-store bridge policy unchanged. (Part of #4612; prerequisite for #6044)
+
 - Reject ref-struct type arguments in ordinary generic constructor calls with GS0219, as in type declarations. Check symbolic arguments before erasure, including source constructors and open generic owners. Preserve imported parameters that allow ref structs. (Fixes #6015)
 
 - Preserve the inferred platform reference type in `x ?? nil`. Oblivious imported references retain their null values and evaluation order. (Fixes #5565)
