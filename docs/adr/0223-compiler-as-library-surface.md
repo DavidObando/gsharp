@@ -1,6 +1,6 @@
 # ADR-0223: A supported compiler-as-library surface for GSharp.Core
 
-- **Status**: Proposed
+- **Status**: Accepted (approved by the maintainer, 2026-11-17)
 - **Date**: 2026-11-16
 - **Phase**: Tooling
 - **Related**: ADR-0207 (bundled runtime discovery), ADR-0212 §8 (concurrent declaration binding), issue #3818 (host load contexts), issue #5623 (GS0634), Oats `docs/notes/gsharp-compiler-as-library.md`
@@ -26,7 +26,7 @@ Oats found that every API it calls is public, but the contract around those APIs
 - `GetMissingEntryPointDiagnostics()` returns GS0634 when the compilation is not a library, has no entry point, and is not a REPL submission. The host decides that the output is an executable, as `gsc` does with `/target:exe`. The host calls it only when no other error stops the output.
 - `CreateInternalErrorDiagnostic(Exception)` converts an exception that escapes the compiler into a diagnostic. It preserves an explicit diagnostic ID from an `EmitDiagnosticException` in the exception chain; otherwise, it returns GS9998. It uses an available `EmitDiagnosticException` source anchor. A host can report the returned diagnostic as `gsc` does.
 
-These are the only changes to code in this ADR.
+D1 changes no other code.
 
 ### D2. Packaging (design only)
 
@@ -39,7 +39,7 @@ Publish `GSharp.Core` as its own NuGet package, `Gsharp.Compiler`, from the same
 
 Until the package exists, `$(GsharpSdkToolsDirectory)compiler/GSharp.Core.dll` is the documented reference path. The SDK keeps the property name and that relative path for the 0.5 line.
 
-### D3. Hermetic reference sets (design only)
+### D3. Hermetic reference sets (implemented)
 
 Add explicit factories to `ReferenceResolver`:
 
@@ -47,6 +47,8 @@ Add explicit factories to `ReferenceResolver`:
 - `WithReferences(paths)` stays the explicit form.
 - `WithRuntimeReferences(paths)` and `Default()` keep their behavior. Their documentation states that the result depends on the host process.
 - `CaptureHostAssemblies()` and the two-argument `WithRuntimeReferences` become public, so a host can capture the host snapshot once before work starts, as `gsc` does.
+
+`packRoot` is the folder that contains the versions of `Microsoft.NETCore.App.Ref`. The factory selects the newest version, in semantic version order, that has the `ref/<tfm>` folder. It adds no host assembly as a fallback. It throws `DirectoryNotFoundException` when it finds no pack, or when the pack folder contains no assemblies.
 
 ### D4. Bundled runtime directory (design only)
 

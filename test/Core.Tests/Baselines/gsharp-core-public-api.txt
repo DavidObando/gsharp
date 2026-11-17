@@ -5158,10 +5158,13 @@ type sealed class GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver : System.Ob
   method public static Boolean TryGetAssemblyPath(System.Reflection.Assembly assembly, out String path)
   method public static Boolean TryValidateDriverReferencePaths(System.Collections.Generic.IEnumerable`1<String> referencePaths, out String error)
   method public static GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver Default()
+  method public static GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver ForReferencePack(String targetFramework, String packRoot = null)
   method public static GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver WithReferences(System.Collections.Generic.IEnumerable`1<String> referencePaths)
   method public static GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver WithRuntimeReferences(System.Collections.Generic.IEnumerable`1<String> referencePaths)
+  method public static GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver WithRuntimeReferences(System.Collections.Generic.IEnumerable`1<String> referencePaths, System.Collections.Immutable.ImmutableArray`1<System.Reflection.Assembly> hostSnapshot)
   method public static System.Collections.Generic.IReadOnlyList`1<String> HostTrustedPlatformAssemblyPaths()
   method public static System.Collections.Generic.IReadOnlyList`1<String> ResolveDriverReferencePaths(System.Collections.Generic.IEnumerable`1<String> referencePaths)
+  method public static System.Collections.Immutable.ImmutableArray`1<System.Reflection.Assembly> CaptureHostAssemblies()
   property public String CurrentAssemblyName { get; set; }
   property public System.Collections.Immutable.ImmutableArray`1<String> MissingTransitiveReferences { get; }
   property public System.Collections.Immutable.ImmutableArray`1<System.Reflection.Assembly> Assemblies { get; }
