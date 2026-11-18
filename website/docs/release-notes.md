@@ -16,6 +16,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Cover stored `Func[T]` factories passed to imported generic methods with dependent constraints. Runtime regression tests preserve delegate invocation counts and results for the symbolic applicability correction in #6058. (Fixes #6088)
+
 - Bind bare address-of arguments to managed `ref`, `out`, and `in` parameters in unsafe shared methods, including P/Invoke calls. Preserve storage-type checks and generic forwarding. (Fixes #6086)
 
 - Initialize repository version metadata before G# build preparation when NBGV targets are imported, including projects that disable generated version sources. Preserve cold restore-and-publish evaluations before those imports exist. Build Extensions without a bundled self-reference and reuse its graph output for SDK packing. Unchanged builds retain identical metadata and skip compilation. Keep stage-2 certification's exact SDK target inventory current. (Fixes #5116)
