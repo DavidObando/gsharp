@@ -153,6 +153,114 @@ class B {
             return "$result:$mapped:$calls:${Object.ReferenceEquals(callback, alias)}"
         }
 `, "42:5:2:True", false}
+            yield []object{"pointer-chain-with-interleaved-callback", "", `
+        var calls = 0
+        let first = func(n int32) int32 { return n + 1 }
+        let callback = func(n int32) int32 {
+            calls++
+            return first(n)
+        }
+        let second = func(n int32) int32 { return first(n) }
+        let alias = callback
+        unsafe {
+            let fp = &second
+            let result = fp(41)
+            let mapped = List[int32](){1, 2}.Select(callback).Sum()
+            return "$result:$mapped:$calls:${Object.ReferenceEquals(callback, alias)}"
+        }
+`, "42:5:2:True", false}
+            yield []object{"capture-free-backward-chain-keeps-direct-calls", "", `
+        let before = GC.GetAllocatedBytesForCurrentThread()
+        let first = func(n int32) int32 { return n + 1 }
+        let second = func(n int32) int32 { return first(n) }
+        let third = func(n int32) int32 { return second(n) }
+        let result = third(41)
+        let allocated = GC.GetAllocatedBytesForCurrentThread() - before
+        return "$result:$allocated"
+`, "42:0", true}
+            yield []object{"backward-overload-set", "", `
+        let f = func() int32 { return 1 }
+        let f = func(n int32) int32 { return n }
+        let g = func() int32 { return f() + f(2) }
+        let zero Func[int32] = f
+        let one Func[int32, int32] = f
+        return "${g()}:${zero()}:${one(2)}"
+`, "3:1:2", true}
+            yield []object{"nested-pointer-name-does-not-promote-capturing-local", "", `
+        var calls = 0
+        let first = func(n int32) int32 { return n + 1 }
+        let callback = func(n int32) int32 {
+            calls++
+            return first(n)
+        }
+        let second = func(n int32) int32 { return callback(n) }
+        let alias = callback
+        var pointerResult = 0
+        {
+            let callback = func(n int32) int32 { return n + 10 }
+            let after = func(n int32) int32 { return callback(n) }
+            unsafe {
+                let fp = &callback
+                pointerResult = fp(41)
+            }
+        }
+        return "$pointerResult:${second(1)}:${alias(2)}:$calls:${Object.ReferenceEquals(callback, alias)}"
+`, "51:2:3:2:True", false}
+            yield []object{"forward-group-with-capture-free-backward-dependency", "", `
+        var seed = 99
+        var calls = 99
+        let helper = func(seed int32) int32 {
+            var calls = seed
+            calls++
+            return calls
+        }
+        let first = func(n int32) int32 { return second(n) }
+        let second = func(n int32) int32 { return helper(n) }
+        let alias Func[int32, int32] = first
+        return "${List[int32](){41}.Select(first).Single()}:${alias(0)}:$seed:$calls"
+`, "42:1:99:99", true}
+            yield []object{"forward-group-with-capture-free-recursive-dependency", "", `
+        let helper = func(n int32) int32 {
+            if n == 0 { return 1 }
+            let next Func[int32, int32] = helper
+            let recurse = func(value int32) int32 { return helper(value) }
+            return next(n - 1) + recurse(0)
+        }
+        let first = func(n int32) int32 { return second(n) }
+        let second = func(n int32) int32 { return helper(n) }
+        let alias Func[int32, int32] = first
+        return "${alias(41)}"
+`, "42", true}
+            yield []object{"forward-group-with-self-addressed-dependency", "", `
+        let helper = func(n int32) int32 {
+            if n == 0 { return 1 }
+            unsafe {
+                let fp = &helper
+                return fp(n - 1) + 1
+            }
+        }
+        let first = func(n int32) int32 { return second(n) }
+        let second = func(n int32) int32 { return helper(n) }
+        let alias Func[int32, int32] = first
+        return "${alias(41)}"
+`, "42", false}
+            yield []object{"forward-group-with-capturing-recursive-dependency", "", `
+        var calls = 0
+        let helper = func(n int32) int32 {
+            let self = helper
+            if !Object.ReferenceEquals(self, helper) { return -1000 }
+            calls++
+            if n == 0 { return calls }
+            let recurse = func(value int32) int32 { return helper(value) }
+            return recurse(n - 1)
+        }
+        let first = func(n int32) int32 { return second(n) }
+        let second = func(n int32) int32 { return helper(n) }
+        let alias = helper
+        let a = first(1)
+        let b = alias(0)
+        return "$a:$b:$calls:${Object.ReferenceEquals(helper, alias)}"
+`, "2:3:3:True", true}
         }
     }
 }

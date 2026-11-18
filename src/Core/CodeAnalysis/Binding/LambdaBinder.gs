@@ -928,10 +928,26 @@ internal class LambdaBinder {
             return
         }
         let literals = List[BoundFunctionLiteralExpression](group)
-        if group.Count >= 2 {
-            for member in group {
-                CollectNestedFunctionLiterals(member.Body, literals)
+        for member in group {
+            CollectNestedFunctionLiterals(member.Body, literals)
+        }
+        var refreshCaptures = false
+        for literal in literals {
+            if !localFunctionCapturedVariables.TryGetValue(literal.Function, out var cached) ||
+                !HashSet[VariableSymbol](cached).SetEquals(literal.CapturedVariables) {
+                refreshCaptures = true
+                break
             }
+        }
+        // A body rewrite can remove a delegate-self capture. Rebuild all capture summaries from the rewritten literals.
+        if refreshCaptures {
+            for literal in literals {
+                localFunctionCapturedVariables[literal.Function] = literal.CapturedVariables
+                localFunctionDirectCapturedVariables.Remove(literal.Function)
+                localFunctionReferencedFunctions.Remove(literal.Function)
+            }
+        }
+        if group.Count >= 2 || refreshCaptures {
             let maxPasses = Math.Max(8, literals.Count * literals.Count)
             for var pass = 0; pass < maxPasses; pass++ {
                 var changed = false
