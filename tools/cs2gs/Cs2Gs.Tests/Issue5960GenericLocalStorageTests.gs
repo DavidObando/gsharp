@@ -38,6 +38,8 @@ open class Issue5960GenericLocalStorageTests {
     @InlineData("assignment-result")
     @InlineData("inferred-call-result")
     @InlineData("out-parameter")
+    @InlineData("projected-containers")
+    @InlineData("async-projected")
     async func ExplicitGenericStorage_PreservesNativeRuntimeBytes(shape string) {
         let effectful = shape == "effectful"
         let fixedConsumers = shape == "fixed-consumers"
@@ -74,6 +76,10 @@ open class Issue5960GenericLocalStorageTests {
                 InferredCallResultSource
             } else if shape == "out-parameter" {
                 OutParameterSource
+            } else if shape == "projected-containers" {
+                ProjectedContainersSource
+            } else if shape == "async-projected" {
+                AsyncProjectedSource
             } else if shape == "fixed-loop" {
                 ConstrainedSource
                     .Replace(
@@ -144,6 +150,10 @@ open class Issue5960GenericLocalStorageTests {
                     string.Concat(Enumerable.Repeat("True:0" + Environment.NewLine, 2)) + "done" + Environment.NewLine,
                     expected
                 )
+            } else if shape == "projected-containers" {
+                Assert.Equal("1:True:1:True:1:True:1:True" + Environment.NewLine, expected)
+            } else if shape == "async-projected" {
+                Assert.Equal("True:1:True:True:1:True" + Environment.NewLine, expected)
             } else {
                 Assert.Contains("False:True:", expected)
                 Assert.Contains("False:False:", expected)
@@ -217,6 +227,10 @@ open class Issue5960GenericLocalStorageTests {
             } else if shape == "out-parameter" {
                 Assert.DoesNotContain("value T?", printed)
                 Assert.DoesNotContain("!!", printed)
+            } else if shape == "projected-containers" || shape == "async-projected" {
+                Assert.Contains("let kept T? = default(T)", printed)
+                Assert.DoesNotContain("value T?", printed)
+                Assert.DoesNotContain("!!", printed)
             } else if loopCase && shape != "fixed-loop" {
                 Assert.Contains("var seed T?", printed)
                 Assert.DoesNotContain("seed!!", printed)
@@ -283,6 +297,50 @@ open class Issue5960GenericLocalStorageTests {
                 Assert.True(
                     work <= previous * 3,
                     "Doubling explicit generic locals must retain linear scan work: $previous -> $work."
+                )
+            }
+            previous = work
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ExplicitGenericAliasChains_KeepLinearContractWork(branching bool) {
+        var previous int64 = 0
+        for count in[]int32{64, 128, 256} {
+            let declarations = StringBuilder()
+            declarations.AppendLine("var x0 = replacement;")
+            let observations = StringBuilder()
+            observations.Append("Id<T>(x0)")
+            for var i = 1; i < count; i++ {
+                let previousName = "x${i - 1}"
+                if branching {
+                    declarations.AppendLine("var x$i = flag ? $previousName : $previousName;")
+                } else {
+                    declarations.AppendLine("var x$i = $previousName;")
+                }
+                observations.Append(" + \":\" + Id<T>(x$i)")
+            }
+            let source = "#nullable enable\npublic static class P {\n" +
+                "static string Id<U>(U value) => (value is null).ToString();\n" +
+                "public static string Run<T>(T replacement, bool flag) where T : class {\n" +
+                declarations.ToString() + "return " + observations.ToString() + ";\n} }"
+            let project = CSharpProjectLoader.LoadInMemory([](string, string){("AliasChain.cs", source)})
+            Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+            let document = Assert.Single(project.Documents)
+            let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+            let translator = CSharpToGSharpTranslator()
+            let printed = GSharpPrinter.Print(translator.TranslateDocument(document, context))
+            TranslationTestValidation.AssertBinds(printed)
+            Assert.DoesNotContain("!!", printed)
+            let work = translator.LastLocalStorageScanWork
+            this.output.WriteLine("$count aliases, branching=$branching: $work contract scan steps")
+            Assert.True(work > 0, "The resource oracle must count bare-contract alias checks.")
+            if previous > 0 {
+                Assert.True(
+                    work <= previous * 3,
+                    "Doubling alias chain length must retain linear contract work: $previous -> $work."
                 )
             }
             previous = work
@@ -446,6 +504,96 @@ public static class P
         MakeRef(ref refNum);
         System.Console.WriteLine((refText is null) + ":" + refNum);
         System.Console.WriteLine(TouchByVal("ok"));
+    }
+}`
+
+        private const ProjectedContainersSource string = `
+#nullable enable
+public static class P
+{
+    static System.Collections.Generic.List<U> Wrap<U>(U x) => new System.Collections.Generic.List<U> { x };
+    static System.Collections.Generic.List<T> MakeInferredLocalList<T>() where T : class
+    {
+        T value = default(T);
+        var result = Wrap(value);
+        return result;
+    }
+    static System.Collections.Generic.List<System.Collections.Generic.List<T>> MakeNestedList<T>() where T : class
+    {
+        T value = default(T);
+        return Wrap(Wrap(value));
+    }
+    static System.Collections.Generic.List<System.Collections.Generic.List<T>> MakeChainedNestedList<T>() where T : class
+    {
+        T value = default(T);
+        var inner = Wrap(value);
+        return Wrap(inner);
+    }
+    static System.Collections.Generic.List<T?> MakeNullableList<T>() where T : class
+    {
+        T kept = default(T);
+        var result = Wrap(kept);
+        return result;
+    }
+    public static void Main()
+    {
+        var single = MakeInferredLocalList<string>();
+        var nested = MakeNestedList<string>();
+        var chained = MakeChainedNestedList<string>();
+        var nullable = MakeNullableList<string>();
+        System.Console.WriteLine(
+            single.Count + ":" + (single[0] is null) + ":" +
+            nested.Count + ":" + (nested[0][0] is null) + ":" +
+            chained.Count + ":" + (chained[0][0] is null) + ":" +
+            nullable.Count + ":" + (nullable[0] is null));
+    }
+}`
+
+        private const AsyncProjectedSource string = `
+#nullable enable
+public static class P
+{
+    static async System.Threading.Tasks.Task<U> Echo<U>(U x)
+    {
+        await System.Threading.Tasks.Task.Yield();
+        return x;
+    }
+    static async System.Threading.Tasks.Task<System.Collections.Generic.List<U>> WrapAsync<U>(U x)
+    {
+        await System.Threading.Tasks.Task.Yield();
+        return new System.Collections.Generic.List<U> { x };
+    }
+    static System.Threading.Tasks.Task<T> MakeUnawaitedTask<T>() where T : class
+    {
+        T value = default(T);
+        return Echo(value);
+    }
+    static async System.Threading.Tasks.Task<System.Collections.Generic.List<T>> MakeAwaitedList<T>() where T : class
+    {
+        T value = default(T);
+        return await WrapAsync(value);
+    }
+    static System.Threading.Tasks.Task<T?> MakeUnawaitedNullableTask<T>() where T : class
+    {
+        T kept = default(T);
+        return Echo(kept);
+    }
+    static async System.Threading.Tasks.Task<System.Collections.Generic.List<T?>> MakeAwaitedNullableList<T>() where T : class
+    {
+        T kept = default(T);
+        return await WrapAsync(kept);
+    }
+    public static void Main()
+    {
+        var t1 = MakeUnawaitedTask<string>().GetAwaiter().GetResult();
+        var t2 = MakeAwaitedList<string>().GetAwaiter().GetResult();
+        var t3 = MakeUnawaitedNullableTask<string>().GetAwaiter().GetResult();
+        var t4 = MakeAwaitedNullableList<string>().GetAwaiter().GetResult();
+        System.Console.WriteLine(
+            (t1 is null) + ":" +
+            t2.Count + ":" + (t2[0] is null) + ":" +
+            (t3 is null) + ":" +
+            t4.Count + ":" + (t4[0] is null));
     }
 }`
 

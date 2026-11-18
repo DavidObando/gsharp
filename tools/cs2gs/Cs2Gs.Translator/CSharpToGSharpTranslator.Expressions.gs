@@ -10233,6 +10233,56 @@ partial class CSharpToGSharpTranslator {
             value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
             targetType ITypeParameterSymbol
         ) bool {
+            if value == nil {
+                return false
+            }
+            let inProgressLocals = HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
+            return this.ExpressionKeepsBareTypeParameterContractCached(value, targetType, inProgressLocals, out _)
+        }
+
+        private func ExpressionKeepsBareTypeParameterContractCached(
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            targetType ITypeParameterSymbol,
+            inProgressLocals HashSet[ILocalSymbol],
+            out hitCycle bool
+        ) bool {
+            hitCycle = false
+            if value == nil {
+                return false
+            }
+            let canMemoize = this.genericLocalStorageEvaluation == nil
+            if canMemoize &&
+                this
+                .state
+                .BareTypeParameterContractExpressions
+                .TryGetValue(value, out var cachedByTarget) &&
+                cachedByTarget.TryGetValue(targetType, out var cached) {
+                return cached
+            }
+            this.localStorageScanWork++
+            let result = this.ExpressionKeepsBareTypeParameterContractCore(
+                value,
+                targetType,
+                inProgressLocals,
+                out hitCycle
+            )
+            if canMemoize && !hitCycle {
+                if !this.state.BareTypeParameterContractExpressions.TryGetValue(value, out var byTarget) {
+                    byTarget = Dictionary[ITypeParameterSymbol, bool](SymbolEqualityComparer.Default)
+                    this.state.BareTypeParameterContractExpressions.Add(value, byTarget)
+                }
+                byTarget[targetType] = result
+            }
+            return result
+        }
+
+        private func ExpressionKeepsBareTypeParameterContractCore(
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            targetType ITypeParameterSymbol,
+            inProgressLocals HashSet[ILocalSymbol],
+            out hitCycle bool
+        ) bool {
+            hitCycle = false
             var unwrapped = value
             while (
                 unwrapped is Microsoft
@@ -10264,10 +10314,22 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             if this.ComposedValueOperands(unwrapped) is {} operands {
-                return operands.Count > 0 && operands.All(
-                    (operand Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax) ->
-                    this.ExpressionKeepsBareTypeParameterContract(operand, targetType)
-                )
+                if operands.Count == 0 {
+                    return false
+                }
+                for operand in operands {
+                    if !this.ExpressionKeepsBareTypeParameterContractCached(
+                        operand,
+                        targetType,
+                        inProgressLocals,
+                        out var operandCycle
+                    ) {
+                        hitCycle |= operandCycle
+                        return false
+                    }
+                    hitCycle |= operandCycle
+                }
+                return true
             }
             if unwrapped is Microsoft
                 .CodeAnalysis
@@ -10289,7 +10351,12 @@ partial class CSharpToGSharpTranslator {
                 ) {
                     return false
                 }
-                return this.ExpressionKeepsBareTypeParameterContract(assignment.Right, targetType)
+                return this.ExpressionKeepsBareTypeParameterContractCached(
+                    assignment.Right,
+                    targetType,
+                    inProgressLocals,
+                    out hitCycle
+                )
             }
             if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.DefaultExpressionSyntax typedDefault {
                 return this
@@ -10315,39 +10382,87 @@ partial class CSharpToGSharpTranslator {
             if this.YieldsValueNilableBeyondItsCSharpType(unwrapped) {
                 return false
             }
+            let symbol = this.context.GetSymbolInfo(unwrapped).Symbol
+            if symbol is ILocalSymbol local {
+                let canMemoize = this.genericLocalStorageEvaluation == nil
+                if canMemoize &&
+                    this
+                    .state
+                    .BareTypeParameterContractLocals
+                    .TryGetValue(local, out var cachedByTarget) &&
+                    cachedByTarget.TryGetValue(targetType, out var cachedLocal) {
+                    return cachedLocal
+                }
+                this.localStorageScanWork++
+                if !inProgressLocals.Add(local) {
+                    hitCycle = true
+                    return false
+                }
+                var localResult = false
+                try {
+                    if this.TryGetEvaluatingGenericLocalStorage(local, out var nullableStorage) {
+                        localResult = !nullableStorage &&
+                            IsBareTypeParameter(local.Type) &&
+                            SymbolEqualityComparer
+                            .Default
+                            .Equals(local.Type, targetType)
+                    } else if this.state.FixedGenericLocalStorage.Contains(local) {
+                        localResult = SymbolEqualityComparer.Default.Equals(
+                            local.Type.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated),
+                            targetType
+                        )
+                    } else if this.ShouldPromoteToNullableReference(local) || this.IsTranslatorWidenedDeclaration(
+                        local
+                    ) ||
+                        this.LocalHoldsPromotedValue(local) {
+                        localResult = false
+                    } else if IsImplicitlyTypedLocal(local) &&
+                        local
+                        .DeclaringSyntaxReferences
+                        .FirstOrDefault()
+                        ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} initializer}} {
+                        if (
+                            this.state.EmittedLocalStorageAcceptsNil.TryGetValue(local, out var nilLocal) && nilLocal
+                        ) ||
+                            this.InferredLocalDeclarationIsNullable(local) {
+                            localResult = false
+                        } else {
+                            localResult = this.ExpressionKeepsBareTypeParameterContractCached(
+                                initializer,
+                                targetType,
+                                inProgressLocals,
+                                out hitCycle
+                            ) &&
+                                SymbolEqualityComparer
+                                .Default
+                                .Equals(
+                                local.Type.WithNullableAnnotation(
+                                    Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated
+                                ),
+                                targetType
+                            )
+                        }
+                    } else {
+                        localResult = IsBareTypeParameter(local.Type) && SymbolEqualityComparer.Default.Equals(
+                            local.Type,
+                            targetType
+                        )
+                    }
+                } finally {
+                    inProgressLocals.Remove(local)
+                }
+                if canMemoize && !hitCycle {
+                    if !this.state.BareTypeParameterContractLocals.TryGetValue(local, out var byTarget) {
+                        byTarget = Dictionary[ITypeParameterSymbol, bool](SymbolEqualityComparer.Default)
+                        this.state.BareTypeParameterContractLocals.Add(local, byTarget)
+                    }
+                    byTarget[targetType] = localResult
+                }
+                return localResult
+            }
             let positions = this.GetExpressionNullablePositions(unwrapped)
             if positions != nil && (positions.Nullable.Contains("") || positions.Platform.Contains("")) {
                 return false
-            }
-            let symbol = this.context.GetSymbolInfo(unwrapped).Symbol
-            if symbol is ILocalSymbol local {
-                if this.TryGetEvaluatingGenericLocalStorage(local, out var nullableStorage) {
-                    return !nullableStorage && IsBareTypeParameter(local.Type) && SymbolEqualityComparer.Default.Equals(
-                        local.Type,
-                        targetType
-                    )
-                }
-                if this.state.FixedGenericLocalStorage.Contains(local) {
-                    return SymbolEqualityComparer.Default.Equals(
-                        local.Type.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated),
-                        targetType
-                    )
-                }
-                if this.ShouldPromoteToNullableReference(local) || this.IsTranslatorWidenedDeclaration(local) ||
-                    this.LocalHoldsPromotedValue(local) {
-                    return false
-                }
-                if IsImplicitlyTypedLocal(local) {
-                    if (this.state.EmittedLocalStorageAcceptsNil.TryGetValue(local, out var nilLocal) && nilLocal) ||
-                        this.InferredLocalDeclarationIsNullable(local) {
-                        return false
-                    }
-                    let initializer = this.GetInferredLocalInitializer(local, out _, out _)
-                    if initializer == nil || !this.ExpressionKeepsBareTypeParameterContract(initializer, targetType) {
-                        return false
-                    }
-                }
-                return IsBareTypeParameter(local.Type) && SymbolEqualityComparer.Default.Equals(local.Type, targetType)
             }
             if symbol is IParameterSymbol parameter {
                 if this.ShouldPromoteToNullableReference(parameter) || this.IsTranslatorWidenedDeclaration(parameter) {
@@ -10404,10 +10519,13 @@ partial class CSharpToGSharpTranslator {
                         ) is {} argTp &&
                             SymbolEqualityComparer
                             .Default
-                            .Equals(argTp, returnParam) && !this.ExpressionKeepsBareTypeParameterContract(
+                            .Equals(argTp, returnParam) && !this.ExpressionKeepsBareTypeParameterContractCached(
                             arg.Expression,
-                            targetType
+                            targetType,
+                            inProgressLocals,
+                            out var argCycle
                         ) {
+                            hitCycle |= argCycle
                             return false
                         }
                     }

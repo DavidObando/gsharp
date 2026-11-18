@@ -18,7 +18,7 @@ import System.Xml.Linq
 import Gsharp.NET.Sdk.Tools
 import Xunit
 
-/// Exercises reference-assembly packaging without compiling against a platform workload.
+/// Exercises reference-assembly packaging with in-box Windows platform identities and no platform workload.
 class Issue5271ReferenceAssemblyPackTests : IDisposable {
     private let directory string = Path.Combine(
         RepoRoot.Path,
@@ -99,9 +99,9 @@ class Issue5271ReferenceAssemblyPackTests : IDisposable {
         Assert.NotEmpty(references)
         Assert.Equal(
             []string{
-                "lib/net10.0-android35.0/Pack.dll",
-                "lib/net10.0-android36.0/Pack.dll",
                 "lib/net10.0-windows7.0/Pack.dll",
+                "lib/net10.0-windows8.0/Pack.dll",
+                "lib/net10.0-windows8.1/Pack.dll",
                 "lib/net10.0/Pack.dll"
             },
             libraries
@@ -122,10 +122,7 @@ class Issue5271ReferenceAssemblyPackTests : IDisposable {
             .OrderBy((name string) -> name, StringComparer.Ordinal)
             .ToArray()
         Assert.NotEmpty(frameworks)
-        Assert.Equal(
-            []string{"net10.0", "net10.0-android35.0", "net10.0-android36.0", "net10.0-windows7.0"},
-            frameworks
-        )
+        Assert.Equal([]string{"net10.0", "net10.0-windows7.0", "net10.0-windows8.0", "net10.0-windows8.1"}, frameworks)
     }
 
     @Theory
@@ -391,7 +388,7 @@ class Issue5271ReferenceAssemblyPackTests : IDisposable {
             }
         }
 
-        // Design-time evaluation supplies packaging metadata without requiring an Android workload.
+        // In-box Windows versions keep default, overridden, and explicit platform identities independent of installed workloads.
         // Reuse a compiled assembly; production targets and NuGet still create and validate every package path.
         private const Project string = `<Project>
   <PropertyGroup>
@@ -401,9 +398,10 @@ class Issue5271ReferenceAssemblyPackTests : IDisposable {
   </PropertyGroup>
   <Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" />
   <PropertyGroup>
-    <TargetFrameworks>net10.0;net10.0-android;net10.0-android35.0;net10.0-windows</TargetFrameworks>
-    <TargetPlatformVersion Condition="'$(TargetFramework)' == 'net10.0-android'">36.0</TargetPlatformVersion>
-    <SupportedOSPlatformVersion Condition="$(TargetFramework.Contains('-android'))">26</SupportedOSPlatformVersion>
+    <TargetFrameworks>net10.0;net10.0-windows;net10.0-windows7.0;net10.0-windows8.1</TargetFrameworks>
+    <!-- Set both properties so SDK inference preserves the selected platform version. -->
+    <TargetPlatformIdentifier Condition="'$(TargetFramework)' == 'net10.0-windows7.0'">Windows</TargetPlatformIdentifier>
+    <TargetPlatformVersion Condition="'$(TargetFramework)' == 'net10.0-windows7.0'">8.0</TargetPlatformVersion>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <ProduceReferenceAssembly>true</ProduceReferenceAssembly>
     <DebugType>none</DebugType>
