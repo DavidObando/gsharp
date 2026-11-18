@@ -5417,11 +5417,11 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             for writeNode in EagerExecutionNodes(operation.Syntax)
-                .Where((node SyntaxNode) -> ReachingWritePosition(node) <= beforePosition)
+                .Where((node SyntaxNode) -> EvaluationEffectEnd(node) <= beforePosition)
                 .Where(
                 (node SyntaxNode) -> node is AssignmentExpressionSyntax || this.ReachingWriteTargetsLocal(node, local)
             )
-                .OrderBy(ReachingWritePosition)
+                .OrderBy(EvaluationEffectEnd)
                 .ThenBy((node SyntaxNode) -> node.SpanStart) {
                 if local.RefKind != RefKind.None &&
                     (
@@ -8686,12 +8686,18 @@ partial class CSharpToGSharpTranslator {
                 )
             )
 
-            private func ReachingWritePosition(node SyntaxNode) int32 -> if node is ArgumentSyntax{
-                RefOrOutKeyword: {RawKind: not int32(SyntaxKind.None)}
-            } argument {
-                argument.Parent?.Parent?.Span.End ?? argument.Span.End
-            } else {
-                node.Span.End
+            // Constructor writes precede initializers. Reference arguments write only when their call completes.
+            private func EvaluationEffectEnd(node SyntaxNode) int32 {
+                if node is ArgumentSyntax{RefOrOutKeyword: {RawKind: not int32(SyntaxKind.None)}} argument &&
+                    argument
+                    .Parent
+                    ?.Parent is {} call {
+                    return EvaluationEffectEnd(call)
+                }
+                if node is BaseObjectCreationExpressionSyntax creation && creation.Initializer is {} initializer {
+                    return creation.ArgumentList?.Span.End ?? initializer.SpanStart
+                }
+                return node.Span.End
             }
 
             private func CreateUnknownTuple(type ITypeSymbol?) ExpressionSyntax {

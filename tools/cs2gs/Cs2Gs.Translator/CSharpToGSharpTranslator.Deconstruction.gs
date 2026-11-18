@@ -4041,7 +4041,7 @@ partial class CSharpToGSharpTranslator {
                     let assignTarget GExpression? = if captured.TryGetValue(targetExpr, out var safeTarget) {
                         safeTarget
                     } else {
-                        this.TranslateExpression(targetExpr)
+                        this.TranslateAssignmentTarget(targetExpr)
                     }
                     assignedValue = this.ConvertDeconstructionAssignmentValue(
                         targetExpr,
@@ -4916,11 +4916,26 @@ partial class CSharpToGSharpTranslator {
                 .Contains(unsupportedSuspending) {
                 this.context.ReportUnsupported(
                     localFunction,
-                    "recursive async or iterator local function '${localFunction.Identifier.Text}' captures storage written in its declaring scope; G# forbids the ref parameter needed to preserve that shared storage on a suspending helper."
+                    "recursive async or iterator local function '${localFunction.Identifier.Text}' captures written or address-exposed storage in its declaring scope; G# forbids the by-reference parameter needed to preserve that shared storage on a suspending helper."
                 )
                 return []GStatement{
                     RawStatement(
                         "// unsupported: suspending recursive local function '${localFunction.Identifier.Text}' requires a ref capture"
+                    )
+                }
+            }
+            if this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol unsupportedNestedClosure &&
+                this
+                .state
+                .UnsupportedNestedClosureRefCaptureLocalFunctions
+                .Contains(unsupportedNestedClosure) {
+                this.context.ReportUnsupported(
+                    localFunction,
+                    "lifted recursive local function '${localFunction.Identifier.Text}' captures written or address-exposed storage inside a nested closure; G# forbids capturing the by-reference parameter needed to preserve that shared storage."
+                )
+                return []GStatement{
+                    RawStatement(
+                        "// unsupported: lifted recursive local function '${localFunction.Identifier.Text}' captures a ref parameter in a nested closure"
                     )
                 }
             }
@@ -5015,7 +5030,20 @@ partial class CSharpToGSharpTranslator {
                     if captureType == nil {
                         continue
                     }
-                    if captureType.IsReferenceType && !CaptureHasExplicitNullableType(capture.Symbol) {
+                    if captureType.IsReferenceType &&
+                        capture.Symbol is ILocalSymbol local &&
+                        this
+                        .state
+                        .EmittedLocalStorageAcceptsNil
+                        .TryGetValue(local, out var acceptsNil) {
+                        captureType = captureType.WithNullableAnnotation(
+                            if acceptsNil {
+                                Microsoft.CodeAnalysis.NullableAnnotation.Annotated
+                            } else {
+                                Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated
+                            }
+                        )
+                    } else if captureType.IsReferenceType && !CaptureHasExplicitNullableType(capture.Symbol) {
                         captureType = captureType.WithNullableAnnotation(
                             Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated
                         )
@@ -5024,10 +5052,10 @@ partial class CSharpToGSharpTranslator {
                         Parameter(
                             this.EmittedName(capture.Symbol, capture.Symbol.Name),
                             this.typeMapper.Map(captureType, this.context, capture.Symbol.Locations.FirstOrDefault()),
-                            refKind: if capture.IsByRef {
-                                "ref"
-                            } else {
-                                default(string?)
+                            refKind: switch capture.RefKind {
+                                case RefKind.Ref: "ref"
+                                case RefKind.In: "in"
+                                default: default(string?)
                             }
                         )
                     )
@@ -5038,10 +5066,28 @@ partial class CSharpToGSharpTranslator {
                     localFunction.ReturnType.GetLocation()
                 )
                 let liftedTypeParameters = this.MapMethodTypeParameters(recursiveLocal)
-                let liftedBody = this.TranslateBody(
-                    localFunction,
-                    "recursive local function '${localFunction.Identifier.Text}'"
-                )
+                let captureBindings = Dictionary[ISymbol, GExpression](SymbolEqualityComparer.Default)
+                for capture in recursiveLift.Captures {
+                    if this.state.PatternBindings.TryGetValue(capture.Symbol, out var replacement) {
+                        captureBindings.Add(capture.Symbol, replacement)
+                        this
+                            .state
+                            .PatternBindings[capture.Symbol] = IdentifierExpression(
+                            this.EmittedName(capture.Symbol, capture.Symbol.Name)
+                        )
+                    }
+                }
+                var liftedBody BlockStatement
+                try {
+                    liftedBody = this.TranslateBody(
+                        localFunction,
+                        "recursive local function '${localFunction.Identifier.Text}'"
+                    )
+                } finally {
+                    for binding in captureBindings {
+                        this.state.PatternBindings[binding.Key] = binding.Value
+                    }
+                }
                 let helper = MethodDeclaration(
                     recursiveLift.Name,
                     liftedParameters,
@@ -5476,7 +5522,7 @@ partial class CSharpToGSharpTranslator {
                             }: declaration.Type
                             default: default(TypeSyntax?)
                         }
-                    )!!
+                    )
                     if type is NullableTypeSyntax {
                         return true
                     }
