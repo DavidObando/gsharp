@@ -2528,6 +2528,10 @@ partial class CSharpToGSharpTranslator {
                 this.state.UnsupportedSuspendingRefCaptureLocalFunctions,
                 SymbolEqualityComparer.Default
             )
+            let savedUnsupportedNestedClosure = HashSet[IMethodSymbol](
+                this.state.UnsupportedNestedClosureRefCaptureLocalFunctions,
+                SymbolEqualityComparer.Default
+            )
             this.isPreallocatingLiftedHelpers = true
             this.state.CurrentEmittedAggregate = aggregate.OriginalDefinition
             this.state.PendingInstanceSynthHelpers = List[MethodDeclaration]()
@@ -2537,6 +2541,7 @@ partial class CSharpToGSharpTranslator {
             this.state.RecursiveLocalFunctionGroups.Clear()
             this.state.UnsupportedRecursiveEnclosingTypeParameterLocalFunctions.Clear()
             this.state.UnsupportedSuspendingRefCaptureLocalFunctions.Clear()
+            this.state.UnsupportedNestedClosureRefCaptureLocalFunctions.Clear()
             try {
                 for part in parts {
                     using let modelScope = this.context.UseSemanticModelForSymbol(part.SyntaxTree, aggregate)
@@ -2570,6 +2575,8 @@ partial class CSharpToGSharpTranslator {
                 this.state.UnsupportedRecursiveEnclosingTypeParameterLocalFunctions.UnionWith(savedUnsupportedTypeParam)
                 this.state.UnsupportedSuspendingRefCaptureLocalFunctions.Clear()
                 this.state.UnsupportedSuspendingRefCaptureLocalFunctions.UnionWith(savedUnsupportedSuspending)
+                this.state.UnsupportedNestedClosureRefCaptureLocalFunctions.Clear()
+                this.state.UnsupportedNestedClosureRefCaptureLocalFunctions.UnionWith(savedUnsupportedNestedClosure)
             }
         }
 
@@ -4028,35 +4035,83 @@ partial class CSharpToGSharpTranslator {
                 return
             }
             let directCaptures = Dictionary[IMethodSymbol, HashSet[ISymbol]](SymbolEqualityComparer.Default)
+            let directNestedClosureCaptures = Dictionary[IMethodSymbol, HashSet[ISymbol]](
+                SymbolEqualityComparer.Default
+            )
+            let nestedClosureCalls = Dictionary[IMethodSymbol, HashSet[IMethodSymbol]](SymbolEqualityComparer.Default)
             for pair in capturingLocals {
                 let captures = HashSet[ISymbol](SymbolEqualityComparer.Default)
-                for identifier in pair.Syntax.DescendantNodes().OfType[IdentifierNameSyntax]() {
-                    let symbol ISymbol? = this.context.GetSymbolInfo(identifier).Symbol
-                    if !(symbol is ILocalSymbol) && !(symbol is IParameterSymbol) {
-                        continue
-                    }
-                    var lexicalOwner = false
-                    for var owner ISymbol? = pair
-                        .Symbol
-                        .ContainingSymbol;
-                        owner is IMethodSymbol;
-                        owner = owner!!.ContainingSymbol {
-                        if SymbolEqualityComparer.Default.Equals(symbol!!.ContainingSymbol, owner) {
-                            lexicalOwner = true
-                            break
+                let nestedCaptures = HashSet[ISymbol](SymbolEqualityComparer.Default)
+                let nestedCalls = HashSet[IMethodSymbol](SymbolEqualityComparer.Default)
+                using let modelScope = this.context.UseSemanticModelForSymbol(pair.Syntax.SyntaxTree, pair.Symbol)
+                if modelScope == nil {
+                    directCaptures[pair.Symbol] = captures
+                    directNestedClosureCaptures[pair.Symbol] = nestedCaptures
+                    nestedClosureCalls[pair.Symbol] = nestedCalls
+                    continue
+                }
+                let IsInsideNestedClosure = func (node Microsoft.CodeAnalysis.SyntaxNode) bool {
+                    for var ancestor Microsoft
+                        .CodeAnalysis
+                        .SyntaxNode? = node.Parent;
+                        ancestor != nil &&
+                        !object.ReferenceEquals(ancestor, pair.Syntax); ancestor = ancestor!!.Parent {
+                        if this.IsClosureBoundary(ancestor) {
+                            return true
                         }
                     }
-                    if !lexicalOwner {
-                        continue
-                    }
-                    let declaredInside = symbol!!.DeclaringSyntaxReferences.Any(
-                        (reference SyntaxReference) -> pair.Syntax.Span.Contains(reference.Span)
+                    return false
+                }
+                // Skip nameof operands because they emit string literals without runtime captures.
+                for node in pair.Syntax.DescendantNodes(
+                    (child Microsoft.CodeAnalysis.SyntaxNode) -> !(
+                        child is InvocationExpressionSyntax &&
+                            this
+                            .context
+                            .SemanticModel
+                            .GetOperation(child) is INameOfOperation
                     )
-                    if !declaredInside {
-                        captures.Add(symbol!!)
+                ) {
+                    if this.context.GetSymbolInfo(node).Symbol is IMethodSymbol callee && edges.TryGetValue(
+                        pair.Symbol,
+                        out var dependencies
+                    ) &&
+                        dependencies.Contains(callee.OriginalDefinition) && IsInsideNestedClosure(node) {
+                        nestedCalls.Add(callee.OriginalDefinition)
+                    }
+                    if node is IdentifierNameSyntax identifier {
+                        let symbol ISymbol? = this.context.GetSymbolInfo(identifier).Symbol
+                        if !(symbol is ILocalSymbol) && !(symbol is IParameterSymbol) {
+                            continue
+                        }
+                        var lexicalOwner = false
+                        for var owner ISymbol? = pair
+                            .Symbol
+                            .ContainingSymbol;
+                            owner is IMethodSymbol;
+                            owner = owner!!.ContainingSymbol {
+                            if SymbolEqualityComparer.Default.Equals(symbol!!.ContainingSymbol, owner) {
+                                lexicalOwner = true
+                                break
+                            }
+                        }
+                        if !lexicalOwner {
+                            continue
+                        }
+                        let declaredInside = symbol!!.DeclaringSyntaxReferences.Any(
+                            (reference SyntaxReference) -> pair.Syntax.Span.Contains(reference.Span)
+                        )
+                        if !declaredInside {
+                            captures.Add(symbol!!)
+                            if IsInsideNestedClosure(identifier) {
+                                nestedCaptures.Add(symbol!!)
+                            }
+                        }
                     }
                 }
                 directCaptures[pair.Symbol] = captures
+                directNestedClosureCaptures[pair.Symbol] = nestedCaptures
+                nestedClosureCalls[pair.Symbol] = nestedCalls
             }
             var changed bool
             do {
@@ -4090,6 +4145,31 @@ partial class CSharpToGSharpTranslator {
                     )
                 }
             }
+            // Issue #6053: G# forbids recapturing a lifted helper's by-reference parameter inside a nested closure.
+            for pair in capturingLocals {
+                if this.state.UnsupportedSuspendingRefCaptureLocalFunctions.Contains(pair.Symbol) {
+                    continue
+                }
+                let capturesByRefInNestedClosure = directNestedClosureCaptures[pair.Symbol].Any(
+                    (symbol ISymbol) -> this.GetCaptureRefKind(symbol) != RefKind.None
+                ) ||
+                    nestedClosureCalls[pair.Symbol]
+                    .Any(
+                    (callee IMethodSymbol) -> directCaptures.TryGetValue(callee, out var calleeCaptures) &&
+                        calleeCaptures.Any((symbol ISymbol) -> this.GetCaptureRefKind(symbol) != RefKind.None)
+                )
+                if capturesByRefInNestedClosure {
+                    this.state.UnsupportedNestedClosureRefCaptureLocalFunctions.Add(pair.Symbol)
+                    this
+                        .state
+                        .UnsupportedNestedClosureRefCaptureLocalFunctions
+                        .UnionWith(
+                        GetRecursiveComponent(pair.Symbol).Select(
+                            (candidate(Syntax LocalFunctionStatementSyntax, Symbol IMethodSymbol)) -> candidate.Symbol
+                        )
+                    )
+                }
+            }
             for pair in capturingLocals {
                 if this
                     .state
@@ -4098,6 +4178,10 @@ partial class CSharpToGSharpTranslator {
                     this
                     .state
                     .UnsupportedSuspendingRefCaptureLocalFunctions
+                    .Contains(pair.Symbol) ||
+                    this
+                    .state
+                    .UnsupportedNestedClosureRefCaptureLocalFunctions
                     .Contains(pair.Symbol) {
                     continue
                 }

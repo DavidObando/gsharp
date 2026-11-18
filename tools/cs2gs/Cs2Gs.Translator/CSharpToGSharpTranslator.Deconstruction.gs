@@ -4924,6 +4924,21 @@ partial class CSharpToGSharpTranslator {
                     )
                 }
             }
+            if this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol unsupportedNestedClosure &&
+                this
+                .state
+                .UnsupportedNestedClosureRefCaptureLocalFunctions
+                .Contains(unsupportedNestedClosure) {
+                this.context.ReportUnsupported(
+                    localFunction,
+                    "lifted recursive local function '${localFunction.Identifier.Text}' captures written or address-exposed storage inside a nested closure; G# forbids capturing the by-reference parameter needed to preserve that shared storage."
+                )
+                return []GStatement{
+                    RawStatement(
+                        "// unsupported: lifted recursive local function '${localFunction.Identifier.Text}' captures a ref parameter in a nested closure"
+                    )
+                }
+            }
             if this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol unsupportedGeneric &&
                 this
                 .state

@@ -700,7 +700,190 @@ class P {
 }`.Replace("PATTERN", pattern), "True|1|1")
     }
 
+    @Theory
+    @InlineData("Remember(in x);", "Func<int> read = () => x; return n == 0 ? read() : Second<int>(n - 1);", "1")
+    @InlineData("x = 2;", "Func<int> read = () => x; return n == 0 ? read() : Second<int>(n - 1);", "2")
+    @InlineData(
+        "Remember(in x);",
+        "Func<int> read = delegate { return x; }; return n == 0 ? read() : Second<int>(n - 1);",
+        "1"
+    )
+    @InlineData("x = 2;", "int Read() => x; return n == 0 ? Read() : Second<int>(n - 1);", "2")
+    func LiftedByReferenceCaptures_WithNestedClosure_AreDiagnosedAsGap(exposure string, body string, expected string) {
+        let source = `using System;
+class P {
+    static void Remember(in int value) { }
+    public static int Run() {
+        int x = 1;
+        EXPOSURE
+        return First(2);
+        int First(int n) {
+            BODY
+        }
+        int Second<T>(int n) => n == 0 ? x : First(n - 1);
+    }
+    static void Main() => Console.Write(Run());
+}`.Replace("EXPOSURE", exposure).Replace("BODY", body)
+        AssertRejectedGap(source, expected, 8, 9, "First")
+    }
+
+    @Fact
+    func LiftedReadonlyCaptures_NameofInNestedClosure_RemainsSupported() {
+        AssertParity(`using System;
+class P {
+    static void Remember(in int value) { }
+    public static string Run() {
+        int x = 1;
+        Remember(in x);
+        return First(2);
+        string First(int n) {
+            Func<string> name = () => nameof(x);
+            return n == 0 ? $"{name()}:{x}" : Second<int>(n - 1);
+        }
+        string Second<T>(int n) => n == 0 ? x.ToString() : First(n - 1);
+    }
+    static void Main() => Console.Write(Run());
+}`, "x:1", (
+                translated string
+            ) -> {
+                Assert.Contains(
+                    "in x int32",
+                    translated,
+                    StringComparison.Ordinal
+                )
+                Assert.DoesNotContain(
+                    "// unsupported:",
+                    translated,
+                    StringComparison.Ordinal
+                )
+            })
+    }
+
+    @Fact
+    func LiftedByValueCaptures_NestedClosure_RemainsSupported() {
+        AssertParity(`using System;
+class P {
+    public static int Run() {
+        int x = 1;
+        return First(2);
+        int First(int n) {
+            Func<int> read = () => x;
+            return n == 0 ? read() : Second<int>(n - 1);
+        }
+        int Second<T>(int n) => n == 0 ? x : First(n - 1);
+    }
+    static void Main() => Console.Write(Run());
+}`, "1", (
+                translated string
+            ) -> {
+                Assert.DoesNotContain(
+                    "in x int32",
+                    translated,
+                    StringComparison.Ordinal
+                )
+                Assert.DoesNotContain(
+                    "ref x int32",
+                    translated,
+                    StringComparison.Ordinal
+                )
+                Assert.DoesNotContain(
+                    "// unsupported:",
+                    translated,
+                    StringComparison.Ordinal
+                )
+            })
+    }
+
     shared {
+        private func AssertRejectedGap(
+            source string,
+            expectedNative string,
+            expectedLine int32,
+            expectedColumn int32,
+            expectedSnippet string
+        ) {
+            let root = IlVerifyRunner().RepoRoot ?? throw DirectoryNotFoundException("Repository root not found.")
+            let directory = Path.Combine(AppContext.BaseDirectory, "issue-5991", Guid.NewGuid().ToString("N"))
+            let input = Path.Combine(directory, "input")
+            let output = Path.Combine(directory, "output")
+            let artifactsRoot = Path.Combine(directory, "migration")
+            Directory.CreateDirectory(input)
+            try {
+                GsharpTestProjectRunner.WriteIsolationBoundary(input)
+                File.WriteAllText(Path.Combine(input, "Probe.csproj"), `<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+</Project>`)
+                File.WriteAllText(Path.Combine(input, "Probe.cs"), source)
+                Run("git", []string{"init", "--quiet", input}, root)
+                Run(
+                    "dotnet",
+                    []string{
+                        "build",
+                        Path.Combine(input, "Probe.csproj"),
+                        "-c",
+                        "Release",
+                        "--nologo",
+                        "-nodeReuse:false",
+                        "-p:UseSharedCompilation=false"
+                    },
+                    root
+                )
+                let native = RunProgram(Path.Combine(input, "bin", "Release", "net10.0", "Probe.dll"))
+                Assert.NotEmpty(native)
+                Assert.Equal(Encoding.UTF8.GetBytes(expectedNative), native)
+                let migration = ProcessRunner.Run(
+                    "dotnet",
+                    []string{
+                        BuildTool("Cs2Gs.Cli", "cs2gs.dll"),
+                        "migrate",
+                        "--corpus",
+                        input,
+                        "--out",
+                        output,
+                        "--artifacts",
+                        artifactsRoot,
+                        "--translate-only",
+                        "--no-format",
+                        "--sdk-version",
+                        SdkPin.ReadGlobalJsonPin(root)!!
+                    },
+                    root
+                )
+                Assert.False(migration.TimedOut, migration.Output)
+                Assert.NotEqual(0, migration.ExitCode)
+                let runJson = Assert.Single(Directory.GetFiles(artifactsRoot, "run.json", SearchOption.AllDirectories))
+                let artifacts = GapLedger.LoadRunArtifacts(Path.GetDirectoryName(runJson)!!)
+                Assert.NotEmpty(artifacts)
+                Assert.All(
+                    artifacts,
+                    (artifact TriageArtifact) -> {
+                        Assert.Equal("CS2GS-GAP", artifact.Diagnostic!!.Id)
+                        Assert.Equal("error", artifact.Diagnostic!!.Severity)
+                        Assert.Equal("LocalFunctionStatement", artifact.OffendingCSharpConstruct!!.Kind)
+                    }
+                )
+                Assert.Contains(
+                    artifacts,
+                    (artifact TriageArtifact) -> artifact
+                        .SourceLocation
+                        .CsLine == expectedLine &&
+                        artifact
+                        .SourceLocation
+                        .CsColumn == expectedColumn &&
+                        artifact.OffendingCSharpConstruct!!.Snippet!!.Contains(
+                        expectedSnippet,
+                        StringComparison.Ordinal
+                    )
+                )
+            } finally {
+                Directory.Delete(directory, recursive: true)
+            }
+        }
+
         private func AssertParity(source string, expected string, verifyTranslation Action[string]? = nil) {
             let root = IlVerifyRunner().RepoRoot ?? throw DirectoryNotFoundException("Repository root not found.")
             let directory = Path.Combine(AppContext.BaseDirectory, "issue-5991", Guid.NewGuid().ToString("N"))

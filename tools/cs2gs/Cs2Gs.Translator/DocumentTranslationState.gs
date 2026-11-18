@@ -97,6 +97,7 @@ internal class DocumentTranslationState {
             SymbolEqualityComparer.Default
         )
         UnsupportedSuspendingRefCaptureLocalFunctions = HashSet[IMethodSymbol](SymbolEqualityComparer.Default)
+        UnsupportedNestedClosureRefCaptureLocalFunctions = HashSet[IMethodSymbol](SymbolEqualityComparer.Default)
         RecursiveLocalFunctionGroups = Dictionary[IMethodSymbol, RecursiveLocalFunctionGroup](
             SymbolEqualityComparer.Default
         )
@@ -574,6 +575,10 @@ internal class DocumentTranslationState {
     }
 
     prop UnsupportedSuspendingRefCaptureLocalFunctions HashSet[IMethodSymbol] {
+        get;
+    }
+
+    prop UnsupportedNestedClosureRefCaptureLocalFunctions HashSet[IMethodSymbol] {
         get;
     }
 
