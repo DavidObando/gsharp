@@ -16,6 +16,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Cover stored `Func[T]` factories passed to imported generic methods with dependent constraints. Runtime regression tests preserve delegate invocation counts and results for the symbolic applicability correction in #6058. (Fixes #6088)
+
 - Resolve calls to parameters and locals named `close` through ordinary callable lookup, including nested callbacks. Keep unshadowed retired-builtin diagnostics. (Fixes #6089)
 
 - Accept nullable managed-reference resources in `using let` and `await using let`, including conditional initializers. Dispose non-nil resources once and skip nil resources. (Fixes #6087)
