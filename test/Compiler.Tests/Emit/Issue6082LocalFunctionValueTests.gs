@@ -11,6 +11,14 @@ open class Issue6082LocalFunctionValueTests {
     @Theory
     @InlineData("read", "var value = 42", "return value.ToString()", "value.ToString()", "42:42")
     @InlineData("variable-write", "var value = 0", "value = 42\nreturn \"done\"", "value.ToString()", "done:42")
+    @InlineData("mutable-function", "var value = func() string { return \"42\" }", "return value()", "value()", "42:42")
+    @InlineData(
+        "typed-function",
+        "let value () -> string = func() string { return \"42\" }",
+        "return value()",
+        "value()",
+        "42:42"
+    )
     @InlineData(
         "index-write",
         "var value = []int32{0}",
@@ -119,6 +127,20 @@ shared class Probe {
 
     shared {
         func Cases() sequence[[]object] {
+            yield []object{"private-generic-owner-backward-helper", `
+class Holder[Outer] {
+    shared {
+        private func Secret() int32 { return 42 }
+        func Run() int32 {
+            let helper = func() int32 { return Holder[int32].Secret() }
+            let next = func() int32 { return helper() }
+            return next()
+        }
+    }
+}
+`, `
+        return Holder[string].Run().ToString()
+`, "42", true}
             yield []object{"nested-capturing-overload-reconciles-singleton", `
 func helper(value string) int32 { return 42 }
 `, `

@@ -519,10 +519,13 @@ internal partial class StatementBinder {
             .HasErrorSince(diagnosticCount) {
             literal.Function.HasCaptures = !literal.CapturedVariables.IsEmpty
             reconcileGenericLocalFunctionGroupCaptures?(List[BoundFunctionLiteralExpression](){literal})
-            if !stagingScope.TryPublishStagedFunction(literal.Function) {
-                Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, syntax.Identifier.ValueText)
+            if !Diagnostics.HasErrorSince(diagnosticCount) && (literal.CapturedVariables.IsEmpty || hasOverloads) {
+                literal.Function.HasCaptures = !literal.CapturedVariables.IsEmpty
+                if !stagingScope.TryPublishStagedFunction(literal.Function) {
+                    Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, syntax.Identifier.ValueText)
+                }
+                return bound
             }
-            return bound
         }
         if bound is BoundLocalFunctionDeclaration{Literal: {} capturing} {
             let proof = LocalFunctionValueCaptureProof(capturing.CapturedVariables)
@@ -559,7 +562,10 @@ internal partial class StatementBinder {
                 syntax
             }
             if captured.Contains(variable) &&
-                declaration is not VariableDeclarationSyntax{Initializer: FunctionLiteralExpressionSyntax} {
+                (
+                declaration is not VariableDeclarationSyntax candidate ||
+                    !StatementBinder.IsNonGenericLocalFunctionLiteralDeclaration(candidate)
+            ) {
                 Found = true
             }
         }
