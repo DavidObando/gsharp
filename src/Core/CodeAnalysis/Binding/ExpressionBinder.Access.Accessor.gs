@@ -1547,6 +1547,9 @@ internal partial class ExpressionBinder {
             }
         }
         $scope = $scope.Pop()
+        if whenNotNull is BoundCallExpression{IsConditionalElided: true} {
+            return whenNotNull
+        }
         // Issue #1213: a null-conditional invocation whose access produces no
         // value — the canonical event-raise form `evt?.Invoke(args)` where the
         // delegate returns `void` — is itself a `void` statement. Do not wrap
@@ -4770,15 +4773,16 @@ internal partial class ExpressionBinder {
                 methodParameterNameAt
             )
             let MakeStaticGenericCall = func (substitutedReturnOverride TypeSymbol?) BoundCallExpression {
-                let result = BoundCallExpression(
+                let result = overloads
+                    .CreatePossiblyElidedCall(
                     ce,
                     method!!,
                     finalArguments,
-                    substitutedReturnOverride ?? method!!.Type
+                    substitutedReturnOverride ?? method!!.Type,
+                    methodTypeArguments
                 ){
                     StaticGenericOwnerType = staticGenericOwner,
-                    StaticGenericInterfaceOwnerType = staticGenericInterfaceOwner,
-                    MethodTypeArguments = methodTypeArguments
+                    StaticGenericInterfaceOwnerType = staticGenericInterfaceOwner
                 }
                 RecordStaticTypeQualifier(result, ownerType, ce)
                 return result

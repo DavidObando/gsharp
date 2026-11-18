@@ -18,6 +18,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Elide source conditional method calls consistently across static, instance, extension, generic, base, and override calls. Skip receiver and argument effects when no symbol is active. Preserve conditional metadata and diagnose non-void members with GS0212. (Fixes #6033)
+
 - Reject constructor initializer targets other than `base` with GS0642 instead of silently calling a base constructor. Use `convenience init() { init(args) }` for same-class chaining. (Fixes #6074)
 
 - Cover stored `Func[T]` factories passed to imported generic methods with dependent constraints. Runtime regression tests preserve delegate invocation counts and results for the symbolic applicability correction in #6058. (Fixes #6088)

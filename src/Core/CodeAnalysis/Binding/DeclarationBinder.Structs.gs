@@ -2027,13 +2027,7 @@ internal partial class DeclarationBinder {
                     // non-`open` class) is reported with GS0388.
                     Binder.AttachDocumentation(methodSymbol, methodSyntax)
                     if !methodSyntax.Annotations.IsDefaultOrEmpty {
-                        let methodAttributes = BindAttributes(
-                            methodSyntax.Annotations,
-                            AttributeTargetKind.Method,
-                            Binder.FunctionDeclarationAllowedTargets,
-                            "a method declaration",
-                            AttributeTargets.Method
-                        )
+                        let methodAttributes = BindFunctionAttributes(methodSyntax, returnType, "a method declaration")
                         methodSymbol.SetAttributes(methodAttributes)
                         ValidateInlineDataNilArguments(methodAttributes, methodSymbol.Parameters)
                         ValidateUnscopedRefPlacement(methodSymbol)
@@ -3495,13 +3489,7 @@ internal partial class DeclarationBinder {
                     methodSymbol.AsyncReturnsValueTask = returnTypeIsValueTask || methodSyntax.IsSuspend
                     methodSymbol.IsUnsafe = binderCtx.InUnsafeContext
                     if !methodSyntax.Annotations.IsDefaultOrEmpty {
-                        let methodAttributes = BindAttributes(
-                            methodSyntax.Annotations,
-                            AttributeTargetKind.Method,
-                            Binder.FunctionDeclarationAllowedTargets,
-                            "a method declaration",
-                            AttributeTargets.Method
-                        )
+                        let methodAttributes = BindFunctionAttributes(methodSyntax, returnType, "a method declaration")
                         methodSymbol.SetAttributes(methodAttributes)
                         ValidateInlineDataNilArguments(methodAttributes, methodSymbol.Parameters)
                         ValidateUnscopedRefPlacement(methodSymbol)

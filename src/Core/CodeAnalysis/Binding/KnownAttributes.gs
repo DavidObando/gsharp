@@ -484,6 +484,25 @@ internal shared class KnownAttributes {
         return false
     }
 
+    /// Checks conditional symbols on a source method and its overridden methods.
+    /// @param function The called source function.
+    /// @param preprocessorSymbols The active compilation symbols.
+    /// @returns Whether no conditional symbol keeps the call.
+    internal func IsConditionallyElided(function FunctionSymbol, preprocessorSymbols ICollection[string]?) bool {
+        var current FunctionSymbol? = function
+        var sawConditional = false
+        while current != nil {
+            if HasConditional(current.Attributes) {
+                sawConditional = true
+                if !IsConditionallyElided(current.Attributes, preprocessorSymbols) {
+                    return false
+                }
+            }
+            current = current.OverriddenMethod
+        }
+        return sawConditional
+    }
+
     /// Returns `true` when [`attributes`](paramref) contains at
     /// least one `[Conditional("SYMBOL")]` application and *none* of the
     /// named symbols is present in [`preprocessorSymbols`](paramref). In
