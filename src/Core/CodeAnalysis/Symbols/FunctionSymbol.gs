@@ -573,7 +573,7 @@ class FunctionSymbol : Symbol {
     prop PInvokeMetadata PInvokeMetadata?
 
     /// Gets or sets the resolved P/Invoke return marshalling override (ADR-0226).
-    prop ReturnMarshalAsMetadata MarshalAsMetadata?
+    internal prop ReturnMarshalAsMetadata MarshalAsMetadata?
 
     /// Gets or sets the CLR interface slot this method explicitly implements via
     /// a covariant-return interface bridge (issue #985). Two same-name,

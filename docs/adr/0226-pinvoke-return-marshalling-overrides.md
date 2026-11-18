@@ -14,7 +14,7 @@ Ordinary return attributes and parameter marshalling overrides already have sepa
 ## Decision
 
 Bind return overrides through the same compatibility checks and descriptor encoder as parameter overrides.
-Store the resolved return descriptor on `FunctionSymbol`.
+Store the resolved return descriptor as internal state on `FunctionSymbol`; do not extend the public compiler API.
 Emit a sequence-zero `Param` row with `HasFieldMarshal` and its complete `FieldMarshal` descriptor.
 Do not emit a duplicate `MarshalAsAttribute` custom-attribute row.
 
