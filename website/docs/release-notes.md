@@ -16,6 +16,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Reject constructor initializer targets other than `base` with GS0642 instead of silently calling a base constructor. Use `convenience init() { init(args) }` for same-class chaining. (Fixes #6074)
+
 - Cover stored `Func[T]` factories passed to imported generic methods with dependent constraints. Runtime regression tests preserve delegate invocation counts and results for the symbolic applicability correction in #6058. (Fixes #6088)
 
 - Match imported data types by CLR declaration and semantic type arguments when converting method groups. A forwarding lambda in another scope no longer causes GS0218 for a compatible shared callback. (Fixes #6090)

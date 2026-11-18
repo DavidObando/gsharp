@@ -995,7 +995,7 @@ A `DelegateDecl` declares a real CLR `MulticastDelegate`-derived named delegate 
 StructBody       = "{" StructMember* "}" .
 StructMember     = Annotation* Accessibility? ( OpenOrOverride* ( MethodDecl | PropertyDecl | EventDecl | ConstructorDecl ) | SharedBlock | FieldDecl ) .
 OpenOrOverride   = "open" | "override" .
-ConstructorDecl  = "init" "(" Parameters? ")" ( ":" identifier "(" Arguments? ")" )? Block .
+ConstructorDecl  = "init" "(" Parameters? ")" ( ":" "base" "(" Arguments? ")" )? Block .
 SharedBlock      = "shared" "{" SharedMember* "}" .
 SharedMember     = Accessibility? ( MethodDecl | PropertyDecl | EventDecl | FieldDecl ) | StaticInitializerBlock .
 StaticInitializerBlock = "init" Block .  (*  / : runs in the type's .cctor after static-field initializers *)
@@ -2675,7 +2675,7 @@ StructMember      ::= Annotation*
                       | SharedBlock
                       | FieldDecl )
 OpenOrOverride    ::= 'open' | 'override'
-ConstructorDecl   ::= 'convenience'? 'func'? 'init' '(' Parameters? ')' (':' identifier '(' Arguments? ')')? Block
+ConstructorDecl   ::= 'convenience'? 'func'? 'init' '(' Parameters? ')' (':' 'base' '(' Arguments? ')')? Block
 DeinitDecl        ::= 'deinit' Block                     (* class-only; no parameters or return type *)
 SharedBlock       ::= 'shared' '{' SharedMember* '}'
 SharedMember      ::= Annotation* Accessibility? (Async? MethodDecl | PropertyDecl | EventDecl | FieldDecl)

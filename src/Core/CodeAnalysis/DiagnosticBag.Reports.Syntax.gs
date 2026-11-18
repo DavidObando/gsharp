@@ -82,6 +82,13 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         propertyName
     )
 
+    /// Reports an invalid target in a constructor initializer.
+    /// @param location The text location of the initializer target.
+    func ReportInvalidConstructorInitializerTarget(location TextLocation) -> Report(
+        location,
+        DiagnosticDescriptors.InvalidConstructorInitializerTarget
+    )
+
     /// Reports that the `inline` modifier was combined with `data` or `record`.
     /// @param location The text location of the conflicting modifier.
     func ReportInlineCannotBeCombinedWithData(location TextLocation) -> Report(
