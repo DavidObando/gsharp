@@ -437,17 +437,19 @@ internal partial class ExpressionBinder {
             receiver = declaredClrReceiver
             result = RewrapTransparentMemberResult(
                 result,
-                BoundImportedInstanceCallExpression(
-                    importedCall.Syntax,
-                    declaredClrReceiver,
-                    declaredClrMethod,
-                    importedCall.Type,
-                    importedCall.Arguments,
-                    importedCall.ArgumentRefKinds,
-                    importedCall.TypeArgumentSymbols,
-                    importedCall.ConstrainedReceiverTypeParameter,
-                    importedCall.ConstrainedInterfaceType,
-                    importedCall.IsNonVirtualBaseCall
+                importedCall.CopySignatureReturnTypeTo(
+                    BoundImportedInstanceCallExpression(
+                        importedCall.Syntax,
+                        declaredClrReceiver,
+                        declaredClrMethod,
+                        importedCall.Type,
+                        importedCall.Arguments,
+                        importedCall.ArgumentRefKinds,
+                        importedCall.TypeArgumentSymbols,
+                        importedCall.ConstrainedReceiverTypeParameter,
+                        importedCall.ConstrainedInterfaceType,
+                        importedCall.IsNonVirtualBaseCall
+                    )
                 )
             )
         } else if receiver != nil && binderCtx.TryGetNarrowedAccessPath(receiver, out receiverPath, out _) &&
