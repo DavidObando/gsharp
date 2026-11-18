@@ -4461,6 +4461,31 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return false
             }
+            let storage = this.GetDeconstructedTupleStorageType(local)
+            if storage != nil &&
+                local
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is SingleVariableDesignationSyntax d &&
+                d
+                .Ancestors()
+                .OfType[AssignmentExpressionSyntax]()
+                .FirstOrDefault() is {Left: {} left, Right: {} right} &&
+                TryFindDeconstructionPath(d, left, List[int32](), out var path) {
+                var current ExpressionSyntax? = Unparenthesize(right)
+                var reachedLiteralLeaf = true
+                for index in path!! {
+                    if current is TupleExpressionSyntax tuple && index < tuple.Arguments.Count {
+                        current = Unparenthesize(tuple.Arguments[index].Expression)
+                    } else {
+                        reachedLiteralLeaf = false
+                        break
+                    }
+                }
+                if !reachedLiteralLeaf {
+                    return !storage.IsNullable
+                }
+            }
             let initializer = this.GetInferredLocalInitializer(local, out _, out _)
             if initializer != nil {
                 return this.GSharpExpressionIsStaticallyNonNull(initializer)
@@ -4472,7 +4497,6 @@ partial class CSharpToGSharpTranslator {
                     ObliviousNullabilityAnalyzer.SymbolValueType(element)
                 )
             }
-            let storage = this.GetDeconstructedTupleStorageType(local)
             return storage != nil && !storage.IsNullable
         }
 

@@ -413,6 +413,83 @@ public static class Matrix
         )
     }
 
+    @Fact
+    func OmittedDelegateDefaultConvertedArgAllowNullAndClosedSlotCoalesceAssign_CompileAndRun() {
+        const source = `#nullable enable
+using System;
+using System.Diagnostics.CodeAnalysis;
+
+namespace Demo;
+
+public delegate bool Check<T>(T? value = default);
+
+public sealed class Input
+{
+    public static int OperatorCalls;
+    public string? Tag;
+    public Input(string? tag) => Tag = tag;
+}
+
+public sealed class Result
+{
+    public string Label;
+    public Result(string label) => Label = label;
+
+    public static implicit operator Result?(Input x)
+    {
+        Input.OperatorCalls++;
+        return x.Tag is null ? null : new Result(x.Tag);
+    }
+}
+
+public sealed class Box<T>
+{
+    public T? Value;
+}
+
+public sealed class AllowNullHolder<T> where T : class
+{
+    [AllowNull]
+    public T Cache;
+
+    public int Touch(T fallback) => (Cache ??= fallback).GetHashCode();
+}
+
+public static class Probe
+{
+    public static string Accept<T>(T? value) => value is null ? "null" : value.ToString()!;
+
+    public static string Run()
+    {
+        Check<string> isNil = s => s is null;
+        Check<int> isZero = n => n == 0;
+
+        Input.OperatorCalls = 0;
+        var a1 = Accept<Result>(new Input(null));
+        var a2 = Accept<Result>(new Input("ok"));
+        var calls = Input.OperatorCalls;
+
+        string? maybeNull = null;
+        string? present = "val";
+        var b1 = new Box<string>();
+        var r1 = b1.Value ??= maybeNull;
+        b1.Value ??= present;
+        var r2 = b1.Value ??= "ignored";
+
+        var holder = new AllowNullHolder<string>();
+        var h = holder.Touch("abc") == "abc".GetHashCode();
+
+        return string.Join("|", isNil(), isZero(), a1, a2 is not null && a2.Contains("Result"), calls, r1 ?? "nil", b1.Value, r2, h);
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("isNil(default(string))", printed, StringComparison.Ordinal)
+        Assert.Contains("isZero(0)", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("isNil(nil)", printed, StringComparison.Ordinal)
+        Assert.Contains("Result?(Input(nil)) ?? default(Result)", printed, StringComparison.Ordinal)
+        Assert.Equal("True|True|null|True|2|nil|val|val|True", CompileAndRun(printed, "Demo.Probe.Run()"))
+    }
+
     shared {
         private func Translate(source string) string {
             let project = CSharpProjectLoader.LoadInMemory([](string, string){("Snippet.cs", source)})

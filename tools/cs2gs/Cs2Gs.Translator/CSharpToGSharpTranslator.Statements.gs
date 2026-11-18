@@ -7897,6 +7897,28 @@ partial class CSharpToGSharpTranslator {
             }
             value = this.ForgiveElementAccessAssignmentRhs(assignment, value)
             value = this.ForgiveObliviousExternalAssignmentRhs(assignment, value)
+            if assignment.IsKind(SyntaxKind.CoalesceAssignmentExpression) {
+                let coalesceTarget ISymbol? = this.GetProjectedAssignmentTarget(
+                    assignment.Left,
+                    this.context.GetSymbolInfo(assignment.Left).Symbol
+                )
+                if this.TryGetEmittedNonNullGenericSlotType(
+                    coalesceTarget,
+                    assignment.Right.GetLocation(),
+                    out var nonNullSlotType
+                ) {
+                    if IsNullOrSuppressedNull(assignment.Right) {
+                        if value is not DefaultValueExpression {
+                            value = DefaultValueExpression(nonNullSlotType)
+                        }
+                    } else if !this.GSharpExpressionIsStaticallyNonNull(assignment.Right, value) {
+                        value = ParenthesizedExpression(
+                            BinaryExpression(value, "??", DefaultValueExpression(nonNullSlotType))
+                        )
+                    }
+                }
+                return value
+            }
             if !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) {
                 return value
             }
@@ -8280,7 +8302,34 @@ partial class CSharpToGSharpTranslator {
             return this.WithHoistedAssignments(
                 expression,
                 includeSelf: false,
-                () -> if hoistPostfix {
+                () -> if expression is AssignmentExpressionSyntax coalesceStmt && coalesceStmt.IsKind(
+                    SyntaxKind.CoalesceAssignmentExpression
+                ) &&
+                    !this
+                    .CanEmitNativeCoalesceAssignment(coalesceStmt) {
+                    let statements = List[GStatement]()
+                    let target GExpression? = this.MakeDuplicationSafeTarget(
+                        this.TranslateAssignmentTarget(coalesceStmt.Left)!!,
+                        statements,
+                        coalesceStmt.Left
+                    )
+                    let current GExpression? = this.SpillOperand(target!!, statements)
+                    statements.Add(
+                        IfStatement(
+                            BinaryExpression(current, "==", LiteralExpression.Null()),
+                            BlockStatement(
+                                List[GStatement]{
+                                    AssignmentStatement(
+                                        target,
+                                        this.TranslateAssignmentValue(coalesceStmt),
+                                        isVoid: true
+                                    )
+                                }
+                            )
+                        )
+                    )
+                    statements
+                } else if hoistPostfix {
                     this.WithHoistedPostfix(
                         expression,
                         func () IEnumerable[GStatement] {

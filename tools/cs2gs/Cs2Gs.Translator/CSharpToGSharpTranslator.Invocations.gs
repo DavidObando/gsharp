@@ -1602,7 +1602,39 @@ partial class CSharpToGSharpTranslator {
                         "$parameterKind default value of type '${parameter.Type}' has no gsc constant form."
                     )
                 }
-                defaultValue = IdentifierExpression("nil")
+                defaultValue = if legitimateNull && callSyntax != nil && this.TryGetEmittedNonNullGenericSlotType(
+                    parameter,
+                    callSyntax.GetLocation(),
+                    out var nonNullSlotType
+                ) {
+                    cast[GExpression](DefaultValueExpression(nonNullSlotType))
+                } else {
+                    let mappedType GTypeReference? = this.typeMapper.Map(
+                        parameter.Type,
+                        this.context,
+                        callSyntax?.GetLocation() ?? parameter.Locations.FirstOrDefault()
+                    )
+                    let nonNullableValueType = parameter
+                        .Type
+                        .IsValueType &&
+                        parameter
+                        .Type
+                        .OriginalDefinition
+                        ?.SpecialType != SpecialType.System_Nullable_T &&
+                        parameter
+                        .Type
+                        .NullableAnnotation != Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated
+                    if legitimateNull &&
+                        (nonNullableValueType || mappedType is not{IsNullable: true}) &&
+                        mappedType != nil {
+                        cast[GExpression](DefaultValueExpression(mappedType))
+                    } else {
+                        cast[GExpression](IdentifierExpression("nil"))
+                    }
+                }
             }
             return if coerceToParameterType {
                 this.CoerceMaterializedArgument(defaultValue, parameter.Type, callSyntax!!.GetLocation())
@@ -3330,6 +3362,9 @@ partial class CSharpToGSharpTranslator {
             parameterType ITypeSymbol,
             location Location
         ) GExpression? {
+            if value is DefaultValueExpression {
+                return value
+            }
             if !parameterType.IsReferenceType {
                 return this.CoerceOperandTo(value, parameterType, location)
             }

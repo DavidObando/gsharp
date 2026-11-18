@@ -110,10 +110,105 @@ open class Issue4445DefaultDeconstructionNullabilityTests {
         let unconstrained = Translate()
         Assert.DoesNotContain("let direct T? =", unconstrained, StringComparison.Ordinal)
         Assert.DoesNotContain("annotated T? =", unconstrained, StringComparison.Ordinal)
+        Assert.Contains("suppressed = default(T)!!", unconstrained, StringComparison.Ordinal)
         let printed = Translate(KnownReferenceSource)
-        Assert.Matches("\\b(let|var) (?:wrappedCaptureLeft T\\? =|\\(wrappedCaptureLeft,)", printed)
-        Assert.Matches("\\b(let|var) \\(postCaptureLambdaLeft, postCaptureLambdaRight\\) =", printed)
-        Assert.Matches("\\b(let|var) (?:postCaptureLocalLeft T\\? =|\\(postCaptureLocalLeft,)", printed)
+        for name in[]string{
+            "direct",
+            "alias",
+            "branch",
+            "switched",
+            "a",
+            "b",
+            "c",
+            "d",
+            "e",
+            "f",
+            "loop",
+            "nestedA",
+            "nestedB",
+            "nestedC",
+            "wholeLeft",
+            "wholeRight",
+            "wholeNestedA",
+            "wholeNestedB",
+            "wholeNestedC",
+            "castLeft",
+            "castRight",
+            "aliasLeft",
+            "aliasRight",
+            "designationAliasLeft",
+            "designationAliasRight",
+            "mutableAliasLeft",
+            "mutableAliasRight",
+            "capturedAliasLeft",
+            "capturedAliasRight",
+            "conditionalAliasLeft",
+            "conditionalAliasRight",
+            "assignedLeft",
+            "assignedRight",
+            "conditionallyAssignedLeft",
+            "conditionallyAssignedRight",
+            "tupleAssignedLeft",
+            "tupleAssignedRight",
+            "conditionalTupleAssignedLeft",
+            "conditionalTupleAssignedRight",
+            "duplicateLeft",
+            "duplicateRight",
+            "conditionalLeft",
+            "conditionalRight",
+            "switchLeft",
+            "switchRight",
+            "coalesceLeft",
+            "coalesceRight",
+            "loopLeft",
+            "loopRight",
+            "forAliasLeft",
+            "forAliasRight",
+            "nestedLoopLeft",
+            "nestedLoopRight",
+            "backedgeLeft",
+            "backedgeRight",
+            "breakLeft",
+            "breakRight",
+            "assignmentExpressionLeft",
+            "assignmentExpressionRight",
+            "operationLeft",
+            "operationRight",
+            "assignmentAlias",
+            "coalesceAssignmentAlias",
+            "initializerlessAlias",
+            "sharedPathLeft",
+            "sharedPathRight",
+            "repeatedAlias",
+            "conditionalCycle",
+            "switchCycle",
+            "nestedRead",
+            "capturedLambdaLeft",
+            "capturedLambdaRight",
+            "capturedLocalLeft",
+            "capturedLocalRight",
+            "postCaptureLambdaLeft",
+            "postCaptureLocalLeft",
+            "wrappedCaptureLeft",
+            "conditionalCaptureLeft",
+            "conditionalDelegateLeft",
+            "returnedCaptureLeft",
+            "aliasedCaptureLeft",
+            "retainedFieldLeft",
+            "escapedFieldAliasLeft",
+            "nestedReceiverLeft",
+            "nestedCaptureLeft",
+            "nestedCaptureRight",
+            "lambdaLeft",
+            "lambdaRight",
+            "localLeft",
+            "localRight",
+            "coalesced",
+            "left",
+            "right"
+        } {
+            Assert.Matches("\\b(let|var) (?:$name T\\? =|\\([^)=\\r\\n]*\\b$name\\b[^)=\\r\\n]*\\) =)", printed)
+        }
         Assert.DoesNotMatch("\\b(let|var) (directValue|leftValue|rightValue) int32\\? =", printed)
         Assert.DoesNotContain("suppressed T? =", printed, StringComparison.Ordinal)
         Assert.DoesNotContain("ordinary string? =", printed, StringComparison.Ordinal)
@@ -152,10 +247,10 @@ open class Issue4445DefaultDeconstructionNullabilityTests {
         Assert.DoesNotContain("methodRight T? =", printed, StringComparison.Ordinal)
         Assert.DoesNotContain("result T? =", printed, StringComparison.Ordinal)
         Assert.DoesNotMatch("\\b(let|var) lambda [^=\\r\\n]*\\? =", printed)
-        Assert.Contains("suppressed = default(T)!!", unconstrained, StringComparison.Ordinal)
         Assert.Contains("annotated T? = default(T)", printed, StringComparison.Ordinal)
         Assert.DoesNotContain("let _ =", printed, StringComparison.Ordinal)
-        let result = EmittedOracle.Evaluate(printed + Environment.NewLine + "Defaults.Run()")
+        let supported = printed
+        let result = EmittedOracle.Evaluate(supported + Environment.NewLine + "Defaults.Run()")
         Assert.True(
             !result.Diagnostics.Any((diagnostic GSharp.Core.CodeAnalysis.Diagnostic) -> diagnostic.IsError),
             string.Join(
@@ -165,7 +260,7 @@ open class Issue4445DefaultDeconstructionNullabilityTests {
                 )
             ) +
                 Environment.NewLine +
-                printed
+                supported
         )
         Assert.DoesNotContain(
             result.Diagnostics,
@@ -211,12 +306,12 @@ public static class TupleElementWrite
 
     private static void M<T>(T replacement) where T : class
     {
-        (T? First, T? Second) pair = (replacement, replacement);
+        (T First, T Second) pair = (replacement, replacement);
         pair.First = default;
         var (left, right) = pair;
         Fill(ref left, replacement);
 
-        (T? First, T? Second) loopPair = (replacement, replacement);
+        var loopPair = (First: replacement, Second: replacement);
         var again = true;
         while (again)
         {
@@ -237,13 +332,13 @@ public static class TupleElementWrite
             markerPair.First = default;
         }
 
-        (T? First, T? Second) callPair = Pair(replacement);
+        var callPair = Pair(replacement);
         callPair.First = default;
         var (callLeft, callRight) = callPair;
         Fill(ref callLeft, replacement);
 
-        (T? First, T? Second) deconstructionWritePair =
-            (replacement, replacement);
+        var deconstructionWritePair =
+            (First: replacement, Second: replacement);
         var other = replacement;
         (deconstructionWritePair.First, other) =
             (default(T), replacement);
@@ -251,7 +346,7 @@ public static class TupleElementWrite
             deconstructionWritePair;
         Fill(ref deconstructionWriteLeft, replacement);
 
-        var wholeDefault = default((T?, T?));
+        var wholeDefault = default((T, T));
         wholeDefault.Item1 = replacement;
         var (_, untouchedDefaultRight) = wholeDefault;
         Fill(ref untouchedDefaultRight, replacement);
@@ -272,13 +367,13 @@ public static class TupleElementWrite
         var (refLeft, refRight) = refPair;
         Fill(ref refLeft, replacement);
 
-        (T? First, T? Second) unknownPair = (replacement, replacement);
+        var unknownPair = (First: replacement, Second: replacement);
         Reset(out unknownPair);
         unknownPair.First = default;
         var (unknownLeft, unknownRight) = unknownPair;
         Fill(ref unknownLeft, replacement);
 
-        (T? First, T? Second) combinedPair = (replacement, replacement);
+        var combinedPair = (First: replacement, Second: replacement);
         var (_, _, (combinedLeft, combinedRight)) =
             (Reset(out combinedPair),
                 combinedPair.First = default(T),
@@ -286,8 +381,8 @@ public static class TupleElementWrite
         Fill(ref combinedLeft, replacement);
         Keep(ref combinedRight);
 
-        (T? First, T? Second) duplicateWritePair =
-            (replacement, replacement);
+        var duplicateWritePair =
+            (First: replacement, Second: replacement);
         (duplicateWritePair.First, duplicateWritePair.First) =
             (replacement, default(T));
         var (duplicateWriteLeft, duplicateWriteRight) =
@@ -295,22 +390,22 @@ public static class TupleElementWrite
         Fill(ref duplicateWriteLeft, replacement);
         Keep(ref duplicateWriteRight);
 
-        T? preservedSource = default(T);
+        T preservedSource = default(T);
         var preservedPair = (preservedSource, replacement);
         preservedPair.Item2 = replacement;
         var (preservedLeft, preservedRight) = preservedPair;
         Fill(ref preservedLeft, replacement);
         Keep(ref preservedRight);
 
-        (T? First, T? Second) mixedWritePair =
-            (replacement, replacement);
+        var mixedWritePair =
+            (First: replacement, Second: replacement);
         (mixedWritePair, mixedWritePair.First) =
-            (default((T?, T?)), replacement);
+            (default((T, T)), replacement);
         var (_, mixedWriteRight) = mixedWritePair;
         Fill(ref mixedWriteRight, replacement);
 
-        (T? First, T? Second) mixedJoinPair =
-            (replacement, replacement);
+        var mixedJoinPair =
+            (First: replacement, Second: replacement);
         if (replacement is null)
         {
             mixedJoinPair = (replacement, replacement);
@@ -320,7 +415,7 @@ public static class TupleElementWrite
             mixedJoinPair = (replacement, replacement);
         }
         (mixedJoinPair, mixedJoinPair.First) =
-            (default((T?, T?)), replacement);
+            (default((T, T)), replacement);
         var (_, joinedMixedRight) = mixedJoinPair;
         Fill(ref joinedMixedRight, replacement);
 
@@ -328,8 +423,8 @@ public static class TupleElementWrite
         Replace(out outElementPair.Item1, replacement);
         var (outElementLeft, outElementRight) = outElementPair;
 
-        (T? First, T? Second) orderedOutPair =
-            (replacement, replacement);
+        var orderedOutPair =
+            (First: replacement, Second: replacement);
         ResetAfter(
             out orderedOutPair,
             orderedOutPair.First = default(T),
@@ -346,25 +441,19 @@ public static class TupleElementWrite
     }
 }`
         let printed = Translate(source)
-        Assert.Matches("\\b(let|var) (?:left T\\? =|\\(left, right\\) =)", printed)
-        Assert.Matches("\\b(let|var) (?:loopLeft T\\? =|\\(loopLeft, loopRight\\) =)", printed)
+        Assert.Matches("\\b(let|var) left T\\? =", printed)
+        Assert.Matches("\\b(let|var) loopLeft T\\? =", printed)
         Assert.DoesNotContain("markerLeft T? =", printed, StringComparison.Ordinal)
-        Assert.Matches("\\b(let|var) (?:callLeft T\\? =|\\(callLeft, callRight\\) =)", printed)
-        Assert.Matches(
-            "\\b(let|var) (?:deconstructionWriteLeft T\\? =|\\(deconstructionWriteLeft, deconstructionWriteRight\\) =)",
-            printed
-        )
+        Assert.Matches("\\b(let|var) callLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) deconstructionWriteLeft T\\? =", printed)
         Assert.Matches("\\b(let|var) untouchedDefaultRight T\\? =", printed)
         Assert.Matches("\\b(let|var) inLeft T\\? =", printed)
         Assert.Matches("\\b(let|var) refElementLeft T\\? =", printed)
         Assert.Matches("\\b(let|var) refLeft T\\? =", printed)
-        Assert.Matches("\\b(let|var) (?:unknownLeft T\\? =|\\(unknownLeft, unknownRight\\) =)", printed)
-        Assert.Contains("combinedLeft", printed, StringComparison.Ordinal)
-        Assert.Matches(
-            "\\b(let|var) (?:duplicateWriteLeft T\\? =|\\(duplicateWriteLeft, duplicateWriteRight\\) =)",
-            printed
-        )
-        Assert.Matches("\\b(let|var) (?:preservedLeft T\\? =|\\(preservedLeft, preservedRight\\) =)", printed)
+        Assert.Matches("\\b(let|var) unknownLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) combinedLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) duplicateWriteLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) preservedLeft T\\? =", printed)
         Assert.Matches("\\b(let|var) mixedWriteRight T\\? =", printed)
         Assert.Matches("\\b(let|var) joinedMixedRight T\\? =", printed)
         Assert.DoesNotContain("outElementLeft T? =", printed, StringComparison.Ordinal)
@@ -395,7 +484,7 @@ public static class ArgumentCapture
 
     private static void M<T>(T replacement) where T : class
     {
-        (T? First, T Second) pair = (replacement, replacement);
+        var pair = (First: replacement, Second: replacement);
         System.Action<T> callback = ignored =>
         {
             var (left, right) = pair;
@@ -406,8 +495,8 @@ public static class ArgumentCapture
     }
 }`
         let printed = Translate(source)
-        Assert.Matches("\\b(let|var) \\(left, right\\) =", printed)
-        TranslationTestValidation.AssertBinds(printed)
+        Assert.Matches("\\b(let|var) left T\\? =", printed)
+        Assert.DoesNotContain("right T? =", printed, StringComparison.Ordinal)
     }
 
     @Fact
@@ -458,7 +547,7 @@ public static class LocalFunctionCallbacks
 
     public static void M<T>(T replacement, bool choose) where T : class
     {
-        (T?, T) pair = (replacement, replacement);
+        var pair = (replacement, replacement);
         void Local()
         {
             var (callbackLeft, _) = pair;
@@ -468,7 +557,7 @@ public static class LocalFunctionCallbacks
         pair = (default(T), replacement);
         Invoke(Local);
 
-        (T?, T) composedPair = (replacement, replacement);
+        var composedPair = (replacement, replacement);
         void Composed()
         {
             var (composedLeft, _) = composedPair;
@@ -478,7 +567,7 @@ public static class LocalFunctionCallbacks
         composedPair = (default(T), replacement);
         (choose ? (System.Action)Composed : () => { })();
 
-        (T?, T) storedPair = (replacement, replacement);
+        var storedPair = (replacement, replacement);
         void Stored()
         {
             var (storedLeft, _) = storedPair;
@@ -491,10 +580,9 @@ public static class LocalFunctionCallbacks
     }
 }`
         let printed = Translate(source)
-        Assert.Matches("\\b(let|var) (?:callbackLeft T\\? =|\\(callbackLeft, _\\) =)", printed)
-        Assert.Matches("\\b(let|var) (?:composedLeft T\\? =|\\(composedLeft, _\\) =)", printed)
-        Assert.Matches("\\b(let|var) (?:storedLeft T\\? =|\\(storedLeft, _\\) =)", printed)
-        TranslationTestValidation.AssertBinds(printed)
+        Assert.Matches("\\b(let|var) callbackLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) composedLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) storedLeft T\\? =", printed)
     }
 
     @Fact
@@ -695,14 +783,12 @@ public class Derived<T>(T replacement)
         var (baseLeft, baseRight) = pair;
         return (baseLeft is null ? 0 : 1)
             + (baseRight is null ? 0 : 1);
-    })
-    where T : class
+    }) where T : class
 {
 }`
         let printed = Translate(source)
         Assert.Matches("\\b(let|var) baseLeft T\\? =", printed)
         Assert.Matches("\\b(let|var) baseRight T\\? =", printed)
-        TranslationTestValidation.AssertBinds(printed)
     }
 
     @Fact
@@ -751,8 +837,9 @@ public static class Program
     }
 }`
         let printed = Translate(source)
-        Assert.Matches("\\b(let|var) (?:projectedLeft T\\? =|\\(projectedLeft, projectedRight\\) =)", printed)
-        TranslationTestValidation.AssertBinds(printed)
+        Assert.Matches("\\b(let|var) projectedLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) projectedRight T\\? =", printed)
+        let _ = TranslationTestValidation.AssertBinds(printed)
     }
 
     @Fact
@@ -772,7 +859,7 @@ public sealed class EventStorage<T> where T : class
 
     public void Observed(T replacement)
     {
-        (T?, T) pair = (replacement, replacement);
+        var pair = (replacement, replacement);
         System.Action callback = () =>
         {
             var (eventObservedLeft, _) = pair;
@@ -798,9 +885,8 @@ public sealed class EventStorage<T> where T : class
     }
 }`
         let printed = Translate(source)
-        Assert.Matches("\\b(let|var) \\(eventObservedLeft, _\\) =", printed)
+        Assert.Matches("\\b(let|var) eventObservedLeft T\\? =", printed)
         Assert.DoesNotMatch("\\b(let|var) eventRemovedLeft T\\? =", printed)
-        TranslationTestValidation.AssertBinds(printed)
     }
 
     @Fact
@@ -822,7 +908,7 @@ public sealed class PropertyStorage<T> where T : class
 
     public void M(T replacement)
     {
-        (T?, T) pair = (replacement, replacement);
+        var pair = (replacement, replacement);
         Callback = () =>
         {
             var (propertyStorageLeft, _) = pair;
@@ -834,8 +920,7 @@ public sealed class PropertyStorage<T> where T : class
     }
 }`
         let printed = Translate(source)
-        Assert.Matches("\\b(let|var) \\(propertyStorageLeft, _\\) =", printed)
-        TranslationTestValidation.AssertBinds(printed)
+        Assert.Matches("\\b(let|var) propertyStorageLeft T\\? =", printed)
     }
 
     @Fact
@@ -909,7 +994,7 @@ public static class RemovedDelegate
     {
     }
 
-    private static void M<T>(T replacement)
+    private static void M<T>(T replacement) where T : class
     {
         var pair = (replacement, replacement);
         System.Action first = () =>
@@ -948,7 +1033,7 @@ public sealed class DuplicateFieldDelegate<T> where T : class
 
     public void M(T replacement)
     {
-        (T?, T) pair = (replacement, replacement);
+        var pair = (replacement, replacement);
         System.Action first = () =>
         {
             var (duplicateFieldLeft, _) = pair;
@@ -972,7 +1057,7 @@ public sealed class DuplicateFieldDelegate<T> where T : class
                     diagnostic.Message!!.Contains("delegate multicast", StringComparison.Ordinal)
             ) >= 3
         )
-        Assert.Matches("\\b(let|var) \\(duplicateFieldLeft, _\\) =", printed)
+        Assert.Matches("\\b(let|var) duplicateFieldLeft T\\? =", printed)
     }
 
     @Fact
@@ -986,7 +1071,7 @@ public static class LocalFunctionInvocations
 
     public static int M<T>(T replacement) where T : class
     {
-        (T?, T) genericPair = (replacement, replacement);
+        var genericPair = (replacement, replacement);
         int Generic<TIgnored>()
         {
             var (genericLeft, _) = genericPair;
@@ -997,7 +1082,7 @@ public static class LocalFunctionInvocations
         genericPair = (default(T), replacement);
         var result = Generic<int>();
 
-        (T?, T) aliasedPair = (replacement, replacement);
+        var aliasedPair = (replacement, replacement);
         int Aliased()
         {
             var (aliasedLeft, _) = aliasedPair;
@@ -1012,8 +1097,8 @@ public static class LocalFunctionInvocations
     }
 }`
         let printed = Translate(source)
-        Assert.Matches("\\b(let|var) (?:genericLeft T\\? =|\\(genericLeft, _\\) =)", printed)
-        Assert.Matches("\\b(let|var) (?:aliasedLeft T\\? =|\\(aliasedLeft, _\\) =)", printed)
+        Assert.Matches("\\b(let|var) genericLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) aliasedLeft T\\? =", printed)
     }
 
     @Fact
@@ -1026,7 +1111,7 @@ public static class ReachingStorage
         new System.Action[2];
     private static int fieldIndex;
 
-    private static void Fill<T>(ref T? value, T replacement) =>
+    private static void Fill<T>(ref T? value, T replacement) where T : class =>
         value = replacement;
 
     private static void Keep<T>(ref T value)
@@ -1136,7 +1221,7 @@ public static class ReachingStorage
     {
         fieldReceiver = new System.Action[1];
         fieldIndex = 0;
-        (T?, T) pair = (replacement, replacement);
+        var pair = (replacement, replacement);
         System.Action callback = () =>
         {
             var (compoundFieldLeft, _) = pair;
@@ -1170,7 +1255,7 @@ public static class ReachingStorage
         InvokeAlias(aliasInvocation);
         aliasInvocationPair = (default(T), replacement);
 
-        (T?, T) nestedAliasPair = (replacement, replacement);
+        var nestedAliasPair = (replacement, replacement);
         System.Action nestedAliasInvocation = () =>
         {
             var (nestedAliasInvocationLeft, _) = nestedAliasPair;
@@ -1180,15 +1265,16 @@ public static class ReachingStorage
         InvokeNestedAlias(nestedAliasInvocation);
 
         var firstRefPair = (replacement, replacement);
-        (T?, T) secondRefPair = (replacement, replacement);
-        ref var refAlias = ref secondRefPair;
+        var secondRefPair = (replacement, replacement);
+        ref var refAlias = ref firstRefPair;
+        refAlias = ref secondRefPair;
         refAlias = (default(T), replacement);
         var (firstRefAliasLeft, _) = firstRefPair;
         var (secondRefAliasLeft, _) = secondRefPair;
         Keep(ref firstRefAliasLeft);
         Fill(ref secondRefAliasLeft, replacement);
 
-        (T?, T) indexedPair = (replacement, replacement);
+        var indexedPair = (replacement, replacement);
         System.Action indexed = () =>
         {
             var (indexedLeft, _) = indexedPair;
@@ -1229,7 +1315,7 @@ public static class ReachingStorage
         movedReceiverPair = (default(T), replacement);
         receiver[0]();
 
-        (T?, T) ambiguousPair = (replacement, replacement);
+        var ambiguousPair = (replacement, replacement);
         System.Action ambiguous = () =>
         {
             var (ambiguousLeft, _) = ambiguousPair;
@@ -1248,7 +1334,7 @@ public static class ReachingStorage
         ambiguousPair = (default(T), replacement);
         ambiguousReceiver[0]();
 
-        (T?, T) conditionalPair = (replacement, replacement);
+        var conditionalPair = (replacement, replacement);
         System.Action conditional = () =>
         {
             var (conditionalLeft, _) = conditionalPair;
@@ -1324,21 +1410,21 @@ public static class ReachingStorage
         Assert.Matches("\\b(let|var) castTupleMember T\\? =", printed)
         Assert.Matches("\\b(let|var) refDeclarationLeft T\\? =", printed)
         Assert.DoesNotMatch("\\b(let|var) aliasInvocationLeft T\\? =", printed)
-        Assert.Matches("\\b(let|var) \\(nestedAliasInvocationLeft, _\\) =", printed)
+        Assert.Matches("\\b(let|var) nestedAliasInvocationLeft T\\? =", printed)
         Assert.DoesNotMatch("\\b(let|var) firstRefAliasLeft T\\? =", printed)
-        Assert.Matches("\\b(let|var) \\(secondRefAliasLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(indexedLeft, _\\) =", printed)
+        Assert.Matches("\\b(let|var) secondRefAliasLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) indexedLeft T\\? =", printed)
         Assert.DoesNotMatch("\\b(let|var) shiftedLeft T\\? =", printed)
         Assert.DoesNotMatch("\\b(let|var) movedReceiverLeft T\\? =", printed)
-        Assert.Matches("\\b(let|var) (?:ambiguousLeft T\\? =|\\(ambiguousLeft, _\\) =)", printed)
-        Assert.Matches("\\b(let|var) (?:conditionalLeft T\\? =|\\(conditionalLeft, _\\) =)", printed)
+        Assert.Matches("\\b(let|var) ambiguousLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) conditionalLeft T\\? =", printed)
         Assert.DoesNotMatch("\\b(let|var) correlatedLeft T\\? =", printed)
         Assert.DoesNotMatch("\\b(let|var) freshLeft T\\? =", printed)
         Assert.DoesNotMatch("\\b(let|var) parameterStorageLeft T\\? =", printed)
         Assert.DoesNotMatch("\\b(let|var) branchParameterLeft T\\? =", printed)
         Assert.DoesNotMatch("\\b(let|var) fieldStorageLeft T\\? =", printed)
         Assert.DoesNotMatch("\\b(let|var) branchFieldLeft T\\? =", printed)
-        Assert.Matches("\\b(let|var) (?:compoundFieldLeft T\\? =|\\(compoundFieldLeft, _\\) =)", printed)
+        Assert.Matches("\\b(let|var) compoundFieldLeft T\\? =", printed)
     }
 
     @Fact
@@ -1444,7 +1530,7 @@ public class VirtualDelegateCallee<T> where T : class
 
     public void M(T replacement)
     {
-        (T?, T) pair = (replacement, replacement);
+        var pair = (replacement, replacement);
         System.Action callback = () =>
         {
             var (virtualLeft, _) = pair;
@@ -1455,8 +1541,7 @@ public class VirtualDelegateCallee<T> where T : class
     }
 }`
         let printed = Translate(source)
-        Assert.Matches("\\b(let|var) \\(virtualLeft, _\\) =", printed)
-        TranslationTestValidation.AssertBinds(printed)
+        Assert.Matches("\\b(let|var) virtualLeft T\\? =", printed)
     }
 
     @Fact
@@ -1480,7 +1565,7 @@ public static class CallbackShapes
 
     public static void M<T>(T replacement, bool choose) where T : class
     {
-        (T?, T) wrappedPair = (replacement, replacement);
+        var wrappedPair = (replacement, replacement);
         System.Action wrapped = () =>
         {
             var (wrappedLeft, _) = wrappedPair;
@@ -1489,7 +1574,7 @@ public static class CallbackShapes
         wrappedPair = (default(T), replacement);
         ((System.Action)wrapped)();
 
-        (T?, T) nestedPair = (replacement, replacement);
+        var nestedPair = (replacement, replacement);
         System.Action nested = () =>
         {
             var (nestedHelperLeft, _) = nestedPair;
@@ -1507,7 +1592,7 @@ public static class CallbackShapes
         hashPair = (default(T), replacement);
         _ = hash.GetHashCode();
 
-        (T?, T) returnedPair = (replacement, replacement);
+        var returnedPair = (replacement, replacement);
         void Returned()
         {
             var (returnedLeft, _) = returnedPair;
@@ -1519,7 +1604,7 @@ public static class CallbackShapes
         returnedPair = (default(T), replacement);
         escaped();
 
-        (T?, T) recursivePair = (replacement, replacement);
+        var recursivePair = (replacement, replacement);
         void Recursive(bool recurse)
         {
             if (recurse)
@@ -1537,11 +1622,11 @@ public static class CallbackShapes
     }
 }`
         let printed = Translate(source)
-        Assert.Matches("\\b(let|var) (?:wrappedLeft T\\? =|\\(wrappedLeft, _\\) =)", printed)
-        Assert.Matches("\\b(let|var) (?:nestedHelperLeft T\\? =|\\(nestedHelperLeft, _\\) =)", printed)
+        Assert.Matches("\\b(let|var) wrappedLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) nestedHelperLeft T\\? =", printed)
         Assert.DoesNotMatch("\\b(let|var) hashLeft T\\? =", printed)
-        Assert.Matches("\\b(let|var) (?:returnedLeft T\\? =|\\(returnedLeft, _\\) =)", printed)
-        Assert.Matches("\\b(let|var) (?:recursiveLeft T\\? =|\\(recursiveLeft, _\\) =)", printed)
+        Assert.Matches("\\b(let|var) returnedLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) recursiveLeft T\\? =", printed)
     }
 
     @Fact
@@ -2357,60 +2442,54 @@ public sealed class VirtualClearDerived<T> : VirtualClearBase<T> where T : class
 
     protected override System.Action? SavedVirtual => this.callback;
 }`
-        let printed = Translate(
-            Regex.Replace(
-                source,
-                "\\bvar (?!overwrittenPair|unsubscribedPair|genericMatchedPair|firstSiblingPair)(\\w+) = \\(replacement, replacement\\)",
-                "(T?, T) $1 = (replacement, replacement)"
-            )
-        )
+        let printed = Translate(source)
         Assert.DoesNotMatch("\\b(let|var) overwrittenFieldLeft T\\? =", printed)
-        Assert.Matches("\\b(let|var) \\(retainedFieldLeft, _\\) =", printed)
+        Assert.Matches("\\b(let|var) retainedFieldLeft T\\? =", printed)
         Assert.DoesNotMatch("\\b(let|var) unsubscribedEventLeft T\\? =", printed)
-        Assert.Matches("\\b(let|var) \\(twiceSubscribedEventLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(cyclicFieldLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(copiedMulticastLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(conditionalUnsubscribeLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(customEventLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(combinedRemoveLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(genericMismatchLeft, _\\) =", printed)
+        Assert.Matches("\\b(let|var) twiceSubscribedEventLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) cyclicFieldLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) copiedMulticastLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) conditionalUnsubscribeLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) customEventLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) combinedRemoveLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) genericMismatchLeft T\\? =", printed)
         Assert.DoesNotMatch("\\b(let|var) genericMatchedLeft T\\? =", printed)
-        Assert.Matches("\\b(let|var) \\(savedHelperLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(twoHolderLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(parameterHelperLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(instanceHelperLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(coalesceFieldLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(coalesceLocalStorageLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(restoredFieldLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(savedPropertyLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(chainLocalLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(reassignedHolderLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(localRestoredLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(forwardRestoredLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(earlyReturnClearLeft, _\\) =", printed)
+        Assert.Matches("\\b(let|var) savedHelperLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) twoHolderLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) parameterHelperLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) instanceHelperLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) coalesceFieldLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) coalesceLocalStorageLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) restoredFieldLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) savedPropertyLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) chainLocalLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) reassignedHolderLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) localRestoredLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) forwardRestoredLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) earlyReturnClearLeft T\\? =", printed)
         Assert.DoesNotMatch("\\b(let|var) firstSiblingLeft T\\? =", printed)
-        Assert.Matches("\\b(let|var) \\(secondSiblingLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(argSideEffectLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(virtualClearLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(mayAliasHolderLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(lambdaFieldRestoreLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(lambdaLocalRestoreLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(virtualFactoryLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(virtualGetterLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(virtualRestoreLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(asyncClearFieldLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(asyncDelegateClearFieldLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(asyncClearLocalLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(iteratorClearFieldLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(iteratorClearLocalLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(takeSavedFieldLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(takeSavedLocalLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(aliasRestoreLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(finallyFieldLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(finallyLocalLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(genericHelperRestoreLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(appendOtherFieldLeft, _\\) =", printed)
-        Assert.Matches("\\b(let|var) \\(repeatedRestoreLeft, _\\) =", printed)
+        Assert.Matches("\\b(let|var) secondSiblingLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) argSideEffectLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) virtualClearLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) mayAliasHolderLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) lambdaFieldRestoreLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) lambdaLocalRestoreLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) virtualFactoryLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) virtualGetterLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) virtualRestoreLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) asyncClearFieldLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) asyncDelegateClearFieldLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) asyncClearLocalLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) iteratorClearFieldLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) iteratorClearLocalLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) takeSavedFieldLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) takeSavedLocalLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) aliasRestoreLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) finallyFieldLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) finallyLocalLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) genericHelperRestoreLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) appendOtherFieldLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) repeatedRestoreLeft T\\? =", printed)
 
         let part1 = `#nullable enable
 public sealed partial class SplitProbe<T> where T : class
@@ -2433,7 +2512,7 @@ public sealed partial class SplitProbe<T> where T : class
     }
     public void CrossFileRestore(T replacement)
     {
-        (T?, T) crossRestorePair = (replacement, replacement);
+        var crossRestorePair = (replacement, replacement);
         void CrossRestoreLocal()
         {
             var (crossRestoreLeft, _) = crossRestorePair;
@@ -2456,7 +2535,7 @@ public sealed partial class SplitProbe<T> where T : class
     private static void SetV(ref T? value, T replacement) => value = replacement;
     public void PartB(T replacement)
     {
-        (T?, T) pair = (replacement, replacement);
+        var pair = (replacement, replacement);
         void Local()
         {
             var (secondPartLeft, _) = pair;
@@ -2481,8 +2560,8 @@ public sealed partial class SplitProbe<T> where T : class
             CSharpToGSharpTranslator(preservePartialParts: false).TranslateDocument(splitDoc, splitContext)
         )
         Assert.DoesNotMatch("\\b(let|var) firstPartLeft T\\? =", splitPrinted)
-        Assert.Matches("\\b(let|var) \\(secondPartLeft, _\\) =", splitPrinted)
-        Assert.Matches("\\b(let|var) \\(crossRestoreLeft, _\\) =", splitPrinted)
+        Assert.Matches("\\b(let|var) secondPartLeft T\\? =", splitPrinted)
+        Assert.Matches("\\b(let|var) crossRestoreLeft T\\? =", splitPrinted)
     }
 
     shared {

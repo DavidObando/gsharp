@@ -10517,10 +10517,19 @@ partial class CSharpToGSharpTranslator {
                     parameter.Type,
                     parameter
                 )
-                if convertsValue && !resultAcceptsNil && this.TargetWillRemainNonNullableReference(
-                    targetType,
+                let emitsGenericNonNullSlot = value != nil && this.TryGetEmittedNonNullGenericSlotType(
                     targetSymbol,
-                    value
+                    value.GetLocation(),
+                    out var nonNullSlotType
+                )
+                if convertsValue &&
+                    !resultAcceptsNil &&
+                    (
+                    emitsGenericNonNullSlot || this.TargetWillRemainNonNullableReference(
+                        targetType,
+                        targetSymbol,
+                        value
+                    )
                 ) {
                     var resultType GTypeReference? = this.MapDelegateLikeReturnType(
                         conversionOperator,
@@ -10535,13 +10544,25 @@ partial class CSharpToGSharpTranslator {
                         resultType = MakeNullable(resultType)
                     }
                     if resultType!!.IsNullable {
-                        // Assert the converted result, never its null-accepting input.
-                        let converted GExpression? = EnsureNonNullAssertion(
-                            ConversionExpression(resultType, operatorOperand)
-                        )
+                        let conversion = ConversionExpression(resultType, operatorOperand)
+                        let converted GExpression? = if emitsGenericNonNullSlot {
+                            cast[GExpression](
+                                ParenthesizedExpression(
+                                    BinaryExpression(conversion, "??", DefaultValueExpression(nonNullSlotType))
+                                )
+                            )
+                        } else {
+                            // Assert the converted result, never its null-accepting input.
+                            EnsureNonNullAssertion(conversion)
+                        }
                         this.state.MaterializedConversionResults[converted!!] = conversionOperator
                         return converted
                     }
+                }
+                if emitsGenericNonNullSlot && !this.GSharpExpressionIsStaticallyNonNull(value, operatorOperand) {
+                    return ParenthesizedExpression(
+                        BinaryExpression(operatorOperand, "??", DefaultValueExpression(nonNullSlotType))
+                    )
                 }
                 return operatorOperand
             }
@@ -15371,10 +15392,6 @@ partial class CSharpToGSharpTranslator {
             let targetType ITypeSymbol? = this.GetAssignmentTargetType(assignment.Left, target)
             if targetType is ITypeParameterSymbol {
                 return !CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(targetType) ||
-                    targetType.NullableAnnotation != Microsoft
-                    .CodeAnalysis
-                    .NullableAnnotation
-                    .Annotated ||
                     this.TargetWillRemainNonNullableReference(targetType, target)
             }
             if targetType != nil && targetType.IsReferenceType == true {
