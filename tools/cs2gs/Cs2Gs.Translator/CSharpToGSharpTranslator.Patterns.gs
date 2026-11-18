@@ -1168,7 +1168,7 @@ partial class CSharpToGSharpTranslator {
             let materializedBinders = this
                 .EnumeratePatternBinders(isPattern.Pattern)
                 .Where(
-                (binder ILocalSymbol) -> crossesShortCircuitBoundary || this.IsLocalReassigned(binder) ||
+                (binder ILocalSymbol) -> crossesShortCircuitBoundary || this.PatternBindingNeedsStorage(binder) ||
                     (
                     scrutineeMutable && this.ReadsSymbol(scope_, binder) &&
                         this
@@ -1213,7 +1213,7 @@ partial class CSharpToGSharpTranslator {
                     replacement = this.BuildNegatedPatternBindingValue(binder, receiver, isPattern.Expression)
                 }
                 var storageType GTypeReference? = this.typeMapper.Map(
-                    binder.Type,
+                    this.PatternBindingStorageType(binder),
                     this.context,
                     isPattern.Pattern.GetLocation()
                 )

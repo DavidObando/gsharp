@@ -170,7 +170,7 @@ partial class CSharpToGSharpTranslator {
                 recursiveGroup
                 .Members
                 .Contains(recursiveLocal) {
-                // `IsDirectWrite` is intentionally NOT consulted: a write to a
+                // `IsWriteTarget` is intentionally NOT consulted: a write to a
                 // function-typed function local would be a C# compile error
                 // ("Cannot assign to ... because it is a local function"), so a
                 // rewrite here cannot change meaning.
@@ -183,7 +183,6 @@ partial class CSharpToGSharpTranslator {
                 .state
                 .PatternBindings
                 .Count > 0 &&
-                !IsDirectWrite(identifier) &&
                 this
                 .context
                 .GetSymbolInfo(identifier)
@@ -192,7 +191,10 @@ partial class CSharpToGSharpTranslator {
                 .state
                 .PatternBindings
                 .TryGetValue(boundSymbol, out var replacement) {
-                return replacement
+                if IsWriteTarget(identifier, includeAddress: true) {
+                    return this.WritableSymbolStorage(boundSymbol)
+                }
+                return this.ReadPatternBinding(identifier, boundSymbol, replacement)
             }
             // A C# bare sibling static field/property reference (`FfAc3ChannelsTab`)
             // carries an implicit type qualifier. A G# top-level `func` (e.g. a
@@ -263,6 +265,53 @@ partial class CSharpToGSharpTranslator {
                 return IdentifierExpression("_")
             }
             return IdentifierExpression(this.EmittedName(identifier, identifier.Identifier))
+        }
+
+        private func WritableSymbolStorage(symbol ISymbol) GExpression {
+            if this.state.PatternBindings.TryGetValue(symbol, out var replacement) {
+                return if replacement is NonNullAssertionExpression asserted {
+                    asserted.Operand
+                } else {
+                    replacement
+                }
+            }
+            return IdentifierExpression(this.EmittedName(symbol, symbol.Name))
+        }
+
+        private func ReadPatternBinding(
+            use Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            symbol ISymbol,
+            replacement GExpression
+        ) GExpression {
+            // Materialized captures retain the matched-value proof only until their storage changes.
+            if replacement is NonNullAssertionExpression{Operand: IdentifierExpression storage} &&
+                symbol is ILocalSymbol local &&
+                storage.Name == this.EmittedName(local, local.Name) &&
+                local
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is SingleVariableDesignationSyntax designation &&
+                designation
+                .Ancestors()
+                .OfType[IsPatternExpressionSyntax]()
+                .FirstOrDefault() is {} pattern {
+                let scope_ = this.state.CurrentBodyScope ?? pattern.SyntaxTree.GetRoot()
+                let crossesMutableCapture = !object.ReferenceEquals(
+                    this.NearestFunctionBoundary(pattern),
+                    this.NearestFunctionBoundary(use)
+                ) &&
+                    this.IsSymbolReassigned(local, this.EnclosingFlowScope(designation) ?? pattern.SyntaxTree.GetRoot())
+                if crossesMutableCapture || this.SymbolIsWrittenBetween(local, pattern, use, scope_) ||
+                    this.HasLoopCarriedWrite(use, local, scope_, pattern) || this.ClosureAssignedLocalLosesNarrowing(
+                    local,
+                    pattern,
+                    use,
+                    scope_
+                ) {
+                    return storage
+                }
+            }
+            return replacement
         }
 
         // Issue #3471: gsc resolves a bare reference to a sibling `shared`
@@ -9758,15 +9807,44 @@ partial class CSharpToGSharpTranslator {
             return this.ExpressionCarriesNilableOnlyAtSlotChainCore(value, Array.Empty[ITypeParameterSymbol](), nil)
         }
 
+        private func IsLiftedCaptureParameter(symbol ISymbol) bool {
+            for var scope_ = this.state.CurrentBodyScope; scope_ != nil; scope_ = scope_?.Parent {
+                if scope_ is LocalFunctionStatementSyntax localFunction && this.context.GetDeclaredSymbol(
+                    localFunction
+                ) is IMethodSymbol method &&
+                    this
+                    .state
+                    .LiftedRecursiveLocalFunctions
+                    .TryGetValue(method, out var lifted) {
+                    for capture in lifted.Captures {
+                        if SymbolEqualityComparer.Default.Equals(capture.Symbol, symbol) {
+                            return true
+                        }
+                    }
+                }
+            }
+            return false
+        }
+
         private func IsActivePatternBinding(expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?) bool {
             var expression = expression
             while expression is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax parenthesized {
                 expression = parenthesized.Expression
             }
+            if expression == nil {
+                return false
+            }
             let symbol ISymbol? = this.context.GetSymbolInfo(expression).Symbol
             if symbol == nil ||
                 !(
                 this.state.PatternBindings.ContainsKey(symbol) || this.state.NativePatternVariables.Contains(symbol)
+            ) ||
+                this.IsLiftedCaptureParameter(symbol) {
+                return false
+            }
+            if this.state.PatternBindings.TryGetValue(symbol, out var replacement) && !object.ReferenceEquals(
+                replacement,
+                this.ReadPatternBinding(expression, symbol, replacement)
             ) {
                 return false
             }
@@ -9783,7 +9861,7 @@ partial class CSharpToGSharpTranslator {
                 expression = parenthesized.Expression
             }
             let capture = this.context.GetSymbolInfo(expression).Symbol as ILocalSymbol
-            if capture == nil {
+            if capture == nil || this.IsLiftedCaptureParameter(capture) {
                 return nil
             }
             if this.state.PatternBindings.TryGetValue(capture, out var replacement) {
@@ -22099,9 +22177,7 @@ partial class CSharpToGSharpTranslator {
                             node.SpanStart >= exitedLoop
                                 .Span
                                 .End &&
-                                node
-                                .Span
-                                .End <= readStart &&
+                                EvaluationEffectEnd(node) <= readStart &&
                                 (RunsSourceCode(node) || WritesReferenceStorage(node) || WritesAnyRoot(node)) &&
                                 !this.IsInSiblingBranchOfRead(node, use, $scope)
                         )
@@ -22829,9 +22905,7 @@ partial class CSharpToGSharpTranslator {
                             node.SpanStart >= exitedLoop
                                 .Span
                                 .End &&
-                                node
-                                .Span
-                                .End <= readStart &&
+                                EvaluationEffectEnd(node) <= readStart &&
                                 !this.IsInSiblingBranchOfRead(node, use!!, $scope)
                         )
                     } else {
@@ -23048,6 +23122,19 @@ partial class CSharpToGSharpTranslator {
             // reports that metadata as Annotation.None, so its flow state cannot
             // drive the target-aware receiver/value bridges below.
             let valueSymbol ISymbol? = this.context.GetSymbolInfo(value).Symbol
+            if value is IdentifierNameSyntax &&
+                valueSymbol != nil &&
+                this
+                .state
+                .PatternBindings
+                .TryGetValue(valueSymbol, out var patternReplacement) &&
+                !object.ReferenceEquals(
+                patternReplacement,
+                this.ReadPatternBinding(value, valueSymbol, patternReplacement)
+            ) &&
+                this.ScrutineeStorageIsNullableInGSharp(value) {
+                return true
+            }
             if this.IsImportedObliviousNullableMember(valueSymbol) {
                 return true
             }
@@ -24408,6 +24495,14 @@ partial class CSharpToGSharpTranslator {
             if this.IsCallableValueExpression(recv) {
                 return false
             }
+            if !isDereferenceReceiver && !widenedSinkNeedsNonNull && this.DeclaringRepositoryMemberPromotes(
+                this.context.GetSymbolInfo(recv).Symbol
+            ) {
+                let (targetType, targetSymbol) = this.FindContextualValueTarget(recv)
+                if this.NullForgivingTargetAcceptsNil(targetType, targetSymbol, recv) {
+                    return false
+                }
+            }
             // Issue #5537: an element of storage that keeps an imported oblivious
             // container is `T?` in G#. A C# dereference of it throws on nil. A value
             // position keeps the target-aware bridge, so a nullable target gets no `!!`.
@@ -24620,6 +24715,12 @@ partial class CSharpToGSharpTranslator {
             // throws on a null here too.
             let flowState = this.context.GetTypeInfo(recv).Nullability.FlowState
             let symbol ISymbol? = this.context.GetSymbolInfo(recv).Symbol
+            if !isDereferenceReceiver &&
+                !widenedSinkNeedsNonNull &&
+                symbol != nil &&
+                ObliviousNullabilityAnalyzer.ValueFlowIsPromoted(this.context.Compilation, symbol) {
+                return false
+            }
             // Issue #5254: in this context C# runs no flow analysis, so the
             // declaration is the only contract C# states. A declaration that C#
             // declares non-null and cs2gs widened only to bind a null write
@@ -24753,16 +24854,11 @@ partial class CSharpToGSharpTranslator {
                     )
                 }
                 case invocation is InvocationExpressionSyntax {
-                    // A `Task<T>`/`ValueTask<T>` envelope is itself non-null; its
-                    // annotation belongs to the awaited T (see
-                    // AwaitedReceiverValueIsPromotedNullable), never to the
-                    // receiver being dereferenced here.
                     return this
                         .context
                         .GetSymbolInfo(invocation)
                         .Symbol is IMethodSymbol method &&
-                        !IsTaskLikeEnvelope(method.ReturnType) &&
-                        IsAnnotatedNullableReference(method.ReturnType)
+                        ObliviousNullabilityAnalyzer.ReturnContractIsNullable(this.context.Compilation, method)
                 }
                 case elementAccess is ElementAccessExpressionSyntax {
                     return this
@@ -24828,9 +24924,8 @@ partial class CSharpToGSharpTranslator {
                     .context
                     .GetSymbolInfo(invocation)
                     .Symbol is IMethodSymbol method {
-                    // Method-return taint on Task<T>/ValueTask<T> widens the
-                    // awaited T, not the non-null task envelope itself.
-                    return !IsTaskLikeEnvelope(method.ReturnType) && this.ShouldPromoteToNullableReference(method)
+                    return ObliviousNullabilityAnalyzer.ReturnContractIsNullable(this.context.Compilation, method) ||
+                        (!IsTaskLikeEnvelope(method.ReturnType) && this.ShouldPromoteToNullableReference(method))
                 }
                 case elementAccess is ElementAccessExpressionSyntax {
                     return this
@@ -24867,29 +24962,13 @@ partial class CSharpToGSharpTranslator {
 
         private func AwaitedReceiverValueIsPromotedNullable(
             expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
-        ) bool {
-            switch expression {
-                case parenthesized is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax {
-                    return this.AwaitedReceiverValueIsPromotedNullable(parenthesized.Expression)
-                }
-                case cast is CastExpressionSyntax {
-                    return this.AwaitedReceiverValueIsPromotedNullable(cast.Expression)
-                }
-                case conditional is Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalExpressionSyntax {
-                    return this.AwaitedReceiverValueIsPromotedNullable(conditional.WhenTrue) ||
-                        this.AwaitedReceiverValueIsPromotedNullable(conditional.WhenFalse)
-                }
-                case invocation is InvocationExpressionSyntax when this
-                    .context
-                    .GetSymbolInfo(invocation)
-                    .Symbol is IMethodSymbol method {
-                    return IsTaskLikeEnvelope(method.ReturnType) && this.ShouldPromoteToNullableReference(method)
-                }
-                default {
-                    return false
-                }
-            }
-        }
+        ) bool -> ObliviousNullabilityAnalyzer
+            .AwaitedExpressionResultIsNullable(
+            this.context.Compilation,
+            expression,
+            this.context.SemanticModel,
+            this.context.SiblingCompilations
+        )
 
         // Issue #2164: true when <paramref name="recv"/> reads a nullable
         // (`T?`) field/property that is lazily initialized under a dominating
@@ -26222,34 +26301,6 @@ partial class CSharpToGSharpTranslator {
                     context |= IdentifierNameContext.Invocation
                 }
                 return GSharp.Core.CodeAnalysis.Syntax.SyntaxFacts.IsReservedIdentifier(member.Name, context)
-            }
-
-            private func IsDirectWrite(identifier IdentifierNameSyntax) bool -> switch identifier.Parent {
-                case assignment is Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .AssignmentExpressionSyntax when assignment.Left == identifier: true
-                case prefix is PrefixUnaryExpressionSyntax when prefix.Operand == identifier &&
-                    (
-                    prefix.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.PreIncrementExpression) || prefix.IsKind(
-                        Microsoft.CodeAnalysis.CSharp.SyntaxKind.PreDecrementExpression
-                    )
-                ): true
-                case postfix is PostfixUnaryExpressionSyntax when postfix.Operand == identifier &&
-                    (
-                    postfix.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.PostIncrementExpression) || postfix.IsKind(
-                        Microsoft.CodeAnalysis.CSharp.SyntaxKind.PostDecrementExpression
-                    )
-                ): true
-                case argument is ArgumentSyntax when argument.Expression == identifier &&
-                    (
-                    argument.RefKindKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.RefKeyword) ||
-                        argument
-                        .RefKindKeyword
-                        .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.OutKeyword)
-                ): true
-                default: false
             }
 
             private func IsBareTypeParameter(type ITypeSymbol?) bool {

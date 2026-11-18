@@ -1207,22 +1207,12 @@ partial class CSharpToGSharpTranslator {
                     task
                     .ContainingNamespace
                     ?.ToDisplayString() == "System.Threading.Tasks" {
-                    if !task.IsGenericType {
-                        return nil
-                    }
-                    // Issue #2421: an `async Task<T>` return is still a
-                    // declaration sink for T like any other method return —
-                    // the unwrap above must not skip the SAME tuple/scalar
-                    // promotion the synchronous path below applies, keyed off
-                    // the AWAITED type T (see PromoteAwaitedReturnIfTainted).
-                    let awaitedType = task.TypeArguments[0]
-                    var awaitedMapped GTypeReference? = this.typeMapper.Map(
-                        awaitedType,
-                        this.context,
-                        node.ReturnType.GetLocation()
+                    return this.MapUnwrappedAsyncReturnType(
+                        symbol,
+                        task,
+                        node.ReturnType.GetLocation(),
+                        preserveNestedTaskEnvelope: !unwrapValueTask
                     )
-                    awaitedMapped = this.PromoteTupleDeclarationIfTainted(awaitedMapped, awaitedType, symbol)
-                    return this.PromoteAwaitedReturnIfTainted(awaitedMapped, awaitedType, symbol)
                 }
                 // Issue #1900: `symbol.ReturnType` is already the pointee type T
                 // for a `ref`-returning method (Roslyn strips the `ref`); the
@@ -1271,6 +1261,34 @@ partial class CSharpToGSharpTranslator {
             } else {
                 NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType)
             }
+        }
+
+        private func MapUnwrappedAsyncReturnType(
+            symbol IMethodSymbol,
+            task INamedTypeSymbol,
+            location Location,
+            preserveNestedTaskEnvelope bool = true
+        ) GTypeReference? {
+            if !task.IsGenericType {
+                return nil
+            }
+            // Issue #2421: an `async Task<T>` return is still a declaration sink
+            // for T, keyed off the awaited type T.
+            let awaitedType = task.TypeArguments[0]
+            var awaitedMapped GTypeReference? = this.typeMapper.Map(awaitedType, this.context, location)
+            awaitedMapped = this.PromoteTupleDeclarationIfTainted(awaitedMapped, awaitedType, symbol)
+            awaitedMapped = this.PromoteAwaitedReturnIfTainted(awaitedMapped, awaitedType, symbol)
+            // Ordinary async declarations unwrap one task envelope, so nested
+            // task results keep an explicit envelope (#1918).
+            // Suspend declarations do not unwrap explicit envelopes.
+            if preserveNestedTaskEnvelope && IsTaskLikeEnvelope(awaitedType) && this.typeMapper.Map(
+                task,
+                this.context,
+                location
+            ) is NamedTypeReference envelope {
+                return NamedTypeReference(envelope.Name, []GTypeReference{awaitedMapped!!})
+            }
+            return awaitedMapped
         }
 
         private func MapAttributes(
@@ -2528,6 +2546,10 @@ partial class CSharpToGSharpTranslator {
                 this.state.UnsupportedSuspendingRefCaptureLocalFunctions,
                 SymbolEqualityComparer.Default
             )
+            let savedUnsupportedNestedClosure = HashSet[IMethodSymbol](
+                this.state.UnsupportedNestedClosureRefCaptureLocalFunctions,
+                SymbolEqualityComparer.Default
+            )
             this.isPreallocatingLiftedHelpers = true
             this.state.CurrentEmittedAggregate = aggregate.OriginalDefinition
             this.state.PendingInstanceSynthHelpers = List[MethodDeclaration]()
@@ -2537,6 +2559,7 @@ partial class CSharpToGSharpTranslator {
             this.state.RecursiveLocalFunctionGroups.Clear()
             this.state.UnsupportedRecursiveEnclosingTypeParameterLocalFunctions.Clear()
             this.state.UnsupportedSuspendingRefCaptureLocalFunctions.Clear()
+            this.state.UnsupportedNestedClosureRefCaptureLocalFunctions.Clear()
             try {
                 for part in parts {
                     using let modelScope = this.context.UseSemanticModelForSymbol(part.SyntaxTree, aggregate)
@@ -2570,6 +2593,8 @@ partial class CSharpToGSharpTranslator {
                 this.state.UnsupportedRecursiveEnclosingTypeParameterLocalFunctions.UnionWith(savedUnsupportedTypeParam)
                 this.state.UnsupportedSuspendingRefCaptureLocalFunctions.Clear()
                 this.state.UnsupportedSuspendingRefCaptureLocalFunctions.UnionWith(savedUnsupportedSuspending)
+                this.state.UnsupportedNestedClosureRefCaptureLocalFunctions.Clear()
+                this.state.UnsupportedNestedClosureRefCaptureLocalFunctions.UnionWith(savedUnsupportedNestedClosure)
             }
         }
 
@@ -4028,35 +4053,83 @@ partial class CSharpToGSharpTranslator {
                 return
             }
             let directCaptures = Dictionary[IMethodSymbol, HashSet[ISymbol]](SymbolEqualityComparer.Default)
+            let directNestedClosureCaptures = Dictionary[IMethodSymbol, HashSet[ISymbol]](
+                SymbolEqualityComparer.Default
+            )
+            let nestedClosureCalls = Dictionary[IMethodSymbol, HashSet[IMethodSymbol]](SymbolEqualityComparer.Default)
             for pair in capturingLocals {
                 let captures = HashSet[ISymbol](SymbolEqualityComparer.Default)
-                for identifier in pair.Syntax.DescendantNodes().OfType[IdentifierNameSyntax]() {
-                    let symbol ISymbol? = this.context.GetSymbolInfo(identifier).Symbol
-                    if !(symbol is ILocalSymbol) && !(symbol is IParameterSymbol) {
-                        continue
-                    }
-                    var lexicalOwner = false
-                    for var owner ISymbol? = pair
-                        .Symbol
-                        .ContainingSymbol;
-                        owner is IMethodSymbol;
-                        owner = owner!!.ContainingSymbol {
-                        if SymbolEqualityComparer.Default.Equals(symbol!!.ContainingSymbol, owner) {
-                            lexicalOwner = true
-                            break
+                let nestedCaptures = HashSet[ISymbol](SymbolEqualityComparer.Default)
+                let nestedCalls = HashSet[IMethodSymbol](SymbolEqualityComparer.Default)
+                using let modelScope = this.context.UseSemanticModelForSymbol(pair.Syntax.SyntaxTree, pair.Symbol)
+                if modelScope == nil {
+                    directCaptures[pair.Symbol] = captures
+                    directNestedClosureCaptures[pair.Symbol] = nestedCaptures
+                    nestedClosureCalls[pair.Symbol] = nestedCalls
+                    continue
+                }
+                let IsInsideNestedClosure = func (node Microsoft.CodeAnalysis.SyntaxNode) bool {
+                    for var ancestor Microsoft
+                        .CodeAnalysis
+                        .SyntaxNode? = node;
+                        ancestor != nil &&
+                        !object.ReferenceEquals(ancestor, pair.Syntax); ancestor = ancestor!!.Parent {
+                        if this.IsClosureBoundary(ancestor) {
+                            return true
                         }
                     }
-                    if !lexicalOwner {
-                        continue
-                    }
-                    let declaredInside = symbol!!.DeclaringSyntaxReferences.Any(
-                        (reference SyntaxReference) -> pair.Syntax.Span.Contains(reference.Span)
+                    return false
+                }
+                // Skip nameof operands because they emit string literals without runtime captures.
+                for node in pair.Syntax.DescendantNodes(
+                    (child Microsoft.CodeAnalysis.SyntaxNode) -> !(
+                        child is InvocationExpressionSyntax &&
+                            this
+                            .context
+                            .SemanticModel
+                            .GetOperation(child) is INameOfOperation
                     )
-                    if !declaredInside {
-                        captures.Add(symbol!!)
+                ) {
+                    if this.context.GetSymbolInfo(node).Symbol is IMethodSymbol callee && edges.TryGetValue(
+                        pair.Symbol,
+                        out var dependencies
+                    ) &&
+                        dependencies.Contains(callee.OriginalDefinition) && IsInsideNestedClosure(node) {
+                        nestedCalls.Add(callee.OriginalDefinition)
+                    }
+                    if node is IdentifierNameSyntax identifier {
+                        let symbol ISymbol? = this.context.GetSymbolInfo(identifier).Symbol
+                        if !(symbol is ILocalSymbol) && !(symbol is IParameterSymbol) {
+                            continue
+                        }
+                        var lexicalOwner = false
+                        for var owner ISymbol? = pair
+                            .Symbol
+                            .ContainingSymbol;
+                            owner is IMethodSymbol;
+                            owner = owner!!.ContainingSymbol {
+                            if SymbolEqualityComparer.Default.Equals(symbol!!.ContainingSymbol, owner) {
+                                lexicalOwner = true
+                                break
+                            }
+                        }
+                        if !lexicalOwner {
+                            continue
+                        }
+                        let declaredInside = symbol!!.DeclaringSyntaxReferences.Any(
+                            (reference SyntaxReference) -> pair.Syntax.Span.Contains(reference.Span)
+                        )
+                        if !declaredInside {
+                            captures.Add(symbol!!)
+                            if IsInsideNestedClosure(identifier) {
+                                nestedCaptures.Add(symbol!!)
+                            }
+                        }
                     }
                 }
                 directCaptures[pair.Symbol] = captures
+                directNestedClosureCaptures[pair.Symbol] = nestedCaptures
+                nestedClosureCalls[pair.Symbol] = nestedCalls
             }
             var changed bool
             do {
@@ -4077,12 +4150,37 @@ partial class CSharpToGSharpTranslator {
             } while changed
             for pair in capturingLocals {
                 if (pair.Symbol.IsAsync || IsIteratorBody(pair.Syntax)) && directCaptures[pair.Symbol].Any(
-                    this.IsCaptureWrittenInDeclaringScope
+                    (symbol ISymbol) -> this.GetCaptureRefKind(symbol) != RefKind.None
                 ) {
                     this.state.UnsupportedSuspendingRefCaptureLocalFunctions.Add(pair.Symbol)
                     this
                         .state
                         .UnsupportedSuspendingRefCaptureLocalFunctions
+                        .UnionWith(
+                        GetRecursiveComponent(pair.Symbol).Select(
+                            (candidate(Syntax LocalFunctionStatementSyntax, Symbol IMethodSymbol)) -> candidate.Symbol
+                        )
+                    )
+                }
+            }
+            // Issue #6053: G# forbids recapturing a lifted helper's by-reference parameter inside a nested closure.
+            for pair in capturingLocals {
+                if this.state.UnsupportedSuspendingRefCaptureLocalFunctions.Contains(pair.Symbol) {
+                    continue
+                }
+                let capturesByRefInNestedClosure = directNestedClosureCaptures[pair.Symbol].Any(
+                    (symbol ISymbol) -> this.GetCaptureRefKind(symbol) != RefKind.None
+                ) ||
+                    nestedClosureCalls[pair.Symbol]
+                    .Any(
+                    (callee IMethodSymbol) -> directCaptures.TryGetValue(callee, out var calleeCaptures) &&
+                        calleeCaptures.Any((symbol ISymbol) -> this.GetCaptureRefKind(symbol) != RefKind.None)
+                )
+                if capturesByRefInNestedClosure {
+                    this.state.UnsupportedNestedClosureRefCaptureLocalFunctions.Add(pair.Symbol)
+                    this
+                        .state
+                        .UnsupportedNestedClosureRefCaptureLocalFunctions
                         .UnionWith(
                         GetRecursiveComponent(pair.Symbol).Select(
                             (candidate(Syntax LocalFunctionStatementSyntax, Symbol IMethodSymbol)) -> candidate.Symbol
@@ -4098,18 +4196,17 @@ partial class CSharpToGSharpTranslator {
                     this
                     .state
                     .UnsupportedSuspendingRefCaptureLocalFunctions
+                    .Contains(pair.Symbol) ||
+                    this
+                    .state
+                    .UnsupportedNestedClosureRefCaptureLocalFunctions
                     .Contains(pair.Symbol) {
                     continue
                 }
                 let captures = directCaptures[pair.Symbol]
                     .OrderBy((symbol ISymbol) -> symbol.Locations.FirstOrDefault()?.SourceSpan.Start ?? int32.MaxValue)
                     .ThenBy((symbol ISymbol) -> symbol.Name, StringComparer.Ordinal)
-                    .Select(
-                    (symbol ISymbol) -> LiftedLocalFunctionCapture(
-                        symbol,
-                        this.IsCaptureWrittenInDeclaringScope(symbol)
-                    )
-                )
+                    .Select((symbol ISymbol) -> LiftedLocalFunctionCapture(symbol, this.GetCaptureRefKind(symbol)))
                     .ToList()
                 var containingMethod IMethodSymbol? = pair.Symbol.ContainingSymbol as IMethodSymbol
                 while containingMethod?.MethodKind == MethodKind.LocalFunction {
@@ -4126,14 +4223,21 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
-        // Issue #4302: a lifted helper receives its captures as parameters, so
-        // any write that the original closure cell would observe (a lambda,
-        // another local function, or the member body itself) must keep the
-        // capture by-ref to preserve shared storage.
-        private func IsCaptureWrittenInDeclaringScope(capture ISymbol) bool -> capture
-            .ContainingSymbol
-            .DeclaringSyntaxReferences
-            .Any((reference SyntaxReference) -> this.IsSymbolReassigned(capture, reference.GetSyntax()))
+        // Readonly exposure needs the same slot too, but must not turn an
+        // otherwise immutable capture or parameter into a writable reference.
+        private func GetCaptureRefKind(capture ISymbol) RefKind {
+            var result = RefKind.None
+            for reference in capture.ContainingSymbol.DeclaringSyntaxReferences {
+                let kind = this.GetStorageRefKind(capture, reference.GetSyntax())
+                if kind == RefKind.Ref {
+                    return kind
+                }
+                if kind == RefKind.In {
+                    result = kind
+                }
+            }
+            return result
+        }
 
         // Issues #3399/#4197: ordinary mutual recursion uses nullable
         // function locals so every member is declared before any body binds.

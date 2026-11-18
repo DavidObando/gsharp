@@ -2854,10 +2854,10 @@ class CSharpTypeMapper {
         let declaredReturnType = invoke!!.ReturnType
         var returnType ITypeSymbol? = declaredReturnType
         var isAsync = false
-        // A delegate returning Task / Task<T> maps to the async arrow form
-        // (ADR-0115 §B.8): async () -> void / async () -> T.
+        // Async arrows construct non-null tasks. Nullable task returns retain their explicit envelope.
         if returnType is INamedTypeSymbol returnNamed &&
             returnNamed.Name == "Task" &&
+            !ObliviousNullabilityAnalyzer.ReturnContractIsNullable(context.Compilation, invoke!!) &&
             returnNamed
             .ContainingNamespace
             ?.ToDisplayString() == "System.Threading.Tasks" {
@@ -2873,26 +2873,29 @@ class CSharpTypeMapper {
             var mappedReturn GTypeReference? = this.Map(returnType, context, location)
             // Issue #2504: every structural projection of a source named
             // delegate must consume the same Invoke-return taint as the named
-            // declaration itself. Task<T> arrows expose the unwrapped T result;
-            // ValueTask<T> remains an explicit envelope in the existing mapper,
-            // so promote its inner result in place.
-            if declaredReturnType is INamedTypeSymbol{IsGenericType: true, TypeArguments: {Length: 1}} taskLike &&
-                taskLike.Name == "ValueTask" &&
+            // declaration itself. Explicit task envelopes retain independent root and result contracts.
+            if !isAsync &&
+                declaredReturnType is INamedTypeSymbol{IsGenericType: true, TypeArguments: {Length: 1}} taskLike &&
+                (taskLike.Name == "Task" || taskLike.Name == "ValueTask") &&
                 taskLike
                 .ContainingNamespace
                 ?.ToDisplayString() == "System.Threading.Tasks" &&
-                mappedReturn is NamedTypeReference{TypeArguments: {Count: 1}} valueTaskMapped {
+                mappedReturn is NamedTypeReference{TypeArguments: {Count: 1}} envelopeMapped {
                 let promotedInner GTypeReference? = this.PromoteDelegateReturnPosition(
-                    valueTaskMapped.TypeArguments[0],
+                    envelopeMapped.TypeArguments[0],
                     taskLike.TypeArguments[0],
                     invoke,
                     context,
                     List[int32]()
                 )
-                mappedReturn = if object.ReferenceEquals(promotedInner, valueTaskMapped.TypeArguments[0]) {
+                mappedReturn = if object.ReferenceEquals(promotedInner, envelopeMapped.TypeArguments[0]) {
                     mappedReturn
                 } else {
-                    cast[GTypeReference](NamedTypeReference(valueTaskMapped.Name, []GTypeReference{promotedInner!!}))
+                    cast[GTypeReference](
+                        NamedTypeReference(envelopeMapped.Name, []GTypeReference{promotedInner!!}){
+                            IsNullable = envelopeMapped.IsNullable
+                        }
+                    )
                 }
             } else {
                 mappedReturn = this.PromoteDelegateReturnPosition(
@@ -2902,6 +2905,9 @@ class CSharpTypeMapper {
                     context,
                     List[int32]()
                 )
+            }
+            if !isAsync && ObliviousNullabilityAnalyzer.ReturnContractIsNullable(context.Compilation, invoke!!) {
+                mappedReturn = WithNullable(mappedReturn, true)
             }
             returns.Add(mappedReturn!!)
         }

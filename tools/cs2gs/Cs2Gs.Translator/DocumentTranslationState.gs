@@ -107,6 +107,7 @@ internal class DocumentTranslationState {
             SymbolEqualityComparer.Default
         )
         UnsupportedSuspendingRefCaptureLocalFunctions = HashSet[IMethodSymbol](SymbolEqualityComparer.Default)
+        UnsupportedNestedClosureRefCaptureLocalFunctions = HashSet[IMethodSymbol](SymbolEqualityComparer.Default)
         RecursiveLocalFunctionGroups = Dictionary[IMethodSymbol, RecursiveLocalFunctionGroup](
             SymbolEqualityComparer.Default
         )
@@ -610,6 +611,10 @@ internal class DocumentTranslationState {
         get;
     }
 
+    prop UnsupportedNestedClosureRefCaptureLocalFunctions HashSet[IMethodSymbol] {
+        get;
+    }
+
     // Issue #3399: local functions participating (directly or transitively) in
     // recursion/mutual recursion that cannot be lifted as static helpers
     // (they capture sibling locals), so G#'s non-recursive `let name = func …`
@@ -656,16 +661,16 @@ internal class LiftedRecursiveLocalFunction {
 }
 
 internal class LiftedLocalFunctionCapture {
-    init(symbol ISymbol, isByRef bool) {
+    init(symbol ISymbol, refKind RefKind) {
         Symbol = symbol
-        IsByRef = isByRef
+        RefKind = refKind
     }
 
     prop Symbol ISymbol {
         get;
     }
 
-    prop IsByRef bool {
+    prop RefKind RefKind {
         get;
     }
 }
