@@ -11,6 +11,7 @@ import System.Diagnostics.CodeAnalysis
 import System.Linq
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Binding
+import GSharp.Core.CodeAnalysis.Emit
 
 /// Represents a type symbol in the language.
 open partial class TypeSymbol : Symbol {
@@ -1140,10 +1141,11 @@ open partial class TypeSymbol : Symbol {
                 if (
                     !object.ReferenceEquals(leftDefinition, rightDefinition) &&
                         !(
-                        leftDefinition.ClrType != nil && rightDefinition.ClrType != nil && ClrTypeUtilities.AreSame(
-                            leftDefinition.ClrType,
-                            rightDefinition.ClrType
-                        )
+                        leftDefinition.ClrType != nil &&
+                            rightDefinition.ClrType != nil &&
+                            TypeIdentityComparer
+                            .Instance
+                            .Equals(leftDefinition.ClrType, rightDefinition.ClrType)
                     )
                 ) ||
                     leftArguments.Length != rightArguments.Length {

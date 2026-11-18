@@ -115,6 +115,46 @@ open class Issue2290CrossAssemblyTypeIdentityTests {
         Assert.True(conversion.IsIdentity)
     }
 
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func SameFullName_DifferentAssemblies_AggregatesRemainDistinct(generic bool) {
+        let source = if generic {
+            "package A.B\npublic data class Chapter[T](Title T)"
+        } else {
+            DataClassLibrarySource
+        }
+        let left = EmitLibrary(source, "DistinctLeft" + generic.ToString(), "Left2290")
+        let right = EmitLibrary(source, "DistinctRight" + generic.ToString(), "Right2290")
+        using let resolverA = ReferenceResolver.WithReferences([]string{left})
+        using let resolverB = ReferenceResolver.WithReferences([]string{right})
+        let name = if generic {
+            "A.B.Chapter`1"
+        } else {
+            "A.B.Chapter"
+        }
+        Assert.True(resolverA.TryResolveType(name, out var typeA))
+        Assert.True(resolverB.TryResolveType(name, out var typeB))
+        if generic {
+            typeA = Assert.IsAssignableFrom[Type](typeA).MakeGenericType(
+                Assert.IsAssignableFrom[Type](resolverA.MapClrTypeToReferences(typeof(string)))
+            )
+            typeB = Assert.IsAssignableFrom[Type](typeB).MakeGenericType(
+                Assert.IsAssignableFrom[Type](resolverB.MapClrTypeToReferences(typeof(string)))
+            )
+        }
+        let leftType = Assert.IsAssignableFrom[Type](typeA)
+        let rightType = Assert.IsAssignableFrom[Type](typeB)
+        Assert.Equal(leftType.FullName, rightType.FullName)
+        Assert.NotEqual(leftType.Assembly.FullName, rightType.Assembly.FullName)
+        Assert.True(ImportedTypeSymbol.TryCreateSemanticAggregate(typeA, resolverA, out var aggregateA))
+        Assert.True(ImportedTypeSymbol.TryCreateSemanticAggregate(typeB, resolverB, out var aggregateB))
+        Assert.False(TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(aggregateA, aggregateB))
+        let imported = ImportedTypeSymbol.Get(typeB)
+        Assert.False(TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(aggregateA, imported))
+        Assert.False(TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(imported, aggregateA))
+    }
+
     @Fact
     func Qualified_And_Imported_BareName_Chapter_Convert_BothDirections_Cleanly() {
         let libraryPath = EmitLibrary(
@@ -182,13 +222,13 @@ class Book {
     func GetChapter() Chapter -> Chapter("intro")
 }`
 
-        private func EmitLibrary(source string, caseName string) string {
+        private func EmitLibrary(source string, caseName string, assemblyName string = "Lib2290") string {
             let outputDir = Path.Combine(AppContext.BaseDirectory, "Issue2290", caseName)
             Directory.CreateDirectory(outputDir)
-            let libraryPath = Path.Combine(outputDir, "Lib2290.dll")
+            let libraryPath = Path.Combine(outputDir, assemblyName + ".dll")
             let library = Compilation(SyntaxTree.Parse(SourceText.From(source))){IsLibrary = true}
             using let peStream = File.Create(libraryPath)
-            let result = library.Emit(peStream, pdbStream: nil, refStream: nil, assemblyName: "Lib2290")
+            let result = library.Emit(peStream, pdbStream: nil, refStream: nil, assemblyName: assemblyName)
             Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics))
             return libraryPath
         }
