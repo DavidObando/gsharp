@@ -727,6 +727,40 @@ class P {
         AssertRejectedGap(source, expected, 8, 9, "First")
     }
 
+    @Theory
+    @InlineData(
+        "Remember(in x);",
+        "return n == 0 ? (from _ in new[] { 0 } select x).First() : Second<int>(n - 1);",
+        "1"
+    )
+    @InlineData(
+        "x = 2;",
+        "return n == 0 ? (from _ in new[] { 0 } let y = x select y).First() : Second<int>(n - 1);",
+        "2"
+    )
+    func LiftedByReferenceCaptures_WithBareQueryClause_AreDiagnosedAsGap(
+        exposure string,
+        body string,
+        expected string
+    ) {
+        let source = `using System;
+using System.Linq;
+class P {
+    static void Remember(in int value) { }
+    public static int Run() {
+        int x = 1;
+        EXPOSURE
+        return First(2);
+        int First(int n) {
+            BODY
+        }
+        int Second<T>(int n) => n == 0 ? x : First(n - 1);
+    }
+    static void Main() => Console.Write(Run());
+}`.Replace("EXPOSURE", exposure).Replace("BODY", body)
+        AssertRejectedGap(source, expected, 9, 9, "First")
+    }
+
     @Fact
     func LiftedReadonlyCaptures_NameofInNestedClosure_RemainsSupported() {
         AssertParity(`using System;

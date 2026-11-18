@@ -4053,7 +4053,7 @@ partial class CSharpToGSharpTranslator {
                 let IsInsideNestedClosure = func (node Microsoft.CodeAnalysis.SyntaxNode) bool {
                     for var ancestor Microsoft
                         .CodeAnalysis
-                        .SyntaxNode? = node.Parent;
+                        .SyntaxNode? = node;
                         ancestor != nil &&
                         !object.ReferenceEquals(ancestor, pair.Syntax); ancestor = ancestor!!.Parent {
                         if this.IsClosureBoundary(ancestor) {
