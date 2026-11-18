@@ -530,7 +530,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         implementer StructSymbol,
         interfaceName string,
         methodName string
-    ) -> Report(
+    ) -> ReportMissingMember(
         location,
         DiagnosticDescriptors.InterfaceMethodNotImplemented,
         GetAggregateKindName(implementer),
@@ -826,7 +826,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         methodName string,
         firstInterfaceName string,
         secondInterfaceName string
-    ) -> Report(
+    ) -> ReportMissingMember(
         location,
         DiagnosticDescriptors.ConflictingInterfaceDefaults,
         GetAggregateKindName(implementer),
@@ -880,7 +880,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         implementer StructSymbol,
         interfaceName string,
         methodName string
-    ) -> Report(
+    ) -> ReportMissingMember(
         location,
         DiagnosticDescriptors.InterfaceAbstractMethodHasNoDefault,
         GetAggregateKindName(implementer),
@@ -999,7 +999,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         interfaceName string,
         propertyName string,
         detail string
-    ) -> Report(
+    ) -> ReportMissingMember(
         location,
         DiagnosticDescriptors.StaticVirtualInterfacePropertyNotImplemented,
         structName,
@@ -1021,7 +1021,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         implementer StructSymbol,
         interfaceName string,
         methodName string
-    ) -> Report(
+    ) -> ReportMissingMember(
         location,
         DiagnosticDescriptors.StaticVirtualInterfaceMethodNotImplemented,
         GetAggregateKindName(implementer),
@@ -1293,7 +1293,13 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         className string,
         declaringTypeName string,
         memberName string
-    ) -> Report(location, DiagnosticDescriptors.AbstractMemberNotImplemented, className, declaringTypeName, memberName)
+    ) -> ReportMissingMember(
+        location,
+        DiagnosticDescriptors.AbstractMemberNotImplemented,
+        className,
+        declaringTypeName,
+        memberName
+    )
 
     /// ADR-0195 / issue #4674: GS0617 — a `shared` class declares something it
     /// cannot hold. Every member of a shared class is shared and the class is

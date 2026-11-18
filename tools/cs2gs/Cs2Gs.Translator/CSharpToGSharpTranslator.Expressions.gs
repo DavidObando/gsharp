@@ -15443,6 +15443,12 @@ partial class CSharpToGSharpTranslator {
             if this.IsErasedNameOf(node) {
                 return false
             }
+            if this.WritableReferenceArgumentTarget(node) is {} referenceTarget && this.WritesThroughStorage(
+                referenceTarget,
+                isArgument: true
+            ) {
+                return true
+            }
             switch node {
                 case assignment is Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax {
                     // A member initializer is part of the construction (#5562): a field keeps the fact, and a
@@ -15485,17 +15491,6 @@ partial class CSharpToGSharpTranslator {
                     .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.PostDecrementExpression) {
                     return this.WritesThroughStorage(postfix.Operand, isArgument: false)
                 }
-                case argument is Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .ArgumentSyntax when argument
-                    .RefKindKeyword
-                    .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.RefKeyword) || argument.RefKindKeyword.IsKind(
-                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.OutKeyword
-                ) {
-                    return this.WritesThroughStorage(argument.Expression, isArgument: true)
-                }
                 case addressOf is Microsoft
                     .CodeAnalysis
                     .CSharp
@@ -15504,23 +15499,6 @@ partial class CSharpToGSharpTranslator {
                     .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AddressOfExpression) {
                     // The address of a member or an element names storage that a later write can change.
                     return this.WritesThroughStorage(addressOf.Operand, isArgument: true)
-                }
-                case invocation is InvocationExpressionSyntax when invocation.Expression is MemberAccessExpressionSyntax receiverAccess &&
-                    this
-                    .context
-                    .GetSymbolInfo(invocation)
-                    .Symbol is IMethodSymbol method &&
-                    method.ReducedFrom != nil &&
-                    method.ReducedFrom!!
-                    .Parameters
-                    .Length > 0 &&
-                    method.ReducedFrom!!
-                    .Parameters[0]
-                    .RefKind == RefKind
-                    .Ref {
-                    // cs2gs passes the receiver of a `this ref` extension as `&receiver`, a writable reference.
-                    return this.WritesThroughStorage(receiverAccess.Expression, isArgument: true) ||
-                        this.InvocationStorageMayWriteType(invocation, rootType)
                 }
                 case invocation is InvocationExpressionSyntax {
                     return this.InvocationStorageMayWriteType(invocation, rootType)
@@ -21507,6 +21485,62 @@ partial class CSharpToGSharpTranslator {
             return this.AccessorRunsUserCode(property, operation?.NarrowedType)
         }
 
+        // A reduced `this ref` receiver is an emitted argument, even without C# argument syntax.
+        private func WritableReferenceArgumentTarget(node Microsoft.CodeAnalysis.SyntaxNode) Microsoft
+            .CodeAnalysis
+            .CSharp
+            .Syntax
+            .ExpressionSyntax? {
+            switch node {
+                case argument is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ArgumentSyntax when argument
+                    .RefKindKeyword
+                    .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.RefKeyword) || argument.RefKindKeyword.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.OutKeyword
+                ) {
+                    if argument
+                        .Parent
+                        ?.Parent is InvocationExpressionSyntax call &&
+                        this
+                        .context
+                        .GetSymbolInfo(call)
+                        .Symbol is IMethodSymbol method &&
+                        this.TryGetRewrittenSourceExtensionReceiver(call, method, out var receiver) &&
+                        object.ReferenceEquals(argument.Expression, receiver) {
+                        return nil
+                    }
+                    return argument.Expression
+                }
+                case invocation is InvocationExpressionSyntax when invocation.Expression is MemberAccessExpressionSyntax receiverAccess &&
+                    this
+                    .context
+                    .GetSymbolInfo(invocation)
+                    .Symbol is IMethodSymbol method &&
+                    method.ReducedFrom != nil &&
+                    method.ReducedFrom!!
+                    .Parameters
+                    .Length > 0 &&
+                    method.ReducedFrom!!
+                    .Parameters[0]
+                    .RefKind == RefKind.Ref &&
+                    (
+                    method.ReducedFrom!!.DeclaringSyntaxReferences.IsDefaultOrEmpty || this.TryGetStaticExtensionHelper(
+                        method,
+                        out _,
+                        out _
+                    )
+                ) {
+                    return receiverAccess.Expression
+                }
+                default {
+                    return nil
+                }
+            }
+        }
+
         /// Whether a write to [`target`](paramref) can change storage that a by-reference variable names (ADR-0208
         /// R12). A local or a by-value parameter cannot, a discard or a new variable cannot, and an event subscription
         /// writes no storage. A `ref` or `out` argument names its variable without a write (`RecordWritableReference`),
@@ -21667,7 +21701,15 @@ partial class CSharpToGSharpTranslator {
             let byReference = this.IsByReferenceVariable(symbol)
             let memberPath = memberRegions != nil
             let readStart = readPosition ?? use.SpanStart
-            if !closureAssigned && !byReference && !memberPath {
+            // Issue #6036: gsc drops the fact of every mutable local at a call that receives a writable member
+            // reference, so those calls end the narrowing too, including through a loop's back edge.
+            let anyRootWrites = if !memberPath && this.IsEmittedMutableVariable(symbol) {
+                this.GetAnyRootInvalidations($scope)
+            } else {
+                default(HashSet[Microsoft.CodeAnalysis.SyntaxNode]?)
+            }
+            let onlyAnyRootWrites = !closureAssigned && !byReference && !memberPath
+            if onlyAnyRootWrites && (anyRootWrites == nil || anyRootWrites.Count == 0) {
                 return false
             }
             // ADR-0208 R15 (#5237): a closure-assigned variable loses its fact at every node that may run source code.
@@ -21694,6 +21736,9 @@ partial class CSharpToGSharpTranslator {
                         this.ReferenceStorageType(symbol)
                     )
                 )
+            }
+            let WritesAnyRoot = func (node Microsoft.CodeAnalysis.SyntaxNode) bool {
+                return anyRootWrites != nil && anyRootWrites.Contains(node)
             }
             let OutsideNestedFunctions = func (node Microsoft.CodeAnalysis.SyntaxNode) bool {
                 return object.ReferenceEquals(node, $scope) ||
@@ -21725,7 +21770,14 @@ partial class CSharpToGSharpTranslator {
             } else {
                 this.GetLoopCondition(exitedLoop)
             }
-            if $scope.DescendantNodesAndSelf(OutsideNestedFunctions).Any(
+            // The cached calls are the only candidates when they are the variable's only invalidating effect.
+            let candidates IEnumerable[Microsoft.CodeAnalysis.SyntaxNode] = if anyRootWrites != nil &&
+                onlyAnyRootWrites {
+                anyRootWrites
+            } else {
+                $scope.DescendantNodesAndSelf(OutsideNestedFunctions)
+            }
+            if candidates.Any(
                 (node Microsoft.CodeAnalysis.SyntaxNode) -> (
                     if exitedLoop != nil {
                         (
@@ -21733,7 +21785,7 @@ partial class CSharpToGSharpTranslator {
                                 (
                                 (
                                     !object.ReferenceEquals(node, narrowingGuard) &&
-                                        (RunsSourceCode(node) || WritesReferenceStorage(node))
+                                        (RunsSourceCode(node) || WritesReferenceStorage(node) || WritesAnyRoot(node))
                                 ) ||
                                     (
                                     byReference &&
@@ -21754,7 +21806,7 @@ partial class CSharpToGSharpTranslator {
                                 node
                                 .Span
                                 .End <= readStart &&
-                                (RunsSourceCode(node) || WritesReferenceStorage(node)) &&
+                                (RunsSourceCode(node) || WritesReferenceStorage(node) || WritesAnyRoot(node)) &&
                                 !this.IsInSiblingBranchOfRead(node, use, $scope)
                         )
                     } else {
@@ -21765,7 +21817,7 @@ partial class CSharpToGSharpTranslator {
                             includeReferenceStorageWrites: byReference,
                             readPosition: readStart
                         ) &&
-                            (RunsSourceCode(node) || WritesReferenceStorage(node)) &&
+                            (RunsSourceCode(node) || WritesReferenceStorage(node) || WritesAnyRoot(node)) &&
                             !this.IsInSiblingBranchOfRead(node, use, $scope)
                     }
                 )
@@ -21816,8 +21868,9 @@ partial class CSharpToGSharpTranslator {
                             OutsideNestedFunctions
                         )
                             .Any(
-                            (node Microsoft.CodeAnalysis.SyntaxNode) -> RunsSourceCode(node) ||
-                                WritesReferenceStorage(node)
+                            (candidate Microsoft.CodeAnalysis.SyntaxNode) -> RunsSourceCode(candidate) ||
+                                WritesReferenceStorage(candidate) ||
+                                WritesAnyRoot(candidate)
                         )
                     )
                 ) {
@@ -21835,7 +21888,7 @@ partial class CSharpToGSharpTranslator {
                 if enclosing.SpanStart >= readStart {
                     continue
                 }
-                if (closureAssigned || memberPath) &&
+                if (closureAssigned || memberPath || WritesAnyRoot(enclosing)) &&
                     enclosing is Microsoft
                     .CodeAnalysis
                     .CSharp
@@ -21884,10 +21937,20 @@ partial class CSharpToGSharpTranslator {
                     ) {
                         continue
                     }
-                    if !node.Span.Contains(narrowingGuard.Span) && node.DescendantNodesAndSelf(OutsideNestedFunctions)
-                        .Any(
-                        (candidate Microsoft.CodeAnalysis.SyntaxNode) -> RunsSourceCode(candidate) ||
-                            WritesReferenceStorage(candidate)
+                    let loopSpan = node.Span
+                    if !loopSpan.Contains(narrowingGuard.Span) &&
+                        (
+                        if anyRootWrites != nil && onlyAnyRootWrites {
+                            anyRootWrites.Any(
+                                (candidate Microsoft.CodeAnalysis.SyntaxNode) -> loopSpan.Contains(candidate.Span)
+                            )
+                        } else {
+                            node.DescendantNodesAndSelf(OutsideNestedFunctions).Any(
+                                (candidate Microsoft.CodeAnalysis.SyntaxNode) -> RunsSourceCode(candidate) ||
+                                    WritesReferenceStorage(candidate) ||
+                                    WritesAnyRoot(candidate)
+                            )
+                        }
                     ) {
                         return true
                     }

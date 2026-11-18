@@ -1048,13 +1048,13 @@ internal partial class ExpressionBinder {
                 {
                     // ADR-0174 D12/D13 / GS0566: the Go-style built-ins are retired
                     // in favour of the members every receiver already has. A
-                    // user-defined function of the same name is an ordinary call
+                    // user-defined function or variable of the same name is an ordinary call
                     // (the ADR keeps these names free for users), so only the bare,
                     // otherwise-undefined spelling reports. The arguments are still
                     // bound so their own diagnostics surface, and the first
                     // argument's type picks the replacement the message names for
                     // THIS site.
-                    if !$scope.TryLookupFunctions(name).IsEmpty {
+                    if $scope.TryLookupSymbol(name) is VariableSymbol || !$scope.TryLookupFunctions(name).IsEmpty {
                         return false
                     }
                     let arguments = ImmutableArray.CreateBuilder[BoundExpression](syntax.Arguments.Count)

@@ -158,10 +158,12 @@ jobs:
         # A component-scoped PR packs only the SDK and templates, so the full
         # inventory is required only when the whole solution was built.
         if: github.event_name != 'pull_request' || fromJSON(needs.select.outputs.plan).full
-        # ADR-0218: the package inventory (six RID compiler packages, six other
+        # ADR-0218: the package inventory (six RID compiler packages, seven other
         # packages, five symbol packages), the license, project URL, readme and icon
         # of each package (issue #5621), one version across them, and the SDK's
-        # PackageDownload version. The tag run checks the same list before it pushes.
+        # PackageDownload version. ADR-0223 D2: one copy of each G# runtime assembly in
+        # the SDK, and the same copies in Gsharp.Compiler. The tag run checks the same
+        # list before it pushes.
         run: python3 build/release-publish.py verify --nuget-only --nupkgs out/bin/Release/nupkgs
 
       - name: Upload NuGet packages

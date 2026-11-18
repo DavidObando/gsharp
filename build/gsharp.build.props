@@ -25,6 +25,9 @@
   <ItemGroup>
     <!-- Runtime packages-->
     <MicrosoftVisualStudioValidationPackageReference Include="Microsoft.VisualStudio.Validation" Version="17.8.8" />
+    <!-- GSharp.Core loads target-framework reference assemblies with it. The Gsharp.Compiler
+         package lists the same version as a dependency (ADR-0223 D2). -->
+    <SystemReflectionMetadataLoadContextPackageReference Include="System.Reflection.MetadataLoadContext" Version="9.0.0" />
     <!-- Keep in sync with src/vs-gsharp/test/VsGsharp.UnitTests (that tree is an
          isolated build island and cannot import this file). -->
     <StreamJsonRpcPackageReference Include="StreamJsonRpc" Version="2.22.11" />

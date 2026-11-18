@@ -28,9 +28,10 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// Reports that a type doesn't exist.
     /// @param location The text location where the error was found.
     /// @param name The type name.
-    func ReportUndefinedType(location TextLocation, name string) -> Report(
+    func ReportUndefinedType(location TextLocation, name string) -> ReportFailedLookup(
         location,
         DiagnosticDescriptors.UndefinedType,
+        PrefixLookupKind.Name,
         name
     )
 
@@ -185,7 +186,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
             ReportUseNilInsteadOfNull(location)
             return
         }
-        Report(location, DiagnosticDescriptors.UndefinedVariable, name)
+        ReportFailedLookup(location, DiagnosticDescriptors.UndefinedVariable, PrefixLookupKind.Name, name)
     }
 
     /// Reports that a name doesn't belong to a variable.
@@ -306,9 +307,10 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// Reports that the function doesn't exist.
     /// @param location The text location where the error was found.
     /// @param name The function name.
-    func ReportUndefinedFunction(location TextLocation, name string) -> Report(
+    func ReportUndefinedFunction(location TextLocation, name string) -> ReportFailedLookup(
         location,
         DiagnosticDescriptors.UndefinedFunction,
+        PrefixLookupKind.Name,
         name
     )
 
@@ -599,9 +601,10 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// Reports that we couldn't find the specified type.
     /// @param location The text location where the error was found.
     /// @param text The text associated to the type.
-    func ReportUnableToFindType(location TextLocation, text string) -> Report(
+    func ReportUnableToFindType(location TextLocation, text string) -> ReportFailedLookup(
         location,
         DiagnosticDescriptors.UnableToFindType,
+        PrefixLookupKind.Name,
         text
     )
 
@@ -624,9 +627,10 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// Reports that we couldn't find the specified member.
     /// @param location The text location where the error was found.
     /// @param text The text associated to the member.
-    func ReportUnableToFindMember(location TextLocation, text string) -> Report(
+    func ReportUnableToFindMember(location TextLocation, text string) -> ReportFailedLookup(
         location,
         DiagnosticDescriptors.UnableToFindMember,
+        PrefixLookupKind.Member,
         "Cannot find member $text."
     )
 
@@ -676,9 +680,10 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// Reports that we couldn't find the specified function.
     /// @param location The text location where the error was found.
     /// @param text The text associated to the function.
-    func ReportUnableToFindFunction(location TextLocation, text string) -> Report(
+    func ReportUnableToFindFunction(location TextLocation, text string) -> ReportFailedLookup(
         location,
         DiagnosticDescriptors.UnableToFindFunction,
+        PrefixLookupKind.Member,
         "Cannot find function $text."
     )
 

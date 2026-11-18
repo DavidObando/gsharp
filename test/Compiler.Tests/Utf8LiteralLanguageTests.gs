@@ -164,7 +164,7 @@ async func Read(ch chan[int32], pending Task[int32]) int32 {
     @InlineData("class Holder { shared { var Saved int32 = { LAMBDA\n0 } } }", true)
     @InlineData("class Holder { shared { init { LAMBDA } } }", true)
     @InlineData("open class Base(Value int32) {}\nclass Holder() : Base({ LAMBDA\n0 }) {}", true)
-    @InlineData("open class Base(Value int32) {}\nclass Holder : Base { init() : Base({ LAMBDA\n0 }) {} }", true)
+    @InlineData("open class Base(Value int32) {}\nclass Holder : Base { init() : base({ LAMBDA\n0 }) {} }", true)
     func AsyncLambdaLivenessCoversProgramAndInitializerRoots(declaration string, inferred bool) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let lambda = `let read = async func(ch chan[int32]) int32 {

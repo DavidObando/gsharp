@@ -698,7 +698,13 @@ internal partial class StatementBinder {
             } else {
                 hasBoundElseOnce = true
                 if !EndsInUnconditionalExit(armElse) {
+                    // ADR-0225: the else block can still end in an exit when it is open at the cut.
+                    let pushed = Diagnostics.PushPremiseIf(
+                        PrefixBindingContext.IsOpen(syntax.ElseStatement),
+                        PrefixPremise.RestOfBody
+                    )
                     Diagnostics.ReportGuardLetElseMustExit(syntax.ElseStatement.Location)
+                    Diagnostics.PopPremiseIf(pushed)
                 }
             }
             lastElse = armElse
@@ -749,7 +755,13 @@ internal partial class StatementBinder {
             } else {
                 hasBoundElseOnce = true
                 if !EndsInUnconditionalExit(guardElse) {
+                    // ADR-0225: the else block can still end in an exit when it is open at the cut.
+                    let pushed = Diagnostics.PushPremiseIf(
+                        PrefixBindingContext.IsOpen(syntax.ElseStatement),
+                        PrefixPremise.RestOfBody
+                    )
                     Diagnostics.ReportGuardLetElseMustExit(syntax.ElseStatement.Location)
+                    Diagnostics.PopPremiseIf(pushed)
                 }
             }
             RestoreExternalCallableAliases(callableWhenTrue)
@@ -780,7 +792,13 @@ internal partial class StatementBinder {
         if !hasBoundElseOnce {
             let armElse = BindStatement(syntax.ElseStatement)
             if !EndsInUnconditionalExit(armElse) {
+                // ADR-0225: the else block can still end in an exit when it is open at the cut.
+                let pushed = Diagnostics.PushPremiseIf(
+                    PrefixBindingContext.IsOpen(syntax.ElseStatement),
+                    PrefixPremise.RestOfBody
+                )
                 Diagnostics.ReportGuardLetElseMustExit(syntax.ElseStatement.Location)
+                Diagnostics.PopPremiseIf(pushed)
             }
             allExits = false
         }

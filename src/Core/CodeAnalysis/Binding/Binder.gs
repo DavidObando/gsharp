@@ -1256,7 +1256,12 @@ partial class Binder {
                 .HasInvalidUserGoto &&
                 !ControlFlowGraph
                 .AllPathsReturn(lowered) {
+                let pushed = child.Diagnostics.PushPremiseIf(
+                    PrefixBindingContext.IsOpen(method.Declaration!!.Body),
+                    PrefixPremise.RestOfBody
+                )
                 child.Diagnostics.ReportAllPathsMustReturn(method.Declaration!!.Identifier.Location)
+                child.Diagnostics.PopPremiseIf(pushed)
             }
             AnalyzeFunctionBody(body, lowered, method, child.Diagnostics, child.binderCtx.References)
             let bodyDiagnostics = child.Diagnostics.ToImmutableArray()
@@ -8568,7 +8573,13 @@ partial class Binder {
                     expression: "binder.statements.BindStatement(bodySyntax)"
                 )
             }
+            // ADR-0225: a label after the cut of an open body can still resolve a goto.
+            let labelsPushed = binder.Diagnostics.PushPremiseIf(
+                PrefixBindingContext.IsOpen(bodySyntax),
+                PrefixPremise.RestOfBody
+            )
             binder.statements.FinalizeUserLabels()
+            binder.Diagnostics.PopPremiseIf(labelsPushed)
             // ADR-0065 §2 Rule 3: a `convenience init` body must begin
             // with a `init(args)` self-delegation expression-statement.
             if convenienceConstructor != nil && convenienceConstructor.IsConvenience {
@@ -8584,8 +8595,15 @@ partial class Binder {
                 !binder
                 .statements
                 .HasInvalidUserGoto &&
-                !ControlFlowGraph.AllPathsReturn(lowered) {
+                !ControlFlowGraph
+                .AllPathsReturn(lowered) {
+                // ADR-0225: a body that is open at the cut can still end in a return.
+                let pushed = binder.Diagnostics.PushPremiseIf(
+                    PrefixBindingContext.IsOpen(bodySyntax),
+                    PrefixPremise.RestOfBody
+                )
                 binder.Diagnostics.ReportAllPathsMustReturn(allPathsReturnLocation)
+                binder.Diagnostics.PopPremiseIf(pushed)
             }
             AnalyzeFunctionBody(body, lowered, member, binder.Diagnostics, binder.binderCtx.References)
             return BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray())

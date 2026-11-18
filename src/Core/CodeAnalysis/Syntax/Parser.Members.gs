@@ -284,7 +284,7 @@ open partial class Parser {
             baseCloseParen = MatchToken(SyntaxKind.CloseParenthesisToken)
         }
         let body = ParseBlockStatement()
-        return ConstructorDeclarationSyntax(
+        let declaration = ConstructorDeclarationSyntax(
             syntaxTree,
             accessibilityModifier,
             convenienceModifier,
@@ -299,6 +299,10 @@ open partial class Parser {
             baseCloseParen,
             body
         )
+        if baseKeyword is {} initializerTarget && !initializerTarget.IsMissing && !declaration.HasBaseInitializer {
+            Diagnostics.ReportInvalidConstructorInitializerTarget(initializerTarget.Location)
+        }
+        return declaration
     }
 
     private func ParseSharedBlock() SharedBlockSyntax {

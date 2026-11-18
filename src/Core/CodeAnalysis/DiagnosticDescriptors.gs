@@ -2633,6 +2633,11 @@ internal shared class DiagnosticDescriptors {
         DiagnosticSeverity.Error,
         "Cannot use '{0}?' because '{0}' has no proven reference-type or non-nullable value-type kind. Add a class, class?, struct, or unmanaged constraint, or a sufficient reference-class bound. To accept an already nullable type argument, use bare '{0}'."
     )
+    internal let InvalidConstructorInitializerTarget DiagnosticDescriptor = DiagnosticDescriptor(
+        "GS0642",
+        DiagnosticSeverity.Error,
+        "Only 'base' is valid after ':' in a constructor initializer. For same-class chaining, use 'convenience init() {{ init(args) }}'."
+    )
     internal let FatalCompilerIOError DiagnosticDescriptor = DiagnosticDescriptor(
         "GS9997",
         DiagnosticSeverity.Error,

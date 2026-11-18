@@ -875,7 +875,7 @@ open class ExplicitOnlyBase : IValueCarrier {
 data class DerivedOverExplicitOnly(Value int32) : ExplicitOnlyBase()
 
 open class ExplicitMiddle : HiddenBase(41), IValueCarrier {
-    init(v int32) : super(v) {}
+    init(v int32) : base(v) {}
     prop (IValueCarrier) Value int32 -> 99
 }
 data class DerivedOverExplicitMiddle(Value int32, Extra int32) : ExplicitMiddle(Value)
@@ -885,7 +885,7 @@ open data class GenMiddle(Value int32) : GenBase[int32](Value)
 data class GenLeaf(Extra int32) : GenMiddle(0)
 
 class SiblingConstructingDerived : BaseWithProtectedGetter {
-    init() : super(0) {}
+    init() : base(0) {}
     func Make() DerivedFromProtectedGetter -> DerivedFromProtectedGetter{Value: 42, Extra: 8}
 }
 
