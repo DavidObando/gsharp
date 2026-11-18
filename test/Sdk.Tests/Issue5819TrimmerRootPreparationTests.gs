@@ -80,12 +80,34 @@ class Issue5819TrimmerRootPreparationTests : IDisposable {
         Assert.DoesNotContain("ROOT=Gsharp.", output, StringComparison.Ordinal)
     }
 
+    @Fact
+    func IntermediateFiles_StayUnderProjectDirectory_WhenBuildStartsElsewhere() {
+        // Issue #6029: cs2gs starts nested builds from the repository root.
+        let elsewhere = Path.Combine(directory, "elsewhere")
+        Directory.CreateDirectory(elsewhere)
+        let (exit, output) = RunPrepareForILLink(
+            "false",
+            "true",
+            "false",
+            "false",
+            "false",
+            elsewhere,
+            []string{"-t:_GsharpGenerateRunSettings;PrepareForILLink", "-p:IsTestProject=true"}
+        )
+        Assert.True(exit == 0, output)
+        Assert.True(File.Exists(Path.Combine(directory, "obj", "gsharp.generated.runsettings")), output)
+        Assert.True(File.Exists(Path.Combine(directory, "obj", "gsharp.trimmer.xml")), output)
+        Assert.False(Directory.Exists(Path.Combine(elsewhere, "obj")), output)
+    }
+
     private func RunPrepareForILLink(
         publishAot string,
         publishTrimmed string,
         noExtensions string,
         noChannels string,
-        noValues string
+        noValues string,
+        workingDirectory string? = nil,
+        extraArguments[]string? = nil
     )(Exit int32, Output string) {
         let extensionsPath = Path.Combine(directory, "Gsharp.Extensions.dll")
         let channelsPath = Path.Combine(directory, "Gsharp.Runtime.Channels.dll")
@@ -107,14 +129,14 @@ class Issue5819TrimmerRootPreparationTests : IDisposable {
         let projectPath = Path.Combine(directory, "Probe.proj")
         document.Save(projectPath)
         let start = ProcessStartInfo("dotnet"){
-            WorkingDirectory = directory,
+            WorkingDirectory = workingDirectory ?? directory,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false
         }
         for argument in[]string{
             "msbuild",
-            "Probe.proj",
+            projectPath,
             "-nologo",
             "-nr:false",
             "-v:normal",
@@ -123,7 +145,7 @@ class Issue5819TrimmerRootPreparationTests : IDisposable {
             "-p:GsharpNoExtensions=$noExtensions",
             "-p:GsharpNoChannelsRuntime=$noChannels",
             "-p:GsharpNoValuesRuntime=$noValues"
-        } {
+        }.Concat(extraArguments ?? Array.Empty[string]()) {
             start.ArgumentList.Add(argument)
         }
         using let process = Process.Start(start) ?? throw InvalidOperationException("Cannot start the probe build.")

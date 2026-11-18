@@ -42,6 +42,12 @@ open class SyntaxTree {
         expression: "root"
     )
 
+    /// Gets the facts of the cut for a prefix tree, or `null` for every other tree (ADR-0225).
+    internal prop Prefix PrefixCut? {
+        get;
+        private set;
+    }
+
     /// Gets the documentation comment tokens collected during lexing (ADR-0057 §7).
     internal prop DocumentationTokens ImmutableArray[SyntaxToken] {
         get;
@@ -143,6 +149,26 @@ open class SyntaxTree {
                 parser.Diagnostics.ToImmutableArray(),
                 parser.DocumentationTokens
             )
+            return syntaxTree
+        }
+
+        /// Parses [`source`](paramref)'s text as if it ended at [`cut`](paramref) (ADR-0225). The parser
+        /// closes each delimiter that is open at the cut with a zero-width token that is sealed at the cut.
+        /// @param source The tree that the host gave. Its root supplies the declarations after the cut.
+        /// @param cut The cut position.
+        /// @param remainder What follows the cut.
+        /// @returns The prefix tree. Its text is [`source`](paramref)'s text.
+        internal func ParsePrefix(source SyntaxTree, cut int32, remainder PrefixRemainder) SyntaxTree {
+            let syntaxTree = SyntaxTree(source.Text)
+            let stream = PrefixTokenStream.Build(syntaxTree, source, cut, remainder)
+            let parser = Parser(syntaxTree, stream.Tokens, stream.DocumentationTokens, stream.LexerDiagnostics)
+            syntaxTree.SetParseResult(
+                parser.ParseCompilationUnit(),
+                parser.Diagnostics.ToImmutableArray(),
+                parser.DocumentationTokens
+            )
+            stream.Cut.Tree = syntaxTree
+            syntaxTree.Prefix = stream.Cut
             return syntaxTree
         }
 

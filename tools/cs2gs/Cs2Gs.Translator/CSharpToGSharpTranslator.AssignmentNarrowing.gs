@@ -1210,6 +1210,53 @@ partial class CSharpToGSharpTranslator {
             )
         }
 
+        // A value local or parameter that the translator emits as `var` (a reassigned parameter gets a `var` shadow).
+        // Writes are counted in the declaring scope, so a capture read in a lambda or local function sees outer writes.
+        private func IsEmittedMutableVariable(symbol ISymbol?) bool {
+            let declaration Microsoft
+                .CodeAnalysis
+                .SyntaxNode? = symbol
+                ?.DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax()
+            return declaration != nil &&
+                symbol is ILocalSymbol{RefKind: RefKind.None} or
+                IParameterSymbol{RefKind: RefKind.None} &&
+                this.IsSymbolReassigned(
+                symbol,
+                this.EnclosingFlowScope(declaration) ?? declaration.SyntaxTree.GetRoot()
+            )
+        }
+
+        private let anyRootInvalidations Dictionary[(SemanticModel, SyntaxNode), HashSet[SyntaxNode]] = Dictionary[
+            (SemanticModel, SyntaxNode),
+            HashSet[SyntaxNode]
+        ]()
+
+        // The calls in a scope, outside nested functions and dropped statements, that end the narrowing of every
+        // mutable variable (#6036).
+        private func GetAnyRootInvalidations(scope_ SyntaxNode) HashSet[SyntaxNode] {
+            if scope_.SyntaxTree != this.context.SemanticModel.SyntaxTree {
+                using let modelScope = this.context.UseSemanticModelFor(scope_.SyntaxTree)
+                return this.GetAnyRootInvalidations(scope_)
+            }
+            let key = (this.context.SemanticModel, scope_)
+            if this.anyRootInvalidations.TryGetValue(key, out var cached) {
+                return cached
+            }
+            let calls = HashSet[SyntaxNode](ReferenceEqualityComparer.Instance)
+            for node in scope_.DescendantNodesAndSelf(
+                (node SyntaxNode) -> object.ReferenceEquals(node, scope_) ||
+                    !(this.IsClosureBoundary(node) || this.IsDroppedStatementOrLoopClause(node))
+            ) {
+                if this.CallMayInvalidateAnyRoot(node) {
+                    calls.Add(node)
+                }
+            }
+            this.anyRootInvalidations.Add(key, calls)
+            return calls
+        }
+
         // RecordWritableReference preserves unrelated roots for variables, tuple storage, array elements, and stable member paths.
         private func WritableReferenceMayInvalidateAnyRoot(target ExpressionSyntax) bool {
             let stripped = UnwrapParenthesesAndSuppressions(target)!!

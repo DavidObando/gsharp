@@ -143,6 +143,25 @@ open partial class Parser {
         Diagnostics.AddRange(lexer.Diagnostics)
     }
 
+    /// Initializes a new instance of the (cref:Parser) class over tokens that a prefix parse prepared
+    /// (ADR-0225). The token list ends with an end-of-file token.
+    /// @param syntaxTree The prefix tree.
+    /// @param tokens The tokens, without trivia.
+    /// @param documentationTokens The documentation comment tokens.
+    /// @param lexerDiagnostics The lexer diagnostics of the tokens.
+    internal init(
+        syntaxTree SyntaxTree,
+        tokens ImmutableArray[SyntaxToken],
+        documentationTokens ImmutableArray[SyntaxToken],
+        lexerDiagnostics IEnumerable[Diagnostic]
+    ) {
+        Diagnostics = DiagnosticBag()
+        this.syntaxTree = syntaxTree
+        this.tokens = tokens
+        DocumentationTokens = documentationTokens
+        Diagnostics.AddRange(lexerDiagnostics)
+    }
+
     /// Gets tiagnostic bag associated to this parser.
     prop Diagnostics DiagnosticBag {
         get;

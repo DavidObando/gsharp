@@ -49,6 +49,24 @@ class Diagnostic {
         Properties = properties
     }
 
+    // ADR-0225: a copy that keeps every field and sets the prefix finality.
+    private init(
+        source Diagnostic,
+        severity DiagnosticSeverity,
+        prefixFinality DiagnosticFinality,
+        prefixReason string
+    ) {
+        Descriptor = source.Descriptor
+        Location = source.Location
+        Id = source.Id
+        Severity = severity
+        Message = source.Message
+        AdditionalLocations = source.AdditionalLocations
+        Properties = source.Properties
+        PrefixFinality = prefixFinality
+        this.prefixReason = prefixReason
+    }
+
     /// Gets the stable diagnostic identifier (e.g. `GS0001`).
     prop Id string {
         get;
@@ -88,6 +106,17 @@ class Diagnostic {
         get;
     }
 
+    /// Gets the finality that the binder gave this diagnostic in a prefix bind (ADR-0225).
+    /// It is (cref:DiagnosticFinality.Final) for every diagnostic of a complete program.
+    internal prop PrefixFinality DiagnosticFinality {
+        get;
+    }
+
+    /// Gets the premise that makes the diagnostic future-dependent, or an empty string (ADR-0225).
+    internal prop PrefixReason string -> prefixReason ?? string.Empty
+
+    private var prefixReason string?
+
     /// Gets a value indicating whether this diagnostic is an error.
     prop IsError bool -> Severity == DiagnosticSeverity.Error
 
@@ -100,12 +129,19 @@ class Diagnostic {
         if severity == Severity {
             return this
         }
-        return if Descriptor is {} descriptor {
-            Diagnostic(descriptor, Location, severity, Message, AdditionalLocations, Properties)
-        } else {
-            Diagnostic(Location, Id, severity, Message)
-        }
+        return Diagnostic(this, severity, PrefixFinality, PrefixReason)
     }
+
+    /// Returns a copy of this diagnostic with the given prefix finality (ADR-0225).
+    /// @param finality The finality of the copy.
+    /// @param reason The premise of the finality.
+    /// @returns The copy.
+    internal func WithPrefixFinality(finality DiagnosticFinality, reason string) Diagnostic -> Diagnostic(
+        this,
+        Severity,
+        finality,
+        reason
+    )
 
     /// Diagnostic information message.
     /// @returns A string with the message.

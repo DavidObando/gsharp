@@ -21701,7 +21701,15 @@ partial class CSharpToGSharpTranslator {
             let byReference = this.IsByReferenceVariable(symbol)
             let memberPath = memberRegions != nil
             let readStart = readPosition ?? use.SpanStart
-            if !closureAssigned && !byReference && !memberPath {
+            // Issue #6036: gsc drops the fact of every mutable local at a call that receives a writable member
+            // reference, so those calls end the narrowing too, including through a loop's back edge.
+            let anyRootWrites = if !memberPath && this.IsEmittedMutableVariable(symbol) {
+                this.GetAnyRootInvalidations($scope)
+            } else {
+                default(HashSet[Microsoft.CodeAnalysis.SyntaxNode]?)
+            }
+            let onlyAnyRootWrites = !closureAssigned && !byReference && !memberPath
+            if onlyAnyRootWrites && (anyRootWrites == nil || anyRootWrites.Count == 0) {
                 return false
             }
             // ADR-0208 R15 (#5237): a closure-assigned variable loses its fact at every node that may run source code.
@@ -21728,6 +21736,9 @@ partial class CSharpToGSharpTranslator {
                         this.ReferenceStorageType(symbol)
                     )
                 )
+            }
+            let WritesAnyRoot = func (node Microsoft.CodeAnalysis.SyntaxNode) bool {
+                return anyRootWrites != nil && anyRootWrites.Contains(node)
             }
             let OutsideNestedFunctions = func (node Microsoft.CodeAnalysis.SyntaxNode) bool {
                 return object.ReferenceEquals(node, $scope) ||
@@ -21759,7 +21770,14 @@ partial class CSharpToGSharpTranslator {
             } else {
                 this.GetLoopCondition(exitedLoop)
             }
-            if $scope.DescendantNodesAndSelf(OutsideNestedFunctions).Any(
+            // The cached calls are the only candidates when they are the variable's only invalidating effect.
+            let candidates IEnumerable[Microsoft.CodeAnalysis.SyntaxNode] = if anyRootWrites != nil &&
+                onlyAnyRootWrites {
+                anyRootWrites
+            } else {
+                $scope.DescendantNodesAndSelf(OutsideNestedFunctions)
+            }
+            if candidates.Any(
                 (node Microsoft.CodeAnalysis.SyntaxNode) -> (
                     if exitedLoop != nil {
                         (
@@ -21767,7 +21785,7 @@ partial class CSharpToGSharpTranslator {
                                 (
                                 (
                                     !object.ReferenceEquals(node, narrowingGuard) &&
-                                        (RunsSourceCode(node) || WritesReferenceStorage(node))
+                                        (RunsSourceCode(node) || WritesReferenceStorage(node) || WritesAnyRoot(node))
                                 ) ||
                                     (
                                     byReference &&
@@ -21788,7 +21806,7 @@ partial class CSharpToGSharpTranslator {
                                 node
                                 .Span
                                 .End <= readStart &&
-                                (RunsSourceCode(node) || WritesReferenceStorage(node)) &&
+                                (RunsSourceCode(node) || WritesReferenceStorage(node) || WritesAnyRoot(node)) &&
                                 !this.IsInSiblingBranchOfRead(node, use, $scope)
                         )
                     } else {
@@ -21799,7 +21817,7 @@ partial class CSharpToGSharpTranslator {
                             includeReferenceStorageWrites: byReference,
                             readPosition: readStart
                         ) &&
-                            (RunsSourceCode(node) || WritesReferenceStorage(node)) &&
+                            (RunsSourceCode(node) || WritesReferenceStorage(node) || WritesAnyRoot(node)) &&
                             !this.IsInSiblingBranchOfRead(node, use, $scope)
                     }
                 )
@@ -21850,8 +21868,9 @@ partial class CSharpToGSharpTranslator {
                             OutsideNestedFunctions
                         )
                             .Any(
-                            (node Microsoft.CodeAnalysis.SyntaxNode) -> RunsSourceCode(node) ||
-                                WritesReferenceStorage(node)
+                            (candidate Microsoft.CodeAnalysis.SyntaxNode) -> RunsSourceCode(candidate) ||
+                                WritesReferenceStorage(candidate) ||
+                                WritesAnyRoot(candidate)
                         )
                     )
                 ) {
@@ -21869,7 +21888,7 @@ partial class CSharpToGSharpTranslator {
                 if enclosing.SpanStart >= readStart {
                     continue
                 }
-                if (closureAssigned || memberPath) &&
+                if (closureAssigned || memberPath || WritesAnyRoot(enclosing)) &&
                     enclosing is Microsoft
                     .CodeAnalysis
                     .CSharp
@@ -21918,10 +21937,20 @@ partial class CSharpToGSharpTranslator {
                     ) {
                         continue
                     }
-                    if !node.Span.Contains(narrowingGuard.Span) && node.DescendantNodesAndSelf(OutsideNestedFunctions)
-                        .Any(
-                        (candidate Microsoft.CodeAnalysis.SyntaxNode) -> RunsSourceCode(candidate) ||
-                            WritesReferenceStorage(candidate)
+                    let loopSpan = node.Span
+                    if !loopSpan.Contains(narrowingGuard.Span) &&
+                        (
+                        if anyRootWrites != nil && onlyAnyRootWrites {
+                            anyRootWrites.Any(
+                                (candidate Microsoft.CodeAnalysis.SyntaxNode) -> loopSpan.Contains(candidate.Span)
+                            )
+                        } else {
+                            node.DescendantNodesAndSelf(OutsideNestedFunctions).Any(
+                                (candidate Microsoft.CodeAnalysis.SyntaxNode) -> RunsSourceCode(candidate) ||
+                                    WritesReferenceStorage(candidate) ||
+                                    WritesAnyRoot(candidate)
+                            )
+                        }
                     ) {
                         return true
                     }
