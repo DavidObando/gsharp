@@ -241,7 +241,16 @@ suppression.
   visible after it (an `out var`, a pattern variable, a deconstruction, a
   label, a local function), it is a `using` declaration (gsc takes no
   annotation there, and a block would dispose early) or a `defer`, or it is a
-  `: base(...)` initializer, which stays in the constructor header. In
+  `: base(...)` initializer, which stays in the constructor header. The same
+  suppression covers a `ref`/`in` argument without `!` (issue #6036). It
+  applies when Roslyn's flow state proves a nullable local or parameter
+  non-null at the call, but gsc does not narrow it there. For example, the
+  guard can use a user-defined `==` (`key == null` on `System.Type`), whose
+  dispatch the translation keeps. The callee must be a G# callee, and its
+  parameter must be a non-null reference. csc does not warn on this
+  argument, and G# cannot spell the proof on a variable, so the translation
+  keeps C#'s behavior. It does not add a copy-in/copy-out temporary, and it
+  does not change the guard. In
   addition, a `#pragma warning disable` region naming `CS8600`, `CS8601`,
   `CS8604` or `CS8620` (the csc nullability warnings a by-reference argument
   raises) that

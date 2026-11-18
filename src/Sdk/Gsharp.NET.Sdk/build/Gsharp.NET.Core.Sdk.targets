@@ -186,7 +186,7 @@
   <PropertyGroup>
     <DocumentationFile Condition=" '$(GenerateDocumentationFile)' == 'true' and '$(DocumentationFile)' == '' ">$(IntermediateOutputPath)$(TargetName).xml</DocumentationFile>
     <_GsharpShouldGenerateRunSettings Condition=" '$(IsTestProject)' == 'true' and '$(RunSettingsFilePath)' == '' ">true</_GsharpShouldGenerateRunSettings>
-    <RunSettingsFilePath Condition=" '$(_GsharpShouldGenerateRunSettings)' == 'true' ">$([MSBuild]::NormalizePath('$(IntermediateOutputPath)', 'gsharp.generated.runsettings'))</RunSettingsFilePath>
+    <RunSettingsFilePath Condition=" '$(_GsharpShouldGenerateRunSettings)' == 'true' ">$([MSBuild]::NormalizePath('$(MSBuildProjectDirectory)', '$(IntermediateOutputPath)', 'gsharp.generated.runsettings'))</RunSettingsFilePath>
   </PropertyGroup>
 
   <!-- Visual Studio's legacy VSTest launcher does not infer a target framework
@@ -238,7 +238,7 @@
   <!-- Issue #5819: preserve System.Runtime type forwarders and root bundled G#
        runtime helpers when ILLink or NativeAOT prepares trimmed inputs. -->
   <PropertyGroup>
-    <GsharpTrimmerRootDescriptorFile Condition=" '$(GsharpTrimmerRootDescriptorFile)' == '' ">$([MSBuild]::NormalizePath('$(IntermediateOutputPath)', 'gsharp.trimmer.xml'))</GsharpTrimmerRootDescriptorFile>
+    <GsharpTrimmerRootDescriptorFile Condition=" '$(GsharpTrimmerRootDescriptorFile)' == '' ">$([MSBuild]::NormalizePath('$(MSBuildProjectDirectory)', '$(IntermediateOutputPath)', 'gsharp.trimmer.xml'))</GsharpTrimmerRootDescriptorFile>
   </PropertyGroup>
 
   <Target Name="_GsharpPrepareForILLink"

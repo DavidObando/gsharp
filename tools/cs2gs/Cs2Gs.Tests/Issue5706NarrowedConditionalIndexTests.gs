@@ -32,6 +32,10 @@ import Xunit
 /// On 1868ce45d, writable-ref extension calls on fields fail with GS0158/GS0116; local and array receivers stay bare.
 /// On f955ef24e, later arguments to calls and constructors report GS0300/GS0536 before call completion.
 /// Without emitted-receiver classification, reduced, qualified, and bare extension calls lowered by value produce GS0300/GS0536.
+/// On 30da23546, guarded and assigned mutable locals report GS0158/GS0159/GS0129 after a member-ref call, also across a
+/// loop back edge; `let` locals, parameters and local-ref controls pass. Flow-proven `ref`/`in` arguments report GS0612.
+/// With the reassignment scope at the current body, captures read in a lambda or local function report GS0158; without
+/// the nested-type check, a `Box<string?>` argument to `ref Box<string>` drops the GS0612 that csc also reports.
 /// Each test also compares the translated program's output with C#.
 open class Issue5706NarrowedConditionalIndexTests {
     @Theory
@@ -94,6 +98,189 @@ public static class Demo
         } else {
             Assert.DoesNotContain("plan!!", printed, StringComparison.Ordinal)
         }
+    }
+
+    @Theory
+    @InlineData("Interlocked.Increment(ref ctx.Counter);", true)
+    @InlineData("Interlocked.Increment(ref local);", false)
+    func MutableVariableNarrowing_EndsAtWritableMemberReferenceCall(refCall string, expectAssertion bool) {
+        let printed = Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System.Collections.Generic;
+using System.Threading;
+public static class Demo
+{
+    sealed class Ctx { public int Counter; }
+    static readonly Ctx ctx = new Ctx();
+
+    static string? Find(int i) => i < 0 ? null : "v" + i;
+
+    static int Assigned()
+    {
+        int local = 0;
+        List<int>? seen = null;
+        seen = new List<int>();
+        foreach (var i in new[] { 1, 2, 1 })
+        {
+            if (seen.Contains(i)) continue;
+            __CALL__
+            seen.Add(i);
+        }
+        return seen.Count;
+    }
+
+    static int Guarded(int seed)
+    {
+        int local = 0;
+        var guarded = Find(-1);
+        guarded = Find(seed);
+        if (guarded == null) return 0;
+        __CALL__
+        return guarded.Length;
+    }
+
+    static int Looped(int seed)
+    {
+        int local = 0;
+        var looped = Find(-1);
+        looped = Find(seed);
+        if (looped == null) return 0;
+        var total = 0;
+        foreach (var i in new[] { 1, 2 })
+        {
+            total += looped.Length;
+            __CALL__
+        }
+        return total;
+    }
+
+    static int Fixed(int seed)
+    {
+        int local = 0;
+        var fixedValue = Find(seed);
+        if (fixedValue == null) return 0;
+        __CALL__
+        return fixedValue.Length;
+    }
+
+    static int Parameter(string? param)
+    {
+        int local = 0;
+        if (param == null) return 0;
+        __CALL__
+        return param.Length;
+    }
+
+    static int Captured(int seed)
+    {
+        int local = 0;
+        var captured = Find(-1);
+        captured = Find(seed);
+        int Inner()
+        {
+            if (captured == null) return 0;
+            __CALL__
+            return captured.Length;
+        }
+        return Inner();
+    }
+
+    static int CapturedByLambda(int seed)
+    {
+        int local = 0;
+        var lambdaCapture = Find(-1);
+        lambdaCapture = Find(seed);
+        System.Func<int> inner = () =>
+        {
+            if (lambdaCapture == null) return 0;
+            __CALL__
+            return lambdaCapture.Length;
+        };
+        return inner();
+    }
+
+    public static string Run() =>
+        Assigned() + ":" + Guarded(3) + ":" + Looped(4) + ":" + Fixed(5) + ":" + Parameter("abc") + ":" +
+        Captured(6) + ":" + CapturedByLambda(7);
+}
+`.Replace("__CALL__", refCall), strictIl: true, expectedOutput: "2:2:4:2:3:2:2", rejectedWarning: "GS0536")
+        for name in[]string{"seen", "guarded", "looped", "captured", "lambdaCapture"} {
+            if expectAssertion {
+                Assert.Contains(name + "!!.", printed, StringComparison.Ordinal)
+            } else {
+                Assert.DoesNotContain(name + "!!", printed, StringComparison.Ordinal)
+            }
+        }
+        Assert.DoesNotContain("fixedValue!!", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("param!!", printed, StringComparison.Ordinal)
+    }
+
+    @Theory
+    @InlineData("key == null", "if (!Wrap(ref key)) return \"\";", "Nullable`1", true)
+    @InlineData("key == null", "if (Look(in key).Length == 0) return \"\";", "Int32", true)
+    @InlineData("key is null", "if (!Wrap(ref key)) return \"\";", "Nullable`1", false)
+    func FlowProvenByReferenceArgument_SuppressesGS0612WhereGscDoesNotNarrow(
+        nullTest string,
+        call string,
+        expectedOutput string,
+        expectSuppression bool
+    ) {
+        let printed = Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System;
+public static class Demo
+{
+    static bool Wrap(ref Type projected) { projected = typeof(int?); return true; }
+    static string Look(in Type projected) => projected.Name;
+
+    public static string Run()
+    {
+        Func<Type, Type?> project = t => t;
+        var key = project(typeof(int));
+        if (__GUARD__) return "";
+        __CALL__
+        return key.Name;
+    }
+}
+`.Replace("__GUARD__", nullTest)
+                .Replace("__CALL__", call), strictIl: true, expectedOutput: expectedOutput, rejectedWarning: "GS0612")
+        if expectSuppression {
+            Assert.Contains("@SuppressDiagnostic(\"GS0612\")", printed, StringComparison.Ordinal)
+        } else {
+            Assert.DoesNotContain("GS0612", printed, StringComparison.Ordinal)
+        }
+    }
+
+    // A top-level flow proof does not cover a nested nullability difference, which csc and gsc both report.
+    @Fact
+    func FlowProvenByReferenceArgument_KeepsGS0612ForNestedNullabilityDifference() {
+        let printed = Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System;
+public sealed class Box<T>
+{
+    public T Value;
+    public Box(T value) { Value = value; }
+    public static bool operator ==(Box<T>? left, Box<T>? right) => ReferenceEquals(left, right);
+    public static bool operator !=(Box<T>? left, Box<T>? right) => !ReferenceEquals(left, right);
+    public override bool Equals(object? obj) => ReferenceEquals(this, obj);
+    public override int GetHashCode() => 0;
+}
+public static class Demo
+{
+    static bool Wrap(ref Box<string> box) { box = new Box<string>("w"); return true; }
+
+    public static string Run()
+    {
+        Func<Box<string?>, Box<string?>?> project = b => b;
+        var key = project(new Box<string?>("k"));
+        if (key == null) return "";
+        if (!Wrap(ref key)) return "";
+        return key.Value ?? "";
+    }
+}
+`, strictIl: true, expectedOutput: "w")
+        Assert.DoesNotContain("GS0612", printed, StringComparison.Ordinal)
     }
 
     @Theory

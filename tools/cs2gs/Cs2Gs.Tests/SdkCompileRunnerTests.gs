@@ -26,6 +26,67 @@ import System.Xml.Linq
 /// end-to-end build paths are covered by the cs2gs pipeline's own corpus runs.
 open class SdkCompileRunnerTests {
     @Fact
+    func BuildWorkingDirectory_UsesRepoRootToHonorGlobalJsonSdkPin() {
+        Assert.Equal("/repo", SdkCompileRunner.BuildWorkingDirectory("/repo", "/tmp/app"))
+        Assert.Equal("/tmp/app", SdkCompileRunner.BuildWorkingDirectory(nil, "/tmp/app"))
+    }
+
+    // Without absolute paths, the repository-root child resolved these relative directories under the repository.
+    @Fact
+    func RelativeWorkDirectories_KeepTheirMeaningWhenTheChildRunsFromTheRepoRoot() {
+        let repoRoot string? = GsharpTestProjectRunner.FindRepoRoot()
+        if repoRoot == nil || GsharpTestProjectRunner.ResolveLocalSdkPackage(repoRoot) == nil {
+            return
+        }
+        let root = Path.Combine(AppContext.BaseDirectory, "relative-6029", Guid.NewGuid().ToString("N"))
+        let relativeRoot = Path.GetRelativePath(Environment.CurrentDirectory, root)
+        try {
+            let compileDir = Path.Combine(relativeRoot, "compile")
+            Directory.CreateDirectory(compileDir)
+            let source = Path.Combine(compileDir, "Relative.gs")
+            File.WriteAllText(source, "package Relative\nclass Value { shared { func Get() int32 -> 42 } }\n")
+            let compile = SdkCompileRunner().Compile(
+                compileDir,
+                "Relative",
+                []string{source},
+                TargetKind.Library,
+                Array.Empty[string](),
+                Array.Empty[string](),
+                Array.Empty[string](),
+                rootNamespace: "Relative",
+                config: "Release"
+            )
+            Assert.True(compile.Succeeded, compile.Output)
+            let project = GsharpTestProject{
+                LibraryName: "RelativeLib",
+                LibraryRootNamespace: "RelativeLib",
+                LibraryFiles: []GsharpSourceFile{
+                    GsharpSourceFile(
+                        "Value.gs",
+                        "package RelativeLib\nclass Value { shared { func Get() int32 -> 42 } }\n"
+                    )
+                },
+                TestsName: "RelativeLib.Tests",
+                TestsRootNamespace: "RelativeLib.Tests",
+                TestFiles: []GsharpSourceFile{
+                    GsharpSourceFile(
+                        "ValueTests.gs",
+                        "package RelativeLib.Tests\nimport Xunit\nimport RelativeLib\n" +
+                            "class ValueTests { @Fact func Returns42() { Assert.Equal(42, Value.Get()) } }\n"
+                    )
+                }
+            }
+            let run = GsharpTestProjectRunner().Run(project, Path.Combine(relativeRoot, "run"))
+            Assert.True(run.Status == GsharpTestRunStatus.Ran, run.Output)
+            Assert.Equal("Passed", Assert.Single(run.Results).Outcome)
+        } finally {
+            if Directory.Exists(root) {
+                Directory.Delete(root, recursive: true)
+            }
+        }
+    }
+
+    @Fact
     func WriteFailureArtifacts_PreservesBuildInvocationAndSeparateStreamsOnlyOnFailure() {
         let directory = Path.Combine(Path.GetTempPath(), "cs2gs-sdk-failure-" + Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(directory)

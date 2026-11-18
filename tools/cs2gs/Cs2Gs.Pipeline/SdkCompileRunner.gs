@@ -57,6 +57,9 @@ class SdkCompileRunner {
         analyzerVerifierPackageVersion string?,
         warningsNotAsErrors string? = nil
     ) SdkCompileResult {
+        // The child runs from the repository root (#6029), so keep relative paths' meaning.
+        let generatedProjectPath = Path.GetFullPath(generatedProjectPath)
+        let artifactDirectory = Path.GetFullPath(artifactDirectory)
         let repoRoot string? = GsharpTestProjectRunner.TryFindRepoRoot()
         if sdkMoniker == nil {
             return SdkCompileResult.Unavailable(
@@ -111,12 +114,19 @@ class SdkCompileRunner {
                 warningsNotAsErrors
             )
             let buildEnvironment = IsolatedNugetEnvironment(SharedMirroredNugetRoot(artifactDirectory))
-            let result = ProcessRunner.Run("dotnet", args, projectDirectory, MirroredBuildTimeout, buildEnvironment)
+            let buildWorkingDirectory = BuildWorkingDirectory(repoRoot, projectDirectory!!)
+            let result = ProcessRunner.Run(
+                "dotnet",
+                args,
+                buildWorkingDirectory,
+                MirroredBuildTimeout,
+                buildEnvironment
+            )
             File.WriteAllText(Path.Combine(artifactDirectory, "sdk.build.log"), result.Output ?? string.Empty)
             this.CaptureFailureArtifacts(
                 artifactDirectory,
                 args,
-                projectDirectory!!,
+                buildWorkingDirectory,
                 sdkMoniker,
                 buildEnvironment,
                 result
@@ -136,7 +146,13 @@ class SdkCompileRunner {
                 diagnostics = diagnostics.Concat(relayed).ToList()
             }
             let assemblyPath string? = if result.ExitCode == 0 {
-                ResolveTargetPath(generatedProjectPath, projectDirectory, config, artifactDirectory)
+                ResolveTargetPath(
+                    generatedProjectPath,
+                    projectDirectory,
+                    buildWorkingDirectory,
+                    config,
+                    artifactDirectory
+                )
             } else {
                 default(string?)
             }
@@ -218,6 +234,8 @@ class SdkCompileRunner {
         if string.IsNullOrEmpty(appRunDir) {
             throw ArgumentException("An app run directory is required.", "appRunDir")
         }
+        // The child runs from the repository root (#6029), so keep a relative run directory's meaning.
+        let appRunDir = Path.GetFullPath(appRunDir)
         if string.IsNullOrWhiteSpace(projectName) {
             throw ArgumentException("A project name is required.", "projectName")
         }
@@ -335,9 +353,16 @@ class SdkCompileRunner {
             args.Add("-p:RestoreConfigFile=" + repoNugetConfig)
         }
         let buildEnvironment = IsolatedNugetEnvironment(appRunDir)
-        let result = ProcessRunner.Run("dotnet", args, appRunDir, TimeSpan.FromMinutes(10), buildEnvironment)
+        let buildWorkingDirectory = BuildWorkingDirectory(repoRoot, appRunDir)
+        let result = ProcessRunner.Run(
+            "dotnet",
+            args,
+            buildWorkingDirectory,
+            TimeSpan.FromMinutes(10),
+            buildEnvironment
+        )
         File.WriteAllText(Path.Combine(appRunDir, "sdk.build.log"), result.Output ?? string.Empty)
-        this.CaptureFailureArtifacts(appRunDir, args, appRunDir, sdkVersion, buildEnvironment, result)
+        this.CaptureFailureArtifacts(appRunDir, args, buildWorkingDirectory, sdkVersion, buildEnvironment, result)
         var diagnostics = GscInvoker.ParseDiagnostics(result.Output)
         if result.ExitCode != 0 && diagnostics.Count((d GscDiagnostic) -> d.IsError) == 0 {
             // Issue #3634: before synthesizing an opaque fallback, surface any
@@ -564,6 +589,14 @@ class SdkCompileRunner {
         ]{
             ["NUGET_PACKAGES"] = Path.Combine(root, ".nuget-packages"),
             [GsharpTestProjectRunner.SourceRootEnvironmentVariable] = string.Empty
+        }
+
+        internal func BuildWorkingDirectory(repositoryRoot string?, projectDirectory string) string {
+            // Issue #6029: generated projects sit outside the repo, so use its global.json SDK pin.
+            if !string.IsNullOrEmpty(repositoryRoot) {
+                return repositoryRoot
+            }
+            return projectDirectory
         }
 
         internal func MirroredTestEnvironment(artifactRoot string, sourceRoot string?) IReadOnlyDictionary[
@@ -967,6 +1000,9 @@ class SdkCompileRunner {
             sourceRoot string?,
             timeout TimeSpan
         ) ProcessRunResult {
+            // The child runs from the repository root (#6029), so keep relative paths' meaning.
+            let generatedProjectPath = Path.GetFullPath(generatedProjectPath)
+            let artifactDirectory = Path.GetFullPath(artifactDirectory)
             let projectDirectory string? = Path.GetDirectoryName(Path.GetFullPath(generatedProjectPath))
             let repoRoot string? = GsharpTestProjectRunner.TryFindRepoRoot()
             let projectNugetConfig = Directory.EnumerateFiles(projectDirectory!!).FirstOrDefault(
@@ -1008,7 +1044,7 @@ class SdkCompileRunner {
                         "--",
                         CSharpTestOracle.RunSettingsArgument
                     },
-                    projectDirectory,
+                    BuildWorkingDirectory(repoRoot, projectDirectory!!),
                     timeout,
                     MirroredTestEnvironment(SharedMirroredNugetRoot(artifactDirectory), sourceRoot)
                 )
@@ -1381,6 +1417,7 @@ class SdkCompileRunner {
         private func ResolveTargetPath(
             projectPath string,
             projectDirectory string?,
+            workingDirectory string,
             config string,
             artifactDirectory string
         ) string? {
@@ -1393,7 +1430,7 @@ class SdkCompileRunner {
                     "-p:Configuration=" + (config ?? "Release"),
                     "-p:Cs2GsArtifactRoot=" + artifactDirectory
                 },
-                projectDirectory,
+                workingDirectory,
                 TimeSpan.FromMinutes(2),
                 IsolatedNugetEnvironment(SharedMirroredNugetRoot(artifactDirectory))
             )
