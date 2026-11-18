@@ -1248,17 +1248,19 @@ internal partial class StatementBinder {
                         case call is CallExpressionSyntax: call.Identifier.Text
                         default: default(string?)
                     }
-                    if referencedName != nil && siblingIndices.TryGetValue(referencedName, out var overloads) &&
-                        !(
-                        node.Parent is AccessorExpressionSyntax accessor && object.ReferenceEquals(
-                            accessor.RightPart,
-                            node
-                        )
-                    ) &&
-                        !IsShadowedInsideLiteral(referencedName, node, literal, scopeIndex) {
+                    if referencedName != nil && siblingIndices.TryGetValue(referencedName, out var overloads) {
+                        // Keep historical capture-free method eligibility separate from required forward signatures.
                         hasCrossReference |= referencedName != selfName
                         let lastSibling = overloads[overloads.Count - 1]
-                        if lastSibling > idx {
+                        if lastSibling > idx &&
+                            !(
+                            node.Parent is AccessorExpressionSyntax accessor && object.ReferenceEquals(
+                                accessor.RightPart,
+                                node
+                            )
+                        ) &&
+                            !IsShadowedInsideLiteral(referencedName, node, literal, scopeIndex) &&
+                            CouldReferenceLocalOverload(node, overloads, statementSyntaxes) {
                             groupEnds[idx - start] = Math.Max(groupEnds[idx - start], lastSibling + 1)
                         }
                     }
@@ -1282,7 +1284,6 @@ internal partial class StatementBinder {
             literal FunctionLiteralExpressionSyntax,
             index ClosureScopeIndex
         ) bool {
-            var child = site
             for var ancestor = site.Parent; ancestor != nil; ancestor = ancestor!!.Parent {
                 if ancestor is BlockStatementSyntax or
                     BlockExpressionSyntax or
@@ -1290,11 +1291,15 @@ internal partial class StatementBinder {
                     index
                     .DeclarationsOf(ancestor).TryGetValue(name, out var declarations) {
                     for declaration in declarations {
-                        if declaration.Span.End <= site.Span.Start || index.AreInSameLocalFunctionRun(
-                            ancestor,
-                            declaration,
-                            child
-                        ) {
+                        // Callable buckets merge parent overloads; only value bindings hide them.
+                        if declaration
+                            .Span
+                            .End <= site
+                            .Span
+                            .Start &&
+                            !IsGenericLocalFunctionDeclaration(declaration) &&
+                            !IsNonGenericLocalFunctionLiteralDeclaration(declaration) &&
+                            !IsRefReturningLocalFunctionDeclaration(declaration) {
                             return true
                         }
                     }
@@ -1305,7 +1310,32 @@ internal partial class StatementBinder {
                 if object.ReferenceEquals(ancestor, literal) {
                     return false
                 }
-                child = ancestor
+            }
+            return false
+        }
+
+        private func CouldReferenceLocalOverload(
+            site SyntaxNode,
+            overloads List[int32],
+            statements ImmutableArray[StatementSyntax]
+        ) bool {
+            if !(site is CallExpressionSyntax call) {
+                return true
+            }
+            for index in overloads {
+                let declaration = cast[VariableDeclarationSyntax](statements[index])
+                let literal = cast[FunctionLiteralExpressionSyntax](declaration.Initializer!!)
+                var required = 0
+                var variadic = false
+                for parameter in literal.Parameters {
+                    variadic |= parameter.IsVariadic
+                    if !parameter.IsVariadic && parameter.DefaultValue == nil {
+                        required++
+                    }
+                }
+                if call.Arguments.Count >= required && (variadic || call.Arguments.Count <= literal.Parameters.Count) {
+                    return true
+                }
             }
             return false
         }

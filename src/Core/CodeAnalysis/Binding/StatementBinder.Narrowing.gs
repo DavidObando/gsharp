@@ -5667,45 +5667,6 @@ internal partial class StatementBinder {
         // Created on first use: most functions have no closure.
         private var declarations Dictionary[SyntaxNode, Dictionary[string, List[VariableDeclarationSyntax]]]?
         private var parameters Dictionary[SyntaxNode, HashSet[string]]?
-        private var localFunctionRuns Dictionary[SyntaxNode, Dictionary[SyntaxNode, SyntaxNode]]?
-
-        func AreInSameLocalFunctionRun(container SyntaxNode, declaration SyntaxNode, siteChild SyntaxNode) bool {
-            let index = localFunctionRuns ?? Dictionary[SyntaxNode, Dictionary[SyntaxNode, SyntaxNode]]()
-            localFunctionRuns = index
-            if !index.TryGetValue(container, out var runs) {
-                runs = Dictionary[SyntaxNode, SyntaxNode]()
-                var start SyntaxNode? = nil
-                var previousKind = 0
-                for child in container.GetChildren() {
-                    if child is StatementSyntax statement {
-                        let kind = if StatementBinder.IsNonGenericLocalFunctionLiteralDeclaration(statement) {
-                            1
-                        } else if StatementBinder.IsGenericLocalFunctionDeclaration(statement) {
-                            2
-                        } else if StatementBinder.IsRefReturningLocalFunctionDeclaration(statement) {
-                            3
-                        } else {
-                            0
-                        }
-                        if kind == 0 {
-                            start = nil
-                        } else {
-                            if start == nil || kind != previousKind {
-                                start = child
-                            }
-                            runs[child] = start
-                        }
-                        previousKind = kind
-                    }
-                }
-                index[container] = runs
-            }
-            return runs.TryGetValue(declaration, out var declarationRun) && runs.TryGetValue(
-                siteChild,
-                out var siteRun
-            ) &&
-                object.ReferenceEquals(declarationRun, siteRun)
-        }
 
         /// The variable declarations that are children of [`container`](paramref), by name and in source order.
         func DeclarationsOf(container SyntaxNode) Dictionary[string, List[VariableDeclarationSyntax]] {

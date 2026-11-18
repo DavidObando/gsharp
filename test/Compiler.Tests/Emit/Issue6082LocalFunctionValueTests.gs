@@ -211,6 +211,47 @@ shared class Probe {
 
     shared {
         func Cases() sequence[[]object] {
+            yield []object{"qualified-member-keeps-capture-free-method-identity", `
+class Holder { shared { func second() int32 { return 42 } } }
+`, `
+        let before = GC.GetAllocatedBytesForCurrentThread()
+        let first = func() int32 { return Holder.second() }
+        let second = func() int32 { return 0 }
+        let allocated = GC.GetAllocatedBytesForCurrentThread() - before
+        return "${first()}:$allocated"
+`, "42:0", true}
+            yield []object{"inner-callable-forward-overload", "", `
+        let first = func(n int32) int32 {
+            let second[T] = func(value T, tag int32) int32 { return 0 }
+            return second(n)
+        }
+        let second = func(n int32) int32 { return n + 1 }
+        return first(41).ToString()
+`, "42", true}
+            yield []object{"inner-callable-forward-optional-overload", "", `
+        let first = func(n int32) int32 {
+            let second[T] = func(value T, tag int32) int32 { return 0 }
+            return second(n)
+        }
+        let second = func(n int32, unused int32 = 0) int32 { return n + 1 }
+        return first(41).ToString()
+`, "42", true}
+            yield []object{"inner-callable-forward-empty-variadic-overload", "", `
+        let first = func(n int32) int32 {
+            let second[T] = func(value T, tag int32) int32 { return 0 }
+            return second(n)
+        }
+        let second = func(n int32, rest ...int32) int32 { return n + 1 }
+        return first(41).ToString()
+`, "42", true}
+            yield []object{"inner-callable-forward-expanded-variadic-overload", "", `
+        let first = func(n int32) int32 {
+            let second[T] = func(value T, tag int32) int32 { return 0 }
+            return second(n, 0, 0)
+        }
+        let second = func(n int32, rest ...int32) int32 { return n + 1 }
+        return first(41).ToString()
+`, "42", true}
             for variation in[](Name string, Literal string){("local", `func(n int32) int32 {
                     calls++
                     let later = n + 1
