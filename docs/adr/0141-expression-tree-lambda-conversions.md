@@ -69,6 +69,11 @@ The validator currently accepts the expression forms the lowerer can faithfully
 materialize and rejects the rest explicitly instead of silently compiling the
 wrong program.
 
+An already-elided conditional call (ADR-0047 §6) is a `void` no-op, not a call to
+reconstruct. Validation and lowering skip its omitted receiver and arguments;
+lowering uses the existing `Expression.Default(typeof(void))` representation.
+Enabled calls retain ordinary call validation and lowering.
+
 Supported inside an expression-tree lambda:
 
 - parameters and captured locals

@@ -465,6 +465,9 @@ abstract class BoundTreeWalker {
     }
 
     protected open func VisitCallExpression(node BoundCallExpression) {
+        if node.IsElidedConditionalCall {
+            return
+        }
         VisitList(node.Arguments)
     }
 
@@ -480,10 +483,16 @@ abstract class BoundTreeWalker {
     }
 
     protected open func VisitImportedCallExpression(node BoundImportedCallExpression) {
+        if node.IsElidedConditionalCall {
+            return
+        }
         VisitList(node.Arguments)
     }
 
     protected open func VisitImportedInstanceCallExpression(node BoundImportedInstanceCallExpression) {
+        if node.IsElidedConditionalCall {
+            return
+        }
         VisitExpression(node.Receiver)
         VisitList(node.Arguments)
     }
@@ -491,6 +500,9 @@ abstract class BoundTreeWalker {
     /// ADR-0089 / issue #755: visit a constrained static-virtual call.
     /// @param node The bound node.
     protected open func VisitConstrainedStaticCallExpression(node BoundConstrainedStaticCallExpression) {
+        if node.IsElidedConditionalCall {
+            return
+        }
         VisitList(node.Arguments)
     }
 
@@ -565,6 +577,9 @@ abstract class BoundTreeWalker {
     }
 
     protected open func VisitUserInstanceCallExpression(node BoundUserInstanceCallExpression) {
+        if node.IsElidedConditionalCall {
+            return
+        }
         VisitExpression(node.Receiver)
         VisitList(node.Arguments)
     }
@@ -572,6 +587,9 @@ abstract class BoundTreeWalker {
     /// ADR-0091: visits a (cref:BoundBaseInterfaceCallExpression).
     /// @param node The node being visited.
     protected open func VisitBaseInterfaceCallExpression(node BoundBaseInterfaceCallExpression) {
+        if node.IsElidedConditionalCall {
+            return
+        }
         VisitExpression(node.Receiver)
         VisitList(node.Arguments)
     }
@@ -660,6 +678,9 @@ abstract class BoundTreeWalker {
     }
 
     protected open func VisitClrStaticCallExpression(node BoundClrStaticCallExpression) {
+        if node.IsElidedConditionalCall {
+            return
+        }
         VisitList(node.Arguments)
     }
 

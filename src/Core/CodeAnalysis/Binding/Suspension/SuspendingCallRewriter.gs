@@ -66,6 +66,16 @@ internal class SuspendingCallRewriter : BoundTreeRewriter {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    protected override func RewriteExpression(node BoundExpression) BoundExpression {
+        if node is BoundCallOperationExpression{IsElidedConditionalCall: true} {
+            return node
+        }
+        return base.RewriteExpression(node)
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     protected override func RewriteBlockStatement(node BoundBlockStatement) BoundStatement {
         // The scope lowering declares the block's `ctx` local before the try it
         // guards, so every statement after that declaration is under it.

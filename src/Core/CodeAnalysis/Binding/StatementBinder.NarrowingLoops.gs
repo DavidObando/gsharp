@@ -5773,6 +5773,9 @@ internal partial class StatementBinder {
     }
 
     private func AnalyzeBoundCallEffects(callNode BoundExpression, visiting HashSet[FunctionSymbol]) CallEffectSummary {
+        if callNode is BoundCallOperationExpression{IsElidedConditionalCall: true} {
+            return CallEffectSummary()
+        }
         switch callNode {
             case binary is BoundClrBinaryOperatorExpression {
                 if binary.Method is {} method {

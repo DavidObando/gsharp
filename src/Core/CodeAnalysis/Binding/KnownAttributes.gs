@@ -484,6 +484,84 @@ internal shared class KnownAttributes {
         return false
     }
 
+    /// Checks conditional symbols on a source or imported method, including inherited attributes.
+    /// @param function The called function.
+    /// @param preprocessorSymbols The active compilation symbols.
+    /// @returns Whether no conditional symbol keeps the call.
+    internal func IsConditionallyElided(function Symbol, preprocessorSymbols ICollection[string]?) bool ->
+    IsConditionallyElided(ConditionalSymbols(function), preprocessorSymbols)
+
+    private func ConditionalSymbols(function Symbol) sequence[string?] {
+        if function is ImportedFunctionSymbol imported {
+            for symbol in ConditionalSymbols(imported.Method) {
+                yield symbol
+            }
+        } else if function is FunctionSymbol source {
+            var current FunctionSymbol? = source
+            while current != nil {
+                for symbol in ConditionalSymbols(current.Attributes) {
+                    yield symbol
+                }
+                if current.ExternalOverriddenMethod is {} external {
+                    for symbol in ConditionalSymbols(external) {
+                        yield symbol
+                    }
+                }
+                current = current.OverriddenMethod
+            }
+        }
+    }
+
+    private func ConditionalSymbols(attributes ImmutableArray[BoundAttribute]) sequence[string?] {
+        if !attributes.IsDefaultOrEmpty {
+            for attribute in attributes {
+                if IsConditional(attribute) {
+                    yield attribute.GetConstructorArgument(0, "conditionString")?.Value as string
+                }
+            }
+        }
+    }
+
+    private func ConditionalSymbols(method MethodInfo) sequence[string?] {
+        var method = method
+        if method.IsGenericMethod && !method.IsGenericMethodDefinition {
+            method = method.GetGenericMethodDefinition()
+        }
+        var current MethodInfo? = method
+        while current is {} declaration {
+            for attribute in declaration.GetCustomAttributesData() {
+                if IsConditional(attribute.AttributeType) {
+                    yield if attribute.ConstructorArguments.Count == 1 {
+                        attribute.ConstructorArguments[0].Value as string
+                    } else {
+                        nil
+                    }
+                }
+            }
+            current = FindOverriddenConditionalMethod(declaration)
+        }
+    }
+
+    private func FindOverriddenConditionalMethod(method MethodInfo) MethodInfo? {
+        if !ClrTypeUtilities.SafeIsOverride(method) {
+            return nil
+        }
+        // MetadataLoadContext does not implement GetBaseDefinition. Match the inherited virtual slot instead.
+        var owner = method.DeclaringType?.BaseType
+        while owner != nil {
+            for candidate in ClrTypeUtilities.SafeGetMethods(
+                owner,
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly
+            ) {
+                if candidate.IsVirtual && MemberLookup.HasSameSignature([]MethodInfo{method}, candidate) {
+                    return candidate
+                }
+            }
+            owner = owner.BaseType
+        }
+        return nil
+    }
+
     /// Returns `true` when [`attributes`](paramref) contains at
     /// least one `[Conditional("SYMBOL")]` application and *none* of the
     /// named symbols is present in [`preprocessorSymbols`](paramref). In
@@ -500,20 +578,13 @@ internal shared class KnownAttributes {
     func IsConditionallyElided(
         attributes ImmutableArray[BoundAttribute],
         preprocessorSymbols ICollection[string]?
-    ) bool {
-        if attributes.IsDefaultOrEmpty {
-            return false
-        }
+    ) bool -> IsConditionallyElided(ConditionalSymbols(attributes), preprocessorSymbols)
+
+    private func IsConditionallyElided(symbols sequence[string?], preprocessorSymbols ICollection[string]?) bool {
         var sawConditional = false
-        for attr in attributes {
-            if !IsConditional(attr) {
-                continue
-            }
+        for symbol in symbols {
             sawConditional = true
-            if attr.GetConstructorArgument(0, "conditionString")
-                ?.Value is string symbol &&
-                preprocessorSymbols != nil &&
-                preprocessorSymbols.Contains(symbol) {
+            if symbol != nil && preprocessorSymbols != nil && preprocessorSymbols.Contains(symbol) {
                 return false
             }
         }

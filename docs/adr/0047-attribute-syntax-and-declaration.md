@@ -158,6 +158,22 @@ A small, closed set of attributes drive compiler behaviour today (the binder's h
 
 The rule "if it is on the recognised list, the binder still emits the `CustomAttribute` row" applies — recognition does not suppress emission. This is what makes the resulting assembly indistinguishable from a C#-produced one to downstream tools.
 
+Source conditional functions must return `void`, including static and instance members (`GS0212`).
+Source and imported static, instance, extension, generic, and base calls use the same elision decision.
+Overrides inherit conditional symbols from source and imported base methods.
+Imported inheritance follows virtual slots, not unrelated hidden methods.
+An elided call evaluates neither its receiver nor its arguments, including through `?.`.
+Binding restores their incoming flow state, preserving prior narrowings without exporting operand assignments or member postconditions.
+It establishes no definite-assignment facts or suspension edges, and suspension lowering emits no completion wrapper.
+Elision precedes suspension completion; its call-site type stays `void` even when the emitted callee ABI returns `ValueTask`.
+Expression-tree conversion preserves an already-elided call as a `void` default node without validating or lowering its omitted operands.
+Multiple conditional symbols use OR semantics.
+The existing `Compilation.PreprocessorSymbols` option supplies compilation-wide symbols.
+G# does not implement lexical `#define` or `#undef` directives.
+These rules do not add conditional method-group restrictions.
+Translation must separately preserve the source call site's effective symbol state (issue #6101).
+The compiler does not infer active symbols from conditional metadata.
+
 Attributes not on the recognised list are pure metadata — emitted, queryable through `GetCustomAttributes`, and otherwise inert at compile time.
 
 ### 7. Interaction with extension functions

@@ -1632,7 +1632,7 @@ internal partial class ExpressionBinder {
             let entryAliases = GetCurrentExpressionCallableAliases()
             // Issue #2620: discard context must reach wrappers and tail-if arms,
             // not merely suppress the final void-result check.
-            let result = BindExpressionpublic(syntax, canBeVoid)
+            let result = BindExpressionWithConditionalElision(syntax, canBeVoid)
             if !canBeVoid && result.Type == TypeSymbol.Void {
                 Diagnostics.ReportExpressionMustHaveValue(syntax.Location)
                 return BoundErrorExpression(nil)
@@ -1665,6 +1665,34 @@ internal partial class ExpressionBinder {
                 PopExpressionNarrowingFrame()
             }
         }
+    }
+
+    private func BindExpressionWithConditionalElision(syntax ExpressionSyntax, canBeVoid bool) BoundExpression {
+        if syntax is not(
+            CallExpressionSyntax or
+                AccessorExpressionSyntax or
+                BaseClassCallExpressionSyntax or
+                BaseInterfaceCallExpressionSyntax
+        ) {
+            let result = BindExpressionpublic(syntax, canBeVoid)
+            return if result is BoundCallOperationExpression {
+                ApplyConditionalCallElision(result)
+            } else {
+                result
+            }
+        }
+        let narrowingSnapshot = CaptureNarrowingBindSnapshot()
+        let expressionSnapshot = CaptureExpressionNarrowingFrames(recordSiblingCount: false)
+        let siblingCount = boundSiblingExpressions.Count
+        let result = ApplyConditionalCallElision(BindExpressionpublic(syntax, canBeVoid))
+        if result is BoundCallOperationExpression{IsElidedConditionalCall: true} {
+            RestoreNarrowingBindSnapshot(narrowingSnapshot)
+            RestoreExpressionNarrowingFrames(expressionSnapshot, truncateSiblings: false)
+            if boundSiblingExpressions.Count > siblingCount {
+                boundSiblingExpressions.RemoveRange(siblingCount, boundSiblingExpressions.Count - siblingCount)
+            }
+        }
+        return result
     }
 
     private func BindExpressionpublic(syntax ExpressionSyntax, canBeVoid bool = false) BoundExpression {

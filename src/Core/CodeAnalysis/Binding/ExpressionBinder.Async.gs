@@ -1508,6 +1508,10 @@ internal partial class ExpressionBinder {
         if call is BoundErrorExpression || call.Type == nil || call.Type == TypeSymbol.Error {
             return call
         }
+        let target = ApplyConditionalCallElision(call)
+        if target is BoundCallOperationExpression{IsElidedConditionalCall: true} {
+            return target
+        }
         if function != nil && (function!!.IsAsyncOrSuspending || isAsyncIteratorReturnType(function!!.Type)) {
             return BoundAwaitExpression.CreateImplicitCompletion(
                 nil,

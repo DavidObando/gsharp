@@ -1542,7 +1542,7 @@ internal shared class DefiniteAssignmentAnalyzer {
         tracked HashSet[VariableSymbol],
         flowContext ExpressionFlowContext? = nil
     ) {
-        if expression == nil {
+        if expression == nil || expression is BoundCallOperationExpression{IsElidedConditionalCall: true} {
             return
         }
         var flowContext = flowContext

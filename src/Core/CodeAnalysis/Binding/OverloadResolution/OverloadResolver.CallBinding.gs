@@ -3207,14 +3207,14 @@ internal partial class OverloadResolver {
     /// can rely on the elided call being a no-op of type `void`.
     /// Argument binding still ran above so wrong-type diagnostics on the
     /// elided arguments are reported normally.
-    private func CreatePossiblyElidedCall(
+    internal func CreatePossiblyElidedCall(
         syntax CallExpressionSyntax,
         function FunctionSymbol,
         arguments ImmutableArray[BoundExpression],
         returnType TypeSymbol?,
         methodTypeArguments ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol])
-    ) BoundExpression {
-        if KnownAttributes.IsConditionallyElided(function.Attributes, Scope.PreprocessorSymbols) {
+    ) BoundCallExpression {
+        if KnownAttributes.IsConditionallyElided(function, Scope.PreprocessorSymbols) {
             return BoundCallExpression(
                 nil,
                 function,

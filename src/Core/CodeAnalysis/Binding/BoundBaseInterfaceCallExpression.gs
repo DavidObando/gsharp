@@ -50,7 +50,7 @@ class BoundBaseInterfaceCallExpression : BoundCallOperationExpression {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    override prop Type TypeSymbol -> Method.Type
+    override prop Type TypeSymbol -> GetConditionalCallType(Method.Type)
 
     /// Gets the implicit `this` receiver — a (cref:BoundVariableExpression) reading the enclosing method's
     /// first parameter.
