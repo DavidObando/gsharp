@@ -491,12 +491,11 @@ partial class Binder {
             ) -> Lambdas.CheckAsyncNonGenericLocalFunctionEnclosingTypeParameterInParameter(location, name, literal),
             bindFunctionLiteralWithSelfDeclaration: (
                 literalSyntax FunctionLiteralExpressionSyntax,
-                onSignatureBound(FunctionSymbol, FunctionTypeSymbol) -> void,
-                explicitName string?
+                onSignatureBound(FunctionSymbol, FunctionTypeSymbol) -> void
             ) -> {
                 return Lambdas.BindFunctionLiteralExpression(
                     literalSyntax,
-                    explicitName: explicitName,
+                    explicitName: nil,
                     onSignatureBound: onSignatureBound
                 )
             },

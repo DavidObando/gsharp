@@ -8,6 +8,25 @@ import System.IO
 import Xunit
 
 open class Issue6082LocalFunctionValueTests {
+    @Fact
+    func NestedCapturingCandidates_DoNotMultiplyBindingWork() {
+        var body = "return offset.ToString()"
+        for var depth = 0; depth < 12; depth++ {
+            body = "let helper$depth = func() string {\n$body\n}\n" +
+                "let next$depth = func() string { return helper$depth() }\nreturn next$depth()"
+        }
+        let before = GC.GetTotalAllocatedBytes(precise: true)
+        OrdinaryClosures_RetainFunctionValues(
+            "nested-capture-planning-is-bounded",
+            "",
+            "var offset = 42\n$body",
+            "42",
+            true
+        )
+        let allocated = GC.GetTotalAllocatedBytes(precise: true) - before
+        Assert.True(allocated < 128 * 1024 * 1024, "Nested candidate binding allocated $allocated bytes.")
+    }
+
     @Theory
     @MemberData("Cases")
     func OrdinaryClosures_RetainFunctionValues(
@@ -49,6 +68,41 @@ shared class Probe {
 
     shared {
         func Cases() sequence[[]object] {
+            yield []object{"recursive-local-preserves-outer-overload", `
+func helper(value string) int32 { return 42 }
+`, `
+        let helper = func(value object) int32 {
+            if value is string { return 7 }
+            return helper("answer")
+        }
+        let next = func(n int32) int32 { return helper(n) }
+        return next(0).ToString()
+`, "42", true}
+            yield []object{"generic-async-backward-helper", `
+func Keep[T](value T) T {
+    let helper = async func(item T, n int32) T {
+        if n == 0 { return item }
+        return await helper(item, n - 1)
+    }
+    let next = async func(item T) T { return await helper(item, 1) }
+    return next(value).GetAwaiter().GetResult()
+}
+`, `
+        return Keep(42).ToString()
+`, "42", true}
+            yield []object{"capturing-recursion-preserves-outer-overload", `
+func helper(value string) int32 { return 42 }
+`, `
+        var calls = 0
+        let helper = func(value object) int32 {
+            if value is string { return 7 }
+            calls++
+            return helper("answer")
+        }
+        let next = func(n int32) int32 { return helper(n) }
+        let answer = next(0)
+        return "$answer:$calls"
+`, "42:1", true}
             yield []object{"issue-repro", `
 class B {
     func F(xs List[int], set HashSet[int]) bool {

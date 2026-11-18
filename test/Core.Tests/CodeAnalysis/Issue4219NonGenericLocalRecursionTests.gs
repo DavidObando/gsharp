@@ -322,7 +322,7 @@ Box[string]().Run(4) + s.Run(3) + Box[int32]().EchoViaDelegate(21)`)
     }
 
     @Fact
-    func PromotedBackwardHelper_PreservesLexicalOwnerRestrictions() {
+    func BackwardHelper_PreservesPrivateAccessInGenericOwner() {
         let source = `class Holder[Outer] {
     shared {
         private func Secret() int32 { return 42 }
@@ -334,12 +334,9 @@ Box[string]().Run(4) + s.Run(3) + Box[int32]().EchoViaDelegate(21)`)
     }
 }
 Holder[string].Run()`
-        let invalid = EmittedOracle.Evaluate(
-            []string{source.Replace("Holder[string].Run()", "")},
-            EmittedOracleOptions{IsLibrary: true}
-        )
-        Assert.Contains(invalid.Diagnostics, (d Diagnostic) -> d.Id == "GS0586")
-        Assert.DoesNotContain(invalid.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+        let privateAccess = EmittedOracle.Evaluate(source)
+        Assert.Empty(privateAccess.Diagnostics.Where((d Diagnostic) -> d.IsError))
+        Assert.Equal(42, privateAccess.Value)
         let nonGeneric = EmittedOracle.Evaluate(
             source
                 .Replace("Holder[Outer]", "Holder")

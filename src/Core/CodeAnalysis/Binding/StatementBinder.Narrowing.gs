@@ -8319,10 +8319,7 @@ internal partial class StatementBinder {
         return BindOrdinaryVariableDeclaration(syntax)
     }
 
-    private func BindOrdinaryVariableDeclaration(
-        syntax VariableDeclarationSyntax,
-        functionName string? = nil
-    ) BoundStatement {
+    private func BindOrdinaryVariableDeclaration(syntax VariableDeclarationSyntax) BoundStatement {
         // Issue #491 (ADR-0060 follow-up): a `let ref` / `var ref` declaration introduces a
         // ref-aliasing local. The local's IL slot stores a managed pointer (`T&`) into the
         // initializer's lvalue; the symbol's static type remains `T` and reads/writes through
@@ -8514,8 +8511,7 @@ internal partial class StatementBinder {
                                 declaredSelf.CallableParameterNames = selfNames.MoveToImmutable()
                             }
                             preDeclaredSelf = declaredSelf
-                        },
-                        functionName
+                        }
                     )
                 } else {
                     initializer = bindExpression(syntax.Initializer!!, false)

@@ -56,7 +56,7 @@ internal partial class StatementBinder {
     /// `LambdaBinder.BindFunctionLiteralExpression`'s
     /// `onSignatureBound` parameter.
     private let bindFunctionLiteralWithSelfDeclaration(
-        (FunctionLiteralExpressionSyntax, (FunctionSymbol, FunctionTypeSymbol) -> void, string?) -> BoundExpression
+        (FunctionLiteralExpressionSyntax, (FunctionSymbol, FunctionTypeSymbol) -> void) -> BoundExpression
     )?
 
     private let prepareGenericLocalFunctionDeclaration((VariableDeclarationSyntax) -> () -> BoundStatement)?
@@ -106,6 +106,7 @@ internal partial class StatementBinder {
     // both bound values and the code after them refer to the same label objects.
     private var retriedValueUserLabels Dictionary[string, BoundLabel]?
     private var usingInitializationFlagCount int32
+    private let closureValueDeclarations HashSet[VariableDeclarationSyntax] = HashSet[VariableDeclarationSyntax]()
 
     init(
         binderCtx BinderContext,
@@ -130,7 +131,7 @@ internal partial class StatementBinder {
             (TextLocation, string, BoundFunctionLiteralExpression) -> void
         )? = nil,
         bindFunctionLiteralWithSelfDeclaration(
-            (FunctionLiteralExpressionSyntax, (FunctionSymbol, FunctionTypeSymbol) -> void, string?) -> BoundExpression
+            (FunctionLiteralExpressionSyntax, (FunctionSymbol, FunctionTypeSymbol) -> void) -> BoundExpression
         )? = nil,
         reconcileGenericLocalFunctionGroupCaptures((IReadOnlyList[BoundFunctionLiteralExpression]) -> void)? = nil,
         bindNullCoalescingAssignmentStatement(
@@ -493,116 +494,90 @@ internal partial class StatementBinder {
     }
 
     private func BindOptionalLocalFunctionLiteral(syntax VariableDeclarationSyntax) BoundStatement {
-        // Bind once in a child scope. Publish the callable symbol only when actual binding proves it capture-free.
+        let hasOverloads = !$scope.TryLookupFunctions(syntax.Identifier.ValueText).IsEmpty
+        if !hasOverloads && closureValueDeclarations.Contains(syntax) {
+            return BindOrdinaryVariableDeclaration(syntax)
+        }
+        // Resolve method overloads and generic adaptation before deciding whether a closure value is needed.
         let enclosingScope = $scope
+        let diagnosticCount = Diagnostics.Count
+        let suppressionCount = Diagnostics.SuppressionCount
+        let rollbackNarrowing = CaptureCallArgumentPrebindRollback(syntax)
+        let rollbackRetriedBindings = binderCtx.CaptureRetriedBindingsRollback()
         var bound BoundStatement
-        $scope = BoundScope(enclosingScope)
+        let stagingScope = BoundScope(enclosingScope)
+        $scope = stagingScope
         try {
-            bound = BindOrdinaryVariableDeclaration(syntax, functionName: syntax.Identifier.ValueText)
+            let bindBody = prepareGenericLocalFunctionDeclaration!!(syntax)
+            bound = bindBody()
         } finally {
             $scope = enclosingScope
         }
-        if bound is not BoundVariableDeclaration declaration {
-            return bound
-        }
-        var initializer = declaration.Initializer
-        while initializer is BoundConversionExpression conversion {
-            initializer = conversion.Expression
-        }
-        if initializer is BoundFunctionLiteralExpression literal && literal.CapturedVariables.All(
-            (v VariableSymbol) -> object.ReferenceEquals(v, declaration.Variable)
-        ) {
-            let rewriter = LocalFunctionLiteralPromotionRewriter(
-                literal.Function,
-                declaration.Variable,
-                literal.FunctionType
-            )
-            let rewritten = rewriter.RewriteLiteral(literal)
-            literal.Function.LocalDeclaration = syntax
-            literal.Function.HasCaptures = false
-            reconcileGenericLocalFunctionGroupCaptures?(List[BoundFunctionLiteralExpression](){rewritten})
-            if !$scope.TryDeclareFunction(literal.Function) {
+        if bound is BoundLocalFunctionDeclaration{Literal: {} literal} &&
+            (literal.CapturedVariables.IsEmpty || hasOverloads) &&
+            !Diagnostics
+            .HasErrorSince(diagnosticCount) {
+            literal.Function.HasCaptures = !literal.CapturedVariables.IsEmpty
+            reconcileGenericLocalFunctionGroupCaptures?(List[BoundFunctionLiteralExpression](){literal})
+            if !stagingScope.TryPublishStagedFunction(literal.Function) {
                 Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, syntax.Identifier.ValueText)
             }
-            if !literal.CapturedVariables.IsEmpty {
-                checkNonGenericLocalFunctionEnclosingTypeParameterReference?(
-                    syntax.Identifier.Location,
-                    syntax.Identifier.ValueText,
-                    rewritten
-                )
+            return bound
+        }
+        if bound is BoundLocalFunctionDeclaration{Literal: {} capturing} {
+            let proof = LocalFunctionValueCaptureProof(capturing.CapturedVariables)
+            proof.VisitStatement(capturing.Body)
+            if proof.Found {
+                closureValueDeclarations.Add(syntax)
             }
-            return BoundLocalFunctionDeclaration(syntax, rewritten)
         }
-        if !$scope.TryDeclareVariable(declaration.Variable) {
-            Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, syntax.Identifier.ValueText)
-        }
-        return bound
+        Diagnostics.TruncateTo(diagnosticCount)
+        Diagnostics.RestoreSuppressionsTo(suppressionCount)
+        rollbackNarrowing()
+        rollbackRetriedBindings()
+        return BindOrdinaryVariableDeclaration(syntax)
     }
 
-    // Promotion removes only the candidate's delegate-self cell. Capturing dependencies retain ordinary closure binding unchanged.
-    private sealed class LocalFunctionLiteralPromotionRewriter : BoundTreeRewriter {
-        private let function FunctionSymbol
-        private let variable VariableSymbol
-        private let functionType FunctionTypeSymbol
-        init(function FunctionSymbol, variable VariableSymbol, functionType FunctionTypeSymbol) {
-            this.function = function
-            this.variable = variable
-            this.functionType = functionType
+    // Explicit accesses to parameters and ordinary variables survive an ancestor's representation change.
+    // Cache only that decision: callee capture summaries and function-declaration roles can change.
+    private sealed class LocalFunctionValueCaptureProof : BoundTreeWalker {
+        private let captured HashSet[VariableSymbol]
+        prop Found bool {
+            get;
+            private set;
         }
 
-        func RewriteLiteral(literal BoundFunctionLiteralExpression) BoundFunctionLiteralExpression ->
-        cast[BoundFunctionLiteralExpression](RewriteFunctionLiteralExpression(literal))
+        init(captured ImmutableArray[VariableSymbol]) {
+            this.captured = HashSet[VariableSymbol](captured)
+        }
 
-        protected override func RewriteIndirectCallExpression(node BoundIndirectCallExpression) BoundExpression {
-            if node.Target is BoundVariableExpression target && object.ReferenceEquals(target.Variable, variable) {
-                let arguments = node.Arguments.Select((a BoundExpression) -> RewriteExpression(a)).ToImmutableArray()
-                return BoundCallExpression(node.Syntax, function, arguments, node.Type)
+        private func Observe(variable VariableSymbol) {
+            if captured.Contains(variable) &&
+                variable.DeclaringSyntax is not VariableDeclarationSyntax{
+                Initializer: FunctionLiteralExpressionSyntax
+            } {
+                Found = true
             }
-            return base.RewriteIndirectCallExpression(node)
         }
 
-        protected override func RewriteVariableExpression(node BoundVariableExpression) BoundExpression {
-            if object.ReferenceEquals(node.Variable, variable) {
-                return BoundMethodGroupExpression(node.Syntax, function, functionType)
+        override func VisitExpression(node BoundExpression?) {
+            if Found {
+                return
             }
-            return node
-        }
-
-        protected override func RewriteLocalFunctionDeclaration(node BoundLocalFunctionDeclaration) BoundStatement {
-            let literal = RewriteLiteral(node.Literal)
-            return if object.ReferenceEquals(literal, node.Literal) {
-                node
+            if node is BoundVariableExpression variable {
+                Observe(variable.Variable)
+            } else if node is BoundFunctionLiteralExpression literal {
+                VisitStatement(literal.Body)
             } else {
-                BoundLocalFunctionDeclaration(node.Syntax, literal)
+                base.VisitExpression(node)
             }
         }
 
-        protected override func RewriteFunctionLiteralExpression(node BoundFunctionLiteralExpression) BoundExpression {
-            let body = cast[BoundBlockStatement](RewriteStatement(node.Body))
-            // A transitive capture can change even when this body's expressions do not.
-            if object.ReferenceEquals(body, node.Body) && !node.CapturedVariables.Any(
-                (v VariableSymbol) -> object.ReferenceEquals(v, variable)
-            ) {
-                return node
+        protected override func VisitAssignmentExpression(node BoundAssignmentExpression) {
+            Observe(node.Variable)
+            if !Found {
+                base.VisitAssignmentExpression(node)
             }
-            let rewritten = BoundFunctionLiteralExpression(
-                node.Syntax,
-                node.Function,
-                node.FunctionType,
-                body,
-                node
-                    .CapturedVariables
-                    .Where((v VariableSymbol) -> !object.ReferenceEquals(v, variable))
-                    .ToImmutableArray()
-            ){
-                DeferredExpressionTreeReturnValidation = node.DeferredExpressionTreeReturnValidation,
-                EnclosingTypeParameterOffender = node.EnclosingTypeParameterOffender,
-                EnclosingTypeParameterOffenderLocation = node.EnclosingTypeParameterOffenderLocation,
-                RequiresLexicalOwner = node.RequiresLexicalOwner,
-                EnclosingTypeParameterDiagnosticReported = node.EnclosingTypeParameterDiagnosticReported
-            }
-            node.Function.HasCaptures = !rewritten.CapturedVariables.IsEmpty
-            return rewritten
         }
     }
 

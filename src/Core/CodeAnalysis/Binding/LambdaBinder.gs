@@ -931,23 +931,7 @@ internal class LambdaBinder {
         for member in group {
             CollectNestedFunctionLiterals(member.Body, literals)
         }
-        var refreshCaptures = false
-        for literal in literals {
-            if !localFunctionCapturedVariables.TryGetValue(literal.Function, out var cached) ||
-                !HashSet[VariableSymbol](cached).SetEquals(literal.CapturedVariables) {
-                refreshCaptures = true
-                break
-            }
-        }
-        // A body rewrite can remove a delegate-self capture. Rebuild all capture summaries from the rewritten literals.
-        if refreshCaptures {
-            for literal in literals {
-                localFunctionCapturedVariables[literal.Function] = literal.CapturedVariables
-                localFunctionDirectCapturedVariables.Remove(literal.Function)
-                localFunctionReferencedFunctions.Remove(literal.Function)
-            }
-        }
-        if group.Count >= 2 || refreshCaptures {
+        if group.Count >= 2 {
             let maxPasses = Math.Max(8, literals.Count * literals.Count)
             for var pass = 0; pass < maxPasses; pass++ {
                 var changed = false
@@ -974,7 +958,7 @@ internal class LambdaBinder {
         // combination that path does not support). Re-evaluate the
         // exclusion now that every member's final capture set is known.
         for literal in literals {
-            // Ordinary-literal promotion must use the same lexical-access checks as predeclared functions.
+            // Non-generic direct functions use the same lexical-owner restriction as generic declarations.
             if !literal.Function.IsGeneric && literal.Function.LocalDeclaration is {} declaration {
                 FindEnclosingTypeParameterReference(
                     literal.Function,

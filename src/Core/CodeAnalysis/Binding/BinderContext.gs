@@ -456,6 +456,47 @@ internal class BinderContext {
         RetriedFunctionLiterals = saved
     }
 
+    internal func CaptureRetriedBindingsRollback() Action {
+        let variables = RetriedValueVariables?.ToArray()
+        let typeParameters = RetriedTypeParameters?.ToArray()
+        let functions = RetriedLocalFunctions?.ToArray()
+        let literals = RetriedFunctionLiterals?.ToArray()
+        return () -> {
+            if RetriedValueVariables is {} values {
+                values.Clear()
+                if variables != nil {
+                    for entry in variables {
+                        values[entry.Key] = entry.Value
+                    }
+                }
+            }
+            if RetriedTypeParameters is {} parameters {
+                parameters.Clear()
+                if typeParameters != nil {
+                    for entry in typeParameters {
+                        parameters[entry.Key] = entry.Value
+                    }
+                }
+            }
+            if RetriedLocalFunctions is {} locals {
+                locals.Clear()
+                if functions != nil {
+                    for entry in functions {
+                        locals[entry.Key] = entry.Value
+                    }
+                }
+            }
+            if RetriedFunctionLiterals is {} boundLiterals {
+                boundLiterals.Clear()
+                if literals != nil {
+                    for entry in literals {
+                        boundLiterals[entry.Key] = entry.Value
+                    }
+                }
+            }
+        }
+    }
+
     /// Gets or sets a value indicating whether the current function, lambda, or
     /// local-function body contains a user `goto` statement or non-loop `label:`
     /// declaration, computed syntactically once before that body binds (see
