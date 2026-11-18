@@ -8201,35 +8201,17 @@ internal partial class StatementBinder {
             }
             if steps.Count > 0 || invalidateAfterPrimary {
                 // Invalidate after primary arguments (at primaryEndIndex), or immediately if primaryEndIndex == 0.
-                let frame = StructLiteralFrame(steps)
                 if invalidateAfterPrimary && primaryEndIndex > 0 {
-                    // Split into primary steps, then invalidate, then remaining steps.
                     let primarySteps = steps.GetRange(0, primaryEndIndex)
                     let remainingSteps = steps.GetRange(primaryEndIndex, steps.Count - primaryEndIndex)
-                    if remainingSteps.Count > 0 {
-                        PushStep(WalkStepKind.StructLiteralStep, state: StructLiteralFrame(remainingSteps), flag: false)
-                    }
-                    PushStep(WalkStepKind.StructLiteralStep, state: StructLiteralFrame(primarySteps), flag: false)
-                    // Wait: invalidate needs to run AFTER primarySteps and BEFORE remainingSteps!
-                    // Replace the order on stack: remainingSteps (flag: true) runs invalidate first!
-                    workStack.RemoveRange(
-                        workStack.Count - (
-                            if remainingSteps.Count > 0 {
-                                2
-                            } else {
-                                1
-                            }
-                        ),
-                        if remainingSteps.Count > 0 {
-                            2
-                        } else {
-                            1
-                        }
-                    )
                     PushStep(WalkStepKind.StructLiteralStep, state: StructLiteralFrame(remainingSteps), flag: true)
                     PushStep(WalkStepKind.StructLiteralStep, state: StructLiteralFrame(primarySteps), flag: false)
                 } else {
-                    PushStep(WalkStepKind.StructLiteralStep, state: frame, flag: invalidateAfterPrimary)
+                    PushStep(
+                        WalkStepKind.StructLiteralStep,
+                        state: StructLiteralFrame(steps),
+                        flag: invalidateAfterPrimary
+                    )
                 }
             }
             if node.CopySource != nil {
