@@ -931,7 +931,7 @@ internal class LambdaBinder {
         for member in group {
             CollectNestedFunctionLiterals(member.Body, literals)
         }
-        if group.Count >= 2 {
+        if literals.Count >= 2 {
             let maxPasses = Math.Max(8, literals.Count * literals.Count)
             for var pass = 0; pass < maxPasses; pass++ {
                 var changed = false

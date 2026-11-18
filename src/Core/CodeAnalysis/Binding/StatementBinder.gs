@@ -552,10 +552,14 @@ internal partial class StatementBinder {
         }
 
         private func Observe(variable VariableSymbol) {
+            let syntax = variable.DeclaringSyntax
+            let declaration = if syntax is SyntaxToken identifier {
+                identifier.Parent
+            } else {
+                syntax
+            }
             if captured.Contains(variable) &&
-                variable.DeclaringSyntax is not VariableDeclarationSyntax{
-                Initializer: FunctionLiteralExpressionSyntax
-            } {
+                declaration is not VariableDeclarationSyntax{Initializer: FunctionLiteralExpressionSyntax} {
                 Found = true
             }
         }
@@ -578,6 +582,27 @@ internal partial class StatementBinder {
             if !Found {
                 base.VisitAssignmentExpression(node)
             }
+        }
+
+        protected override func VisitFieldAssignmentExpression(node BoundFieldAssignmentExpression) {
+            if node.Receiver is {} receiver {
+                Observe(receiver)
+            }
+            base.VisitFieldAssignmentExpression(node)
+        }
+
+        protected override func VisitIndexAssignmentExpression(node BoundIndexAssignmentExpression) {
+            if node.Target is {} target {
+                Observe(target)
+            }
+            base.VisitIndexAssignmentExpression(node)
+        }
+
+        protected override func VisitClrIndexAssignmentExpression(node BoundClrIndexAssignmentExpression) {
+            if node.Target is {} target {
+                Observe(target)
+            }
+            base.VisitClrIndexAssignmentExpression(node)
         }
     }
 

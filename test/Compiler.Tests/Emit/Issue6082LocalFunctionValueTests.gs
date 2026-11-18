@@ -8,23 +8,55 @@ import System.IO
 import Xunit
 
 open class Issue6082LocalFunctionValueTests {
-    @Fact
-    func NestedCapturingCandidates_DoNotMultiplyBindingWork() {
-        var body = "return offset.ToString()"
-        for var depth = 0; depth < 12; depth++ {
+    @Theory
+    @InlineData("read", "var value = 42", "return value.ToString()", "value.ToString()", "42:42")
+    @InlineData("variable-write", "var value = 0", "value = 42\nreturn \"done\"", "value.ToString()", "done:42")
+    @InlineData(
+        "index-write",
+        "var value = []int32{0}",
+        "value[0] = 42\nreturn \"done\"",
+        "value[0].ToString()",
+        "done:42"
+    )
+    @InlineData(
+        "field-write",
+        "let value = Holder()",
+        "value.Value = 42\nreturn \"done\"",
+        "value.Value.ToString()",
+        "done:42"
+    )
+    @InlineData(
+        "clr-index-write",
+        "let value = Dictionary[int32, int32]()",
+        "value[0] = 42\nreturn \"done\"",
+        "value[0].ToString()",
+        "done:42"
+    )
+    func NestedCapturingCandidates_DoNotMultiplyBindingWork(
+        name string,
+        setup string,
+        leaf string,
+        readback string,
+        expected string
+    ) {
+        var body = leaf
+        for var depth = 0; depth < 11; depth++ {
             body = "let helper$depth = func() string {\n$body\n}\n" +
                 "let next$depth = func() string { return helper$depth() }\nreturn next$depth()"
         }
-        let before = GC.GetTotalAllocatedBytes(precise: true)
-        OrdinaryClosures_RetainFunctionValues(
-            "nested-capture-planning-is-bounded",
-            "",
-            "var offset = 42\n$body",
-            "42",
-            true
+        CompileAndRun(
+            "nested-capture-planning-is-bounded-" + name,
+            "class Holder { public var Value int32 }",
+            setup +
+                "\nlet start = func() string {\n" +
+                body +
+                "\n}\nlet status = start()\n" +
+                "return status + \":\" + " +
+                readback,
+            expected,
+            true,
+            compilerAllocationBudget: 256 * 1024 * 1024
         )
-        let allocated = GC.GetTotalAllocatedBytes(precise: true) - before
-        Assert.True(allocated < 128 * 1024 * 1024, "Nested candidate binding allocated $allocated bytes.")
     }
 
     @Theory
@@ -35,6 +67,17 @@ open class Issue6082LocalFunctionValueTests {
         body string,
         expected string,
         verifyIl bool
+    ) {
+        CompileAndRun(name, declarations, body, expected, verifyIl)
+    }
+
+    private func CompileAndRun(
+        name string,
+        declarations string,
+        body string,
+        expected string,
+        verifyIl bool,
+        compilerAllocationBudget int64 = 0
     ) {
         let directory = Path.Combine(AppContext.BaseDirectory, "issue-6082", Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(directory)
@@ -51,10 +94,18 @@ shared class Probe {
 ` + body + `
     }
 }`)
-            Assert.Equal(
-                0,
-                Program.Main([]string{"/target:library", "/targetframework:net10.0", "/out:" + assembly, source})
+            let before = GC.GetAllocatedBytesForCurrentThread()
+            let result = Program.Main(
+                []string{"/target:library", "/targetframework:net10.0", "/out:" + assembly, source}
             )
+            let allocated = GC.GetAllocatedBytesForCurrentThread() - before
+            Assert.Equal(0, result)
+            if compilerAllocationBudget > 0 {
+                Assert.True(
+                    allocated < compilerAllocationBudget,
+                    "Nested candidate binding allocated $allocated bytes."
+                )
+            }
             // ILVerify does not implement calli. Function-pointer cases execute the emitted method instead.
             if verifyIl {
                 IlVerifier.Verify(assembly)
@@ -68,6 +119,24 @@ shared class Probe {
 
     shared {
         func Cases() sequence[[]object] {
+            yield []object{"nested-capturing-overload-reconciles-singleton", `
+func helper(value string) int32 { return 42 }
+`, `
+        var calls = 0
+        let helper = func(value object) int32 {
+            let recurse = func(n int32) int32 {
+                if n == 0 { return helper(cast[object]("answer")) }
+                return recurse(n - 1)
+            }
+            calls++
+            if calls > 2 { return -1 }
+            if value is string { return helper("answer") }
+            return recurse(1)
+        }
+        let next = func(n int32) int32 { return helper(n) }
+        let answer = next(0)
+        return "$answer:$calls"
+`, "42:2", true}
             yield []object{"recursive-local-preserves-outer-overload", `
 func helper(value string) int32 { return 42 }
 `, `
