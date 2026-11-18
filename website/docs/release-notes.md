@@ -18,6 +18,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Keep the SDK reference-assembly pack regression independent of installed Android workloads. Retain four inner builds and exact effective-framework path checks. (Fixes #6032)
+
 - Reject constructor initializer targets other than `base` with GS0642 instead of silently calling a base constructor. Use `convenience init() { init(args) }` for same-class chaining. (Fixes #6074)
 
 - Cover stored `Func[T]` factories passed to imported generic methods with dependent constraints. Runtime regression tests preserve delegate invocation counts and results for the symbolic applicability correction in #6058. (Fixes #6088)
