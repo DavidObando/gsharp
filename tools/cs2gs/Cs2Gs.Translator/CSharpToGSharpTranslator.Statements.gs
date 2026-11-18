@@ -167,11 +167,18 @@ partial class CSharpToGSharpTranslator {
             public let Contract GenericLocalStorageContract
             public let Value ExpressionSyntax
             public let Target ISymbol
+            public let InferredTypeParameter ITypeParameterSymbol?
 
-            init(contract GenericLocalStorageContract, value ExpressionSyntax, target ISymbol) {
+            init(
+                contract GenericLocalStorageContract,
+                value ExpressionSyntax,
+                target ISymbol,
+                inferredTypeParameter ITypeParameterSymbol? = nil
+            ) {
                 this.Contract = contract
                 this.Value = value
                 this.Target = target
+                this.InferredTypeParameter = inferredTypeParameter
             }
         }
 
@@ -598,6 +605,8 @@ partial class CSharpToGSharpTranslator {
                     }
                     this.state.EmittedLocalStorageAcceptsNil[storageLocal] = if type != nil {
                         type.IsNullable
+                    } else if this.GenericLocalStorageIsFixed(storageLocal) {
+                        false
                     } else {
                         // G# infers the type from the emitted initializer; only an
                         // initializer that is certainly non-null fixes non-null storage.
@@ -779,14 +788,243 @@ partial class CSharpToGSharpTranslator {
             .IsValueType &&
             local.RefKind == RefKind.None &&
             (
-            local
+            if IsImplicitlyTypedLocal(local) {
+                !this.InferredLocalHasIndependentlyNullableInitializer(local)
+            } else {
+                local.Type.NullableAnnotation != Microsoft.CodeAnalysis.NullableAnnotation.Annotated
+            }
+        )
+
+        private func InferredLocalHasIndependentlyNullableInitializer(local ILocalSymbol) bool {
+            if this.state.IndependentlyNullableInferredLocals.TryGetValue(local, out var cached) {
+                return cached
+            }
+            let visited = HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
+            visited.Add(local)
+            let result = this.ComputeInferredLocalHasIndependentlyNullableInitializer(local, visited)
+            this.state.IndependentlyNullableInferredLocals[local] = result
+            return result
+        }
+
+        private func ComputeInferredLocalHasIndependentlyNullableInitializer(
+            local ILocalSymbol,
+            visited HashSet[ILocalSymbol]
+        ) bool {
+            let syntax = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+            if syntax is VariableDeclaratorSyntax declarator {
+                return declarator.Initializer?.Value is {} initializer && this.ExpressionHasIndependentlyNullableOrigin(
+                    initializer,
+                    visited
+                )
+            }
+            return local
                 .Type
-                .NullableAnnotation != Microsoft
+                .NullableAnnotation == Microsoft
                 .CodeAnalysis
                 .NullableAnnotation
                 .Annotated ||
-                IsImplicitlyTypedLocal(local)
-        )
+                ObliviousNullabilityAnalyzer.ValueContractIsPromoted(this.context.Compilation, local)
+        }
+
+        private func ExpressionHasIndependentlyNullableOrigin(
+            expression ExpressionSyntax,
+            visited HashSet[ILocalSymbol]
+        ) bool {
+            var unwrapped ExpressionSyntax? = expression
+            while (
+                unwrapped is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ParenthesizedExpressionSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .CheckedExpressionSyntax
+            ) {
+                unwrapped = switch unwrapped {
+                    case parenthesized is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ParenthesizedExpressionSyntax: parenthesized.Expression
+                    case checkedExpression is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .CheckedExpressionSyntax: checkedExpression.Expression
+                    default: unwrapped
+                }
+            }
+            if unwrapped == nil {
+                return false
+            }
+            if IsNullOrSuppressedNull(unwrapped) {
+                return true
+            }
+            if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.DefaultExpressionSyntax typedDefault {
+                return this
+                    .context
+                    .GetTypeInfo(typedDefault.Type)
+                    .Type
+                    ?.NullableAnnotation == Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated
+            }
+            if unwrapped is LiteralExpressionSyntax literal && literal.IsKind(SyntaxKind.DefaultLiteralExpression) {
+                return false
+            }
+            if unwrapped is ConditionalAccessExpressionSyntax || unwrapped.IsKind(SyntaxKind.AsExpression) {
+                return true
+            }
+            if unwrapped is BinaryExpressionSyntax coalesce && coalesce.IsKind(SyntaxKind.CoalesceExpression) {
+                return this.ExpressionHasIndependentlyNullableOrigin(coalesce.Right, visited)
+            }
+            if this.ComposedValueOperands(unwrapped) is {} operands {
+                return operands.Any(
+                    (operand ExpressionSyntax) -> this.ExpressionHasIndependentlyNullableOrigin(operand, visited)
+                )
+            }
+            if unwrapped is AssignmentExpressionSyntax assignment && assignment.IsKind(
+                SyntaxKind.SimpleAssignmentExpression
+            ) {
+                return this.ExpressionHasIndependentlyNullableOrigin(assignment.Right, visited)
+            }
+            let symbol = this.context.GetSymbolInfo(unwrapped).Symbol
+            if symbol is ILocalSymbol otherLocal {
+                if otherLocal.Type is not ITypeParameterSymbol {
+                    return true
+                }
+                if !IsImplicitlyTypedLocal(otherLocal) {
+                    return otherLocal.Type.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated
+                }
+                if this.state.IndependentlyNullableInferredLocals.TryGetValue(otherLocal, out var cached) {
+                    return cached
+                }
+                if !visited.Add(otherLocal) {
+                    return false
+                }
+                let nested = this.ComputeInferredLocalHasIndependentlyNullableInitializer(otherLocal, visited)
+                visited.Remove(otherLocal)
+                this.state.IndependentlyNullableInferredLocals[otherLocal] = nested
+                return nested
+            }
+            if symbol is {} memberSymbol && (memberSymbol is IParameterSymbol or IFieldSymbol or IPropertySymbol) {
+                return ObliviousNullabilityAnalyzer.SymbolDeclaredType(memberSymbol)
+                    ?.NullableAnnotation == Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated ||
+                    ObliviousNullabilityAnalyzer.ValueContractIsPromoted(this.context.Compilation, memberSymbol) ||
+                    ObliviousNullabilityAnalyzer.IsImportedStatedNullablePosition(
+                    memberSymbol,
+                    this.context.Compilation
+                )
+            }
+            if unwrapped is InvocationExpressionSyntax invocation && symbol is IMethodSymbol method {
+                if ObliviousNullabilityAnalyzer.SymbolDeclaredType(method)
+                    ?.NullableAnnotation == Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated ||
+                    ObliviousNullabilityAnalyzer.IsImportedStatedNullablePosition(method, this.context.Compilation) ||
+                    this.DeclaredCallResultIsAnnotatedNullable(unwrapped) {
+                    return true
+                }
+                if method
+                    .OriginalDefinition
+                    .ReturnType is ITypeParameterSymbol returnParam &&
+                    returnParam.TypeParameterKind == TypeParameterKind
+                    .Method {
+                    return this.CallArgumentForReturnParameterIsIndependentlyNullable(
+                        invocation,
+                        method,
+                        returnParam,
+                        visited
+                    )
+                }
+                return false
+            }
+            if unwrapped is AwaitExpressionSyntax awaited {
+                if this.DeclaredAwaitedResultIsAnnotatedNullable(awaited) {
+                    return true
+                }
+                if awaited.Expression is InvocationExpressionSyntax awaitedInv &&
+                    this
+                    .context
+                    .GetSymbolInfo(awaitedInv)
+                    .Symbol is IMethodSymbol awaitedMethod {
+                    if GetEffectiveReturnType(awaitedMethod.ReturnType, isAsync: true)?.NullableAnnotation == Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated {
+                        return true
+                    }
+                    if GetEffectiveReturnType(
+                        awaitedMethod.OriginalDefinition.ReturnType,
+                        isAsync: true
+                    ) is ITypeParameterSymbol awaitedReturnParam &&
+                        awaitedReturnParam.TypeParameterKind == TypeParameterKind
+                        .Method {
+                        return this.CallArgumentForReturnParameterIsIndependentlyNullable(
+                            awaitedInv,
+                            awaitedMethod,
+                            awaitedReturnParam,
+                            visited
+                        )
+                    }
+                }
+                return false
+            }
+            return this
+                .context
+                .GetTypeInfo(unwrapped)
+                .Type
+                ?.NullableAnnotation == Microsoft
+                .CodeAnalysis
+                .NullableAnnotation
+                .Annotated
+        }
+
+        private func CallArgumentForReturnParameterIsIndependentlyNullable(
+            invocation InvocationExpressionSyntax,
+            method IMethodSymbol,
+            returnParam ITypeParameterSymbol,
+            visited HashSet[ILocalSymbol]
+        ) bool {
+            if method.ReducedFrom is {} unreducedMethod &&
+                unreducedMethod
+                .Parameters
+                .Length > 0 &&
+                unreducedMethod
+                .Parameters[0]
+                .OriginalDefinition
+                .Type is ITypeParameterSymbol receiverTp &&
+                SymbolEqualityComparer
+                .Default
+                .Equals(receiverTp, returnParam) &&
+                invocation.Expression is MemberAccessExpressionSyntax memberAccess &&
+                this.ExpressionHasIndependentlyNullableOrigin(memberAccess.Expression, visited) {
+                return true
+            }
+            for arg in invocation.ArgumentList.Arguments {
+                if this.GetArgumentParameter(arg) is {} argParam && this.InferredGenericParameterTypeParameter(
+                    argParam,
+                    arg.Expression
+                ) is {} argTp &&
+                    SymbolEqualityComparer
+                    .Default
+                    .Equals(argTp, returnParam) && this.ExpressionHasIndependentlyNullableOrigin(
+                    arg.Expression,
+                    visited
+                ) {
+                    return true
+                }
+            }
+            return false
+        }
 
         private func TryGetEvaluatingGenericLocalStorage(local ILocalSymbol, out nullable bool) bool {
             nullable = false
@@ -919,7 +1157,13 @@ partial class CSharpToGSharpTranslator {
                     }
                     this.localStorageScanWork++
                     this.genericLocalStorageConsumer = consumer
-                    if this.SinkInfersTypeFromValue(consumer.Target, consumer.Value) {
+                    if consumer.InferredTypeParameter is {} inferredTp &&
+                        consumer.Target is IParameterSymbol paramTarget {
+                        if !NullableTypeArgumentViolatesTranslatedConstraints(inferredTp) &&
+                            !this.OtherArgumentFixesTypeParameterToNonNull(consumer.Value, paramTarget, inferredTp) {
+                            continue
+                        }
+                    } else if this.SinkInfersTypeFromValue(consumer.Target, consumer.Value) {
                         continue
                     }
                     root.IsFixed = true
@@ -960,7 +1204,11 @@ partial class CSharpToGSharpTranslator {
             let storeNodes = List[SyntaxNode]()
             let outermost = OutermostTransparentNode(expr, storeNodes: storeNodes)
             if storeNodes.Count == 0 {
-                let (sink, slotType) = this.ResolveValueStoreContract(expr)
+                if this.HasErasingProjectionConversion(expr, projectedPattern) {
+                    return
+                }
+                var (sink, slotType) = this.ResolveValueStoreContract(expr)
+                sink ??= this.TryResolveReducedExtensionReceiverParameter(expr)
                 this.RecordGenericLocalStorageConsumer(
                     sourceType,
                     contract,
@@ -978,6 +1226,9 @@ partial class CSharpToGSharpTranslator {
             }
             for var i = 0; i < storeNodes.Count; i++ {
                 if storeNodes[i] is ExpressionSyntax intermediateExpr {
+                    if this.HasErasingProjectionConversion(intermediateExpr, projectedPattern) {
+                        continue
+                    }
                     let (sink, knownSlot) = this.ResolveStoreAtNode(intermediateExpr, intermediateExpr)
                     this.ClassifyGenericStoreSlot(intermediateExpr, sink, knownSlot, out var slotType, out _)
                     this.RecordGenericLocalStorageConsumer(
@@ -996,7 +1247,13 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             if outermost is ExpressionSyntax outerExpr {
-                let (sink, knownSlot) = this.ResolveStoreAtNode(outerExpr, outerExpr)
+                if this.HasErasingProjectionConversion(outerExpr, projectedPattern) {
+                    return
+                }
+                var (sink, knownSlot) = this.ResolveStoreAtNode(outerExpr, outerExpr)
+                if sink == nil {
+                    sink = this.TryResolveReducedExtensionReceiverParameter(outerExpr)
+                }
                 this.ClassifyGenericStoreSlot(outerExpr, sink, knownSlot, out var slotType, out _)
                 this.RecordGenericLocalStorageConsumer(
                     sourceType,
@@ -1035,9 +1292,15 @@ partial class CSharpToGSharpTranslator {
             }
             if projectedPattern != nil && projectedTypeParameter != nil {
                 if sink is ILocalSymbol inferredLocal && IsImplicitlyTypedLocal(inferredLocal) {
+                    if !MentionsTypeParameter(inferredLocal.Type) {
+                        return
+                    }
                     if !visitedProjectedLocals.TryGetValue(inferredLocal, out var seenPatterns) {
                         seenPatterns = List[(Pattern ITypeSymbol, TypeParameter ITypeParameterSymbol)]()
                         visitedProjectedLocals.Add(inferredLocal, seenPatterns)
+                    }
+                    if seenPatterns.Count >= 4 || ProjectedTypeDepth(projectedPattern) > 16 {
+                        return
                     }
                     for seen in seenPatterns {
                         if SymbolEqualityComparer.Default.Equals(seen.Pattern, projectedPattern) &&
@@ -1070,28 +1333,36 @@ partial class CSharpToGSharpTranslator {
                     return
                 }
                 if sink is IParameterSymbol outerParam {
-                    if this.TryProjectInferredCallResult(
+                    let bindings = Dictionary[ITypeParameterSymbol, ITypeSymbol](SymbolEqualityComparer.Default)
+                    let projectedCall = this.TryProjectInferredCallResult(
                         expr,
                         outerParam,
                         sourceType,
                         projectedPattern,
-                        projectedTypeParameter
-                    ) is {} projectedCall {
+                        projectedTypeParameter,
+                        bindings
+                    )
+                    if outerParam.OriginalDefinition.Type is not ITypeParameterSymbol {
+                        for boundTp in bindings.Keys {
+                            consumers.Add(GenericLocalStorageConsumer(contract, expr, outerParam, boundTp))
+                        }
+                    }
+                    if projectedCall is {} projected {
                         this.CollectGenericLocalStorageConsumers(
                             sourceType,
                             contract,
-                            projectedCall.NextExpr,
+                            projected.NextExpr,
                             index,
                             getContract,
                             consumers,
                             visitedProjectedLocals,
-                            projectedCall.Pattern,
-                            projectedCall.TypeParameter
+                            projected.Pattern,
+                            projected.TypeParameter
                         )
                         return
                     }
                     // An unpropagated inferred method parameter receives the whole container value (`IsNull(Wrap(value))`).
-                    if this.InferredGenericParameterTypeParameter(outerParam, expr) != nil {
+                    if this.InferredGenericParameterTypeParameter(outerParam, expr) != nil || bindings.Count > 0 {
                         return
                     }
                 }
@@ -1123,7 +1394,14 @@ partial class CSharpToGSharpTranslator {
                 ) is {} typeParameter &&
                     IsBareTypeParameter(typeParameter) {
                     consumers.Add(GenericLocalStorageConsumer(contract, expr, sink))
-                    if this.TryProjectInferredCallResult(expr, parameter, sourceType, nil, nil) is {} projectedCall {
+                    if this.TryProjectInferredCallResult(
+                        expr,
+                        parameter,
+                        sourceType,
+                        nil,
+                        nil,
+                        nil
+                    ) is {} projectedCall {
                         this.CollectGenericLocalStorageConsumers(
                             sourceType,
                             contract,
@@ -1145,7 +1423,8 @@ partial class CSharpToGSharpTranslator {
             parameter IParameterSymbol,
             sourceType ITypeSymbol,
             projectedPattern ITypeSymbol?,
-            projectedTypeParameter ITypeParameterSymbol?
+            projectedTypeParameter ITypeParameterSymbol?,
+            collectedBindings Dictionary[ITypeParameterSymbol, ITypeSymbol]?
         )(NextExpr ExpressionSyntax, Pattern ITypeSymbol?, TypeParameter ITypeParameterSymbol?)? {
             if parameter.ContainingSymbol is not IMethodSymbol callee || ValueFeedsExplicitTypeArguments(expr) {
                 return nil
@@ -1154,9 +1433,13 @@ partial class CSharpToGSharpTranslator {
             if invocation == nil {
                 return nil
             }
-            let isAwaited = invocation.Parent is AwaitExpressionSyntax
+            var awaitedNode SyntaxNode = invocation
+            while awaitedNode.Parent is ParenthesizedExpressionSyntax or CheckedExpressionSyntax {
+                awaitedNode = awaitedNode.Parent!!
+            }
+            let isAwaited = awaitedNode.Parent is AwaitExpressionSyntax
             let nextExpr ExpressionSyntax = if isAwaited {
-                cast[ExpressionSyntax](invocation.Parent!!)
+                cast[ExpressionSyntax](awaitedNode.Parent!!)
             } else {
                 invocation
             }
@@ -1180,115 +1463,100 @@ partial class CSharpToGSharpTranslator {
             if projectedTypeParameter == nil {
                 return nil
             }
-            var outerTp ITypeParameterSymbol? = nil
-            var replacement ITypeSymbol? = nil
+            let bindings = collectedBindings ??
+                Dictionary[ITypeParameterSymbol, ITypeSymbol](SymbolEqualityComparer.Default)
             if this.InferredGenericParameterTypeParameter(parameter, expr) is {} directTp &&
                 IsBareTypeParameter(directTp) {
-                outerTp = directTp
-                replacement = projectedPattern
-            } else if this.TryBindMethodTypeParameterFromPattern(
-                parameter.OriginalDefinition.Type,
-                projectedPattern,
-                projectedTypeParameter,
-                out var matchedTp,
-                out var matchedReplacement
-            ) &&
-                matchedTp is {} boundMethodTp &&
-                !NullableTypeArgumentViolatesTranslatedConstraints(boundMethodTp) &&
-                !this
-                .OtherArgumentFixesTypeParameterToNonNull(expr, parameter, boundMethodTp) {
-                outerTp = boundMethodTp
-                replacement = matchedReplacement
+                bindings[directTp] = projectedPattern
+            } else {
+                this.CollectMethodTypeParameterBindings(
+                    parameter.OriginalDefinition.Type,
+                    projectedPattern,
+                    projectedTypeParameter,
+                    bindings
+                )
             }
-            if outerTp == nil || replacement == nil || !MentionsTypeParameter(calleeReturn, outerTp) {
+            if bindings.Count == 0 {
                 return nil
             }
-            let composed = this.SubstituteProjectedTypeParameter(
-                calleeReturn,
-                outerTp,
-                replacement,
-                this.context.Compilation
-            )
+            let composed = this.SubstituteProjectedTypeParameters(calleeReturn, bindings, this.context.Compilation)
+            if !MentionsTypeParameter(composed, projectedTypeParameter) {
+                return nil
+            }
             if SymbolEqualityComparer.Default.Equals(composed, projectedTypeParameter) {
                 return (nextExpr, nil, nil)
             }
             return (nextExpr, composed, projectedTypeParameter)
         }
 
-        private func TryBindMethodTypeParameterFromPattern(
+        private func CollectMethodTypeParameterBindings(
             declaredType ITypeSymbol,
             actualType ITypeSymbol,
             targetTp ITypeParameterSymbol,
-            out boundTp ITypeParameterSymbol?,
-            out replacement ITypeSymbol?
-        ) bool {
-            boundTp = nil
-            replacement = nil
+            bindings Dictionary[ITypeParameterSymbol, ITypeSymbol]
+        ) {
             if declaredType is ITypeParameterSymbol tp && tp.TypeParameterKind == TypeParameterKind.Method {
-                if !MentionsTypeParameter(actualType, targetTp) {
-                    return false
+                if MentionsTypeParameter(actualType, targetTp) && !bindings.ContainsKey(tp) {
+                    bindings[tp] = actualType
                 }
-                boundTp = tp
-                replacement = actualType
-                return true
+                return
             }
             if declaredType is IArrayTypeSymbol declaredArray &&
                 actualType is IArrayTypeSymbol actualArray &&
                 declaredArray.Rank == actualArray
                 .Rank {
-                return this.TryBindMethodTypeParameterFromPattern(
+                this.CollectMethodTypeParameterBindings(
                     declaredArray.ElementType,
                     actualArray.ElementType,
                     targetTp,
-                    out boundTp,
-                    out replacement
+                    bindings
                 )
+                return
             }
             if declaredType is INamedTypeSymbol{IsGenericType: true} declaredNamed &&
-                FindMatchingNamedTypeInHierarchy(actualType, declaredNamed.OriginalDefinition) is {} actualNamed &&
-                declaredNamed
-                .TypeArguments
-                .Length == actualNamed
-                .TypeArguments
-                .Length {
-                for var i = 0; i < declaredNamed.TypeArguments.Length; i++ {
-                    if this.TryBindMethodTypeParameterFromPattern(
-                        declaredNamed.TypeArguments[i],
-                        actualNamed.TypeArguments[i],
+                FindMatchingNamedTypeInHierarchy(actualType, declaredNamed.OriginalDefinition) is {} actualNamed {
+                if declaredNamed.ContainingType != nil && actualNamed.ContainingType != nil {
+                    this.CollectMethodTypeParameterBindings(
+                        declaredNamed.ContainingType,
+                        actualNamed.ContainingType,
                         targetTp,
-                        out boundTp,
-                        out replacement
-                    ) {
-                        return true
+                        bindings
+                    )
+                }
+                if declaredNamed.TypeArguments.Length == actualNamed.TypeArguments.Length {
+                    for var i = 0; i < declaredNamed.TypeArguments.Length; i++ {
+                        this.CollectMethodTypeParameterBindings(
+                            declaredNamed.TypeArguments[i],
+                            actualNamed.TypeArguments[i],
+                            targetTp,
+                            bindings
+                        )
                     }
                 }
             }
-            return false
         }
 
-        private func SubstituteProjectedTypeParameter(
+        private func SubstituteProjectedTypeParameters(
             type ITypeSymbol,
-            target ITypeParameterSymbol,
-            replacement ITypeSymbol,
+            bindings Dictionary[ITypeParameterSymbol, ITypeSymbol],
             compilation CSharpCompilation
         ) ITypeSymbol {
-            if SymbolEqualityComparer.Default.Equals(type, target) {
+            if type is ITypeParameterSymbol tp && bindings.TryGetValue(tp, out var replacement) {
                 return replacement
             }
             if type is IArrayTypeSymbol array {
-                let element = this.SubstituteProjectedTypeParameter(array.ElementType, target, replacement, compilation)
+                let element = this.SubstituteProjectedTypeParameters(array.ElementType, bindings, compilation)
                 return if SymbolEqualityComparer.Default.Equals(element, array.ElementType) {
                     array
                 } else {
                     compilation.CreateArrayTypeSymbol(element, array.Rank)
                 }
             }
-            if type is INamedTypeSymbol{IsGenericType: true} named && named.TypeArguments.Length > 0 {
+            if type is INamedTypeSymbol{IsGenericType: true} named {
                 let rebuiltContaining = if named.ContainingType != nil {
-                    this.SubstituteProjectedTypeParameter(
+                    this.SubstituteProjectedTypeParameters(
                         named.ContainingType,
-                        target,
-                        replacement,
+                        bindings,
                         compilation
                     ) as INamedTypeSymbol
                 } else {
@@ -1300,7 +1568,7 @@ partial class CSharpToGSharpTranslator {
                 )
                 let arguments = List[ITypeSymbol](named.TypeArguments.Length)
                 for argument in named.TypeArguments {
-                    let substituted = this.SubstituteProjectedTypeParameter(argument, target, replacement, compilation)
+                    let substituted = this.SubstituteProjectedTypeParameters(argument, bindings, compilation)
                     if !SymbolEqualityComparer.Default.Equals(substituted, argument) {
                         changed = true
                     }
@@ -1328,6 +1596,96 @@ partial class CSharpToGSharpTranslator {
             return type
         }
 
+        private func HasErasingProjectionConversion(expr ExpressionSyntax, projectedPattern ITypeSymbol?) bool {
+            if projectedPattern == nil {
+                return false
+            }
+            let stopNode = OutermostTransparentNode(expr, stopAtAssignment: true)
+            var current SyntaxNode? = expr
+            while current != nil {
+                if current is CastExpressionSyntax castExpression {
+                    let targetType = this.context.GetTypeInfo(castExpression.Type).Type
+                    if targetType == nil || !MentionsTypeParameter(targetType) {
+                        return true
+                    }
+                    if this
+                        .context
+                        .SemanticModel
+                        .GetOperation(castExpression) is IConversionOperation conv &&
+                        conv.OperatorMethod != nil {
+                        return true
+                    }
+                } else if current is BinaryExpressionSyntax binary && binary.IsKind(SyntaxKind.AsExpression) {
+                    let targetType = this.context.GetTypeInfo(binary.Right).Type
+                    if targetType == nil || !MentionsTypeParameter(targetType) {
+                        return true
+                    }
+                }
+                if object.ReferenceEquals(current, stopNode) {
+                    break
+                }
+                current = current.Parent
+            }
+            return false
+        }
+
+        private func ProjectedTypeDepth(type ITypeSymbol?) int32 {
+            if type is IArrayTypeSymbol array {
+                return 1 + ProjectedTypeDepth(array.ElementType)
+            }
+            if type is INamedTypeSymbol{IsGenericType: true} named {
+                var maxChild int32 = 0
+                if named.ContainingType != nil {
+                    maxChild = Math.Max(maxChild, ProjectedTypeDepth(named.ContainingType))
+                }
+                for argument in named.TypeArguments {
+                    maxChild = Math.Max(maxChild, ProjectedTypeDepth(argument))
+                }
+                return 1 + maxChild
+            }
+            return 0
+        }
+
+        private func TryResolveReducedExtensionReceiverParameter(expr ExpressionSyntax) IParameterSymbol? {
+            let parentNode = OutermostTransparentNode(expr, stopAtAssignment: true)
+            if parentNode?.Parent is MemberAccessExpressionSyntax memberAccess &&
+                memberAccess.Expression == parentNode &&
+                memberAccess.Parent is InvocationExpressionSyntax invocation &&
+                this
+                .context
+                .GetSymbolInfo(invocation)
+                .Symbol is IMethodSymbol{ReducedFrom: {} unreducedMethod} &&
+                unreducedMethod
+                .Parameters
+                .Length > 0 {
+                return unreducedMethod.Parameters[0]
+            }
+            return nil
+        }
+
+        private func TryGetReducedExtensionReceiverInvocation(
+            expr ExpressionSyntax,
+            parameter IParameterSymbol
+        ) InvocationExpressionSyntax? {
+            let parentNode = OutermostTransparentNode(expr, stopAtAssignment: true)
+            if parentNode?.Parent is MemberAccessExpressionSyntax memberAccess &&
+                memberAccess.Expression == parentNode &&
+                memberAccess.Parent is InvocationExpressionSyntax invocation &&
+                this
+                .context
+                .GetSymbolInfo(invocation)
+                .Symbol is IMethodSymbol{ReducedFrom: {} unreducedMethod} &&
+                unreducedMethod
+                .Parameters
+                .Length > 0 &&
+                SymbolEqualityComparer
+                .Default
+                .Equals(unreducedMethod.Parameters[0], parameter) {
+                return invocation
+            }
+            return nil
+        }
+
         private func EnclosingInferredCallForArgument(
             expr ExpressionSyntax,
             parameter IParameterSymbol
@@ -1339,7 +1697,7 @@ partial class CSharpToGSharpTranslator {
                 .Equals(this.GetArgumentParameter(argument), parameter) {
                 return invocation
             }
-            return nil
+            return this.TryGetReducedExtensionReceiverInvocation(expr, parameter)
         }
 
         private func DeclaredGenericLocalConsumerSlotType(sink ISymbol?) ITypeSymbol? -> switch sink {

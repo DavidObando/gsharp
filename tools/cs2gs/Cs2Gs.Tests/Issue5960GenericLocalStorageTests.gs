@@ -40,6 +40,10 @@ open class Issue5960GenericLocalStorageTests {
     @InlineData("out-parameter")
     @InlineData("projected-containers")
     @InlineData("async-projected")
+    @InlineData("object-alias")
+    @InlineData("ref-choose-projected")
+    @InlineData("extension-receiver")
+    @InlineData("nullable-alias-assignment")
     async func ExplicitGenericStorage_PreservesNativeRuntimeBytes(shape string) {
         let effectful = shape == "effectful"
         let fixedConsumers = shape == "fixed-consumers"
@@ -80,6 +84,14 @@ open class Issue5960GenericLocalStorageTests {
                 ProjectedContainersSource
             } else if shape == "async-projected" {
                 AsyncProjectedSource
+            } else if shape == "object-alias" {
+                ObjectAliasSource
+            } else if shape == "ref-choose-projected" {
+                RefChooseProjectedSource
+            } else if shape == "extension-receiver" {
+                ExtensionReceiverSource
+            } else if shape == "nullable-alias-assignment" {
+                NullableAliasAssignmentSource
             } else if shape == "fixed-loop" {
                 ConstrainedSource
                     .Replace(
@@ -151,9 +163,17 @@ open class Issue5960GenericLocalStorageTests {
                     expected
                 )
             } else if shape == "projected-containers" {
-                Assert.Equal("1:True:1:True:1:True:1:True" + Environment.NewLine, expected)
+                Assert.Equal("1:True:1:True:1:True:True:True:True:1:True" + Environment.NewLine, expected)
             } else if shape == "async-projected" {
-                Assert.Equal("True:1:True:True:1:True" + Environment.NewLine, expected)
+                Assert.Equal("True:1:True:1:True:True:1:True" + Environment.NewLine, expected)
+            } else if shape == "object-alias" {
+                Assert.Equal("1:True" + Environment.NewLine, expected)
+            } else if shape == "ref-choose-projected" {
+                Assert.Equal("True:True:True" + Environment.NewLine, expected)
+            } else if shape == "extension-receiver" {
+                Assert.Equal("True:True:0" + Environment.NewLine, expected)
+            } else if shape == "nullable-alias-assignment" {
+                Assert.Equal("keep:ok:True" + Environment.NewLine, expected)
             } else {
                 Assert.Contains("False:True:", expected)
                 Assert.Contains("False:False:", expected)
@@ -200,7 +220,12 @@ open class Issue5960GenericLocalStorageTests {
             let translated = Directory.GetFiles(destination, "Probe.gs", SearchOption.AllDirectories)
             let gsPath = Assert.Single(translated)
             let printed = File.ReadAllText(gsPath)
-            Assert.True(!translation.Output.Contains("CS2GS-GENERIC-STORE-BRIDGE"), translation.Output + "\n" + printed)
+            if shape != "nullable-alias-assignment" {
+                Assert.True(
+                    !translation.Output.Contains("CS2GS-GENERIC-STORE-BRIDGE"),
+                    translation.Output + "\n" + printed
+                )
+            }
             let translatedPath = Path.Combine(directory, "Translated.dll")
             let compile = ProcessRunner.Run(
                 "dotnet",
@@ -227,10 +252,20 @@ open class Issue5960GenericLocalStorageTests {
             } else if shape == "out-parameter" {
                 Assert.DoesNotContain("value T?", printed)
                 Assert.DoesNotContain("!!", printed)
-            } else if shape == "projected-containers" || shape == "async-projected" {
+            } else if shape == "projected-containers" || shape == "async-projected" || shape == "ref-choose-projected" {
                 Assert.Contains("let kept T? = default(T)", printed)
                 Assert.DoesNotContain("value T?", printed)
                 Assert.DoesNotContain("!!", printed)
+            } else if shape == "object-alias" {
+                Assert.Contains("let value T? = default(T)", printed)
+                Assert.DoesNotContain("!!", printed)
+            } else if shape == "extension-receiver" {
+                Assert.DoesNotContain("value T?", printed)
+                Assert.DoesNotContain("!!", printed)
+            } else if shape == "nullable-alias-assignment" {
+                Assert.Contains("let y = input", printed)
+                Assert.Contains("x = y!!", printed)
+                Assert.DoesNotContain("input!!", printed)
             } else if loopCase && shape != "fixed-loop" {
                 Assert.Contains("var seed T?", printed)
                 Assert.DoesNotContain("seed!!", printed)
@@ -511,7 +546,18 @@ public static class P
 #nullable enable
 public static class P
 {
+    sealed class Outer<O>
+    {
+        public sealed class Item
+        {
+            public O Value { get; }
+            public Item(O value) { Value = value; }
+        }
+    }
     static System.Collections.Generic.List<U> Wrap<U>(U x) => new System.Collections.Generic.List<U> { x };
+    static (U, U) Pair<U>(U x) => (x, x);
+    static B Second<A, B>((A, B) x) => x.Item2;
+    static Outer<V>.Item Box<V>(V x) => new Outer<V>.Item(x);
     static System.Collections.Generic.List<T> MakeInferredLocalList<T>() where T : class
     {
         T value = default(T);
@@ -529,6 +575,21 @@ public static class P
         var inner = Wrap(value);
         return Wrap(inner);
     }
+    static T MakeSecond<T>() where T : class
+    {
+        T value = default(T);
+        return Second(Pair(value));
+    }
+    static T? MakeSecondNullable<T>() where T : class
+    {
+        T kept = default(T);
+        return Second(Pair(kept));
+    }
+    static Outer<System.Collections.Generic.List<T>>.Item MakeBoxedList<T>() where T : class
+    {
+        T value = default(T);
+        return Box(Wrap(value));
+    }
     static System.Collections.Generic.List<T?> MakeNullableList<T>() where T : class
     {
         T kept = default(T);
@@ -540,11 +601,16 @@ public static class P
         var single = MakeInferredLocalList<string>();
         var nested = MakeNestedList<string>();
         var chained = MakeChainedNestedList<string>();
+        var second = MakeSecond<string>();
+        var secondNullable = MakeSecondNullable<string>();
+        var boxed = MakeBoxedList<string>();
         var nullable = MakeNullableList<string>();
         System.Console.WriteLine(
             single.Count + ":" + (single[0] is null) + ":" +
             nested.Count + ":" + (nested[0][0] is null) + ":" +
             chained.Count + ":" + (chained[0][0] is null) + ":" +
+            (second is null) + ":" + (secondNullable is null) + ":" +
+            (boxed.Value[0] is null) + ":" +
             nullable.Count + ":" + (nullable[0] is null));
     }
 }`
@@ -573,6 +639,11 @@ public static class P
         T value = default(T);
         return await WrapAsync(value);
     }
+    static async System.Threading.Tasks.Task<System.Collections.Generic.List<T>> MakeParenthesizedAwaitedList<T>() where T : class
+    {
+        T value = default(T);
+        return await (WrapAsync(value));
+    }
     static System.Threading.Tasks.Task<T?> MakeUnawaitedNullableTask<T>() where T : class
     {
         T kept = default(T);
@@ -587,13 +658,127 @@ public static class P
     {
         var t1 = MakeUnawaitedTask<string>().GetAwaiter().GetResult();
         var t2 = MakeAwaitedList<string>().GetAwaiter().GetResult();
+        var t2p = MakeParenthesizedAwaitedList<string>().GetAwaiter().GetResult();
         var t3 = MakeUnawaitedNullableTask<string>().GetAwaiter().GetResult();
         var t4 = MakeAwaitedNullableList<string>().GetAwaiter().GetResult();
         System.Console.WriteLine(
             (t1 is null) + ":" +
             t2.Count + ":" + (t2[0] is null) + ":" +
+            t2p.Count + ":" + (t2p[0] is null) + ":" +
             (t3 is null) + ":" +
             t4.Count + ":" + (t4[0] is null));
+    }
+}`
+
+        private const ObjectAliasSource string = `
+#nullable enable
+public static class P
+{
+    static System.Collections.Generic.List<U> Wrap<U>(U x) => new System.Collections.Generic.List<U> { x };
+    static object Make<T>() where T : class
+    {
+        T value = default(T);
+        var a = (object)Wrap(value);
+        a = Wrap(a);
+        return a;
+    }
+    public static void Main()
+    {
+        var outer = (System.Collections.IList)Make<string>();
+        if (outer[0] is System.Collections.IList inner)
+        {
+            System.Console.WriteLine(outer.Count + ":" + (inner[0] is null));
+        }
+    }
+}`
+
+        private const RefChooseProjectedSource string = `
+#nullable enable
+public static class P
+{
+    static System.Collections.Generic.List<U> Wrap<U>(U x) => new System.Collections.Generic.List<U> { x };
+    static V Choose<V>(ref V seed, System.Collections.Generic.List<V> values) => values.Count > 0 ? values[0] : seed;
+    static void Touch<V>(ref V seed, System.Collections.Generic.List<V> values) { }
+    static T MakeChoose<T>(T replacement) where T : class
+    {
+        T seed = replacement;
+        T value = default(T);
+        return Choose(ref seed, Wrap(value));
+    }
+    static T MakeTouchFixed<T>(T replacement) where T : class
+    {
+        T seed = replacement;
+        T value = default(T);
+        Touch(ref seed, Wrap(value));
+        return value;
+    }
+    static T? MakeTouchNullable<T>() where T : class
+    {
+        T seed = default(T);
+        T kept = default(T);
+        Touch(ref seed, Wrap(kept));
+        return kept;
+    }
+    public static void Main()
+    {
+        System.Console.WriteLine(
+            (MakeChoose("keep") is null) + ":" +
+            (MakeTouchFixed("keep") is null) + ":" +
+            (MakeTouchNullable<string>() is null));
+    }
+}`
+
+        private const ExtensionReceiverSource string = `
+#nullable enable
+public static class Ext
+{
+    public static U Id<U>(this U x) => x;
+}
+public static class P
+{
+    static T Make<T>() where T : class
+    {
+        T value = default(T);
+        return value.Id();
+    }
+    static T MakeUnconstrained<T>()
+    {
+        T value = default(T);
+        return value.Id();
+    }
+    public static void Main()
+    {
+        System.Console.WriteLine(
+            (Make<string>() is null) + ":" +
+            (MakeUnconstrained<string>() is null) + ":" +
+            MakeUnconstrained<int>());
+    }
+}`
+
+        private const NullableAliasAssignmentSource string = `
+#nullable enable
+public static class P
+{
+    static T Make<T>(T replacement, T? input, bool clear) where T : class
+    {
+        T x = clear ? default(T) : replacement;
+        var y = input;
+        if (x is null) x = y;
+        return x;
+    }
+    static bool MakeUnfixed<T>(T? input) where T : class
+    {
+        T x = default(T);
+        var y = input;
+        if (x is null) x = y;
+        return x is null;
+    }
+    public static void Main()
+    {
+        System.Console.WriteLine(
+            Make("keep", null, false) + ":" +
+            Make("keep", "ok", true) + ":" +
+            MakeUnfixed<string>(null));
     }
 }`
 

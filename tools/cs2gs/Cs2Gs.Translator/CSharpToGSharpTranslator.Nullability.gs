@@ -938,6 +938,9 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func LocalHoldsPromotedValueCore(local ILocalSymbol) bool {
+            if this.GenericLocalStorageIsFixed(local) {
+                return false
+            }
             // A type clause fixes the storage, so its nullability is the answer. Without a clause, only a
             // certainly non-null initializer gives a certain answer.
             if this
@@ -1873,10 +1876,21 @@ partial class CSharpToGSharpTranslator {
             } else {
                 this.FindEnclosingArgumentThroughReferenceCasts(callSite)
             }
-            if enclosingArgument?.Parent is not BaseArgumentListSyntax argumentList || argumentList.Parent == nil {
+            var callNode SyntaxNode? = nil
+            var argumentList BaseArgumentListSyntax? = nil
+            if enclosingArgument?.Parent is BaseArgumentListSyntax list && list.Parent != nil {
+                argumentList = list
+                callNode = list.Parent
+            } else if callSite != nil && this.TryGetReducedExtensionReceiverInvocation(
+                callSite,
+                parameter
+            ) is {} reducedInvocation {
+                callNode = reducedInvocation
+                argumentList = reducedInvocation.ArgumentList
+            }
+            if callNode == nil || argumentList == nil {
                 return false
             }
-            let callNode = argumentList.Parent!!
             let cacheKey = (callNode, parameter.Name, typeParameter.Ordinal)
             // Storage evaluation can still fix a component. Cache bounds only after that evaluation completes.
             if this.genericLocalStorageEvaluation == nil && this.nonParamsTypeParameterBounds.TryGetValue(
@@ -1905,16 +1919,24 @@ partial class CSharpToGSharpTranslator {
             parameter IParameterSymbol,
             typeParameter ITypeParameterSymbol
         ) bool {
-            let receiverExpression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = switch callNode {
-                case InvocationExpressionSyntax{
-                    Expression: MemberAccessExpressionSyntax memberAccess
-                }: memberAccess.Expression
-                case InvocationExpressionSyntax{Expression: MemberBindingExpressionSyntax} bindingCall: bindingCall
-                    .Ancestors()
-                    .OfType[ConditionalAccessExpressionSyntax]()
-                    .FirstOrDefault()
-                    ?.Expression
-                default: default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
+            let receiverExpression Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ExpressionSyntax? = if enclosingArgument != nil {
+                switch callNode {
+                    case InvocationExpressionSyntax{
+                        Expression: MemberAccessExpressionSyntax memberAccess
+                    }: memberAccess.Expression
+                    case InvocationExpressionSyntax{Expression: MemberBindingExpressionSyntax} bindingCall: bindingCall
+                        .Ancestors()
+                        .OfType[ConditionalAccessExpressionSyntax]()
+                        .FirstOrDefault()
+                        ?.Expression
+                    default: default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
+                }
+            } else {
+                default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
             }
             if receiverExpression != nil &&
                 this
@@ -1951,7 +1973,8 @@ partial class CSharpToGSharpTranslator {
             }
             for var i = 0; i < argumentList.Arguments.Count; i++ {
                 let otherArgument = argumentList.Arguments[i]
-                if otherArgument == enclosingArgument || (otherArgument.NameColon == nil && i >= parameter.Ordinal) {
+                if otherArgument == enclosingArgument ||
+                    (enclosingArgument != nil && otherArgument.NameColon == nil && i >= parameter.Ordinal) {
                     continue
                 }
                 let otherParameter IParameterSymbol? = this.GetArgumentParameter(otherArgument)

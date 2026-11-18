@@ -74,6 +74,7 @@ internal class DocumentTranslationState {
         LocalHoldsPromotedValueInProgress = HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
         EmittedLocalTypeClauses = HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
         InferredLocalDefaultTypedDeclarations = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
+        IndependentlyNullableInferredLocals = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         BareTypeParameterContractExpressions = Dictionary[
             Microsoft.CodeAnalysis.SyntaxNode,
             Dictionary[ITypeParameterSymbol, bool]
@@ -465,6 +466,10 @@ internal class DocumentTranslationState {
     // Issue #4445: semantic/CFG default provenance is invariant per local and
     // can be queried repeatedly while lowering one declaration.
     prop InferredLocalDefaultTypedDeclarations Dictionary[ILocalSymbol, bool] {
+        get;
+    }
+
+    prop IndependentlyNullableInferredLocals Dictionary[ILocalSymbol, bool] {
         get;
     }
 
