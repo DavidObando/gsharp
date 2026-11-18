@@ -201,6 +201,18 @@ internal shared class PInvokeBinder {
             }
             diagnostics.ReportPInvokeUnsupportedMarshallingType(typeLocation, parameter.Type?.Name ?? "?")
         }
+        let returnMarshalAs = KnownAttributes.FindMarshalAs(function.Attributes)
+        if returnMarshalAs != nil {
+            function.ReturnMarshalAsMetadata = BindMarshalAsMetadata(
+                returnMarshalAs,
+                function.Type,
+                "return",
+                returnMarshalAs.Syntax?.Location ?? identifierLocation,
+                isLibraryImport,
+                true,
+                diagnostics
+            )
+        }
         let returnIsString = function.Type == TypeSymbol.String
         if function.Type != TypeSymbol.Void {
             let returnLocation = syntax.Type?.Location ?? identifierLocation
@@ -755,17 +767,40 @@ internal shared class PInvokeBinder {
                     .Location
             }
         )
+        let metadata = BindMarshalAsMetadata(
+            attr,
+            parameter.Type,
+            parameter.Name,
+            annotationLocation,
+            isLibraryImport,
+            false,
+            diagnostics
+        )
+        if metadata != nil {
+            parameter.SetMarshalAsMetadata(metadata)
+        }
+    }
+
+    private func BindMarshalAsMetadata(
+        attr BoundAttribute,
+        effectiveType TypeSymbol?,
+        positionName string,
+        annotationLocation TextLocation,
+        isLibraryImport bool,
+        isReturn bool,
+        diagnostics DiagnosticBag
+    ) MarshalAsMetadata? {
         // ADR-0096 §3 — @MarshalAs on a string parameter under
         // @LibraryImport collides with the function-wide
         // StringMarshalling knob, which is the canonical per-call lever.
         // Reject with GS0360 rather than silently honour one or the other.
-        if isLibraryImport && parameter.Type == TypeSymbol.String {
+        if isLibraryImport && effectiveType == TypeSymbol.String {
             diagnostics.ReportMarshalAsRejected(
                 annotationLocation,
-                parameter.Name,
-                "@LibraryImport string parameters take their encoding from the function-wide StringMarshalling knob; use @LibraryImport(StringMarshalling: StringMarshalling.Utf8) (or Utf16) instead"
+                positionName,
+                "@LibraryImport string parameters and returns take their encoding from the function-wide StringMarshalling knob; use @LibraryImport(StringMarshalling: StringMarshalling.Utf8) (or Utf16) instead"
             )
-            return
+            return nil
         }
         // 1) Required positional UnmanagedType.
         var unmanagedType UnmanagedType
@@ -777,11 +812,19 @@ internal shared class PInvokeBinder {
                 annotationLocation,
                 unmanagedTypeArgument?.Value?.ToString() ?? "<missing>"
             )
-            return
+            return nil
         }
         if !SupportedUnmanagedTypes.Contains(unmanagedType) {
             diagnostics.ReportMarshalAsUnsupportedUnmanagedType(annotationLocation, unmanagedType.ToString())
-            return
+            return nil
+        }
+        if isReturn && (unmanagedType is UnmanagedType.ByValArray or UnmanagedType.ByValTStr) {
+            diagnostics.ReportMarshalAsRejected(
+                annotationLocation,
+                positionName,
+                "ByValArray and ByValTStr describe inline fields, not return values"
+            )
+            return nil
         }
         // 2) Named arguments.
         var arraySubType UnmanagedType? = nil
@@ -824,47 +867,44 @@ internal shared class PInvokeBinder {
         // the ref-kind: a `@MarshalAs(...)` on `ref int32` validates
         // against `int32` (the pointee), since the marshalling rule
         // applies to the pointed-at unmanaged form.
-        let effectiveType = parameter.Type
         if !IsCompatibleMarshalAs(unmanagedType, effectiveType) {
             diagnostics.ReportMarshalAsIncompatibleType(
                 annotationLocation,
-                parameter.Name,
+                positionName,
                 effectiveType?.Name ?? "?",
                 unmanagedType.ToString()
             )
-            return
+            return nil
         }
         // 4) Required-knob checks for the size-bearing forms.
         if unmanagedType == UnmanagedType.ByValTStr && !(sizeConst != nil) {
             diagnostics.ReportMarshalAsMissingRequiredArgument(
                 annotationLocation,
-                parameter.Name,
+                positionName,
                 unmanagedType.ToString(),
                 "SizeConst"
             )
-            return
+            return nil
         }
         if unmanagedType == UnmanagedType.ByValArray && !(sizeConst != nil) {
             diagnostics.ReportMarshalAsMissingRequiredArgument(
                 annotationLocation,
-                parameter.Name,
+                positionName,
                 unmanagedType.ToString(),
                 "SizeConst"
             )
-            return
+            return nil
         }
         if unmanagedType == UnmanagedType.LPArray && !(sizeConst != nil) && !(sizeParamIndex != nil) {
             diagnostics.ReportMarshalAsMissingRequiredArgument(
                 annotationLocation,
-                parameter.Name,
+                positionName,
                 unmanagedType.ToString(),
                 "SizeConst or SizeParamIndex"
             )
-            return
+            return nil
         }
-        parameter.SetMarshalAsMetadata(
-            MarshalAsMetadata(unmanagedType, arraySubType, safeArraySubType, sizeConst, sizeParamIndex)
-        )
+        return MarshalAsMetadata(unmanagedType, arraySubType, safeArraySubType, sizeConst, sizeParamIndex)
     }
 
     /// ADR-0096 / issue #762: the per-UnmanagedType compatibility

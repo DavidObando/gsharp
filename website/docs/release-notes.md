@@ -14,6 +14,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ## Unreleased (0.5 line)
 
+- **Preserve P/Invoke return marshalling overrides** (#6072). Emit return-target `MarshalAs` descriptors for `DllImport` and both `LibraryImport` methods. Preserve other return attributes, diagnose unsupported return forms, and keep unannotated boolean defaults unchanged.
+
 ### Bug Fixes
 
 - Cover stored `Func[T]` factories passed to imported generic methods with dependent constraints. Runtime regression tests preserve delegate invocation counts and results for the symbolic applicability correction in #6058. (Fixes #6088)

@@ -572,6 +572,9 @@ class FunctionSymbol : Symbol {
     /// `null` for ordinary managed functions.
     prop PInvokeMetadata PInvokeMetadata?
 
+    /// Gets or sets the resolved P/Invoke return marshalling override (ADR-0226).
+    prop ReturnMarshalAsMetadata MarshalAsMetadata?
+
     /// Gets or sets the CLR interface slot this method explicitly implements via
     /// a covariant-return interface bridge (issue #985). Two same-name,
     /// same-parameter methods that differ only by return type and satisfy two
