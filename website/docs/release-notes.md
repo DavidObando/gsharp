@@ -18,6 +18,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Set `MALLOC_MMAP_THRESHOLD_=131072` for mirrored `cs2gs` `dotnet test` runs. With this fixed glibc threshold, freed native blocks of 128 KB or more return to the OS. Under hosted-runner limits, the self-migrated `Cs2Gs.Tests` testhost peaks at 4.9 GB instead of 15.3 GB. Build environments do not change. (Fixes #6096)
+
 - Reject constructor initializer targets other than `base` with GS0642 instead of silently calling a base constructor. Use `convenience init() { init(args) }` for same-class chaining. (Fixes #6074)
 
 - Cover stored `Func[T]` factories passed to imported generic methods with dependent constraints. Runtime regression tests preserve delegate invocation counts and results for the symbolic applicability correction in #6058. (Fixes #6088)
