@@ -31,7 +31,7 @@ shared class Demo {
     }
 }
 Console.WriteLine(Demo.Run())`, "ConditionalDriver6033", executable: true)
-        Assert.Equal(Encoding.UTF8.GetBytes("0\n"), fixture.RunBytes(program))
+        Assert.Equal(Encoding.UTF8.GetBytes("0" + Environment.NewLine), fixture.RunBytes(program))
         IlVerifier.Verify(program)
     }
 

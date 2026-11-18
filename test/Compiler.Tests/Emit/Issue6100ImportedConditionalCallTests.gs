@@ -25,7 +25,7 @@ class Issue6100ImportedConditionalCallTests {
 import ConditionalFixture6100
 Probe.SharedKeep(7)
 Console.WriteLine(Recorder.Trace)`, "ConditionalDriver6100", executable: true, "/r:" + library)
-        Assert.Equal(Encoding.UTF8.GetBytes("\n"), fixture.RunBytes(program))
+        Assert.Equal(Encoding.UTF8.GetBytes(Environment.NewLine), fixture.RunBytes(program))
         IlVerifier.Verify(program, []string{library})
     }
 
