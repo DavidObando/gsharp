@@ -5821,6 +5821,7 @@ internal partial class StatementBinder {
             ConditionNegateEnd,
             ConditionLeafEnd,
             ConditionDiscardResult,
+            PossiblySkippedStart,
             PossiblySkippedEnd,
             ExpressionPostChecks,
             VariableDeclarationEnd,
@@ -6402,24 +6403,17 @@ internal partial class StatementBinder {
         }
 
         private func PushPossiblySkippedStatement(node BoundStatement) {
-            savedStates.Add(CaptureCallableState())
-            PushStep(WalkStepKind.PossiblySkippedEnd)
-            PushStatement(node)
+            PushStep(WalkStepKind.PossiblySkippedStart, node)
         }
 
         private func PushPossiblySkippedExpression(node BoundExpression?) {
-            if node == nil {
-                return
+            if node != nil {
+                PushStep(WalkStepKind.PossiblySkippedStart, node)
             }
-            savedStates.Add(CaptureCallableState())
-            PushStep(WalkStepKind.PossiblySkippedEnd)
-            PushExpression(node)
         }
 
         private func PushPossiblySkippedPattern(node BoundPattern) {
-            savedStates.Add(CaptureCallableState())
-            PushStep(WalkStepKind.PossiblySkippedEnd)
-            PushPattern(node)
+            PushStep(WalkStepKind.PossiblySkippedStart, node)
         }
 
         private func ProcessWorkStack() {
@@ -6481,6 +6475,21 @@ internal partial class StatementBinder {
                         }
                         case WalkStepKind.ConditionDiscardResult {
                             PopConditionResult()
+                        }
+                        case WalkStepKind.PossiblySkippedStart {
+                            savedStates.Add(CaptureCallableState())
+                            PushStep(WalkStepKind.PossiblySkippedEnd)
+                            switch step.Node {
+                                case expr is BoundExpression {
+                                    PushExpression(expr)
+                                }
+                                case pattern is BoundPattern {
+                                    PushPattern(pattern)
+                                }
+                                case stmt is BoundStatement {
+                                    PushStatement(stmt)
+                                }
+                            }
                         }
                         case WalkStepKind.PossiblySkippedEnd {
                             let branchStart = PopSavedState()
@@ -7635,9 +7644,6 @@ internal partial class StatementBinder {
                         PushStep(WalkStepKind.ConditionDiscardResult)
                         PushCondition(bin)
                     } else if bin.Op.Kind == BoundBinaryOperatorKind.NullCoalesce {
-                        PushExpression(bin.Left)
-                        // Note: stack is LIFO, so push Right before Left!
-                        workStack.RemoveAt(workStack.Count - 1)
                         PushPossiblySkippedExpression(bin.Right)
                         PushExpression(bin.Left)
                     } else if bin.Left is not BoundBinaryExpression {

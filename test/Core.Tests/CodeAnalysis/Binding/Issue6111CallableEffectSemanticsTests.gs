@@ -210,6 +210,35 @@ Run("ok", true)
         AssertContainsError(result, "GS0158")
     }
 
+    @Fact
+    func NullCoalesce_LeftAssignedMutatingTarget_PreservedWhenRightOverwritesTarget() {
+        let result = EmittedOracle.Evaluate(`
+func Run(initial string?, fallback string?) int32 {
+    var value = initial
+    if value != nil {
+        let _ = {
+            var f () -> int32 = () -> 0
+            let _ = {
+                f = () -> {
+                    value = nil
+                    return 0
+                }
+                fallback
+            } ?? {
+                f = () -> 1
+                "ok"
+            }
+            f()
+        }
+        return value.Length
+    }
+    return 0
+}
+Run("ok", "x")
+`)
+        AssertContainsError(result, "GS0158")
+    }
+
     shared {
         private func AssertContainsError(result EmittedOracleResult, diagnosticId string) {
             Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.IsError && d.Id == diagnosticId)
