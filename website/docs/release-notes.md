@@ -22,9 +22,12 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Keep the SDK reference-assembly pack regression independent of installed Android workloads. Retain four inner builds and exact effective-framework path checks. (Fixes #6032)
+
 - Preserve symbolic receiver types in imported method labels for hover, signature help, and member completion. Show source-defined arguments instead of erased `object` placeholders. Keep fixed-array lengths, tuple names, and declared return nullability. Keep declared signatures separate from call-result narrowing. (Fixes #5492)
 
 - Set `MALLOC_MMAP_THRESHOLD_=131072` for mirrored `cs2gs` `dotnet test` runs. With this fixed glibc threshold, freed native blocks of 128 KB or more return to the OS. Under hosted-runner limits, the self-migrated `Cs2Gs.Tests` testhost peaks at 4.9 GB instead of 15.3 GB. Build environments do not change. (Fixes #6096)
+
 - Preserve non-null assignment facts from ordinary extension-call receivers, including imported extensions. Receiver-side `??=` no longer causes a false GS0158 after the call. Keep later assignments and by-reference writes invalidating those facts. (Fixes #6107)
 
 - Reject constructor initializer targets other than `base` with GS0642 instead of silently calling a base constructor. Use `convenience init() { init(args) }` for same-class chaining. (Fixes #6074)
