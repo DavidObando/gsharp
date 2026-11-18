@@ -879,10 +879,13 @@ internal partial class ExpressionBinder {
                 resultSlot: nil
             )
         }
-        let resultType = if invoke.Type is NullableTypeSymbol {
-            invoke.Type
-        } else {
-            cast[TypeSymbol](NullableTypeSymbol.Get(invoke.Type))
+        let resultType = binderCtx.BindSourceNullable(
+            invoke.Type,
+            syntax.NullableQuestionToken!!.Location,
+            isOperator: true
+        )
+        if resultType == TypeSymbol.Error {
+            return BoundErrorExpression(syntax)
         }
         var resultSlot LocalVariableSymbol? = nil
         if resultType is NullableTypeSymbol nullableResult && ReflectionMetadataEmitter.IsValueTypeSymbol(

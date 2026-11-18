@@ -16,9 +16,19 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 - **Preserve P/Invoke return marshalling overrides** (#6072). Emit return-target `MarshalAs` descriptors for `DllImport` and both `LibraryImport` methods. Preserve other return attributes, diagnose unsupported return forms, and keep unannotated boolean defaults unchanged.
 
+### Breaking Changes
+
+- **Source nullable type parameters require a known kind** (Fixes #6040, #6043, #6057, #6060; ADR-0224). Source `T?` annotations and operators that create nullable results or binding-header storage report `GS0641` unless constraints prove reference kind or nonnullable value kind. Diagnostics point to the annotation or source operator, including the `let` keyword in nullable binding headers. Use `class`/`class?`, a sufficient reference-class bound, `struct`, or `unmanaged` for the API's actual domain. `notnull`, interface-only bounds, and a dependent parameter's bare `class` bound are insufficient. Use ordinary unconstrained `T` when callers supply a complete nullable argument, such as `Id[int32?]`. Mixed APIs can require separate reference/value contracts. Imported CLR nullable annotations and the repository's published SDK pin are unchanged. This restriction replaces the draft return adapter and unimplemented companion proposal; it introduces no new nullable ABI.
+
 ### Bug Fixes
 
 - Keep the SDK reference-assembly pack regression independent of installed Android workloads. Retain four inner builds and exact effective-framework path checks. (Fixes #6032)
+
+- Preserve symbolic receiver types in imported method labels for hover, signature help, and member completion. Show source-defined arguments instead of erased `object` placeholders. Keep fixed-array lengths, tuple names, and declared return nullability. Keep declared signatures separate from call-result narrowing. (Fixes #5492)
+
+- Set `MALLOC_MMAP_THRESHOLD_=131072` for mirrored `cs2gs` `dotnet test` runs. With this fixed glibc threshold, freed native blocks of 128 KB or more return to the OS. Under hosted-runner limits, the self-migrated `Cs2Gs.Tests` testhost peaks at 4.9 GB instead of 15.3 GB. Build environments do not change. (Fixes #6096)
+
+- Preserve non-null assignment facts from ordinary extension-call receivers, including imported extensions. Receiver-side `??=` no longer causes a false GS0158 after the call. Keep later assignments and by-reference writes invalidating those facts. (Fixes #6107)
 
 - Reject constructor initializer targets other than `base` with GS0642 instead of silently calling a base constructor. Use `convenience init() { init(args) }` for same-class chaining. (Fixes #6074)
 
@@ -102,6 +112,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 - Clarify ADR-0209's existing public-copy preference for well-known types, nonpublic fallback, and searched/dependency module partition. Consumer-specific access remains compilation-owned. This changes documentation only. (Fixes #5204)
 
 - Construct expanded List and span variadic carriers over source-declared elements and generic type parameters. Preserve symbolic element types through ordinary constructor emission, including nullable elements and nested collections. Normal-form arguments retain their carrier identity. (Fixes #6010)
+
+- Follow widened `cs2gs` field, property, and call-result values into call arguments and reduced extension receivers. Discover forwarding through the existing candidate-filtered read analysis and retain the all-reads-safe fixed point. Collect reads from every canonical linked-source declaration before pruning. Keep fixed contracts, effectful dereferences, and incompatible params carriers pinned. (Fixes #5556)
 
 - Reject release packages whose embedded nuspec ID or version differs from the filename. Reuse package metadata verification before publishing. (Fixes #5550)
 

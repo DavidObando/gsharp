@@ -1723,6 +1723,17 @@ internal class LambdaBinder {
             !(boundBody is BoundErrorExpression) {
             returnType = placeholderReturnType
         }
+        if TypeSymbol.ContainsTypeParameter(returnType) {
+            let sourceReturns = ReturnTypeCollector()
+            sourceReturns.Visit(boundBody)
+            let inputs = sourceReturns
+                .ReturnTypes
+                .Append(boundBody.Type)
+                .Append(targetFunctionType?.ReturnType ?? TypeSymbol.Error)
+            if !binderCtx.ValidateSourceNullableResult(returnType, syntax.ArrowToken.Location, inputs) {
+                return BoundErrorExpression(syntax)
+            }
+        }
         if isAsync && isAsyncIteratorReturnType(returnType) {
             Diagnostics.ReportAsyncIteratorFunctionLiteralNotSupported(syntax.Location, returnType)
             return BoundErrorExpression(syntax)

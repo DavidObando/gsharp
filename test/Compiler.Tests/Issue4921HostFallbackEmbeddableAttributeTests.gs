@@ -611,7 +611,7 @@ public abstract class BaseInit {
 
             let implSrcPath = Path.Combine(tempDir, "ImplLib.gs")
             let implPath = Path.Combine(tempDir, "ImplLib.dll")
-            File.WriteAllText(implSrcPath, `
+            const implSource = `
 package ImplLib
 
 import ContractLib
@@ -648,7 +648,15 @@ public class Impl : BaseInit, IReader {
         return ref this.slot
     }
 }
-`)
+`
+            Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(
+                implSource,
+                []string{"T"},
+                2,
+                isLibrary: true,
+                references: []string{contractPath}
+            )
+            File.WriteAllText(implSrcPath, implSource.Replace("class Config[T] :", "class Config[T struct] :"))
             {
                 using let compileOut = StringWriter()
                 using let compileErr = StringWriter()

@@ -208,6 +208,18 @@ internal partial class ExpressionBinder {
             whenFalse = UnwrapSynthesizedRefDelegateBranch(whenFalse)
         }
         var resultType TypeSymbol? = ComputeConditionalResultType(whenTrue.Type, whenFalse.Type, targetType)
+        if !binderCtx.ValidateSourceNullableResult(
+            resultType,
+            syntax.IfKeyword.Location,
+            []TypeSymbol{whenTrue.Type, whenFalse.Type, targetType ?? TypeSymbol.Error}
+        ) {
+            if deferOnFailure {
+                Diagnostics.TruncateTo(diagMark)
+                Diagnostics.RestoreSuppressionsTo(suppressionMark)
+                return BoundErrorExpression(syntax)
+            }
+            return BoundErrorExpression(nil)
+        }
         if targetType == nil {
             resultType = MaterializeSynthesizedRefDelegateResultType(resultType, []BoundExpression{whenTrue, whenFalse})
         }

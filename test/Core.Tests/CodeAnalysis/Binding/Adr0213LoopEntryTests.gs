@@ -2574,7 +2574,7 @@ func Run(ref text string?) int32 {
     return n
 }
 func Main() { }`, "GS0158@9:16")
-            Add("explicit-type-argument-conversion-removes-a-by-reference-fact (A3)", `package T
+            const explicitConversionSource = `package T
 import System
 import System.Linq
 import System.Collections.Generic
@@ -2594,8 +2594,18 @@ func Run(ref text string?, dt DateTime, tok Token, dict Dictionary[Token, DateTi
     }
     return n
 }
-func Main() { }`, "GS0158@15:16")
-            Add("open-receiver-type-parameter-counts-as-a-conversion (A3)", `package T
+func Main() { }`
+            Add(
+                "explicit-type-argument-conversion-removes-a-by-reference-fact (A3)",
+                explicitConversionSource,
+                "GS0641@8:15 GS0158@15:16"
+            )
+            Add(
+                "explicit-type-argument-conversion-with-known-value-kind (A3)",
+                explicitConversionSource.Replace("class Box[T]", "class Box[T struct]"),
+                "GS0158@15:16"
+            )
+            const openReceiverSource = `package T
 import System
 import System.Linq
 import System.Collections.Generic
@@ -2615,7 +2625,17 @@ func Run(ref text string?, dt DateTime, tok Token, dict Dictionary[Token, DateTi
     }
     return n
 }
-func Main() { }`, "GS0158@15:16")
+func Main() { }`
+            Add(
+                "open-receiver-type-parameter-counts-as-a-conversion (A3)",
+                openReceiverSource,
+                "GS0641@8:15 GS0158@15:16"
+            )
+            Add(
+                "open-receiver-conversion-with-known-value-kind (A3)",
+                openReceiverSource.Replace("class Box[T]", "class Box[T struct]"),
+                "GS0158@15:16"
+            )
             Add("open-stored-comparer-invalidates-a-by-reference-fact (A3)", `package T
 import System
 import System.Collections.Generic

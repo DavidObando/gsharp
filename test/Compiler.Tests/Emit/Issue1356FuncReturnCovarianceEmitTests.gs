@@ -11,13 +11,8 @@ import System.Diagnostics
 import System.IO
 import Xunit
 
-/// Issue #1356: a function-typed value whose return type is a bare type
-/// parameter `T` implicitly converts to a function whose return type is the
-/// nullable form `T?` of the same type parameter. Widening a non-null value
-/// to its nullable form is always safe, so a `(T) -> T` flows into a
-/// `(T) -> T?` slot. Issue #2714 also permits the reverse delegate
-/// conversion because an unconstrained `T?` annotation does not change
-/// the emitted runtime signature.
+/// Reference-kind return widening retains the delegate's CLR signature.
+/// Unrestricted nullable return erasure requires GS0641 under ADR-0224.
 open class Issue1356FuncReturnCovarianceEmitTests {
     @Fact
     func Library_FuncReturnTypeParameterWidensToNullable_Compiles() {
@@ -31,7 +26,8 @@ class Box[T] {
         this.f = g
     }
 }`
-        let dllPath = CompileLibrary(source)
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(source, []string{"T"}, 1, isLibrary: true)
+        let dllPath = CompileLibrary(source.Replace("Box[T]", "Box[T class?]"))
         TryCleanup(dllPath)
     }
 
@@ -66,7 +62,7 @@ class Box {
     }
 
     @Fact
-    func Library_NullableReturnConvertsToSameRuntimeSignature() {
+    func Library_UnrestrictedNullableReturnErasureRequiresKnownKind() {
         let source = `package p
 
 class Box[T] {
@@ -75,8 +71,7 @@ class Box[T] {
         this.f = g
     }
 }`
-        let dllPath = CompileLibrary(source)
-        TryCleanup(dllPath)
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(source, []string{"T"}, 1, isLibrary: true)
     }
 
     @Fact
@@ -104,7 +99,8 @@ func Main() {
     let b = Box[string](func (x string) string { return x + "!" })
     System.Console.WriteLine(b.apply("hi"))
 }`
-        let output = CompileAndRun(source)
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(source, []string{"T"}, 2)
+        let output = CompileAndRun(source.Replace("Box[T]", "Box[T class?]"))
         Assert.Equal("hi!${Environment.NewLine}", output)
     }
 

@@ -657,7 +657,7 @@ internal partial class ExpressionBinder {
                     return receiver
                 }
                 return if accessor.IsNullConditional {
-                    BindNullConditionalAccessExpressionCore(receiver, accessor.RightPart)
+                    BindNullConditionalAccessExpressionCore(receiver, accessor.RightPart, accessor.DotToken.Location)
                 } else {
                     BindAccessorStep(receiver, classSymbol: nil, accessor.RightPart)
                 }

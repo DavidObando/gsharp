@@ -167,7 +167,8 @@ func Main() {
     t.RunAsync().Wait()
     Console.WriteLine("okC")
 }`
-        let output = CompileAndRun(source)
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(source, []string{"TOutput"}, 1)
+        let output = CompileAndRun(source.Replace("TransformC[TInput, TOutput]", "TransformC[TInput, TOutput struct]"))
         Assert.Equal("okC${Environment.NewLine}", output)
     }
 

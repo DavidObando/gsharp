@@ -24,8 +24,7 @@ import Xunit
 open class Issue2171NullableIsInterfaceNarrowingTests {
     @Fact
     func If_IsInterface_OnNullableTypeParameterOperand_NarrowsToTestedInterface() {
-        // Declared type is a NULLABLE unconstrained type parameter (`T?`).
-        let result = Evaluate(`
+        const Source = `
 interface IInit {
     func Init() void;
 }
@@ -34,7 +33,9 @@ func Run[T](x T?) void {
         x.Init()
     }
 }
-`)
+`
+        SourceNullableKindAssertions.Reject(Source, "T", 1)
+        let result = Evaluate(Source.Replace("[T]", "[T class?]"))
         Assert.Empty(result.Diagnostics)
     }
 
@@ -61,14 +62,16 @@ func Run(x IShape?) void {
     func And_IsInterface_OnNullableTypeParameterOperand_NarrowsRightOperand() {
         // The short-circuit (`x is I && …`) classifier must agree with the
         // `if`-statement classifier for nullable type-parameter operands.
-        let result = Evaluate(`
+        const Source = `
 interface IInit {
     func Init() int32;
 }
 func Run[T](x T?) bool {
     return x is IInit && x.Init() > 0
 }
-`)
+`
+        SourceNullableKindAssertions.Reject(Source, "T", 1)
+        let result = Evaluate(Source.Replace("[T]", "[T class?]"))
         Assert.Empty(result.Diagnostics)
     }
 

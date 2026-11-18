@@ -57,23 +57,9 @@ open class Issue4192DeferredParameterDefaultValueGapsTests {
         Assert.Contains(diagnostics, (d Diagnostic) -> d.Id == "GS0265")
     }
 
-    /// A generic instance/shared method returning an unconstrained
-    /// `sequence[T?]` is immediately expanded into two specialized
-    /// clones (reference-type and value-type `T`) by
-    /// `ExpandNullableSequenceIteratorSpecializations`, which runs
-    /// during the SAME per-struct declaration-body pass that registers the
-    /// deferred default-value closure — well before
-    /// `BindPendingParameterDefaultValues` drains it. The original,
-    /// unspecialized method symbol (the only one the deferred closure's
-    /// captured `parameter` belongs to) is discarded once
-    /// specialization installs its two clones instead, so without a
-    /// follow-up copy, an optional parameter on such a method silently lost
-    /// its default value entirely on both installed clones. This test
-    /// exercises both specializations by calling the method with the
-    /// argument omitted against each of a reference-type and a value-type
-    /// type argument.
+    /// Constrained nullable iterators must retain deferred parameter defaults.
     @Fact
-    func GenericIteratorSpecialization_ArgumentOmitted_UsesDeferredDefaultOnBothClones() {
+    func GenericNullableIterators_RequireKindsAndRetainDeferredDefaults() {
         // The default is a plain literal (not a forward reference) — #4183's
         // deferral applies unconditionally to every parameter default, so a
         // literal default is deferred exactly the same way a forward-
@@ -91,8 +77,17 @@ open class Issue4192DeferredParameterDefaultValueGapsTests {
             "class RefBox {}\n" +
             "func UseRefType(b Box) sequence[RefBox?] { return b.Items[RefBox]() }\n" +
             "func UseValueType(b Box) sequence[int32?] { return b.Items[int32]() }\n"
-        let diagnostics = GetDiagnostics(source)
-        Assert.Empty(diagnostics)
+        SourceNullableKindAssertions.Reject(source, "T", 1)
+        let referenceSource = source.Replace("Items[T]", "Items[T class?]").Replace(
+            "func UseValueType(b Box) sequence[int32?] { return b.Items[int32]() }\n",
+            ""
+        )
+        let valueSource = source.Replace("Items[T]", "Items[T struct]").Replace(
+            "func UseRefType(b Box) sequence[RefBox?] { return b.Items[RefBox]() }\n",
+            ""
+        )
+        Assert.Empty(GetDiagnostics(referenceSource))
+        Assert.Empty(GetDiagnostics(valueSource))
     }
 
     /// The deferred closure re-establishes scope, package, referencing

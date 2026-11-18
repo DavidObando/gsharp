@@ -80,7 +80,7 @@ run()`)
 
     @Fact
     func GenericFunctionType_InvokeAndNullConditionalInvoke_Resolve() {
-        let result = EmittedOracle.Evaluate(`func InvokeDirect[T any, R any](callback (T) -> R, value T) R {
+        const Source = `func InvokeDirect[T any, R any](callback (T) -> R, value T) R {
     return callback.Invoke(value)
 }
 
@@ -99,7 +99,9 @@ func run() int32 {
         + (if missing == "missing" { 1 } else { 0 })
 }
 
-run()`)
+run()`
+        SourceNullableKindAssertions.Reject(Source, "R", 1)
+        let result = EmittedOracle.Evaluate(Source.Replace("InvokeMaybe[T any, R any]", "InvokeMaybe[T any, R class?]"))
         Assert.DoesNotContain(result.Diagnostics, (diagnostic Diagnostic) -> diagnostic.IsError)
         Assert.Null(result.UnhandledException)
         Assert.Equal(1011, result.Value)
@@ -107,7 +109,7 @@ run()`)
 
     @Fact
     func GenericInvoke_PreservesConstraintsNestedNullabilityAndAsyncReturn() {
-        let result = EmittedOracle.Evaluate(`package P
+        const Source = `package P
 import System
 import System.Threading.Tasks
 
@@ -142,7 +144,9 @@ func run() int32 {
         + (if mixed == "8" { 1 } else { 0 })
 }
 
-run()`)
+run()`
+        SourceNullableKindAssertions.Reject(Source, "T", 4)
+        let result = EmittedOracle.Evaluate(Source.Replace("InvokeNested[T any]", "InvokeNested[T class?]"))
         Assert.DoesNotContain(result.Diagnostics, (diagnostic Diagnostic) -> diagnostic.IsError)
         Assert.Null(result.UnhandledException)
         Assert.Equal(518, result.Value)

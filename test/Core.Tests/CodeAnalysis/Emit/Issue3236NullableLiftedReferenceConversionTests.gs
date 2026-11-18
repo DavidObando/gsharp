@@ -131,20 +131,17 @@ r`)
     }
 
     @Fact
-    func UnconstrainedNullableTypeParam_ValueInstantiation_LiftStaysIntact() {
-        // Guard for the #3226 unconstrained-`T?` lift (PR #3234): an
-        // UNCONSTRAINED T's `T?` slot instantiated at a value type routes
-        // through the Nullable<X> MethodSpec lift, which the #3236 arms
-        // (keyed on a class-base-constrained T) must leave untouched. A nil
-        // Nullable<int32> takes the fallback and a live one unwraps.
-        let result = EmittedOracle.Evaluate(`func Pass[T](x T?, fb T) T {
+    func NullableValueTypeParameter_RequiresKindAndPreservesFallbackAndPresentValue() {
+        const Source = `func Pass[T](x T?, fb T) T {
     if x != nil { return x!! }
     return fb
 }
 
 var v1 int32? = nil
 var v2 int32? = 7
-Pass(v1, 99) * 100 + Pass(v2, 0)`)
+Pass(v1, 99) * 100 + Pass(v2, 0)`
+        SourceNullableKindAssertions.Reject(Source, "T", 1)
+        let result = EmittedOracle.Evaluate(Source.Replace("[T]", "[T struct]"))
         Assert.Empty(result.Diagnostics.Where((d Diagnostic) -> d.IsError))
         Assert.Null(result.UnhandledException)
         Assert.Equal(9907, result.Value)

@@ -440,18 +440,16 @@ func FindIn[T](xs List[T], match Predicate[T]) T -> xs.Find(match)`
         )
     }
 
-    /// The CLR classifier follows a dependent bound transitively, as the
-    /// (cref:TypeSymbol) classifier does through
-    /// (cref:TypeParameterSymbol.DependentBoundProvesReferenceType):
-    /// in `where U : class where T : U`, `T` is a reference, and a
-    /// cyclic or interface-only chain is `Unknown`.
+    /// Dependent bounds prove reference kind only through concrete reference classes.
     @Fact
     func ClassifyArgument_Follows_A_Clr_Dependent_Bound() {
         let compilation = CSharpCompilation.Create(
             "Adr0193DependentBounds",
             []Microsoft.CodeAnalysis.SyntaxTree{CSharpSyntaxTree.ParseText(`public class Chain<U, T> where U : class where T : U { }
 public class Longer<A, B, C> where A : class where B : A where C : B { }
-public class Open<U, T> where T : U { }`)},
+public class Open<U, T> where T : U { }
+public class Animal { }
+public class Concrete<A, B, C> where A : Animal where B : A where C : B { }`)},
             []PortableExecutableReference{MetadataReference.CreateFromFile(typeof(object).Assembly.Location)},
             CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
         )
@@ -462,16 +460,32 @@ public class Open<U, T> where T : U { }`)},
         let Parameter = func (type string, index int32) Type {
             return (assembly.GetType(type) ?? throw XunitException(type + " not emitted")).GetGenericArguments()[index]
         }
-        Assert.Equal(TypeArgumentKind.Reference, NullabilityImportRule.ClassifyArgument(Parameter("Chain`2", 1)))
-        Assert.Equal(TypeArgumentKind.Reference, NullabilityImportRule.ClassifyArgument(Parameter("Longer`3", 2)))
+        Assert.Equal(TypeArgumentKind.Reference, NullabilityImportRule.ClassifyArgument(Parameter("Chain`2", 0)))
+        Assert.Equal(TypeArgumentKind.Unknown, NullabilityImportRule.ClassifyArgument(Parameter("Chain`2", 1)))
+        Assert.Equal(TypeArgumentKind.Unknown, NullabilityImportRule.ClassifyArgument(Parameter("Longer`3", 2)))
         Assert.Equal(TypeArgumentKind.Unknown, NullabilityImportRule.ClassifyArgument(Parameter("Open`2", 1)))
+        Assert.Equal(TypeArgumentKind.Reference, NullabilityImportRule.ClassifyArgument(Parameter("Concrete`3", 2)))
+        let chain = assembly.GetType("Chain`2") ?? throw XunitException("Chain not emitted")
+        Assert.Equal(
+            []Type{typeof(object), typeof(int32)},
+            chain.MakeGenericType(typeof(object), typeof(int32)).GetGenericArguments()
+        )
         // The symbol overload answers the same chain the same way.
         let bound = TypeParameter()
         bound.HasReferenceTypeConstraint = true
         let dependent = TypeParameterSymbol("T", ordinal: 1, TypeParameterConstraint.Any, TypeParameterVariance.None){
             TypeParameterBound = bound
         }
+        Assert.Equal(TypeArgumentKind.Unknown, NullabilityImportRule.ClassifyArgument(dependent))
+        Assert.Same(dependent, NullabilityImportRule.ApplyOpenSlot(dependent, ClrNullabilityState.Annotated))
+        Assert.False(ClrTypeUtilities.IsReferenceTypeForVariance(Parameter("Chain`2", 1)))
+        bound.ClassConstraint = TypeSymbol.FromClrType(typeof(Stream))
         Assert.Equal(TypeArgumentKind.Reference, NullabilityImportRule.ClassifyArgument(dependent))
+        Assert.Same(
+            NullableTypeSymbol.Get(dependent),
+            NullabilityImportRule.ApplyOpenSlot(dependent, ClrNullabilityState.Annotated)
+        )
+        Assert.True(ClrTypeUtilities.IsReferenceTypeForVariance(Parameter("Concrete`3", 2)))
         let unboundedDependent = TypeParameterSymbol(
             "T",
             ordinal: 1,

@@ -117,7 +117,7 @@ class Lookup : ILookup {
     }
 
     @Fact
-    func NullableIndexerRejected_ReportsGS0504() {
+    func NullableIndexer_RequiresKnownKindAndUsesTheValueNullableSlot() {
         const source = `package NullableIndexerRejected
 
 interface I[T] { prop this[key string] T? { get; } }
@@ -132,6 +132,14 @@ class C : I[int32] {
             StringComparison.Ordinal
         )
         Assert.DoesNotContain("GS0187", output, StringComparison.Ordinal)
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(
+            source,
+            []string{"T"},
+            1,
+            []string{"GS0504"},
+            isLibrary: true
+        )
+        AssertEmitsAndLoads(source.Replace("interface I[T]", "interface I[T struct]"))
     }
 
     @Fact
@@ -258,7 +266,19 @@ class NullableSetArgument : ISetExact[int32?] {
 
 interface IPositionalExact[T] { prop Value T { get; } }
 data class NullablePositional(Value int32?) : IPositionalExact[int32?]`
-        AssertEmitsAndLoads(source)
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(source, []string{"T"}, 3, isLibrary: true)
+        let supported = source
+            .Replace("interface IGenericNullable[T]", "interface IGenericNullable[T class?]")
+            .Replace(
+            "class ConstructedValueCovariant : IGenericNullable[int32]",
+            "interface IValueNullable[T struct] { prop Value T? { get; } }\nclass ConstructedValueCovariant : IValueNullable[int32]"
+        )
+            .Replace("prop Value int32 -> 1", "prop Value int32? -> 1")
+            .Replace("interface IOpenNullable[T]", "interface IOpenNullable[T class?]")
+            .Replace("class OpenGenericCovariant[T]", "class OpenGenericCovariant[T class?]")
+            .Replace("interface INestedNullable[T]", "interface INestedNullable[T struct]")
+            .Replace("INestedNullable[int32?]", "INestedNullable[int32]")
+        AssertEmitsAndLoads(supported)
     }
 
     @Fact
@@ -303,7 +323,21 @@ sealed interface IStatic[T] {
 struct OpenStatic[T] : IStatic[T] {
     shared { prop Value T? -> nil }
 }`
-        AssertEmitsAndLoads(accepted)
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(accepted, []string{"T"}, 9, isLibrary: true)
+        var supported = accepted
+        for name in[]string{"IGet", "ISet", "IIndexer", "ISlice", "IArray", "INested", "IStatic"} {
+            supported = supported.Replace("interface " + name + "[T]", "interface " + name + "[T struct]")
+        }
+        supported = supported
+            .Replace("class OpenSet[T]", "class OpenSet[T struct]")
+            .Replace("struct OpenStatic[T]", "struct OpenStatic[T struct]")
+            .Replace("Value int32", "Value int32?")
+            .Replace("this[key string] int32", "this[key string] int32?")
+            .Replace("Value []int32", "Value []int32?")
+            .Replace("Value [3]int32", "Value [3]int32?")
+            .Replace("Cell[int32]", "Cell[int32?]")
+        AssertEmitsAndLoads(supported)
+        var index = 0
         for rejected in[]string{`package NullableImplicitGetRejected
 interface I[T] { prop Value T? { get; } }
 class C : I[int32] { prop Value int32? -> nil }`, `package NullableExplicitGetRejected
@@ -336,12 +370,26 @@ struct C : I[int32] {
         private prop (I[int32]) Value int32? -> nil
     }
 }`} {
-            let _ = CompileExpectingFailure(rejected)
+            let otherErrors = switch index {
+                case 1: []string{"GS0187", "GS0494"}
+                case 7: []string{"GS0397"}
+                case 8: []string{"GS0397", "GS0494"}
+                default: []string{"GS0504"}
+            }
+            Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(
+                rejected,
+                []string{"T"},
+                1,
+                otherErrors,
+                isLibrary: true
+            )
+            AssertEmitsAndLoads(rejected.Replace("interface I[T]", "interface I[T struct]"))
+            index++
         }
     }
 
     @Fact
-    func ImplicitStaticVirtualNullableErasure_EmitsAndLoads() {
+    func ImplicitStaticVirtualNullable_RequiresKnownValueKind() {
         const source = `package StaticImplicitCovarianceRejected
 sealed interface I[T] {
     shared { prop Value T? { get; } }
@@ -349,11 +397,17 @@ sealed interface I[T] {
 struct C : I[int32] {
     shared { prop Value int32 -> 1 }
 }`
-        AssertEmitsAndLoads(source)
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(source, []string{"T"}, 1, isLibrary: true)
+        AssertEmitsAndLoads(
+            source.Replace("interface I[T]", "interface I[T struct]").Replace(
+                "prop Value int32 -> 1",
+                "prop Value int32? -> 1"
+            )
+        )
     }
 
     @Fact
-    func ExplicitStaticVirtualNullableErasure_EmitsAndLoads() {
+    func ExplicitStaticVirtualNullable_RequiresKnownValueKind() {
         const source = `package StaticExplicitCovarianceRejected
 sealed interface I[T] {
     shared { prop Value T? { get; } }
@@ -363,7 +417,10 @@ struct C : I[int32] {
         private prop (I[int32]) Value int32 -> 1
     }
 }`
-        AssertEmitsAndLoads(source)
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(source, []string{"T"}, 1, isLibrary: true)
+        AssertEmitsAndLoads(
+            source.Replace("interface I[T]", "interface I[T struct]").Replace("Value int32 -> 1", "Value int32? -> 1")
+        )
     }
 
     @Fact

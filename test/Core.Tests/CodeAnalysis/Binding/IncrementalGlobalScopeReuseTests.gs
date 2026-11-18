@@ -26,6 +26,25 @@ import Xunit
 /// — while remaining bit-for-bit identical to a full rebuild.
 open class IncrementalGlobalScopeReuseTests {
     @Fact
+    func RemovingNullableAnnotation_DoesNotSuppressFreshOperatorDiagnostic() {
+        const source = "func F[T](b bool, x T) {\nlet a = default(T?)\nlet r = b ? x : nil\n}"
+        let original = Parse("Nullable.gs", source)
+        let editedSource = source.Replace("let a = default(T?)\n", "")
+        let edited = Parse("Nullable.gs", editedSource)
+        let before = Compilation(original){IncrementalBodyReuse = true}
+        Assert.Single(before.GetDiagnostics().Where((d Diagnostic) -> d.IsError))
+        let after = before.ReplaceSyntaxTree(original, edited)
+        Assert.Same(before.GlobalScope, after.GlobalScope)
+        let fresh = Assert.Single(Compilation(edited).GetDiagnostics().Where((d Diagnostic) -> d.IsError))
+        Assert.Equal("GS0641", fresh.Id)
+        Assert.Equal(editedSource.IndexOf("?", StringComparison.Ordinal), fresh.Location.Span.Start)
+        Assert.Equal(1, fresh.Location.Span.Length)
+        let incremental = Assert.Single(after.GetDiagnostics().Where((d Diagnostic) -> d.IsError))
+        Assert.Equal(fresh.Id, incremental.Id)
+        Assert.Equal(fresh.Location.Span, incremental.Location.Span)
+    }
+
+    @Fact
     func NativeProtocolBodiesRebuildSynthesisWithSharedBodyCache() {
         let tree = Parse("Native.gs", `protocol P {}
 struct Value {}
