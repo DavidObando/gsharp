@@ -1213,21 +1213,6 @@ internal partial class StatementBinder {
             }
         )
 
-        private func AddressedLocalFunctionName(node SyntaxNode) string? {
-            if node is not UnaryExpressionSyntax unary || unary.OperatorToken.Kind != SyntaxKind.AmpersandToken {
-                return nil
-            }
-            var operand = unary.Operand
-            while operand is ParenthesizedExpressionSyntax parenthesized {
-                operand = parenthesized.Expression
-            }
-            return if operand is NameExpressionSyntax name {
-                name.IdentifierToken.Text
-            } else {
-                nil
-            }
-        }
-
         /// Plans each adjacent run once. Forward references and overloads require callable symbols.
         /// Other historically grouped members keep callable symbols only when binding proves they capture nothing (#6082).
         private func PlanNonGenericLocalFunctionLiterals(
@@ -1246,7 +1231,6 @@ internal partial class StatementBinder {
             }
             let groupEnds = [end - start]int32
             let direct = [end - start]bool
-            let selfPointers = [end - start]bool
             var hasCrossReference = false
             for var idx = start; idx < end; idx++ {
                 let decl = cast[VariableDeclarationSyntax](statementSyntaxes[idx])
@@ -1254,7 +1238,6 @@ internal partial class StatementBinder {
                 let literal = cast[FunctionLiteralExpressionSyntax](decl.Initializer!!)
                 groupEnds[idx - start] = idx
                 for node in literal.Body.DescendantNodesAndSelf() {
-                    selfPointers[idx - start] |= AddressedLocalFunctionName(node) == selfName
                     // A direct call (`second(x)`) is its own syntax node with an
                     // `Identifier` token — it is NOT a NameExpressionSyntax
                     // wrapping a call, so both shapes must be checked to catch
@@ -1279,7 +1262,7 @@ internal partial class StatementBinder {
                 for var idx = start; idx < end; idx++ {
                     let name = (cast[VariableDeclarationSyntax](statementSyntaxes[idx])).Identifier.Text
                     regionEnd = Math.Max(regionEnd, groupEnds[idx - start])
-                    direct[idx - start] = idx < regionEnd || siblingIndices[name].Count > 1 || selfPointers[idx - start]
+                    direct[idx - start] = idx < regionEnd || siblingIndices[name].Count > 1
                 }
             }
             return (direct, hasCrossReference)

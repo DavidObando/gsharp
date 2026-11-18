@@ -211,6 +211,41 @@ shared class Probe {
 
     shared {
         func Cases() sequence[[]object] {
+            yield []object{"shadowed-local-address-keeps-closure-value", `
+func Bump(ref value int32) { value++ }
+`, `
+        var calls = 0
+        let first = func(n int32) int32 { return n + 1 }
+        let callback = func(n int32) int32 {
+            calls++
+            var callback = n
+            Bump(&callback)
+            return first(callback)
+        }
+        let next = func(n int32) int32 { return callback(n) }
+        let alias = callback
+        let result = List[int32](){40}.Select(callback).Single()
+        let following = next(0)
+        return "$result:$following:$calls:${Object.ReferenceEquals(callback, alias)}"
+`, "42:2:2:True", true}
+            yield []object{"shadowed-function-address-keeps-closure-value", "", `
+        var calls = 0
+        let first = func(n int32) int32 { return n + 1 }
+        let callback = func(n int32) int32 {
+            calls++
+            let callback = func(m int32) int32 { return m + 1 }
+            let after = func(m int32) int32 { return callback(m) }
+            unsafe {
+                let pointer = &callback
+                return first(pointer(n))
+            }
+        }
+        let next = func(n int32) int32 { return callback(n) }
+        let alias = callback
+        let result = List[int32](){40}.Select(callback).Single()
+        let following = next(0)
+        return "$result:$following:$calls:${Object.ReferenceEquals(callback, alias)}"
+`, "42:2:2:True", false}
             yield []object{"private-generic-owner-backward-helper", `
 class Holder[Outer] {
     shared {
