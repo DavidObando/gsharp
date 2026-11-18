@@ -1206,14 +1206,14 @@ open partial class TypeSymbol : Symbol {
                     rightNullable.UnderlyingType
                 )
             }
-            // Imported aggregates and plain imports can represent the same CLR declaration.
+            // Compare the complete CLR identity, including nested arguments' assemblies.
             // Compare semantic arguments too: CLR erasure must not collapse distinct constructions.
             if (left is StructSymbol{ClrType: not nil} && right is ImportedTypeSymbol) ||
                 (right is StructSymbol{ClrType: not nil} && left is ImportedTypeSymbol) {
                 return AreSameConstructedUserTypeCore(
-                    left.ConstructedFrom,
+                    left,
                     left.ConstructedTypeArguments,
-                    right.ConstructedFrom,
+                    right,
                     right.ConstructedTypeArguments
                 )
             }

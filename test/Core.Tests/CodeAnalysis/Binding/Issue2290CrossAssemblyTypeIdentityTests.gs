@@ -10,6 +10,7 @@ import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 import System
+import System.Collections.Generic
 import System.IO
 import Xunit
 
@@ -153,6 +154,46 @@ open class Issue2290CrossAssemblyTypeIdentityTests {
         let imported = ImportedTypeSymbol.Get(typeB)
         Assert.False(TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(aggregateA, imported))
         Assert.False(TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(imported, aggregateA))
+    }
+
+    @Theory
+    @InlineData(0)
+    @InlineData(1)
+    @InlineData(2)
+    func SameDefinition_DifferentArgumentAssemblies_AggregatesRemainDistinct(shape int32) {
+        let suffix = shape.ToString()
+        let library = EmitLibrary("package A.B\npublic data class Chapter[T](Title T)", "ArgumentBox" + suffix)
+        let left = EmitLibrary("package A.B\npublic class Item {}", "ArgumentLeft" + suffix, "ArgumentLeft2290")
+        let right = EmitLibrary("package A.B\npublic class Item {}", "ArgumentRight" + suffix, "ArgumentRight2290")
+        using let resolverA = ReferenceResolver.WithReferences([]string{library, left})
+        using let resolverB = ReferenceResolver.WithReferences([]string{library, right})
+        Assert.True(resolverA.TryResolveType("A.B.Item", out var itemA))
+        Assert.True(resolverB.TryResolveType("A.B.Item", out var itemB))
+        var argumentA = Assert.IsAssignableFrom[Type](itemA)
+        var argumentB = Assert.IsAssignableFrom[Type](itemB)
+        if shape == 1 {
+            argumentA = argumentA.MakeArrayType()
+            argumentB = argumentB.MakeArrayType()
+        } else if shape == 2 {
+            let list = typeof(List[object]).GetGenericTypeDefinition()
+            argumentA = Assert.IsAssignableFrom[Type](resolverA.MapClrTypeToReferences(list)).MakeGenericType(argumentA)
+            argumentB = Assert.IsAssignableFrom[Type](resolverB.MapClrTypeToReferences(list)).MakeGenericType(argumentB)
+        }
+        Assert.True(resolverA.TryResolveType("A.B.Chapter`1", out var definitionA))
+        Assert.True(resolverB.TryResolveType("A.B.Chapter`1", out var definitionB))
+        Assert.Equal(definitionA?.AssemblyQualifiedName, definitionB?.AssemblyQualifiedName)
+        let typeA = Assert.IsAssignableFrom[Type](definitionA).MakeGenericType(argumentA)
+        let typeB = Assert.IsAssignableFrom[Type](definitionB).MakeGenericType(argumentB)
+        Assert.True(ImportedTypeSymbol.TryCreateSemanticAggregate(typeA, resolverA, out var aggregate))
+        Assert.True(
+            TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(aggregate, ImportedTypeSymbol.Get(typeA))
+        )
+        Assert.False(
+            TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(aggregate, ImportedTypeSymbol.Get(typeB))
+        )
+        Assert.False(
+            TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(ImportedTypeSymbol.Get(typeB), aggregate)
+        )
     }
 
     @Fact
