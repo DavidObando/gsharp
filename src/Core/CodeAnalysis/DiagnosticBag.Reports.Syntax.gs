@@ -84,7 +84,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
 
     /// Reports an invalid target in a constructor initializer.
     /// @param location The text location of the initializer target.
-    func ReportInvalidConstructorInitializerTarget(location TextLocation) -> Report(
+    internal func ReportInvalidConstructorInitializerTarget(location TextLocation) -> Report(
         location,
         DiagnosticDescriptors.InvalidConstructorInitializerTarget
     )
