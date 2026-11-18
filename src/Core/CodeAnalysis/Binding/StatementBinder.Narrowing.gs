@@ -5706,7 +5706,7 @@ internal partial class StatementBinder {
             }
             let names = HashSet[string](StringComparer.Ordinal)
             for declaration in run {
-                names.Add(declaration.Identifier.Text)
+                names.Add(declaration.Identifier.ValueText)
             }
             // This is the same eligibility decision the binder consumes, not a capture-syntax guess.
             if !StatementBinder.HasLocalFunctionCrossReference(run, names) {

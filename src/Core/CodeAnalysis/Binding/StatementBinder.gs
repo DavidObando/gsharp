@@ -1225,7 +1225,7 @@ internal partial class StatementBinder {
             for var idx = start; idx < end; idx++ {
                 let declaration = cast[VariableDeclarationSyntax](statementSyntaxes[idx])
                 declarations.Add(declaration)
-                let name = declaration.Identifier.Text
+                let name = declaration.Identifier.ValueText
                 if !siblingIndices.TryGetValue(name, out var overloads) {
                     overloads = List[int32]()
                     siblingIndices[name] = overloads
@@ -1265,7 +1265,7 @@ internal partial class StatementBinder {
             if hasCrossReference {
                 var regionEnd = start
                 for var idx = start; idx < end; idx++ {
-                    let name = (cast[VariableDeclarationSyntax](statementSyntaxes[idx])).Identifier.Text
+                    let name = (cast[VariableDeclarationSyntax](statementSyntaxes[idx])).Identifier.ValueText
                     regionEnd = Math.Max(regionEnd, groupEnds[idx - start])
                     direct[idx - start] = idx < regionEnd || siblingIndices[name].Count > 1
                 }
@@ -1313,8 +1313,8 @@ internal partial class StatementBinder {
         }
 
         private func LocalFunctionReferenceName(node SyntaxNode) string? -> switch node {
-            case name is NameExpressionSyntax: name.IdentifierToken.Text
-            case call is CallExpressionSyntax: call.Identifier.Text
+            case name is NameExpressionSyntax: name.IdentifierToken.ValueText
+            case call is CallExpressionSyntax: call.Identifier.ValueText
             default: default(string?)
         }
 
@@ -1328,7 +1328,7 @@ internal partial class StatementBinder {
                     if LocalFunctionReferenceName(node) is {} name &&
                         name != declaration
                         .Identifier
-                        .Text &&
+                        .ValueText &&
                         siblingNames.Contains(name) {
                         return true
                     }

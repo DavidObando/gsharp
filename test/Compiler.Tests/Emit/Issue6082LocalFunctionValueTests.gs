@@ -211,6 +211,39 @@ shared class Probe {
 
     shared {
         func Cases() sequence[[]object] {
+            yield []object{"escaped-declaration-forward-call", "", `
+        var calls = 0
+        let first = func(n int32) int32 { return second(n) }
+        let $second = func(n int32) int32 {
+            calls++
+            return n + 1
+        }
+        let last = func(n int32) int32 { return first(n) }
+        let result = last(41)
+        let next = last(0)
+        return "$result:$next:$calls"
+`, "42:1:2", true}
+            yield []object{"escaped-reference-forward-call", "", `
+        var calls = 0
+        let first = func(n int32) int32 { return $second(n) }
+        let second = func(n int32) int32 {
+            calls++
+            return n + 1
+        }
+        let last = func(n int32) int32 { return first(n) }
+        let result = last(41)
+        let next = last(0)
+        return "$result:$next:$calls"
+`, "42:1:2", true}
+            yield []object{"escaped-declaration-forward-value", "", `
+        let first = func(n int32) int32 {
+            let forward Func[int32, int32] = second
+            return forward(n)
+        }
+        let $second = func(n int32) int32 { return n + 1 }
+        let last = func(n int32) int32 { return first(n) }
+        return "${last(41)}:${last(0)}"
+`, "42:1", true}
             yield []object{"planned-method-preserves-parent-overload", "", `
         let first = func(n int32) int32 {
             let second = func(value int32, tag int32) int32 { return 0 }
