@@ -5847,9 +5847,20 @@ internal partial class StatementBinder {
             ApplyCallableArgsStep,
             ApplyCallableArgPost,
             CallableTargetsStep,
-            AnalyzeCallableVariableStep,
+            GotoReplayStep,
             AnalyzeCallableVariablePost,
             FunctionLiteralExit
+        }
+
+        private sealed class GotoReplayFrame {
+            let InitialEnd int32
+            var Index int32
+            let ReplayedAdded HashSet[VariableSymbol] = HashSet[VariableSymbol]()
+
+            init(start int32, initialEnd int32) {
+                Index = start
+                InitialEnd = initialEnd
+            }
         }
 
         private data struct WalkStep(
@@ -6768,8 +6779,19 @@ internal partial class StatementBinder {
                         case WalkStepKind.CallableTargetsStep {
                             ProcessCallableTargetsStep(cast[CallableTargetsFrame](step.State!!))
                         }
-                        case WalkStepKind.AnalyzeCallableVariableStep {
-                            AnalyzeCallableVariable(cast[VariableSymbol](step.Node!!))
+                        case WalkStepKind.GotoReplayStep {
+                            let frame = cast[GotoReplayFrame](step.State!!)
+                            while frame.Index < callableInvocations.Count {
+                                let idx = frame.Index
+                                let variable = callableInvocations[idx]
+                                frame.Index++
+                                if idx >= frame.InitialEnd && !frame.ReplayedAdded.Add(variable) {
+                                    continue
+                                }
+                                PushStep(WalkStepKind.GotoReplayStep, state: frame)
+                                AnalyzeCallableVariable(variable)
+                                break
+                            }
                         }
                         case WalkStepKind.AnalyzeCallableVariablePost {
                             let post = cast[AnalyzeVariablePostState](step.State!!)
@@ -6944,11 +6966,13 @@ internal partial class StatementBinder {
                 jumpedRegionLabels.Add(gotoStatement.Label)
                 if !visitedLabels.Contains(gotoStatement.Label) {
                     pendingConditionalTargets.Add(gotoStatement.Label)
-                } else if callableInvocationCountsAtLabel.TryGetValue(gotoStatement.Label, out var invocationStart) {
-                    let invocationEnd = callableInvocations.Count
-                    for var i = invocationEnd - 1; i >= invocationStart; i-- {
-                        PushStep(WalkStepKind.AnalyzeCallableVariableStep, callableInvocations[i])
-                    }
+                } else if callableInvocationCountsAtLabel.TryGetValue(gotoStatement.Label, out var invocationStart) &&
+                    invocationStart < callableInvocations
+                    .Count {
+                    PushStep(
+                        WalkStepKind.GotoReplayStep,
+                        state: GotoReplayFrame(invocationStart, callableInvocations.Count)
+                    )
                 }
             }
             switch node.Kind {
