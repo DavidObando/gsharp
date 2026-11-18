@@ -958,7 +958,9 @@ internal class LambdaBinder {
         // combination that path does not support). Re-evaluate the
         // exclusion now that every member's final capture set is known.
         for literal in literals {
-            literal.Function.HasCaptures = !literal.CapturedVariables.IsEmpty
+            if literal.Function.LocalDeclaration != nil {
+                literal.Function.HasCaptures = !literal.CapturedVariables.IsEmpty
+            }
             if literal.EnclosingTypeParameterOffender is {} offender &&
                 !literal.EnclosingTypeParameterDiagnosticReported &&
                 literal
