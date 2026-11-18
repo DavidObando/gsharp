@@ -279,6 +279,53 @@ Run("ok", true)
         AssertContainsError(result, "GS0158")
     }
 
+    @Fact
+    func GotoReplay_ReassignedBySubsequentNewlyDiscoveredCall_InvalidatesNarrowing() {
+        let result = EmittedOracle.Evaluate(`
+func Run(initial string?, flag bool) int32 {
+    var value = initial
+    if value != nil {
+        let _ = {
+            let runner () -> int32 = () -> {
+                let mutator () -> int32 = () -> {
+                    value = nil
+                    return 0
+                }
+                var g () -> int32 = () -> 0
+                var h () -> int32 = () -> 0
+                let setter () -> int32 = () -> {
+                    let _ = g()
+                    g = mutator
+                    return 0
+                }
+                let late () -> int32 = () -> {
+                    let _ = g()
+                    let _ = h()
+                    h = setter
+                    return 0
+                }
+                var f () -> int32 = () -> 0
+                var count = 0
+                again:
+                let _ = f()
+                f = late
+                count++
+                if count < 4 && flag {
+                    goto again
+                }
+                return 0
+            }
+            runner()
+        }
+        return value.Length
+    }
+    return 0
+}
+Run("ok", true)
+`)
+        AssertContainsError(result, "GS0158")
+    }
+
     shared {
         private func AssertContainsError(result EmittedOracleResult, diagnosticId string) {
             Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.IsError && d.Id == diagnosticId)

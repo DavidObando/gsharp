@@ -5855,7 +5855,8 @@ internal partial class StatementBinder {
         private sealed class GotoReplayFrame {
             let InitialEnd int32
             var Index int32
-            let ReplayedAdded HashSet[VariableSymbol] = HashSet[VariableSymbol]()
+            let SeenStates Dictionary[VariableSymbol, (Normal CallableAliasState, AllEntry CallableAliasState)] =
+            Dictionary[VariableSymbol, (Normal CallableAliasState, AllEntry CallableAliasState)]()
 
             init(start int32, initialEnd int32) {
                 Index = start
@@ -6785,8 +6786,15 @@ internal partial class StatementBinder {
                                 let idx = frame.Index
                                 let variable = callableInvocations[idx]
                                 frame.Index++
-                                if idx >= frame.InitialEnd && !frame.ReplayedAdded.Add(variable) {
-                                    continue
+                                let currentState = CaptureCallableState()
+                                if frame.SeenStates.TryGetValue(variable, out var seenState) {
+                                    let joinedState = JoinCallableStates(seenState, currentState)
+                                    if idx >= frame.InitialEnd && CallableStatesEqual(seenState, joinedState) {
+                                        continue
+                                    }
+                                    frame.SeenStates[variable] = joinedState
+                                } else {
+                                    frame.SeenStates[variable] = currentState
                                 }
                                 PushStep(WalkStepKind.GotoReplayStep, state: frame)
                                 AnalyzeCallableVariable(variable)
