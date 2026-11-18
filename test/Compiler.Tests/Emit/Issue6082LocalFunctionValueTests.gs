@@ -1,17 +1,33 @@
 package GSharp.Compiler.Tests.Emit
 
 import GSharp.Compiler
+import GSharp.Core.Tests
 import GSharp.Tests
 import System
 import System.Collections.Generic
+import System.Diagnostics
 import System.IO
 import Xunit
+import Xunit.Abstractions
 
 open class Issue6082LocalFunctionValueTests {
+    private let output ITestOutputHelper
+
+    init(output ITestOutputHelper) {
+        this.output = output
+    }
+
     @Theory
     @InlineData("read", "var value = 42", "return value.ToString()", "value.ToString()", "42:42")
     @InlineData("variable-write", "var value = 0", "value = 42\nreturn \"done\"", "value.ToString()", "done:42")
     @InlineData("mutable-function", "var value = func() string { return \"42\" }", "return value()", "value()", "42:42")
+    @InlineData(
+        "capturing-function",
+        "var offset = 42\nlet value = func() string { return offset.ToString() }",
+        "return value()",
+        "value()",
+        "42:42"
+    )
     @InlineData(
         "typed-function",
         "let value () -> string = func() string { return \"42\" }",
@@ -47,23 +63,79 @@ open class Issue6082LocalFunctionValueTests {
         readback string,
         expected string
     ) {
-        var body = leaf
-        for var depth = 0; depth < 11; depth++ {
-            body = "let helper$depth = func() string {\n$body\n}\n" +
-                "let next$depth = func() string { return helper$depth() }\nreturn next$depth()"
+        let allocations = List[int64]()
+        for limit in[]int32{4, 4, 8, 12} {
+            var body = leaf
+            for var depth = 0; depth < limit; depth++ {
+                body = "let helper$depth = func() string {\n$body\n}\n" +
+                    "let next$depth = func() string { return helper$depth() }\nreturn next$depth()"
+            }
+            allocations.Add(
+                CompileAndRun(
+                    "nested-capture-planning-is-bounded-$name-$limit",
+                    "class Holder { public var Value int32 }",
+                    setup +
+                        "\nlet start = func() string {\n" +
+                        body +
+                        "\n}\nlet status = start()\n" +
+                        "return status + \":\" + " +
+                        readback,
+                    expected,
+                    true
+                )
+            )
         }
-        CompileAndRun(
-            "nested-capture-planning-is-bounded-" + name,
-            "class Holder { public var Value int32 }",
-            setup +
-                "\nlet start = func() string {\n" +
-                body +
-                "\n}\nlet status = start()\n" +
-                "return status + \":\" + " +
-                readback,
-            expected,
-            true,
-            compilerAllocationBudget: 256 * 1024 * 1024
+        // The first compilation warms the same source shape and reference imports.
+        allocations.RemoveAt(0)
+        Assert.True(
+            allocations[2] - allocations[1] < Math.Max(allocations[1] - allocations[0], 1024 * 1024) * 6,
+            "Nested allocation curve (depth 4/8/12): " + string.Join(", ", allocations)
+        )
+    }
+
+    @Fact
+    func CapturingCallbacks_RetryCacheWorkGrowsWithWrites() {
+        using let contract = CSharpFixture(`using System;
+namespace CallbackControl;
+public static class CallbackContract {
+    public static string Pick(Func<int> value, int rank) => "wrong";
+    public static string Pick(object value, long rank) => ((Func<string>)value)();
+}`, assemblyName: "Issue6082Callbacks", deterministic: true)
+        let growth = List[float64]()
+        for retried in[]bool{false, true} {
+            let allocations = List[int64]()
+            for count in[]int32{4, 64, 256, 1024} {
+                var body = "var offset = 42\nlet helper0 = func() string { return offset.ToString() }\n"
+                for var index = 1; index < count; index++ {
+                    body += "let helper$index = func() string { return helper0() }\n"
+                }
+                let last = count - 1
+                body += if retried {
+                    "helper$last()"
+                } else {
+                    "return helper$last()"
+                }
+                if retried {
+                    body = "return CallbackContract.Pick(() -> { return {\n$body\n} }, 1)"
+                }
+                let allocated = CompileAndRun(
+                    "callback-count-$retried-$count",
+                    "",
+                    body,
+                    "42",
+                    true,
+                    reference: contract.AssemblyPath
+                )
+                if count > 4 {
+                    allocations.Add(allocated)
+                }
+            }
+            Assert.True(allocations[1] > allocations[0], string.Join(", ", allocations))
+            growth.Add(float64(allocations[2] - allocations[1]) / (allocations[1] - allocations[0]))
+        }
+        Assert.True(
+            growth[1] < growth[0] * 1.05,
+            "Retry-cache allocation curvature exceeds the ordinary-callback control: " + string.Join(", ", growth)
         )
     }
 
@@ -85,41 +157,53 @@ open class Issue6082LocalFunctionValueTests {
         body string,
         expected string,
         verifyIl bool,
-        compilerAllocationBudget int64 = 0
-    ) {
+        reference string? = nil
+    ) int64 {
         let directory = Path.Combine(AppContext.BaseDirectory, "issue-6082", Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(directory)
         try {
             let source = Path.Combine(directory, name + ".gs")
             let assembly = Path.Combine(directory, name + ".dll")
+            let referenceImport = if reference != nil {
+                "import CallbackControl\n"
+            } else {
+                ""
+            }
             File.WriteAllText(source, `package Issue6082
 import System
 import System.Collections.Generic
 import System.Linq
-` + declarations + `
+` + referenceImport + declarations + `
 shared class Probe {
     func Run() string {
 ` + body + `
     }
 }`)
-            let before = GC.GetAllocatedBytesForCurrentThread()
-            let result = Program.Main(
-                []string{"/target:library", "/targetframework:net10.0", "/out:" + assembly, source}
-            )
-            let allocated = GC.GetAllocatedBytesForCurrentThread() - before
-            Assert.Equal(0, result)
-            if compilerAllocationBudget > 0 {
-                Assert.True(
-                    allocated < compilerAllocationBudget,
-                    "Nested candidate binding allocated $allocated bytes."
-                )
+            let arguments = List[string](){"/target:library", "/targetframework:net10.0", "/out:" + assembly, source}
+            if reference is {} path {
+                arguments.Add("/reference:" + path)
+                File.Copy(path, Path.Combine(directory, Path.GetFileName(path)))
             }
+            let before = GC.GetAllocatedBytesForCurrentThread()
+            let start = Stopwatch.GetTimestamp()
+            let result = Program.Main(arguments.ToArray())
+            let allocated = GC.GetAllocatedBytesForCurrentThread() - before
+            let ticks = Stopwatch.GetTimestamp() - start
+            output.WriteLine(
+                "$name: allocated=$allocated elapsedTicks=$ticks frequency=" + Stopwatch.Frequency.ToString()
+            )
+            Assert.Equal(0, result)
             // ILVerify does not implement calli. Function-pointer cases execute the emitted method instead.
             if verifyIl {
-                IlVerifier.Verify(assembly)
+                if reference is {} path {
+                    IlVerifier.Verify(assembly, []string{path})
+                } else {
+                    IlVerifier.Verify(assembly)
+                }
             }
             let emitted = EmittedFixture.Load(assembly)
             Assert.Equal(expected, emitted.GetType("Issue6082.Probe")!!.GetMethod("Run")!!.Invoke(nil, nil))
+            return allocated
         } finally {
             Directory.Delete(directory, recursive: true)
         }

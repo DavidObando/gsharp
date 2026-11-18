@@ -106,7 +106,8 @@ internal partial class StatementBinder {
     // both bound values and the code after them refer to the same label objects.
     private var retriedValueUserLabels Dictionary[string, BoundLabel]?
     private var usingInitializationFlagCount int32
-    private let closureValueDeclarations HashSet[VariableDeclarationSyntax] = HashSet[VariableDeclarationSyntax]()
+    private let closureValueDecisions Dictionary[VariableDeclarationSyntax, ClosureValueDecision] =
+    Dictionary[VariableDeclarationSyntax, ClosureValueDecision]()
 
     init(
         binderCtx BinderContext,
@@ -495,7 +496,8 @@ internal partial class StatementBinder {
 
     private func BindOptionalLocalFunctionLiteral(syntax VariableDeclarationSyntax) BoundStatement {
         let hasOverloads = !$scope.TryLookupFunctions(syntax.Identifier.ValueText).IsEmpty
-        if !hasOverloads && closureValueDeclarations.Contains(syntax) {
+        if !hasOverloads && closureValueDecisions.TryGetValue(syntax, out var previousDecision) &&
+            previousDecision.IsValid(enclosingScope: $scope) {
             return BindOrdinaryVariableDeclaration(syntax)
         }
         // Resolve method overloads and generic adaptation before deciding whether a closure value is needed.
@@ -503,7 +505,7 @@ internal partial class StatementBinder {
         let diagnosticCount = Diagnostics.Count
         let suppressionCount = Diagnostics.SuppressionCount
         let rollbackNarrowing = CaptureCallArgumentPrebindRollback(syntax)
-        let rollbackRetriedBindings = binderCtx.CaptureRetriedBindingsRollback()
+        using let retriedBindings = binderCtx.BeginRetriedBindingsTransaction()
         var bound BoundStatement
         let stagingScope = BoundScope(enclosingScope)
         $scope = stagingScope
@@ -524,56 +526,84 @@ internal partial class StatementBinder {
                 if !stagingScope.TryPublishStagedFunction(literal.Function) {
                     Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, syntax.Identifier.ValueText)
                 }
+                retriedBindings.Commit()
                 return bound
             }
         }
         if bound is BoundLocalFunctionDeclaration{Literal: {} capturing} {
-            let proof = LocalFunctionValueCaptureProof(capturing.CapturedVariables)
-            proof.VisitStatement(capturing.Body)
-            if proof.Found {
-                closureValueDeclarations.Add(syntax)
+            if !closureValueDecisions.TryGetValue(syntax, out var decision) {
+                decision = ClosureValueDecision()
+                closureValueDecisions.Add(syntax, decision)
             }
+            let proof = LocalFunctionValueCaptureProof(capturing.CapturedVariables, decision, enclosingScope)
+            proof.VisitStatement(capturing.Body)
         }
         Diagnostics.TruncateTo(diagnosticCount)
         Diagnostics.RestoreSuppressionsTo(suppressionCount)
         rollbackNarrowing()
-        rollbackRetriedBindings()
+        retriedBindings.Dispose()
         return BindOrdinaryVariableDeclaration(syntax)
     }
 
-    // Explicit accesses to parameters and ordinary variables survive an ancestor's representation change.
-    // Cache only that decision: callee capture summaries and function-declaration roles can change.
-    private sealed class LocalFunctionValueCaptureProof : BoundTreeWalker {
-        private let captured HashSet[VariableSymbol]
-        prop Found bool {
-            get;
-            private set;
+    // Keep source-level proof dependencies, not speculative symbols or bodies. Revalidate each
+    // binding role because an ancestor can change from a method into an ordinary function value.
+    private sealed class ClosureValueDecision {
+        private let variables HashSet[string] = HashSet[string](StringComparer.Ordinal)
+        private let functions Dictionary[VariableDeclarationSyntax, string] =
+        Dictionary[VariableDeclarationSyntax, string]()
+
+        func IsValid(enclosingScope BoundScope) bool {
+            for name in variables {
+                if enclosingScope.TryLookupSymbol(name) is VariableSymbol and not GlobalVariableSymbol {
+                    return true
+                }
+            }
+            for dependency in functions {
+                for function in enclosingScope.TryLookupFunctions(dependency.Value) {
+                    if function.LocalDeclaration == dependency.Key && function.HasCaptures {
+                        return true
+                    }
+                }
+            }
+            return false
         }
 
-        init(captured ImmutableArray[VariableSymbol]) {
+        func Record(variable VariableSymbol, enclosingScope BoundScope) {
+            if object.ReferenceEquals(enclosingScope.TryLookupSymbol(variable.Name), variable) {
+                variables.Add(variable.Name)
+            }
+        }
+
+        func Record(function FunctionSymbol, enclosingScope BoundScope) {
+            if function.HasCaptures && function.LocalDeclaration is {} declaration {
+                for visible in enclosingScope.TryLookupFunctions(function.Name) {
+                    if visible == function {
+                        functions[declaration] = function.Name
+                        break
+                    }
+                }
+            }
+        }
+    }
+
+    private sealed class LocalFunctionValueCaptureProof : BoundTreeWalker {
+        private let captured HashSet[VariableSymbol]
+        private let decision ClosureValueDecision
+        private let enclosingScope BoundScope
+
+        init(captured ImmutableArray[VariableSymbol], decision ClosureValueDecision, enclosingScope BoundScope) {
             this.captured = HashSet[VariableSymbol](captured)
+            this.decision = decision
+            this.enclosingScope = enclosingScope
         }
 
         private func Observe(variable VariableSymbol) {
-            let syntax = variable.DeclaringSyntax
-            let declaration = if syntax is SyntaxToken identifier {
-                identifier.Parent
-            } else {
-                syntax
-            }
-            if captured.Contains(variable) &&
-                (
-                declaration is not VariableDeclarationSyntax candidate ||
-                    !StatementBinder.IsNonGenericLocalFunctionLiteralDeclaration(candidate)
-            ) {
-                Found = true
+            if captured.Contains(variable) {
+                decision.Record(variable, enclosingScope)
             }
         }
 
         override func VisitExpression(node BoundExpression?) {
-            if Found {
-                return
-            }
             if node is BoundVariableExpression variable {
                 Observe(variable.Variable)
             } else if node is BoundFunctionLiteralExpression literal {
@@ -585,9 +615,14 @@ internal partial class StatementBinder {
 
         protected override func VisitAssignmentExpression(node BoundAssignmentExpression) {
             Observe(node.Variable)
-            if !Found {
-                base.VisitAssignmentExpression(node)
+            base.VisitAssignmentExpression(node)
+        }
+
+        protected override func VisitCallExpression(node BoundCallExpression) {
+            if captured.Count > 0 {
+                decision.Record(node.Function, enclosingScope)
             }
+            base.VisitCallExpression(node)
         }
 
         protected override func VisitFieldAssignmentExpression(node BoundFieldAssignmentExpression) {

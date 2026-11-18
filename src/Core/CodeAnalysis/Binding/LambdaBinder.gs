@@ -401,7 +401,7 @@ internal class LambdaBinder {
                     refKind: refKind
                 )
                 if p.Identifier != nil && retriedVariables != nil {
-                    retriedVariables[p.Identifier] = lambdaParam
+                    binderCtx.SetRetriedBinding(retriedVariables, p.Identifier, cast[VariableSymbol](lambdaParam))
                 }
             }
             // ADR-0063 §5: function-literal (lambda) parameters can declare a
@@ -792,7 +792,7 @@ internal class LambdaBinder {
                     CanReuseLocalFunction(existingFunction, function) {
                     function = existingFunction
                 } else {
-                    retriedLocalFunctions[syntax] = function
+                    binderCtx.SetRetriedBinding(retriedLocalFunctions, syntax, function)
                 }
             }
             if !Scope.TryDeclareFunction(function) {
@@ -1479,7 +1479,7 @@ internal class LambdaBinder {
                     refKind: refKind
                 )
                 if p.Identifier != nil && retriedVariables != nil {
-                    retriedVariables[p.Identifier] = lambdaParam
+                    binderCtx.SetRetriedBinding(retriedVariables, p.Identifier, cast[VariableSymbol](lambdaParam))
                 }
             }
             // ADR-0063 §5: arrow-lambda parameters can also declare a default
@@ -3012,7 +3012,11 @@ internal class LambdaBinder {
             }
             discarded = builder.MoveToImmutable()
         }
-        cache[key] = RetriedFunctionLiteralEntry(bound, Diagnostics.VisibleSince(startMark), discarded, keptNaturalType)
+        binderCtx.SetRetriedBinding(
+            cache,
+            key,
+            RetriedFunctionLiteralEntry(bound, Diagnostics.VisibleSince(startMark), discarded, keptNaturalType)
+        )
     }
 
     private func CanReuseLocalFunction(existing FunctionSymbol, candidate FunctionSymbol) bool {

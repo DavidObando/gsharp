@@ -456,43 +456,66 @@ internal class BinderContext {
         RetriedFunctionLiterals = saved
     }
 
-    internal func CaptureRetriedBindingsRollback() Action {
-        let variables = RetriedValueVariables?.ToArray()
-        let typeParameters = RetriedTypeParameters?.ToArray()
-        let functions = RetriedLocalFunctions?.ToArray()
-        let literals = RetriedFunctionLiterals?.ToArray()
-        return () -> {
-            if RetriedValueVariables is {} values {
-                values.Clear()
-                if variables != nil {
-                    for entry in variables {
-                        values[entry.Key] = entry.Value
+    private let retriedBindingUndo List[Action] = List[Action]()
+    private var retriedBindingTransactionDepth int32
+
+    internal func SetRetriedBinding[K, V](cache Dictionary[K, V], key K, value V) {
+        if retriedBindingTransactionDepth > 0 {
+            let existed = cache.TryGetValue(key, out var previous)
+            retriedBindingUndo.Add(
+                func () void {
+                    if existed {
+                        cache[key] = previous
+                    } else {
+                        cache.Remove(key)
                     }
                 }
+            )
+        }
+        cache[key] = value
+    }
+
+    internal func BeginRetriedBindingsTransaction() RetriedBindingsTransaction {
+        retriedBindingTransactionDepth++
+        return RetriedBindingsTransaction(this, retriedBindingUndo.Count)
+    }
+
+    private func FinishRetriedBindingsTransaction(mark int32, rollback bool) {
+        if rollback {
+            for var index = retriedBindingUndo.Count - 1; index >= mark; index-- {
+                retriedBindingUndo[index].Invoke()
             }
-            if RetriedTypeParameters is {} parameters {
-                parameters.Clear()
-                if typeParameters != nil {
-                    for entry in typeParameters {
-                        parameters[entry.Key] = entry.Value
-                    }
-                }
-            }
-            if RetriedLocalFunctions is {} locals {
-                locals.Clear()
-                if functions != nil {
-                    for entry in functions {
-                        locals[entry.Key] = entry.Value
-                    }
-                }
-            }
-            if RetriedFunctionLiterals is {} boundLiterals {
-                boundLiterals.Clear()
-                if literals != nil {
-                    for entry in literals {
-                        boundLiterals[entry.Key] = entry.Value
-                    }
-                }
+            retriedBindingUndo.RemoveRange(mark, retriedBindingUndo.Count - mark)
+        }
+        // Keep committed inner writes available to an enclosing rollback.
+        retriedBindingTransactionDepth--
+        if retriedBindingTransactionDepth == 0 {
+            retriedBindingUndo.Clear()
+        }
+    }
+
+    internal sealed class RetriedBindingsTransaction : IDisposable {
+        private let owner BinderContext
+        private let mark int32
+        private var finished bool
+
+        init(owner BinderContext, mark int32) {
+            this.owner = owner
+            this.mark = mark
+        }
+
+        func Commit() {
+            Finish(rollback: false)
+        }
+
+        func Dispose() {
+            Finish(rollback: true)
+        }
+
+        private func Finish(rollback bool) {
+            if !finished {
+                owner.FinishRetriedBindingsTransaction(mark, rollback)
+                finished = true
             }
         }
     }
