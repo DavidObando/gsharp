@@ -41,6 +41,7 @@ internal shared class IfLetBindingSupport {
     /// controls the binding's lifetime (then-block only for `if let`,
     /// enclosing block for `guard let`, or loop body for
     /// `while let`).
+    /// @param binderCtx The current source-binding context.
     /// @param binding The clause syntax.
     /// @param diagnostics The diagnostic bag GS0296 is reported into.
     /// @param conversions The conversion classifier used for an explicit type clause.
@@ -53,6 +54,7 @@ internal shared class IfLetBindingSupport {
     /// `while let` whose initializer is a channel handle rather than a receive).
     /// @returns The bound binding.
     internal func BindBindingClause(
+        binderCtx BinderContext,
         binding IfLetBindingClauseSyntax,
         diagnostics DiagnosticBag,
         conversions ConversionClassifier,
@@ -157,6 +159,17 @@ internal shared class IfLetBindingSupport {
             let errorVar = declareLocal(binding.Identifier, true, errorVarType)
             return BoundIfLetBinding(errorVar, nil, initializerExpr)
         }
+        if declaredUnderlying != nil {
+            nullableStorageType = NullableTypeSymbol.Get(declaredUnderlying)
+        }
+        if !binderCtx.ValidateSourceNullableResult(
+            nullableStorageType,
+            binding.LetKeyword.Location,
+            []TypeSymbol{initializerType}
+        ) {
+            let errorVar = declareLocal(binding.Identifier, true, TypeSymbol.Error)
+            return BoundIfLetBinding(errorVar, nil, initializerExpr)
+        }
         // If the user gave an explicit type clause, the underlying type
         // they wrote must match (or be a conversion-target of) the RHS's
         // underlying. We route through the existing conversion classifier
@@ -165,10 +178,9 @@ internal shared class IfLetBindingSupport {
             initializerExpr = conversions.BindConversion(
                 binding.Initializer.Location,
                 initializerExpr,
-                NullableTypeSymbol.Get(declaredUnderlying)
+                nullableStorageType
             )
             underlying = declaredUnderlying
-            nullableStorageType = NullableTypeSymbol.Get(declaredUnderlying)
         }
         // The synthesized binding is `let name <nullable> = expr`. The
         // user observes it at the underlying type via the existing
@@ -252,6 +264,7 @@ internal shared class IfLetBindingSupport {
                     default(((IfLetBindingClauseSyntax, BoundExpression) -> void)?)
                 }
                 let bound = BindBindingClause(
+                    binderCtx,
                     binding,
                     diagnostics,
                     conversions,

@@ -31,8 +31,7 @@ class BoundNullConditionalAccessExpression : BoundExpression {
     /// @param type The result type — always a
     /// (cref:NullableTypeSymbol).
     /// @param resultSlot Optional synthetic local that the emitter
-    /// uses to materialize `default(Nullable<T>)` when the access
-    /// result is a value type. Null for reference-typed results.
+    /// uses to materialize a typed default for value and generic results.
     init(
         syntax SyntaxNode?,
         receiver BoundExpression,
@@ -45,7 +44,11 @@ class BoundNullConditionalAccessExpression : BoundExpression {
         Capture = capture
         WhenNotNull = whenNotNull
         _type = type
-        ResultSlot = resultSlot
+        ResultSlot = resultSlot ?? if type is NullableTypeSymbol{UnderlyingType: TypeParameterSymbol} {
+            LocalVariableSymbol(capture.Name + "_result", isReadOnly: false, type)
+        } else {
+            default(VariableSymbol?)
+        }
     }
 
     /// ```xmldoc
@@ -75,9 +78,8 @@ class BoundNullConditionalAccessExpression : BoundExpression {
         get;
     }
 
-    /// Gets the synthetic temp slot used to materialize `default(Nullable<T>)`
-    /// in the nil branch when the access result is a value type. Null when the
-    /// result is a reference type (the nil branch then just pushes `ldnull`).
+    /// Gets the synthetic local for a typed default on the nil branch.
+    /// Generic parameters require this local even when their constraints prove reference kind.
     prop ResultSlot VariableSymbol? {
         get;
     }

@@ -676,6 +676,8 @@ internal shared class ObliviousNullabilityAnalyzer {
             this.Members = members
             this.Widened = HashSet[string](StringComparer.Ordinal)
             this.Canonical = Dictionary[string, string](StringComparer.Ordinal)
+            this.Forwarding = Dictionary[string, HashSet[string]](StringComparer.Ordinal)
+            this.Slots = Dictionary[string, ISymbol](StringComparer.Ordinal)
         }
 
         prop Members List[NullArgumentGraph] {
@@ -687,6 +689,14 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
 
         prop Canonical Dictionary[string, string] {
+            get;
+        }
+
+        prop Forwarding Dictionary[string, HashSet[string]] {
+            get;
+        }
+
+        prop Slots Dictionary[string, ISymbol] {
             get;
         }
     }
@@ -2714,14 +2724,15 @@ internal shared class ObliviousNullabilityAnalyzer {
     }
 
     // Issue #5574: the widened declarations of a run, as a greatest fixed point.
-    // Start from every declaration that the forwarding edges reach from a null
-    // argument; then repeatedly drop a declaration that has a read the null
+    // Start from every declaration that forwarding edges reach from a null argument.
+    // Classified handoffs extend that closure before safety pruning starts.
+    // Then repeatedly drop a declaration that has a read the null
     // cannot pass (see `ClassifyNullArgumentRead`, whose slot reads depend on
     // what else stays widened) and every declaration no longer reachable from a
     // seed through declarations that stay. Each step only removes, so the result
     // does not depend on the order of declarations, files or queries.
     private func ComputeNullArgumentRun(run NullArgumentRun) {
-        let forward = Dictionary[string, HashSet[string]](StringComparer.Ordinal)
+        let forward = run.Forwarding
         let seeds = HashSet[string](StringComparer.Ordinal)
         let declarations = Dictionary[string, List[ISymbol]](StringComparer.Ordinal)
         for graph in run.Members {
@@ -2742,14 +2753,10 @@ internal shared class ObliviousNullabilityAnalyzer {
             for entry in graph.Symbols {
                 let canonical = CanonicalNullArgumentKey(entry.Key, run)
                 if !declarations.TryGetValue(canonical, out var symbols) {
-                    symbols = List[ISymbol]()
+                    symbols = NullArgumentDeclarationsInRun(entry.Value, run)
                     declarations[canonical] = symbols
-                }
-                symbols.Add(entry.Value)
-                // A declaration seen through a run project's emitted reference is
-                // read in its source, so the source declaration joins it.
-                if entry.Value.DeclaringSyntaxReferences.Length == 0 {
-                    symbols.AddRange(SourceDeclarationsInRun(entry.Value, run.Members))
+                } else {
+                    symbols.Add(entry.Value)
                 }
             }
         }
@@ -2782,9 +2789,38 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         let widened = Reach(nil)
         if widened.Count == 0 {
+            forward.Clear()
             return
         }
-        let reads = CollectNullArgumentReads(run, widened, declarations)
+        let reads = Dictionary[string, List[(Safe bool, Slot string?)]](StringComparer.Ordinal)
+        // Discover handoffs through the same candidate-filtered reads that decide safety.
+        // Classify each declaration once, without binding unrelated call arguments.
+        var pending = HashSet[string](widened, StringComparer.Ordinal)
+        while pending.Count != 0 {
+            for entry in CollectNullArgumentReads(run, pending, declarations) {
+                reads[entry.Key] = entry.Value
+            }
+            let next = HashSet[string](StringComparer.Ordinal)
+            for source in pending {
+                if !forward.TryGetValue(source, out var targets) {
+                    continue
+                }
+                for target in targets {
+                    if widened.Contains(target) {
+                        continue
+                    }
+                    if !declarations.ContainsKey(target) && run.Slots.TryGetValue(target, out var slot) {
+                        declarations[target] = NullArgumentDeclarationsInRun(slot, run)
+                    }
+                    if !IsEmitted(target) {
+                        continue
+                    }
+                    widened.Add(target)
+                    next.Add(target)
+                }
+            }
+            pending = next
+        }
         var changed = true
         while changed {
             changed = false
@@ -2807,6 +2843,8 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
         }
         run.Widened.UnionWith(widened)
+        forward.Clear()
+        run.Slots.Clear()
     }
 
     // Issue #5574: every read, in every compilation of the run, of the
@@ -3010,15 +3048,20 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
             return
         }
-        AddNullArgumentRead(
-            reads,
-            candidate,
-            if original is IParameterSymbol{IsParams: true} parameter {
-                ClassifyNullArgumentParamsRead(expression, parameter, model, run)
-            } else {
-                ClassifyNullArgumentRead(expression, model, run)
+        let classified = if original is IParameterSymbol{IsParams: true} parameter {
+            ClassifyNullArgumentParamsRead(expression, parameter, model, run)
+        } else {
+            ClassifyNullArgumentRead(expression, model, run)
+        }
+        AddNullArgumentRead(reads, candidate, classified)
+        // Carry only value reads, not the reverse compatibility checks on params calls.
+        if !classified.Safe && classified.Slot is {} target && run.Slots.ContainsKey(target) {
+            if !run.Forwarding.TryGetValue(candidate, out var targets) {
+                targets = HashSet[string](StringComparer.Ordinal)
+                run.Forwarding[candidate] = targets
             }
-        )
+            targets.Add(target)
+        }
     }
 
     private func CollectNullArgumentParamsCall(
@@ -3396,10 +3439,10 @@ internal shared class ObliviousNullabilityAnalyzer {
     )
 
     // Issue #5574: what a read of a widened declaration does with the value. A
-    // dereference (`x.M`, `x[i]`, `foreach`), a comparison or null test
+    // dereference that preserves evaluation before its null check, a comparison or null test
     // (`x == y`, `x is …`, `x ?? y`, `x?.M`, `switch (x)`) and the author's own
     // `x!` take the null as C# does or are asserted either way: G#'s `!!`
-    // before a dereference throws where C# throws. A read that a null test
+    // before a dereference must not skip argument or store effects. A read that a null test
     // guards (`if (x != null) …`) takes it too; a pattern that captures the
     // value (`x is var y`) does not. A read handed to a slot (an argument, a store, a
     // `return`, an arrow body, a reduced extension's receiver, a user-defined
@@ -3469,10 +3512,10 @@ internal shared class ObliviousNullabilityAnalyzer {
                     .Length > 0 {
                     return ClassifyNullArgumentSlot(unreduced.Parameters[0], model, run, localSafety)
                 }
-                return (true, default(string?))
+                return (NullArgumentDereferencePreservesEvaluation(access, model), default(string?))
             }
             case element is ElementAccessExpressionSyntax when element.Expression == value {
-                return (true, default(string?))
+                return (NullArgumentDereferencePreservesEvaluation(element, model), default(string?))
             }
             case conditional is ConditionalAccessExpressionSyntax when conditional.Expression == value {
                 return (true, default(string?))
@@ -3579,7 +3622,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                     IsNullArgumentCandidate(expanded.OriginalDefinition) &&
                     IsEmittedByRun(expanded, run.Members) &&
                     NullArgumentKeys(expanded) is {Count: > 0} keys {
-                    return (false, CanonicalNullArgumentKey(keys[0], run))
+                    return (false, RegisterNullArgumentSlot(expanded, keys[0], run))
                 }
                 return if ParamsElementType(expanded) is {
                     NullableAnnotation: Microsoft.CodeAnalysis.NullableAnnotation.Annotated
@@ -3612,6 +3655,77 @@ internal shared class ObliviousNullabilityAnalyzer {
             default {
                 return unsafe
             }
+        }
+    }
+
+    // A receiver assertion must not skip arguments or stores that C# evaluates before its null check.
+    private func NullArgumentDereferencePreservesEvaluation(expression ExpressionSyntax, model SemanticModel) bool {
+        var whole = expression
+        while whole.Parent is ParenthesizedExpressionSyntax parenthesized {
+            whole = parenthesized
+        }
+        if whole.Parent is InvocationExpressionSyntax call && call.Expression == whole {
+            return model.GetOperation(call) is IInvocationOperation invocation && invocation.Arguments.All(
+                (argument IArgumentOperation) -> IsInertNullArgumentEvaluation(argument.Value)
+            )
+        }
+        let operation = model.GetOperation(expression)
+        if operation == nil {
+            return false
+        }
+        let argumentsAreInert = switch operation {
+            case _ is IFieldReferenceOperation or IEventReferenceOperation: true
+            case property is IPropertyReferenceOperation: property.Arguments.All(
+                (argument IArgumentOperation) -> IsInertNullArgumentEvaluation(argument.Value)
+            )
+            case element is IArrayElementReferenceOperation: element.Indices.All(IsInertNullArgumentEvaluation)
+            default: false
+        }
+        if !argumentsAreInert {
+            return false
+        }
+        var target = whole
+        while true {
+            if target.Parent is ParenthesizedExpressionSyntax parenthesized {
+                target = parenthesized
+            } else if target.Parent is ArgumentSyntax argument && argument.Parent is TupleExpressionSyntax tuple {
+                target = tuple
+            } else {
+                break
+            }
+        }
+        if target != whole && target.Parent is AssignmentExpressionSyntax tupleStore && tupleStore.Left == target {
+            return false
+        }
+        if whole.Parent is AssignmentExpressionSyntax store && store.Left == whole {
+            return switch model.GetOperation(store) {
+                case assignment is ISimpleAssignmentOperation: IsInertNullArgumentEvaluation(assignment.Value)
+                case assignment is IEventAssignmentOperation: IsInertNullArgumentEvaluation(assignment.HandlerValue)
+                default: true
+            }
+        }
+        return true
+    }
+
+    private func IsInertNullArgumentEvaluation(operation IOperation?) bool {
+        if operation == nil {
+            return false
+        }
+        if operation.ConstantValue.HasValue {
+            return true
+        }
+        return switch operation {
+            case parameter is IParameterReferenceOperation: parameter.Parameter.RefKind == RefKind.None
+            case local is ILocalReferenceOperation: local.Local.RefKind == RefKind.None
+            case _ is IInstanceReferenceOperation or IDefaultValueOperation: true
+            case parenthesized is IParenthesizedOperation: IsInertNullArgumentEvaluation(parenthesized.Operand)
+            case conversion is IConversionOperation when conversion.IsImplicit &&
+                !conversion.IsChecked &&
+                conversion.OperatorMethod == nil &&
+                (
+                conversion.Conversion.IsIdentity || conversion.Conversion.IsReference || conversion.Conversion.IsNumeric
+            ): IsInertNullArgumentEvaluation(conversion.Operand)
+            default: false
         }
     }
 
@@ -3763,7 +3877,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             IsNullArgumentCandidate(original) &&
             IsEmittedByRun(target, run.Members) &&
             NullArgumentKeys(original) is {Count: > 0} keys {
-            return (false, CanonicalNullArgumentKey(keys[0], run))
+            return (false, RegisterNullArgumentSlot(original, keys[0], run))
         }
         return (false, default(string?))
     }
@@ -3858,9 +3972,15 @@ internal shared class ObliviousNullabilityAnalyzer {
             IsNullArgumentCandidate(original) &&
             IsEmittedByRun(original, run.Members) &&
             NullArgumentKeys(original) is {Count: > 0} keys {
-            return (false, CanonicalNullArgumentKey(keys[0], run))
+            return (false, RegisterNullArgumentSlot(original, keys[0], run))
         }
         return (false, default(string?))
+    }
+
+    private func RegisterNullArgumentSlot(slot ISymbol, key string, run NullArgumentRun) string {
+        let canonical = CanonicalNullArgumentKey(key, run)
+        run.Slots.TryAdd(canonical, OriginalNullArgumentDeclaration(slot) ?? slot)
+        return canonical
     }
 
     private func IsSafeExplicitlyNullableReferenceLocal(
@@ -3975,14 +4095,29 @@ internal shared class ObliviousNullabilityAnalyzer {
             IsEmittedByRun(slot.OriginalDefinition, graphs)
     }
 
-    // Issue #5574: the source declarations, in the run's compilations, that a
-    // declaration seen through a run project's emitted reference stands for.
-    private func SourceDeclarationsInRun(symbol ISymbol, graphs List[NullArgumentGraph]) List[ISymbol] {
-        let sources = List[ISymbol]()
-        for source in RunSourceDeclarations(symbol, graphs.Select((graph NullArgumentGraph) -> graph.Owner)) {
-            sources.Add(OriginalNullArgumentDeclaration(source) ?? source)
+    // Resolve every canonical declaration's aliases, regardless of how its first symbol enters the run.
+    private func NullArgumentDeclarationsInRun(symbol ISymbol, run NullArgumentRun) List[ISymbol] {
+        let declarations = List[ISymbol]{symbol}
+        let declaration = OriginalNullArgumentDeclaration(symbol) ?? symbol
+        let keys = NullArgumentKeys(declaration)
+        if keys.Count == 0 || NullArgumentId(declaration) is not{} id {
+            return declarations
         }
-        return sources
+        let canonical = CanonicalNullArgumentKey(keys[0], run)
+        // Canonicalization records every assembly and linked-source alias before read collection.
+        for graph in run.Members {
+            let key = graph.Owner.Assembly.Identity.GetDisplayName() + "|" + id
+            if run.Canonical.TryGetValue(key, out var candidate) &&
+                candidate == canonical &&
+                graph.Owner is CSharpCompilation compilation &&
+                DeclarationOfNullArgumentId(id, compilation) is {} source &&
+                source
+                .DeclaringSyntaxReferences
+                .Length != 0 {
+                declarations.Add(OriginalNullArgumentDeclaration(source) ?? source)
+            }
+        }
+        return declarations
     }
 
     // Issue #5577: the source declarations that `symbol` stands for when it is
@@ -4486,7 +4621,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
     }
 
-    private func CallArgumentList(node SyntaxNode) ArgumentListSyntax? -> switch node {
+    internal func CallArgumentList(node SyntaxNode) ArgumentListSyntax? -> switch node {
         case invocation is InvocationExpressionSyntax: invocation.ArgumentList
         case creation is BaseObjectCreationExpressionSyntax: creation.ArgumentList
         case initializer is ConstructorInitializerSyntax: initializer.ArgumentList
@@ -11277,6 +11412,18 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         for var node SyntaxNode? = stripped; node != nil; node = node!!.Parent {
             switch node.Parent {
+                case binary is BinaryExpressionSyntax when node == binary.Right &&
+                    (binary.IsKind(SyntaxKind.LogicalAndExpression) || binary.IsKind(SyntaxKind.LogicalOrExpression)) &&
+                    IsBuiltInBooleanOperation(binary, model) &&
+                    NullTestOf(
+                    binary.Left,
+                    symbol,
+                    model,
+                    whenTrueIsNull: binary.IsKind(SyntaxKind.LogicalOrExpression)
+                ) is {} guardTest &&
+                    GuardValueRemainsUnchanged(binary.Left, node, stripped, symbol, model) {
+                    return guardTest
+                }
                 case elseClause is ElseClauseSyntax when elseClause.Parent is IfStatementSyntax elseIf &&
                     node == elseClause.Statement &&
                     NullTestOf(elseIf.Condition, symbol, model, whenTrueIsNull: true) is {} guardTest &&
@@ -11555,15 +11702,56 @@ internal shared class ObliviousNullabilityAnalyzer {
         default: false
     }
 
-    // Matches `x == null` / `x is null` (whenTrueIsNull: true) and
-    // `x != null` / `x is not null` (whenTrueIsNull: false) against
-    // <paramref name="symbol"/> by identifier name.
     private func IsBuiltInBooleanOperation(expression BinaryExpressionSyntax, model SemanticModel) bool ->
     model.GetOperation(expression) is IBinaryOperation{
         OperatorMethod: nil,
         Type: {SpecialType: SpecialType.System_Boolean}
     }
 
+    internal func IsPossibleStringNullGuard(invocation InvocationExpressionSyntax) bool {
+        if invocation.ArgumentList.Arguments.Count != 1 {
+            return false
+        }
+        let name = switch invocation.Expression {
+            case identifier is IdentifierNameSyntax: identifier.Identifier.ValueText
+            case member is MemberAccessExpressionSyntax: member.Name.Identifier.ValueText
+            default: ""
+        }
+        return name == "IsNullOrEmpty" || name == "IsNullOrWhiteSpace"
+    }
+
+    internal func IsBuiltInStringNullGuard(
+        invocation InvocationExpressionSyntax,
+        symbol ISymbol?,
+        model SemanticModel
+    ) bool ->
+    symbol != nil && IsPossibleStringNullGuard(invocation) && model.GetOperation(
+        invocation
+    ) is IInvocationOperation operation &&
+        operation
+        .TargetMethod
+        .IsStatic &&
+        operation
+        .TargetMethod
+        .ContainingType
+        .SpecialType == SpecialType.System_String &&
+        operation
+        .Arguments
+        .Length == 1 &&
+        operation
+        .Arguments[0]
+        .Value
+        .Syntax is ExpressionSyntax value &&
+        model
+        .GetTypeInfo(value)
+        .Type
+        ?.SpecialType == SpecialType.System_String &&
+        (symbol is not IFieldSymbol || CSharpToGSharpTranslator.IsUnqualifiedOrThisQualifiedFieldRead(value)) &&
+        SymbolEqualityComparer
+        .Default
+        .Equals(model.GetSymbolInfo(value).Symbol, symbol)
+
+    // The opposite branch proves non-null; a rejecting branch can also include empty strings.
     private func NullTestOf(
         condition ExpressionSyntax,
         symbol ISymbol?,
@@ -11595,12 +11783,20 @@ internal shared class ObliviousNullabilityAnalyzer {
             return expression is LiteralExpressionSyntax literal && literal.IsKind(SyntaxKind.NullLiteralExpression)
         }
         switch condition {
-            case conjunction is BinaryExpressionSyntax when !whenTrueIsNull && conjunction.IsKind(
-                SyntaxKind.LogicalAndExpression
+            case conjunction is BinaryExpressionSyntax when conjunction.IsKind(
+                if whenTrueIsNull {
+                    SyntaxKind.LogicalOrExpression
+                } else {
+                    SyntaxKind.LogicalAndExpression
+                }
             ) &&
                 IsBuiltInBooleanOperation(conjunction, model) {
                 return NullTestOf(conjunction.Right, symbol, model, whenTrueIsNull) ??
                     NullTestOf(conjunction.Left, symbol, model, whenTrueIsNull)
+            }
+            case invocation is InvocationExpressionSyntax when whenTrueIsNull &&
+                IsBuiltInStringNullGuard(invocation, symbol, model) {
+                return invocation
             }
             case binary is BinaryExpressionSyntax when binary.IsKind(
                 if whenTrueIsNull {
@@ -11609,7 +11805,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                     SyntaxKind.NotEqualsExpression
                 }
             ) {
-                if symbol is IFieldSymbol && !IsBuiltInBooleanOperation(binary, model) {
+                if !IsBuiltInBooleanOperation(binary, model) {
                     return nil
                 }
                 return if (IsSymbolIdentifier(binary.Left, symbol) && IsNullLiteral(binary.Right)) ||

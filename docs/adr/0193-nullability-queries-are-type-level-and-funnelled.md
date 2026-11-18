@@ -702,6 +702,10 @@ from member kinds to readers.
 These were decided by the repository owner before this ADR was written. They are
 the Decision, not options.
 
+[ADR-0224](0224-source-nullable-type-parameter-kind-constraints.md) separately restricts source annotations and nullable-producing operators to parameters with a proven representation kind.
+It does not change imported annotations or this ADR's policy.
+In particular, an annotated open slot with an unknown in-scope argument remains unchanged.
+
 1. **`[Nullable(2)]` on an open slot.** `[Nullable(2)]T` means `T?` — reference
    nullability — when the substituted type argument is a reference type. When the
    substituted argument is a value type, it is ordinary CLR value-type semantics,

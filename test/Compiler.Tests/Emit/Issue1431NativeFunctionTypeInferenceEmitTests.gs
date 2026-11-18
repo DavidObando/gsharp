@@ -49,7 +49,8 @@ func Project1431[TSource, TResult, TKey](
 }
 
 public var result = Project1431([]int32{5, 6, 7}, (s int32) -> s * 10, (t int32) -> t)`
-        let assembly = CompileAndRun(source)
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(source, []string{"TResult"}, 1)
+        let assembly = CompileAndRun(source.Replace("[TSource, TResult, TKey]", "[TSource, TResult struct, TKey]"))
         Assert.Equal(50, GetIntField(assembly, "result"))
     }
 

@@ -25,6 +25,16 @@ import Xunit
 @Collection("ConsoleIo")
 open class Issue3099TypeArgumentReificationTests {
     @Fact
+    func UnconstrainedGenericPayload_RequiresKnownNullableFieldKind() {
+        let source = CreateSource("gsharp-generic", GenericPayloadSource, "Payload[int32]")
+        let result = EmittedOracle.Evaluate(source)
+        let error = Assert.Single(result.Diagnostics.Where((d GSharp.Core.CodeAnalysis.Diagnostic) -> d.IsError))
+        Assert.Equal("GS0641", error.Id)
+        Assert.Equal(source.IndexOf("T?", StringComparison.Ordinal) + 1, error.Location.Span.Start)
+        Assert.Equal(1, error.Location.Span.Length)
+    }
+
+    @Fact
     func CompositeEnclosingTypeArguments_ReifyAcrossEmittedHosts() {
         const Source = `package Issue3255
 import System
@@ -280,6 +290,18 @@ Reify[int32]()`
     ] { }
 
     shared {
+        private const GenericPayloadSource string = `struct Payload[T] {
+    let Value T
+    var Imported List[T]
+    var Slice []T
+    var Nullable T?
+    var Array [3]T
+    shared {
+        var Stat int32
+    }
+    const Kilo int32 = 1000
+}`
+
         func TypeArgumentCases() sequence[[]object] {
             yield []object{"class", `class Payload {
     let Eleven int32
@@ -339,17 +361,11 @@ Reify[int32]()`
         }
     }
 }`, "Owner[int32].Middle[string].Payload"}
-            yield []object{"gsharp-generic", `struct Payload[T] {
-    let Value T
-    var Imported List[T]
-    var Slice []T
-    var Nullable T?
-    var Array [3]T
-    shared {
-        var Stat int32
-    }
-    const Kilo int32 = 1000
-}`, "Payload[int32]"}
+            yield []object{
+                "gsharp-generic",
+                GenericPayloadSource.Replace("Payload[T]", "Payload[T struct]"),
+                "Payload[int32]"
+            }
             yield []object{"imported-generic", `struct Payload {
     let Eleven int32
     var TwentyTwo string

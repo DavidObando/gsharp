@@ -15,72 +15,33 @@ import System.Reflection.PortableExecutable
 import System.Text
 import Xunit
 
-/// Issue #4062: a DEPENDENT constraint propagates the bounding parameter's
-/// `class` constraint, so `nil` is legal at
-/// `[TBase class, TDerived TBase]`.
-/// @remarks <b>The defect.</b> `return nil` at a `TDerived` slot under
-/// `[TBase class, TDerived TBase]` reported
-/// `GS0155: Cannot convert type 'nil' to 'TDerived'.` — measured on
-/// `origin/main` @ `7708be7d` before anything was written. C#
-/// propagates a bounding parameter's special constraints to the bounded one, so
-/// `TDerived : TBase : class` proves `TDerived` is a reference type in
-/// every instantiation and `csc` accepts `TDerived x = null;`.
-/// `[T class]` on its own was already accepted (#2354's rule); the
-/// reference-ness simply did not travel down a `TypeParameterBound`
-/// chain.
-///
-/// <b>Root cause and the shape of the repair.</b> #4043 made
-/// `TypeParameterSymbol.TypeParameterBound` a SEPARATE slot from
-/// `ClassConstraint` on purpose: roughly forty consumers read
-/// `ClassConstraint != null` as "this parameter is a reference type" AND
-/// as "this is the type it derives from", and the second reading drives boxing
-/// and `callvirt` decisions in the emitter that a dependent bound cannot
-/// supply. Merging the slots is #4027's defect shape — a slot that looks like a
-/// reference emitting `ldnull` at a `!!T` position that is not one.
-/// The repair therefore answers only the reference-ness HALF, in one new
-/// depth-bounded property (`DependentBoundProvesReferenceType`) read by
-/// exactly ONE consumer,
-/// the nil rule of `Conversion.Classify` (the old predicate was removed by #4316).
-/// `IsReferenceConstrainedTypeParameter` — which also drives
-/// `IsReferenceLikeTarget`'s conversion arms, where `ClassConstraint`
-/// additionally names the type to box or upcast TO — is deliberately left
-/// alone, so this widens `nil` acceptance and nothing else.
-///
-/// <b>The IL is #4027's shape, not a bare <c>ldnull</c>.</b> The issue
-/// asks for `default(T)` (`ldloca; initobj; ldloc`) rather than
-/// `ldnull`, and that falls out for free:
-/// `ConversionClassifier` already lowers `nil` at ANY bare
-/// type-parameter target to a `BoundDefaultExpression` (#4027), so no emit
-/// path changed at all. Every green row below IL-verifies and RUNS, and the
-/// running rows observe the value — `== nil` prints `True` — so
-/// "compiles" is never mistaken for "means nil".
-///
-/// <b>What must stay refused, and why that is the whole soundness
-/// argument.</b> A dependent bound whose chain root carries NO `class`
-/// proves nothing: `[TBase, TDerived TBase]` can be instantiated with a
-/// struct, and `[TBase struct, TDerived TBase]` certainly is one. Both
-/// still report `GS0155`, which is what keeps this a completeness fix
-/// rather than a soundness regression — the checker never starts accepting what
-/// the CLR refuses.
-///
-/// <b>Not #4070's rule.</b> Measured, not asserted. #4070 walks
-/// `ClassConstraint` for INTERFACE implication in
-/// `ClrOverloadResolution`; this walks `TypeParameterBound` for
-/// REFERENCE-NESS in `TypeParameterSymbol`/`Conversion`. Disjoint
-/// slots, disjoint files, and each commit's witness leaves the other's rows
-/// unmoved. They share only a PRINCIPLE — a bound implies what the bounding
-/// thing proves — which has three entry points that cannot share a helper
-/// (the third is filed as #4084).
+/// Dependent nullable contracts require a concrete reference-class proof, not another parameter's bare class flag.
+/// Original unsafe inputs remain rejection witnesses beside constrained, strict-IL runtime controls.
 open class Issue4062DependentBoundReferenceTypeTests {
-    /// `nil` at a type parameter whose dependent-bound chain roots in
-    /// `class` now compiles, IL-verifies, runs, and observably carries a
-    /// null.
+    /// Preserves the original inputs and their valid concrete-reference migrations.
     /// @param name The case name.
     /// @param source The G# source.
     /// @param expectedLines The expected stdout lines, in order.
     @Theory
-    @MemberData("NilAccepted")
-    func ADependentBoundRootedInClass_AcceptsNil(name string, source string, expectedLines[]string) {
+    @MemberData("OriginalNilCases")
+    func DependentNilSources_RequireSoundReferenceProofs(name string, source string, expectedLines[]string) {
+        var source = source
+        if name is not(
+            "a-chain-whose-root-carries-a-class-base-bound" or
+                "control-a-bare-class-constraint-still-accepts-nil" or
+                "control-a-dependent-bound-without-a-nil-is-unchanged"
+        ) {
+            AssertFirstQuestionIsRejected(source)
+            source = source
+                .Replace("TBase class", "TBase System.IO.Stream")
+                .Replace("A class", "A System.IO.Stream")
+                .Replace("Box[T class]", "Box[T System.IO.Stream]")
+                .Replace("Sink[T]", "Sink[T System.IO.Stream]")
+                .Replace("[object, object, string]", "[System.IO.Stream, System.IO.Stream, System.IO.MemoryStream]")
+                .Replace("[object, string]", "[System.IO.Stream, System.IO.MemoryStream]")
+                .Replace("Box[object]().Accept[string]", "Box[System.IO.Stream]().Accept[System.IO.MemoryStream]")
+                .Replace("\"a\"", "System.IO.MemoryStream()")
+        }
         let tempDir = Directory.CreateTempSubdirectory("gs_4062_").FullName
         try {
             let appPath = Path.Combine(tempDir, name + ".dll")
@@ -99,9 +60,7 @@ open class Issue4062DependentBoundReferenceTypeTests {
         }
     }
 
-    /// A dependent bound whose chain does not prove reference-ness still
-    /// refuses `nil` with `GS0155` — the fix is a completeness fix
-    /// and never accepts what the CLR refuses.
+    /// Bare unknown-kind parameters still refuse nil conversions.
     /// @param name The case name.
     /// @param source The G# source.
     @Theory
@@ -123,29 +82,8 @@ open class Issue4062DependentBoundReferenceTypeTests {
         }
     }
 
-    /// The chain walk is terminated by VISITED-SYMBOL cycle detection, not by a
-    /// depth limit, so a chain that is merely LONG still proves reference-ness
-    /// (review of PR #4088). Swept across depths rather than tested at one, for
-    /// the reason PR #4068's own replacement of a depth cap failed.
-    /// @remarks <b>The finding.</b> The first version used a fixed 32-hop cap.
-    /// Measured on that build: `[T0 class, T1 T0, … T33 T32]` — where the
-    /// reference constraint is proven 33 hops away — reported
-    /// `GS0155: Cannot convert type 'nil' to 'T33'.` A cap is a SEMANTIC
-    /// answer ("no") to a question about length, which is the wrong shape; the
-    /// only thing that may stop the walk is actually revisiting a parameter.
-    ///
-    /// <b>Why a sweep and not one deep row.</b> PR #4068 replaced the same
-    /// kind of cap and its first attempt keyed cycle detection on
-    /// `ClrTypeUtilities.IsSameAs`, whose `Type.FullName` is
-    /// `null` for an open constructed generic — so every nested
-    /// generic compared equal, a FALSE cycle fired at the first hop, and the
-    /// catchable depth collapsed from seven to one while the change looked like
-    /// a fix. A single deep row would not have caught that; a SWEEP does,
-    /// because a false cycle shows up as the SHALLOW rows failing. The walk here
-    /// keys on reference identity of the `TypeParameterSymbol`, which needs
-    /// no name at all and so cannot have that defect — and these rows are what
-    /// says so rather than the argument.
-    /// @param depth The number of hops from the bounded parameter to the `class` root.
+    /// A long chain preserves the difference between bare class flags and concrete reference-class bounds.
+    /// @param depth The number of dependent-bound hops.
     @Theory
     @InlineData(int32(1))
     @InlineData(int32(2))
@@ -156,7 +94,7 @@ open class Issue4062DependentBoundReferenceTypeTests {
     @InlineData(int32(32))
     @InlineData(int32(33))
     @InlineData(int32(64))
-    func ALongButValidDependentChain_StillAcceptsNil(depth int32) {
+    func ALongDependentChain_RequiresAConcreteReferenceProof(depth int32) {
         // `[T0 class, T1 T0, ... Tdepth T(depth-1)]`, with the nil at `Tdepth`.
         let parameters = List[string]{"T0 class"}
         for var i = 1; i <= depth; i++ {
@@ -177,16 +115,20 @@ class Fixture {
 }
 
 Console.WriteLine(Fixture.Deep[` + "$arguments" + `]("a") == nil)`)
+        AssertFirstQuestionIsRejected(source)
+        let migrated = source
+            .Replace("T0 class", "T0 System.IO.Stream")
+            .Replace(arguments, string.Join(", ", Enumerable.Repeat("System.IO.Stream", depth + 1)))
+            .Replace("\"a\"", "System.IO.MemoryStream()")
         let tempDir = Directory.CreateTempSubdirectory("gs_4062_deep_").FullName
         try {
             let appPath = Path.Combine(tempDir, "Deep$depth.dll")
-            let appLog = Compile(tempDir, "App.gs", source, appPath, "/target:exe")
+            let appLog = Compile(tempDir, "App.gs", migrated, appPath, "/target:exe")
             Assert.DoesNotContain("GS9998", appLog, StringComparison.Ordinal)
             Assert.DoesNotContain("GS0155", appLog, StringComparison.Ordinal)
             Assert.True(
                 File.Exists(appPath),
-                (`a ` + "$depth" + `-hop chain rooted in ` + "\u0060" + `class` + "\u0060" + ` must compile. Log:
-` + "$appLog")
+                "A $depth-hop concrete reference-bound chain must compile. Log:${Environment.NewLine}$appLog"
             )
             IlVerifier.Verify(appPath)
             let (exit, output) = RunDotnet(appPath)
@@ -321,10 +263,15 @@ class Fixture {
 
 Console.WriteLine(Fixture.Dependent[object, string]("a") == nil)
 Console.WriteLine(Fixture.Bare[string]("a") == nil)`
+        AssertFirstQuestionIsRejected(Source)
+        let migrated = Source.Replace("TBase class", "TBase System.IO.Stream").Replace(
+            "Fixture.Dependent[object, string](\"a\")",
+            "Fixture.Dependent[System.IO.Stream, System.IO.MemoryStream](System.IO.MemoryStream())"
+        )
         let tempDir = Directory.CreateTempSubdirectory("gs_4062_il_").FullName
         try {
             let appPath = Path.Combine(tempDir, "Il.dll")
-            let appLog = Compile(tempDir, "App.gs", Source, appPath, "/target:exe")
+            let appLog = Compile(tempDir, "App.gs", migrated, appPath, "/target:exe")
             Assert.True(File.Exists(appPath), (`the program must compile. Log:
 ` + "$appLog"))
             IlVerifier.Verify(appPath)
@@ -346,14 +293,23 @@ Console.WriteLine(Fixture.Bare[string]("a") == nil)`
     }
 
     shared {
+        private func AssertFirstQuestionIsRejected(source string) {
+            let offset = source.IndexOf('?')
+            Assert.True(offset >= 0)
+            let line = source.Substring(0, offset).Count((c char) -> c == '\n') + 1
+            let column = offset - source.LastIndexOf('\n', offset)
+            Issue6040GenericNullableReturnDriverTests.CheckRejected(
+                source,
+                []string{"GS0641@${line},${column},${line},${column + 1}"}
+            )
+        }
+
         /// Timeout for running an emitted sample.
         private const RunTimeout int32 = 60_000
 
-        /// Every position at which `nil` must now be accepted under a
-        /// dependent bound whose chain root is `class`. Each of these reported
-        /// `GS0155` on the parent.
+        /// Original dependent-bound inputs, including unsafe class-flag cases and valid controls.
         /// @returns Case name, G# source, expected stdout lines.
-        func NilAccepted() sequence[[]object] {
+        func OriginalNilCases() sequence[[]object] {
             // THE ISSUE'S OWN REPRO, with the return value observed rather than
             // merely compiled.
             yield []object{"the-issues-repro-nil-returned-at-a-dependent-bound", `package P

@@ -3274,6 +3274,9 @@ partial class CSharpToGSharpTranslator {
                 .Annotated {
                 return false
             }
+            if this.InferredMethodAcceptsDeclaredNullableValue(targetSymbol, writtenValue) {
+                return false
+            }
             // Issue #5537: a parameter or element typed by a type argument of oblivious
             // container storage, or of a construction stored there, takes that argument's
             // nullable spelling (`List[string?].Add`, `[]string?` elements).
@@ -3410,6 +3413,61 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             return !(targetDeclaredInThisCompilation && this.IsTranslatorWidenedDeclaration(targetSymbol))
+        }
+
+        // The callee must own the slot, with no dependencies elsewhere in its signature contract.
+        private func InferredMethodAcceptsDeclaredNullableValue(target ISymbol?, value ExpressionSyntax?) bool {
+            if value == nil ||
+                target is not IParameterSymbol{RefKind: RefKind.None} parameter ||
+                parameter
+                .OriginalDefinition
+                .Type is not ITypeParameterSymbol typeParameter ||
+                parameter.ContainingSymbol is not IMethodSymbol{ReducedFrom: nil} method ||
+                !SymbolEqualityComparer
+                .Default
+                .Equals(typeParameter.DeclaringMethod?.OriginalDefinition, method.OriginalDefinition) ||
+                !this.SinkInfersTypeFromValue(parameter, value) ||
+                CallResultMentionsTypeParameter(method, typeParameter) ||
+                method
+                .OriginalDefinition
+                .Parameters
+                .Any(
+                (other IParameterSymbol) -> other.Ordinal != parameter.Ordinal &&
+                    MentionsTypeParameter(other.Type, typeParameter)
+            ) ||
+                method
+                .OriginalDefinition
+                .TypeParameters
+                .Any(
+                (other ITypeParameterSymbol) -> other.ConstraintTypes.Any(
+                    (constraint ITypeSymbol) -> MentionsTypeParameter(constraint, typeParameter)
+                )
+            ) {
+                return false
+            }
+            if OutermostTransparentNode(value, stopAtAssignment: true)?.Parent is not ArgumentSyntax argument ||
+                argument
+                .Parent
+                ?.Parent is not InvocationExpressionSyntax invocation ||
+                !SymbolEqualityComparer
+                .Default
+                .Equals(this.GetArgumentParameter(argument), parameter) || this.InvocationEmitsTypeArguments(
+                invocation,
+                method
+            ) {
+                return false
+            }
+            // Roslyn's constructed argument can omit the nullable annotation on captured storage.
+            // This exception is for an annotated reference type parameter, not flow-narrowed concrete references.
+            let declared = this.GetDeclaredValueType(Unparenthesize(value))
+            return declared is ITypeParameterSymbol{IsReferenceType: true} &&
+                declared.NullableAnnotation == Microsoft
+                .CodeAnalysis
+                .NullableAnnotation
+                .Annotated &&
+                SymbolEqualityComparer
+                .Default
+                .Equals(declared, this.GetEffectiveMethodTypeArgument(method, typeParameter.Ordinal))
         }
 
         private func CoalesceAssignmentTargetIsNonNullInGSharp(assignment AssignmentExpressionSyntax) bool {

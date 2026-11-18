@@ -14,9 +14,38 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ## Unreleased (0.5 line)
 
+- **Preserve P/Invoke return marshalling overrides** (#6072). Emit return-target `MarshalAs` descriptors for `DllImport` and both `LibraryImport` methods. Preserve other return attributes, diagnose unsupported return forms, and keep unannotated boolean defaults unchanged.
+
+### Breaking Changes
+
+- **Source nullable type parameters require a known kind** (Fixes #6040, #6043, #6057, #6060; ADR-0224). Source `T?` annotations and operators that create nullable results or binding-header storage report `GS0641` unless constraints prove reference kind or nonnullable value kind. Diagnostics point to the annotation or source operator, including the `let` keyword in nullable binding headers. Use `class`/`class?`, a sufficient reference-class bound, `struct`, or `unmanaged` for the API's actual domain. `notnull`, interface-only bounds, and a dependent parameter's bare `class` bound are insufficient. Use ordinary unconstrained `T` when callers supply a complete nullable argument, such as `Id[int32?]`. Mixed APIs can require separate reference/value contracts. Imported CLR nullable annotations and the repository's published SDK pin are unchanged. This restriction replaces the draft return adapter and unimplemented companion proposal; it introduces no new nullable ABI.
+
 ### Bug Fixes
 
 - Preserve symbolic receiver types in imported method labels for hover, signature help, and member completion. Show source-defined arguments instead of erased `object` placeholders. Keep fixed-array lengths, tuple names, and declared return nullability. Keep declared signatures separate from call-result narrowing. (Fixes #5492)
+
+- Set `MALLOC_MMAP_THRESHOLD_=131072` for mirrored `cs2gs` `dotnet test` runs. With this fixed glibc threshold, freed native blocks of 128 KB or more return to the OS. Under hosted-runner limits, the self-migrated `Cs2Gs.Tests` testhost peaks at 4.9 GB instead of 15.3 GB. Build environments do not change. (Fixes #6096)
+- Preserve non-null assignment facts from ordinary extension-call receivers, including imported extensions. Receiver-side `??=` no longer causes a false GS0158 after the call. Keep later assignments and by-reference writes invalidating those facts. (Fixes #6107)
+
+- Reject constructor initializer targets other than `base` with GS0642 instead of silently calling a base constructor. Use `convenience init() { init(args) }` for same-class chaining. (Fixes #6074)
+
+- Cover stored `Func[T]` factories passed to imported generic methods with dependent constraints. Runtime regression tests preserve delegate invocation counts and results for the symbolic applicability correction in #6058. (Fixes #6088)
+
+- Match imported data types by CLR declaration and semantic type arguments when converting method groups. A forwarding lambda in another scope no longer causes GS0218 for a compatible shared callback. (Fixes #6090)
+
+- Resolve calls to parameters and locals named `close` through ordinary callable lookup, including nested callbacks. Keep unshadowed retired-builtin diagnostics. (Fixes #6089)
+
+- Accept nullable managed-reference resources in `using let` and `await using let`, including conditional initializers. Dispose non-nil resources once and skip nil resources. (Fixes #6087)
+
+- Bind bare address-of arguments to managed `ref`, `out`, and `in` parameters in unsafe shared methods, including P/Invoke calls. Preserve storage-type checks and generic forwarding. (Fixes #6086)
+
+- Initialize repository version metadata before G# build preparation when NBGV targets are imported, including projects that disable generated version sources. Preserve cold restore-and-publish evaluations before those imports exist. Build Extensions without a bundled self-reference and reuse its graph output for SDK packing. Unchanged builds retain identical metadata and skip compilation. Keep stage-2 certification's exact SDK target inventory current. (Fixes #5116)
+
+- Admit conversion operators whose owning class appears through a nullable reference type. Preserve nullable operand and return contracts. Reject same-type conversions and duplicate signatures that differ only by reference-nullability annotations. Translator acceptance remains gated on a released compiler SDK pin. (Fixes #6024)
+
+- Include accessible static members of constructed imported types in language-server completion, including trailing dots and unfinished member names. Keep instance members and constructors out of type-qualified suggestions. (Fixes #6019)
+
+- Preserve explicitly nullable reference type-parameter storage passed as a complete inferred method type argument in `cs2gs`. Do not add a throwing assertion when the unconstrained argument does not reach the result. Keep concrete reference inference, fixed storage, authored forgiveness, synthesized explicit type arguments, constraints, and the broader oblivious generic-store bridge policy unchanged. (Part of #4612; prerequisite for #6044)
 
 - Reject ref-struct type arguments in ordinary generic constructor calls with GS0219, as in type declarations. Check symbolic arguments before erasure, including source constructors and open generic owners. Preserve imported parameters that allow ref structs. (Fixes #6015)
 
@@ -27,6 +56,14 @@ The published **0.5** documentation snapshot and all current installation/downlo
 - **Fewer cascading parse diagnostics** (Oats). The parser reports `GS0005` once for each token where it stops, so `func f( int32 {` gives one `GS0005`, not two. The binder does not report `GS0113` "Type ''" for a type name token that the parser synthesized.
 
 - **Public entry-point and internal-error diagnostics for library hosts** (Oats, ADR-0223). `Compilation.GetMissingEntryPointDiagnostics()` (`GS0634`) and `Compilation.CreateInternalErrorDiagnostic(Exception)` (`GS9998`) are public, so a host can report them as `gsc` does. ADR-0223 proposes packaging, hermetic reference sets, an explicit runtime directory, and a thread-safety contract.
+
+- **`Gsharp.Compiler` package for library hosts** (Oats, ADR-0223 D2). A new NuGet package, `Gsharp.Compiler`, contains `GSharp.Core.dll` with its XML documentation and PDB. It has the same version as `Gsharp.NET.Sdk` and comes from the same build. Its dependencies include `System.Reflection.MetadataLoadContext`, so a host does not add it by hand. The G# runtime assemblies are under `runtimes/gsharp/`. The SDK now ships one copy of `Gsharp.Extensions.dll` and `Gsharp.Runtime.Channels.dll`: before, `tools/compiler/`, `tools/gsgen/`, and `tools/formatter/` had the bootstrap SDK's copies. (Fixes #6067)
+- **Hermetic reference sets for library hosts** (Oats, ADR-0223 D3). `ReferenceResolver.ForReferencePack(targetFramework, packRoot)` builds a resolver over `Microsoft.NETCore.App.Ref/<version>/ref/<tfm>` and the bundled G# runtimes. It does not use the assemblies that the host process has loaded. `ReferenceResolver.CaptureHostAssemblies()` and `ReferenceResolver.WithRuntimeReferences(referencePaths, hostSnapshot)` are public, so a host can capture the host assemblies once, as `gsc` does. The documentation of `Default()` and `WithRuntimeReferences` states that their result depends on the host process. (Fixes #6065)
+- **Thread-safety rules for library hosts** (Oats, ADR-0223 D5). A stress test binds and emits the repository samples on parallel workers against one shared `ReferenceResolver` and compares each result with a serial run. The compiler architecture page now gives the thread-safety rules for hosts. Hosts must use one resolver for each assembly name and serialize the compilations that share it, because compilations with different assembly names can get incorrect `InternalsVisibleTo` results (#6070). (Part of #6068)
+
+- **Explicit bundled runtime directory for library hosts** (Oats, ADR-0223 D4). `ReferenceResolver.Default(runtimeDirectory)`, `ReferenceResolver.ForReferencePack(targetFramework, packRoot, runtimeDirectory)`, and `ReferenceResolver.ResolveDriverReferencePaths(referencePaths, runtimeDirectory)` take the folder of the bundled G# runtime assemblies. The search order is the argument, then the folder beside the application, then `GSHARP_SDK_TOOLS_DIR`. The internal process-wide `ReferenceResolver.SdkToolsDirectory` is removed. `gsc` and `gsi` keep their search order. A library host that sets only `GSHARP_SDK_TOOLS_DIR` now gets the files beside the application first. `ForReferencePack` has a third optional parameter; it is not released yet. (Fixes #6066)
+
+- **Bind an incomplete program** (Oats, ADR-0225, part of #6075). `Compilation.BindPrefix(tree, cut, options)` binds a tree as if its text ended at `cut`. The parser closes each delimiter that is open at the cut, so the host writes no seal. Each diagnostic is `Final`, `FutureDependent` (a later declaration, the rest of an open body or the remaining members of an open type can remove it) or `Artifact` (the cut caused it), with a reason. The result also has the scope and the open constructs at the cut. `PrefixRemainder.KeepDeclarations` keeps the declarations after the cut for a fill-in edit. Diagnostics of complete programs do not change.
 
 - **One diagnostic for a property initializer** (Oats). `prop X T = value` reports the new `GS0640` once at the `=` token. Before, the `=` started a field declaration and caused `GS0113` (`Type ''`), `GS0288`, and `GS0005`. The `PropertyDecl` grammar still has no initializer.
 - **No GS0573 after an unresolved `catch` type** (Oats). A `catch` clause whose type does not resolve reports only `GS0113`. It no longer counts as `catch (System.Exception)` in the unreachable-clause check, and later clauses do not shadow it.
@@ -41,6 +78,9 @@ The published **0.5** documentation snapshot and all current installation/downlo
   Hoisted field captures retain their pre-call effect boundary.
   Evaluated prefixes within statements, expression bodies, and completed conditions share ordered mutation analysis. Constructor effects precede initializer reads, while one-time loop-header reads precede body effects. Plain-assignment results retain nullable storage contracts and bridge non-null sinks once. Erased `nameof` operands and dropped closure, reference-alias, or loop writes do not invalidate facts; contextual conversions still do.
   Prefix reads do not inherit plain-assignment facts before condition completion. Lowered loop incrementors account for intervening body and continue-path effects. Each lowered continue site retains its own prefix and guard facts; shared incrementors join post-cleanup paths. Native for-post expressions retain their separate binding boundary. Unbraced loop bodies retain their root-condition facts. Invalidation skips absent incoming facts and preserves indexed guard-query scaling.
+- **Keep `cs2gs` builds valid after writable shared-storage ref arguments** (Part of #6036). Emit the required null assertion when G# drops an unrelated local's narrowed state; ref arguments to separate locals remain unaffected.
+- **Keep `cs2gs` narrowing in step with gsc after writable member-reference calls** (Fixes #6036). A call that receives a writable member reference (`Interlocked.Increment(ref ctx.Counter)`) now ends the narrowing of every reassigned local and parameter. This applies after a null guard and after an assignment, including through a loop's back edge, so the translator emits the required `!!`. A `ref` or `in` argument that C# proves non-null, but gsc does not narrow (for example, after a guard through a user-defined `==`), now carries `@SuppressDiagnostic("GS0612")`, as a dropped `!` already does.
+- Run nested `cs2gs` SDK commands (`build`, `msbuild`, `test`, and `restore`) from the repository root so generated projects outside the checkout still use its `global.json` SDK pin. Relative work and project paths still resolve from the caller's directory. Keep external builds without a repository root unchanged. `Gsharp.NET.Sdk` now resolves `gsharp.generated.runsettings` and `gsharp.trimmer.xml` from the project directory, not the process working directory. (Fixes #6029)
 - **Retain erased-array writes and nested anonymous storage contracts** (#5326). Treat unrecoverable `System.Array` elements as unknown writes. Preserve disjoint element proofs before argument conversion erases them. Reuse anonymous constructor contracts for member reads and project native managed-reference and slice elements recursively. Validate stable local results before publishing binder and slice-resolution outputs.
 - **Keep anonymous evidence and metadata fallback isolated in cs2gs** (#5326). Partition merge results by their compilation and catalog/model analysis domain. Retain original untrusted references when snapshot metadata is invalid, so default-reference loads report Roslyn diagnostics without poisoning later loads.
 - **Retain scoped anonymous input spellings in cs2gs** (#5326). Include recursively rendered aliases and qualifiers in merge-cache input identity. Preserve structural nullability contracts, canonical output deduplication, and evidence grouping.
@@ -69,6 +109,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 - Clarify ADR-0209's existing public-copy preference for well-known types, nonpublic fallback, and searched/dependency module partition. Consumer-specific access remains compilation-owned. This changes documentation only. (Fixes #5204)
 
 - Construct expanded List and span variadic carriers over source-declared elements and generic type parameters. Preserve symbolic element types through ordinary constructor emission, including nullable elements and nested collections. Normal-form arguments retain their carrier identity. (Fixes #6010)
+
+- Follow widened `cs2gs` field, property, and call-result values into call arguments and reduced extension receivers. Discover forwarding through the existing candidate-filtered read analysis and retain the all-reads-safe fixed point. Collect reads from every canonical linked-source declaration before pruning. Keep fixed contracts, effectful dereferences, and incompatible params carriers pinned. (Fixes #5556)
 
 - Reject release packages whose embedded nuspec ID or version differs from the filename. Reuse package metadata verification before publishing. (Fixes #5550)
 

@@ -3642,7 +3642,21 @@ internal class ConversionClassifier {
             binderCtx.RecordPointerEscapedArgument(argument)
         }
         if parameter != nil && parameter.RefKind != RefKind.None {
-            if argument is BoundAddressOfExpression{IsUnmanaged: false} addr {
+            if argument is BoundAddressOfExpression addr {
+                // An in-pointer parameter can instead consume the raw pointer value through an implicit readonly temporary.
+                if addr.IsUnmanaged && parameter.RefKind == RefKind.In && Conversion.Classify(addr.Type, expectedType)
+                    .IsImplicit {
+                    return BindImplicitInArgument(location, argument, expectedType, parameter)
+                }
+                // A ref-kind parameter gives bare address-of its managed-reference context, including inside unsafe code.
+                let reference = if addr.IsUnmanaged {
+                    BoundAddressOfExpression(addr.Syntax, addr.Operand, unmanaged: false, isReadOnly: addr.IsReadOnly){
+                        FixedBufferEscapeSyntax = addr.FixedBufferEscapeSyntax,
+                        FixedBufferSyntax = addr.FixedBufferSyntax
+                    }
+                } else {
+                    addr
+                }
                 let operandType TypeSymbol? = ByRefStorageMatching.TryGetStorageType(addr, parameter.RefKind) ??
                     addr
                     .Operand
@@ -3651,9 +3665,9 @@ internal class ConversionClassifier {
                     expectedType == TypeSymbol.Error ||
                     (
                     operandType != nil &&
-                        CheckByRefArgumentStorage(location, parameter, operandType, expectedType, addr)
+                        CheckByRefArgumentStorage(location, parameter, operandType, expectedType, reference)
                 ) {
-                    return argument
+                    return reference
                 }
                 // Issue #4422: report the mismatch against the storage type
                 // rather than letting BindConversion report the `*T` address.
@@ -3941,7 +3955,13 @@ internal class ConversionClassifier {
         location TextLocation,
         argumentIndex int32
     ) BoundExpression {
-        if parameter.RefKind == RefKind.None || !IsPlainValueArgument(argument) {
+        if parameter.RefKind == RefKind.None {
+            return argument
+        }
+        if argument is BoundAddressOfExpression{IsUnmanaged: true} {
+            return BindCallArgumentWithRefKind(location, argument, expectedType, parameter, argumentIndex)
+        }
+        if !IsPlainValueArgument(argument) {
             return argument
         }
         if parameter.RefKind == RefKind.In {
@@ -4189,10 +4209,18 @@ internal class ConversionClassifier {
             "disposable variables have a bound type",
             expression: "variable.Type"
         )
+        let resourceType = variableType.StripToBareShape()
+        var receiver BoundExpression = BoundVariableExpression(nil, variable)
+        if resourceType.ReferenceNullability != ReferenceNullabilityKind.NotApplicable && !object.ReferenceEquals(
+            resourceType,
+            variableType
+        ) {
+            receiver = BoundConversionExpression(nil, resourceType, receiver)
+        }
         // #568 primary path: if the variable's type is a user-defined class
         // that declares a public parameterless Dispose() (including via
         // IDisposable implementation), route through user-instance-call.
-        if variable.Type is StructSymbol userType && TypeMemberModel.TryGetMethodIncludingInherited(
+        if resourceType is StructSymbol userType && TypeMemberModel.TryGetMethodIncludingInherited(
             userType,
             "Dispose",
             out var userDispose
@@ -4203,7 +4231,6 @@ internal class ConversionClassifier {
             (userDispose.Type == TypeSymbol.Void || userDispose.Type == nil) &&
             userDispose.Accessibility == Accessibility
             .Public {
-            let receiver = BoundVariableExpression(nil, variable)
             return BoundUserInstanceCallExpression(nil, receiver, userDispose, ImmutableArray[BoundExpression].Empty)
         }
         // Extended CLR-type path: walk self + transitive interfaces so a
@@ -4211,7 +4238,7 @@ internal class ConversionClassifier {
         // Issue #2148: a same-compilation user class deriving from an imported
         // IDisposable base has no ClrType of its own, so fall back to the
         // nearest imported base's ClrType to find the inherited Dispose.
-        let clrType Type? = variableType.ClrType ?? GetNearestImportedBaseClrType(variableType)
+        let clrType Type? = resourceType.ClrType ?? GetNearestImportedBaseClrType(resourceType)
         if clrType == nil {
             Diagnostics.ReportTypeNotDisposable(location, variableType)
             return nil
@@ -4225,10 +4252,9 @@ internal class ConversionClassifier {
             Diagnostics.ReportTypeNotDisposable(location, variableType)
             return nil
         }
-        let receiver2 = BoundVariableExpression(nil, variable)
         return BoundImportedInstanceCallExpression(
             nil,
-            receiver2,
+            receiver,
             disposeMethod,
             TypeSymbol.Void,
             ImmutableArray[BoundExpression].Empty
@@ -4254,12 +4280,20 @@ internal class ConversionClassifier {
             "async-disposable variables have a bound type",
             expression: "variable.Type"
         )
+        let resourceType = variableType.StripToBareShape()
+        var receiver BoundExpression = BoundVariableExpression(nil, variable)
+        if resourceType.ReferenceNullability != ReferenceNullabilityKind.NotApplicable && !object.ReferenceEquals(
+            resourceType,
+            variableType
+        ) {
+            receiver = BoundConversionExpression(nil, resourceType, receiver)
+        }
         let valueTaskType = TypeSymbol.FromClrTypeWithoutNullability(
             typeof(ValueTask),
             NullabilityFreeReason.TypeLiteral
         )
         // User-defined G# class path: probe for DisposeAsync() returning ValueTask.
-        if variable.Type is StructSymbol userType && TypeMemberModel.TryGetMethodIncludingInherited(
+        if resourceType is StructSymbol userType && TypeMemberModel.TryGetMethodIncludingInherited(
             userType,
             "DisposeAsync",
             out var userDisposeAsync
@@ -4269,7 +4303,6 @@ internal class ConversionClassifier {
             .Length == 0 &&
             userDisposeAsync.Accessibility == Accessibility
             .Public {
-            let receiver = BoundVariableExpression(nil, variable)
             let call = BoundUserInstanceCallExpression(
                 nil,
                 receiver,
@@ -4282,7 +4315,7 @@ internal class ConversionClassifier {
         // CLR-type path: walk self + transitive interfaces for DisposeAsync.
         // Issue #2148: fall back to the nearest imported base's ClrType for a
         // same-compilation user class deriving from an imported IAsyncDisposable.
-        let clrType Type? = variableType.ClrType ?? GetNearestImportedBaseClrType(variableType)
+        let clrType Type? = resourceType.ClrType ?? GetNearestImportedBaseClrType(resourceType)
         if clrType == nil {
             Diagnostics.ReportTypeNotAsyncDisposable(location, variableType)
             return nil
@@ -4296,10 +4329,9 @@ internal class ConversionClassifier {
             Diagnostics.ReportTypeNotAsyncDisposable(location, variableType)
             return nil
         }
-        let receiver2 = BoundVariableExpression(nil, variable)
         let clrCall = BoundImportedInstanceCallExpression(
             nil,
-            receiver2,
+            receiver,
             disposeAsyncMethod,
             valueTaskType,
             ImmutableArray[BoundExpression].Empty

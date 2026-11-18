@@ -8,13 +8,12 @@ import System
 import System.Reflection.Metadata
 import System.Runtime.InteropServices
 
-/// The resolved per-parameter `@MarshalAs(UnmanagedType.…)` override
-/// attached to a P/Invoke (cref:ParameterSymbol) (ADR-0096 /
-/// issue #762). Carries enough state to (a) build the CLR
+/// The resolved `@MarshalAs(UnmanagedType.…)` override for a P/Invoke parameter or return (ADR-0096, ADR-0226).
+/// Carries enough state to (a) build the CLR
 /// `FieldMarshal` blob per ECMA-335 II.23.4 and (b) preserve the
 /// original syntactic intent for tooling.
 /// @remarks One instance is attached by (cref:Binding.PInvokeBinder) when
-/// the parameter carries a well-formed `@MarshalAs` annotation;
+/// the signature position carries a well-formed `@MarshalAs` annotation;
 /// the emitter consumes it to set
 /// (cref:System.Reflection.ParameterAttributes.HasFieldMarshal)
 /// and to add a row to the `FieldMarshal` table via

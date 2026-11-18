@@ -329,7 +329,13 @@ internal shared class PartialMethodMerger {
                 // Narrowed to the well-formed-but-unimplemented shape — a group
                 // with TWO declaring parts is a part-count problem (GS0610), and
                 // reporting "no implementation" twice would hide that.
+                // ADR-0225: with nothing after the cut, a later part can implement the method.
+                let pushed = diagnostics.PushPremiseIf(
+                    PrefixBindingContext.Current?.Remainder == PrefixRemainder.Nothing,
+                    PrefixPremise.RestOfType
+                )
                 diagnostics.ReportPartialMethodHasNoImplementation(declaringParts[0].Identifier.Location, name)
+                diagnostics.PopPremiseIf(pushed)
                 continue
             }
             for part in group {

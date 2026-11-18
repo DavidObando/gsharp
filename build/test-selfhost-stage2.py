@@ -18,6 +18,7 @@ import struct
 import subprocess
 import sys
 import unittest
+import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
 
@@ -1032,6 +1033,32 @@ class ControllerBoundaryTests(unittest.TestCase):
         result = run_driver("--validate-project", tree, project)
         self.assertEqual(2, result.returncode)
         self.assertIn("unmodeled project target definition", result.stderr)
+
+    def test_repository_sdk_project_definition_is_accepted(self) -> None:
+        project = REPO / "src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj"
+        result = run_driver("--validate-project", REPO, project)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_repository_sdk_pack_target_with_wrong_payload_is_rejected(self) -> None:
+        tree = self.tree()
+        relative = "src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj"
+        project = tree / relative
+        project.parent.mkdir(parents=True)
+        for target, output_path in (
+            ("PackGsharpExtensions", "PropertyGroup/_GsharpExtensionsOutDir"),
+            ("_GsharpPackPublishedSdkPayloads",
+             "ItemGroup/_GsharpSdkPackagePayload/GsharpSdkPackSource[@Condition]"),
+        ):
+            with self.subTest(target=target):
+                shutil.copy2(REPO / relative, project)
+                document = ET.parse(project)
+                output = document.find(f"./Target[@Name='{target}']/{output_path}")
+                self.assertIsNotNone(output)
+                output.text = "$(BaseOutputPath)/Compiler/"
+                document.write(project, encoding="utf-8")
+                result = run_driver("--validate-project", tree, project)
+                self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+                self.assertIn(f"unmodeled project target definition '{target}'", result.stderr)
 
     def test_build_project_references_local_override_is_rejected(self) -> None:
         tree = self.tree()

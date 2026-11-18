@@ -1048,13 +1048,13 @@ internal partial class ExpressionBinder {
                 {
                     // ADR-0174 D12/D13 / GS0566: the Go-style built-ins are retired
                     // in favour of the members every receiver already has. A
-                    // user-defined function of the same name is an ordinary call
+                    // user-defined function or variable of the same name is an ordinary call
                     // (the ADR keeps these names free for users), so only the bare,
                     // otherwise-undefined spelling reports. The arguments are still
                     // bound so their own diagnostics surface, and the first
                     // argument's type picks the replacement the message names for
                     // THIS site.
-                    if !$scope.TryLookupFunctions(name).IsEmpty {
+                    if $scope.TryLookupSymbol(name) is VariableSymbol || !$scope.TryLookupFunctions(name).IsEmpty {
                         return false
                     }
                     let arguments = ImmutableArray.CreateBuilder[BoundExpression](syntax.Arguments.Count)
@@ -1203,7 +1203,7 @@ internal partial class ExpressionBinder {
         // conversion, never construction. Resolve imported generic targets
         // here because ordinary name lookup does not materialize their closed
         // CLR type.
-        if syntax.NullableQuestionToken != nil && syntax.Arguments.Count == 1 {
+        if syntax.NullableQuestionToken is {} nullableTargetQuestion && syntax.Arguments.Count == 1 {
             var checkedTarget = if openGenericDefinition != nil && !symbolicTypeArgs.IsDefaultOrEmpty {
                 cast[TypeSymbol](
                     ImportedTypeSymbol.GetConstructed(resolvedClrType, openGenericDefinition, symbolicTypeArgs)
@@ -1220,7 +1220,7 @@ internal partial class ExpressionBinder {
             }
             result = conversions.BindConversion(
                 syntax.Arguments[0],
-                NullableTypeSymbol.Get(checkedTarget),
+                binderCtx.BindSourceNullable(checkedTarget, nullableTargetQuestion.Location),
                 allowExplicit: true
             )
             return true
@@ -1434,8 +1434,8 @@ internal partial class ExpressionBinder {
             .Count == 1 &&
             boundArguments.Length == 1 &&
             conversionTarget != nil {
-            if syntax.NullableQuestionToken != nil {
-                conversionTarget = NullableTypeSymbol.Get(conversionTarget)
+            if syntax.NullableQuestionToken is {} nullableTargetQuestion {
+                conversionTarget = binderCtx.BindSourceNullable(conversionTarget, nullableTargetQuestion.Location)
             }
             let argument = boundArguments[0]
             // Issue #3684 (family F8): the same fallback must cover the

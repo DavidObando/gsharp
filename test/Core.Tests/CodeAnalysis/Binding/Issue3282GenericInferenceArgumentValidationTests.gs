@@ -26,7 +26,12 @@ open class Issue3282GenericInferenceArgumentValidationTests {
         expectedId string,
         expectedSpan string
     ) {
-        AssertDiagnostic(genericSource, expectedId, expectedSpan)
+        if genericSource.Contains("later T?", StringComparison.Ordinal) {
+            SourceNullableKindAssertions.Reject(genericSource, "T", 1, expectedId)
+            AssertDiagnostic(genericSource.Replace("Show[T]", "Show[T struct]"), expectedId, expectedSpan)
+        } else {
+            AssertDiagnostic(genericSource, expectedId, expectedSpan)
+        }
         AssertDiagnostic(nonGenericSource, expectedId, expectedSpan)
     }
 
