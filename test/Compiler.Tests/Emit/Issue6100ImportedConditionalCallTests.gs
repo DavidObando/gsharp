@@ -13,6 +13,7 @@ import System.IO
 import System.Linq
 import System.Reflection
 import System.Text
+import System.Threading.Tasks
 import Xunit
 
 class Issue6100ImportedConditionalCallTests {
@@ -26,6 +27,105 @@ Probe.SharedKeep(7)
 Console.WriteLine(Recorder.Trace)`, "ConditionalDriver6100", executable: true, "/r:" + library)
         Assert.Equal(Encoding.UTF8.GetBytes("\n"), fixture.RunBytes(program))
         IlVerifier.Verify(program, []string{library})
+    }
+
+    @Theory
+    @InlineData("Probe.SharedKeep(channel)", false)
+    @InlineData("Probe().Keep(channel)", false)
+    @InlineData("Derived().Send(channel)", false)
+    @InlineData("Probe.SharedKeep(channel)", true)
+    func FrozenGSharpSuspendingCalls_AreElidedBeforeCompletion(call string, asyncCaller bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        // G# owns the suspending ABI; freeze its producer before varying consumer symbols.
+        let library = fixture.Compile(`package ConditionalSuspension6100
+import System.Diagnostics
+open class Probe {
+    @Conditional("ACTIVE_6100")
+    suspend func Keep(channel chan[int32]) { channel <- 7 }
+    shared {
+        @Conditional("ACTIVE_6100")
+        suspend func SharedKeep(channel chan[int32]) { channel <- 7 }
+    }
+}`, "ConditionalSuspensionLibrary6100", executable: false)
+        let frozenBytes = File.ReadAllBytes(library)
+        let referencePaths = ReferenceResolver.ResolveDriverReferencePaths([]string{library})
+        let runtimeDirectory = Path.GetDirectoryName(
+            referencePaths.Single((path string) -> Path.GetFileName(path) == "Gsharp.Runtime.Channels.dll")
+        )
+        var source = `import ConditionalSuspension6100
+class Derived : Probe {
+    func Send(channel chan[int32]) { base.Keep(channel) }
+}
+shared class Consumer {
+    private var result int32 = -1
+    func Run() {
+        let channel = chan[int32](1)
+        ` + call + `
+        channel.Reader.TryRead(out var value)
+        result = value
+    }
+    func ReadResult() int32 -> result
+}
+Consumer.Run()`
+        if asyncCaller {
+            source = source.Replace("func Run()", "async func Run()").Replace(
+                "Consumer.Run()",
+                "Consumer.Run().GetAwaiter().GetResult()"
+            )
+        }
+        for enabled in[]bool{false, true} {
+            using let references = ReferenceResolver.WithReferences(referencePaths)
+            let compilation = Compilation(references, SyntaxTree.Parse(SourceText.From(source))){
+                PreprocessorSymbols = if enabled {
+                    ImmutableHashSet.Create("ACTIVE_6100")
+                } else {
+                    ImmutableHashSet[string].Empty
+                }
+            }
+            using let image = MemoryStream()
+            let result = compilation.Emit(image)
+            Assert.True(result.Success, string.Join("\n", result.Diagnostics))
+            let assemblies = EmittedFixture.LoadTogether(runtimeDirectory, frozenBytes, image.ToArray())
+            let consumer = assemblies[1].GetTypes().Single((t Type) -> t.Name == "Consumer")
+            let entry = assemblies[1].EntryPoint!!
+            entry.Invoke(
+                nil,
+                if entry.GetParameters().Length == 0 {
+                    nil
+                } else {
+                    []object{Array.Empty[string]()}
+                }
+            )
+            Assert.Equal(
+                if enabled {
+                    7
+                } else {
+                    0
+                },
+                cast[int32](consumer.GetMethod("ReadResult")!!.Invoke(nil, nil))
+            )
+            Assert.Equal(
+                if asyncCaller {
+                    typeof(Task)
+                } else if enabled {
+                    typeof(ValueTask)
+                } else {
+                    typeof(void)
+                },
+                consumer.GetMethod("Run")!!.ReturnType
+            )
+            let method = assemblies[0].GetType("ConditionalSuspension6100.Probe")!!.GetMethod("SharedKeep")!!
+            Assert.Equal(typeof(ValueTask), method.ReturnType)
+            Assert.Contains(
+                method.GetCustomAttributesData(),
+                (a CustomAttributeData) -> a.AttributeType == typeof(ConditionalAttribute)
+            )
+            Assert.Contains(
+                method.GetCustomAttributesData(),
+                (a CustomAttributeData) -> a.AttributeType.FullName == "Gsharp.Concurrency.SuspendingAttribute"
+            )
+            Assert.Equal(frozenBytes, File.ReadAllBytes(library))
+        }
     }
 
     @Fact

@@ -69,6 +69,13 @@ abstract class BoundCallOperationExpression : BoundExpression {
         set;
     }
 
+    /// Gets the logical void result of an elided call, independent of its suspending ABI.
+    internal func GetConditionalCallType(resultType TypeSymbol) TypeSymbol -> if IsElidedConditionalCall {
+        TypeSymbol.Void
+    } else {
+        resultType
+    }
+
     /// Gets the arguments, in source order.
     abstract prop Arguments ImmutableArray[BoundExpression] {
         get;

@@ -36,11 +36,15 @@ Console.WriteLine(Demo.Run())`, "ConditionalDriver6033", executable: true)
     }
 
     @Theory
-    @InlineData("Keep(channel)")
-    @InlineData("Probe().Keep(channel)")
-    @InlineData("Derived().Send(channel)")
-    func ElidedSuspendingCalls_DoNotWrapCompletionsOrColorCallers(call string) {
-        let source = `import System.Diagnostics
+    @InlineData("Keep(channel)", "", false)
+    @InlineData("Probe().Keep(channel)", "", false)
+    @InlineData("Derived().Send(channel)", "", false)
+    @InlineData("Keep(channel)", "suspend ", false)
+    @InlineData("Probe().Keep(channel)", "suspend ", false)
+    @InlineData("Derived().Send(channel)", "suspend ", false)
+    @InlineData("Keep(channel)", "suspend ", true)
+    func ElidedSuspendingCalls_DoNotWrapCompletionsOrColorCallers(call string, modifier string, asyncCaller bool) {
+        var source = `import System.Diagnostics
 open class Probe {
     @Conditional("ACTIVE_6033")
     func Keep(channel chan[int32]) { channel <- 7 }
@@ -61,6 +65,13 @@ shared class Consumer {
     func ReadResult() int32 -> result
 }
 Consumer.Run()`
+        source = source.Replace("func Keep(", modifier + "func Keep(")
+        if asyncCaller {
+            source = source.Replace("func Run()", "async func Run()").Replace(
+                "Consumer.Run()",
+                "Consumer.Run().GetAwaiter().GetResult()"
+            )
+        }
         for enabled in[]bool{false, true} {
             let compilation = Compilation(SyntaxTree.Parse(SourceText.From(source))){
                 PreprocessorSymbols = if enabled {
@@ -75,7 +86,9 @@ Consumer.Run()`
             let assembly = EmittedFixture.Load(image.ToArray())
             let consumer = assembly.GetTypes().Single((t Type) -> t.Name == "Consumer")
             Assert.Equal(
-                if enabled {
+                if asyncCaller {
+                    typeof(Task)
+                } else if enabled {
                     typeof(ValueTask)
                 } else {
                     typeof(void)

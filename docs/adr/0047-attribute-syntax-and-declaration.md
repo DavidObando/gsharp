@@ -164,6 +164,7 @@ Overrides inherit conditional symbols from source and imported base methods.
 Imported inheritance follows virtual slots, not unrelated hidden methods.
 An elided call evaluates neither its receiver nor its arguments, including through `?.`.
 It establishes no definite-assignment facts or suspension edges, and suspension lowering emits no completion wrapper.
+Elision precedes suspension completion; its call-site type stays `void` even when the emitted callee ABI returns `ValueTask`.
 Multiple conditional symbols use OR semantics.
 The existing `Compilation.PreprocessorSymbols` option supplies compilation-wide symbols.
 G# does not implement lexical `#define` or `#undef` directives.

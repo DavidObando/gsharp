@@ -70,7 +70,7 @@ class BoundCallExpression : BoundCallOperationExpression {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    override prop Type TypeSymbol -> ReturnType ?? Function.Type
+    override prop Type TypeSymbol -> GetConditionalCallType(ReturnType ?? Function.Type)
 
     /// Gets, for issue #1209, the constructed generic user type when a
     /// static (`shared`) method is dispatched on a constructed generic user
