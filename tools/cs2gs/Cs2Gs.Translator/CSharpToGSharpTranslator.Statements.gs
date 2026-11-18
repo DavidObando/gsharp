@@ -284,8 +284,10 @@ partial class CSharpToGSharpTranslator {
                             localAcceptsNil {
                             emitType = true
                         } else if this.context.GetDeclaredSymbol(declarator) is ILocalSymbol equalTypeLocal &&
-                            this
-                            .ShouldPromoteToNullableReference(equalTypeLocal) {
+                            (
+                            this.ShouldPromoteToNullableReference(equalTypeLocal) ||
+                                this.StoredValueContractRequiresType(equalTypeLocal)
+                        ) {
                             // Issue #1737: the explicit-type-equals-initializer-type
                             // shape above bypasses the type clause entirely (relying
                             // on inference), which would also silently drop the
@@ -351,6 +353,15 @@ partial class CSharpToGSharpTranslator {
                     if this.InferredLocalDeclarationIsNullable(containerLocal) {
                         type = MakeNullable(type)
                     }
+                } else if initializer != nil && this.context.GetDeclaredSymbol(
+                    declarator
+                ) is ILocalSymbol storedLocal &&
+                    this
+                    .StoredValueContractRequiresType(storedLocal) {
+                    type = this.PromoteIfUsedAsNullable(
+                        this.MapInferredLocalDeclarationType(storedLocal, declaration!!.Type.GetLocation()),
+                        storedLocal
+                    )
                 } else if initializer != nil && this.context.GetDeclaredSymbol(
                     declarator
                 ) is ILocalSymbol inferredLocal &&
@@ -524,6 +535,9 @@ partial class CSharpToGSharpTranslator {
                 }
                 // Issue #4356: record the emitted G# nullability of this local
                 // (analyzer mode), for every later read of it.
+                if this.context.GetDeclaredSymbol(declarator) is ILocalSymbol storedLocal {
+                    type = this.PromoteStoredValueContract(type, storedLocal)
+                }
                 this.RecordEmittedLocalNullability(
                     this.context.GetDeclaredSymbol(declarator) as ILocalSymbol,
                     type,
@@ -587,7 +601,8 @@ partial class CSharpToGSharpTranslator {
         /// unlike C#'s erased `!`, G#'s `!!` is a checked assertion that
         /// THROWS on nil.
         private func InferredLocalDeclarationIsNullable(local ILocalSymbol) bool {
-            if this.ShouldPromoteToNullableReference(local) ||
+            if ObliviousNullabilityAnalyzer.ValueContractIsPromoted(this.context.Compilation, local) ||
+                this.ShouldPromoteToNullableReference(local) ||
                 (
                 IsAnnotatedNullableReference(local.Type) && this.IsUsedAsNullable(
                     local,
@@ -7969,7 +7984,7 @@ partial class CSharpToGSharpTranslator {
         // Expression nullability is absent when warnings are disabled, even
         // when the declared indexer or array element explicitly permits null.
         private func GetAssignmentTargetType(left ExpressionSyntax, target ISymbol?) ITypeSymbol? {
-            return switch target {
+            let type = switch target {
                 case local is ILocalSymbol: local.Type
                 case parameter is IParameterSymbol: parameter.Type
                 case field is IFieldSymbol: field.Type
@@ -7980,6 +7995,16 @@ partial class CSharpToGSharpTranslator {
                     .GetTypeInfo(element.Expression)
                     .Type is IArrayTypeSymbol array: array.ElementType
                 default: this.context.GetTypeInfo(left).Type
+            }
+            return if type?.IsReferenceType == true && ObliviousNullabilityAnalyzer.IsTupleElementTainted(
+                this.context.Compilation,
+                left,
+                this.context.SemanticModel,
+                this.context.SiblingCompilations
+            ) {
+                type.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
+            } else {
+                type
             }
         }
 

@@ -255,8 +255,10 @@ internal shared class LiteralConstructionRuntimeParity {
         librarySource string? = nil,
         transform((string) -> string)? = nil,
         verifyIL bool = false,
+        expectedOutput string? = nil,
         verifyAssembly Action[string]? = nil,
-        nullableContextOptions NullableContextOptions = NullableContextOptions.Enable
+        nullableContextOptions NullableContextOptions = NullableContextOptions.Enable,
+        emittedSource string? = nil
     ) {
         let tree = CSharpSyntaxTree.ParseText(source, CSharpParseOptions(LanguageVersion.Latest), path: "Probe.cs")
         let library = if librarySource != nil {
@@ -287,7 +289,7 @@ internal shared class LiteralConstructionRuntimeParity {
         )
         let model = compilation.GetSemanticModel(tree)
         let context = TranslationContext(compilation, model, "Probe.cs")
-        var printed = GSharpPrinter.Print(
+        var printed = emittedSource ?? GSharpPrinter.Print(
             CSharpToGSharpTranslator().TranslateDocument(LoadedDocument("Probe.cs", tree, model), context)
         )
         if transform != nil {
@@ -295,7 +297,6 @@ internal shared class LiteralConstructionRuntimeParity {
             Assert.NotEqual(printed, transformed)
             printed = transformed
         }
-        verifyTranslation?.Invoke(printed)
         let directory = Path.Combine(
             AppContext.BaseDirectory,
             "literal-construction-parity",
@@ -321,6 +322,9 @@ internal shared class LiteralConstructionRuntimeParity {
             )
             let expected = RunDotnet([]string{nativePath})
             Assert.NotEmpty(expected)
+            if expectedOutput != nil {
+                Assert.Equal(Encoding.UTF8.GetBytes(expectedOutput), expected)
+            }
             let gsPath = Path.Combine(directory, "Translated.gs")
             let translatedPath = Path.Combine(directory, "Translated.dll")
             File.WriteAllText(gsPath, printed)
@@ -362,13 +366,14 @@ internal shared class LiteralConstructionRuntimeParity {
                 Assert.True(verified.Status == IlVerifyStatus.Passed, verified.Output)
                 Assert.Empty(verified.Errors)
             }
-            Assert.Equal(expected, RunDotnet([]string{translatedPath}))
+            Assert.Equal(expected, RunDotnet([]string{translatedPath}, printed))
+            verifyTranslation?.Invoke(printed)
         } finally {
             Directory.Delete(directory, recursive: true)
         }
     }
 
-    private func RunDotnet(arguments[]string, printed string = "") string {
+    internal func RunDotnet(arguments[]string, printed string = "")[]uint8 {
         let start = ProcessStartInfo("dotnet"){
             UseShellExecute = false,
             RedirectStandardOutput = true,
@@ -378,20 +383,25 @@ internal shared class LiteralConstructionRuntimeParity {
             start.ArgumentList.Add(argument)
         }
         using let process = Process.Start(start) ?? throw InvalidOperationException("Could not start dotnet.")
-        let stdout = process.StandardOutput.ReadToEndAsync()
+        using let stdout = MemoryStream()
+        let copyStdout = process.StandardOutput.BaseStream.CopyToAsync(stdout)
         let stderr = process.StandardError.ReadToEndAsync()
         if !process.WaitForExit(120000) {
             process.Kill(entireProcessTree: true)
             process.WaitForExit()
             Assert.Fail("dotnet process timed out.")
         }
-        let output = stdout.GetAwaiter().GetResult()
+        copyStdout.GetAwaiter().GetResult()
+        let output = stdout.ToArray()
         let errors = stderr.GetAwaiter().GetResult()
-        Assert.True(process.ExitCode == 0, "dotnet failed:\n" + output + errors + "\n" + printed)
+        Assert.True(
+            process.ExitCode == 0,
+            "dotnet failed:\n" + Encoding.UTF8.GetString(output) + errors + "\n" + printed
+        )
         return output
     }
 
-    private func FindCompiler() string {
+    internal func FindCompiler() string {
         var directory DirectoryInfo? = DirectoryInfo(AppContext.BaseDirectory)
         while directory != nil {
             let candidate = Path.Combine(directory.FullName, "Compiler", "gsc.dll")
