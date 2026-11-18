@@ -974,6 +974,19 @@ internal class LambdaBinder {
         // combination that path does not support). Re-evaluate the
         // exclusion now that every member's final capture set is known.
         for literal in literals {
+            // Ordinary-literal promotion must use the same lexical-access checks as predeclared functions.
+            if !literal.Function.IsGeneric && literal.Function.LocalDeclaration is {} declaration {
+                FindEnclosingTypeParameterReference(
+                    literal.Function,
+                    literal.Body,
+                    ImmutableArray[TypeParameterSymbol].Empty,
+                    out var requiresLexicalOwner
+                )
+                literal.RequiresLexicalOwner |= requiresLexicalOwner
+                if requiresLexicalOwner {
+                    literal.EnclosingTypeParameterOffenderLocation = declaration.Identifier.Location
+                }
+            }
             if literal.EnclosingTypeParameterOffender is {} offender &&
                 !literal.EnclosingTypeParameterDiagnosticReported &&
                 literal

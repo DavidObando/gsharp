@@ -321,6 +321,38 @@ Box[string]().Run(4) + s.Run(3) + Box[int32]().EchoViaDelegate(21)`)
         Assert.Equal(42, result.Value)
     }
 
+    @Fact
+    func PromotedBackwardHelper_PreservesLexicalOwnerRestrictions() {
+        let source = `class Holder[Outer] {
+    shared {
+        private func Secret() int32 { return 42 }
+        func Run() int32 {
+            let helper = func() int32 { return Holder[int32].Secret() }
+            let next = func() int32 { return helper() }
+            return next()
+        }
+    }
+}
+Holder[string].Run()`
+        let invalid = EmittedOracle.Evaluate(
+            []string{source.Replace("Holder[string].Run()", "")},
+            EmittedOracleOptions{IsLibrary: true}
+        )
+        Assert.Contains(invalid.Diagnostics, (d Diagnostic) -> d.Id == "GS0586")
+        Assert.DoesNotContain(invalid.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+        let nonGeneric = EmittedOracle.Evaluate(
+            source
+                .Replace("Holder[Outer]", "Holder")
+                .Replace("Holder[int32]", "Holder")
+                .Replace("Holder[string]", "Holder")
+        )
+        Assert.Empty(nonGeneric.Diagnostics.Where((d Diagnostic) -> d.IsError))
+        Assert.Equal(42, nonGeneric.Value)
+        let accessible = EmittedOracle.Evaluate(source.Replace("private func Secret", "public func Secret"))
+        Assert.Empty(accessible.Diagnostics.Where((d Diagnostic) -> d.IsError))
+        Assert.Equal(42, accessible.Value)
+    }
+
     @Theory
     @InlineData("let callback () -> int32 = Holder[int32].Secret\nreturn callback()", "GS0586")
     @InlineData("let nested = func() int32 { return 42 }\nreturn nested()", "GS0586")

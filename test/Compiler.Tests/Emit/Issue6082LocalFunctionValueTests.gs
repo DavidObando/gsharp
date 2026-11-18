@@ -261,6 +261,24 @@ class B {
         let b = alias(0)
         return "$a:$b:$calls:${Object.ReferenceEquals(helper, alias)}"
 `, "2:3:3:True", true}
+            yield []object{"async-recursive-capture-free-helper", `import System.Threading.Tasks`, `
+        let helper = async func(n int32) int32 {
+            if n == 0 { return 42 }
+            return await helper(n - 1)
+        }
+        let next = async func(n int32) int32 { return await helper(n) }
+        let callback Func[int32, Task[int32]] = next
+        return "${helper(3).GetAwaiter().GetResult()}:${callback(2).GetAwaiter().GetResult()}"
+`, "42:42", true}
+            yield []object{"recursion-through-nested-generic-local", "", `
+        let helper = func(n int32) int32 {
+            if n == 0 { return 1 }
+            let recurse[T] = func(value T, depth int32) int32 { return helper(depth) }
+            return recurse(n, n - 1) + 1
+        }
+        let next = func(n int32) int32 { return helper(n) }
+        return "${next(41)}"
+`, "42", true}
         }
     }
 }

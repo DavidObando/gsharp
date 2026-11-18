@@ -559,7 +559,7 @@ internal partial class StatementBinder {
             if node.Target is BoundVariableExpression target && object.ReferenceEquals(target.Variable, variable) {
                 replacements++
                 let arguments = node.Arguments.Select((a BoundExpression) -> RewriteExpression(a)).ToImmutableArray()
-                return BoundCallExpression(node.Syntax, function, arguments)
+                return BoundCallExpression(node.Syntax, function, arguments, node.Type)
             }
             return base.RewriteIndirectCallExpression(node)
         }
@@ -570,6 +570,15 @@ internal partial class StatementBinder {
                 return BoundMethodGroupExpression(node.Syntax, function, functionType)
             }
             return node
+        }
+
+        protected override func RewriteLocalFunctionDeclaration(node BoundLocalFunctionDeclaration) BoundStatement {
+            let literal = RewriteLiteral(node.Literal)
+            return if object.ReferenceEquals(literal, node.Literal) {
+                node
+            } else {
+                BoundLocalFunctionDeclaration(node.Syntax, literal)
+            }
         }
 
         protected override func RewriteFunctionLiteralExpression(node BoundFunctionLiteralExpression) BoundExpression {
