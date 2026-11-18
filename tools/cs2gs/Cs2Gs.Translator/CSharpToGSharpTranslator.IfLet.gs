@@ -81,7 +81,7 @@ partial class CSharpToGSharpTranslator {
                 asTarget = this.MapTypeSyntax(typeSyntax)
                 if targetSymbol.IsValueType {
                     asTarget = MakeNullable(asTarget)
-                } else if !targetSymbol.IsReferenceType {
+                } else if !CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(targetSymbol) {
                     return false
                 }
             }
@@ -246,7 +246,7 @@ partial class CSharpToGSharpTranslator {
                 asTarget = this.MapTypeSyntax(typeSyntax)
                 if targetSymbol.IsValueType {
                     asTarget = MakeNullable(asTarget)
-                } else if !targetSymbol.IsReferenceType {
+                } else if !CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(targetSymbol) {
                     return false
                 }
             }
@@ -461,7 +461,7 @@ partial class CSharpToGSharpTranslator {
                     // `as` requires a nullable value-type target; `while let`
                     // then strips that nullable layer back to the C# binder's T.
                     asTarget = MakeNullable(asTarget)
-                } else if !targetSymbol.IsReferenceType {
+                } else if !CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(targetSymbol) {
                     // An unconstrained type parameter cannot be the target of
                     // G#'s testing conversion.
                     return false
@@ -557,7 +557,7 @@ partial class CSharpToGSharpTranslator {
                 asTarget = this.MapTypeSyntax(typeSyntax)
                 if targetSymbol.IsValueType {
                     asTarget = MakeNullable(asTarget)
-                } else if !targetSymbol.IsReferenceType {
+                } else if !CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(targetSymbol) {
                     return false
                 }
             }

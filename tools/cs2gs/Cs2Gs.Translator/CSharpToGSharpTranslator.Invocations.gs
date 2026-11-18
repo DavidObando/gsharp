@@ -722,7 +722,9 @@ partial class CSharpToGSharpTranslator {
                 this.context,
                 conditionalAccess.GetLocation()
             )
-            if !nullableType!!.IsNullable {
+            if !nullableType!!.IsNullable && CSharpTypeMapper.CanAnnotateTypeParameterNullableInGSharp(
+                conditionalType
+            ) {
                 nullableType = MakeNullable(nullableType)
             }
             result = ParenthesizedExpression(IfExpression(guard_, call, DefaultValueExpression(nullableType)))
@@ -2172,6 +2174,23 @@ partial class CSharpToGSharpTranslator {
                 !isXunitNullAssertion &&
                 targetParameter is {} nullableTargetParam &&
                 targetType != nil {
+                if this.TryGetEmittedNonNullGenericSlotType(
+                    nullableTargetParam,
+                    argument.Expression.GetLocation(),
+                    out var nonNullGenericSlotType
+                ) {
+                    if IsNullOrSuppressedNull(argument.Expression) {
+                        if translated is not DefaultValueExpression {
+                            translated = DefaultValueExpression(nonNullGenericSlotType)
+                        }
+                    } else if !this.SinkInfersTypeFromValue(nullableTargetParam, argument.Expression) &&
+                        !this
+                        .GSharpExpressionIsStaticallyNonNull(argument.Expression, translated) {
+                        translated = ParenthesizedExpression(
+                            BinaryExpression(translated, "??", DefaultValueExpression(nonNullGenericSlotType))
+                        )
+                    }
+                }
                 translated = this.BridgeWidenedImplicitArrayConsumer(
                     argument.Expression,
                     translated,
@@ -4577,18 +4596,20 @@ partial class CSharpToGSharpTranslator {
                     ){IsNullable = namedDelegateRef.IsNullable}
                 }
             }
+            let effectiveCastTargetType GTypeReference? = if cast.Type is NullableTypeSyntax &&
+                !targetType!!.IsNullable &&
+                CSharpTypeMapper.CanAnnotateTypeParameterNullableInGSharp(targetSymbol) {
+                MakeNullable(targetType)
+            } else {
+                targetType
+            }
             if StripParentheses(cast.Expression).IsKind(
                 Microsoft.CodeAnalysis.CSharp.SyntaxKind.NullLiteralExpression
             ) &&
                 (targetSymbol != nil && targetSymbol.IsReferenceType == true || targetType!!.IsNullable) {
                 // Typed null keeps overload selection without an unparseable
                 // conversion such as `[]char(nil)` or `Guid?(nil)`.
-                let defaultType GTypeReference? = if cast.Type is NullableTypeSyntax && !targetType!!.IsNullable {
-                    MakeNullable(targetType)
-                } else {
-                    targetType
-                }
-                return DefaultValueExpression(defaultType)
+                return DefaultValueExpression(effectiveCastTargetType)
             }
             var operand GExpression? = this.TranslateExpression(cast.Expression)
             let conversion = if sourceSymbol == nil || targetSymbol == nil {
@@ -4610,13 +4631,8 @@ partial class CSharpToGSharpTranslator {
                 operand = EnsureNonNullAssertion(operand)
             }
             if conversion.IsBoxing {
-                let boxingTargetType GTypeReference? = if cast.Type is NullableTypeSyntax && !targetType!!.IsNullable {
-                    MakeNullable(targetType)
-                } else {
-                    targetType
-                }
                 let useUnambiguousCast = targetSymbol?.SpecialType != SpecialType.System_Object
-                return ConversionExpression(boxingTargetType, operand, useUnambiguousCast)
+                return ConversionExpression(effectiveCastTargetType, operand, useUnambiguousCast)
             }
             // Preserve explicit class/interface-to-object casts when they
             // supply a surrounding expression's common type, such as
@@ -4627,12 +4643,7 @@ partial class CSharpToGSharpTranslator {
             if targetSymbol?.SpecialType == SpecialType.System_Object &&
                 sourceSymbol != nil &&
                 sourceSymbol.IsReferenceType == true {
-                let objectTargetType GTypeReference? = if cast.Type is NullableTypeSyntax && !targetType!!.IsNullable {
-                    MakeNullable(targetType)
-                } else {
-                    targetType
-                }
-                return ConversionExpression(objectTargetType, operand)
+                return ConversionExpression(effectiveCastTargetType, operand)
             }
             // Issue #3843: a C# reference cast over a NULLABLE operand stays
             // `cast[T](expr)`. It used to lower to the null-preserving safe
@@ -4647,11 +4658,7 @@ partial class CSharpToGSharpTranslator {
             // wrong-type cast from a throw into a nil. `cast[T]` matches C#
             // `(T)x` exactly: nil in → nil out, wrong type → InvalidCastException,
             // static result non-nullable.
-            let conversionTargetType GTypeReference? = if cast.Type is NullableTypeSyntax && !targetType!!.IsNullable {
-                MakeNullable(targetType)
-            } else {
-                targetType
-            }
+            let conversionTargetType GTypeReference? = effectiveCastTargetType
             // Issue #3907: a TUPLE target has no `T(expr)` spelling. That form
             // renders as `(TaskArm, SelectWaiter)(state)`, which G# reads as a
             // call on a parenthesized expression rather than a conversion —

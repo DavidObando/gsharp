@@ -188,12 +188,8 @@ namespace Demo
             Arm<List<int>>(new List<int> { 1 }) + " " + Arm<List<int>>(null);
     }
 }`
-        let project = CSharpProjectLoader.LoadInMemory([](string, string){("Snippet.cs", source)})
-        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
-        let document = Assert.Single(project.Documents)
-        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
-        let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
-        TranslationTestValidation.AssertSourceNullableKindRejection(printed, "T")
+        let printed = AssertRuns(source, "1 0 1 0")
+        Assert.Contains("Positive[T IReadOnlyList[int32]](current T)", printed, StringComparison.Ordinal)
         AssertRuns(source.Replace("where T : IReadOnlyList<int>", "where T : class, IReadOnlyList<int>"), "1 0 1 0")
     }
 

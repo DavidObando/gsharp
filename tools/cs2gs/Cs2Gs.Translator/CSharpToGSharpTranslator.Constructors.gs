@@ -1101,7 +1101,7 @@ partial class CSharpToGSharpTranslator {
                     .CodeAnalysis
                     .NullableAnnotation
                     .Annotated
-                return if nonNullableValueType {
+                return if nonNullableValueType || type is not{IsNullable: true} {
                     cast[GExpression](DefaultValueExpression(type))
                 } else {
                     cast[GExpression](IdentifierExpression("nil"))

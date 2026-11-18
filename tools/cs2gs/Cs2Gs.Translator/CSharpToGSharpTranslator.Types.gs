@@ -840,7 +840,7 @@ partial class CSharpToGSharpTranslator {
             node Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax
         ) GTypeReference? {
             let resultType ITypeSymbol? = this.context.GetTypeInfo(node).Type
-            if !(resultType != nil && resultType.IsReferenceType == true) {
+            if !CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(resultType) {
                 return nil
             }
             let mapped GTypeReference? = this.typeMapper.Map(resultType, this.context, node.GetLocation())

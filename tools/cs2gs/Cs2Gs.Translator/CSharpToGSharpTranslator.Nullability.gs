@@ -209,8 +209,8 @@ partial class CSharpToGSharpTranslator {
             // `Box<string>.Value` is judged as `T Value`, which the producer never
             // widens unless `T` is known to be a reference type.
             let declared = PromotableDeclaredType(source)
-            if !(declared != nil && declared.IsReferenceType == true) ||
-                declared.NullableAnnotation == Microsoft
+            if !CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(declared) ||
+                declared!!.NullableAnnotation == Microsoft
                 .CodeAnalysis
                 .NullableAnnotation
                 .Annotated {
@@ -406,8 +406,10 @@ partial class CSharpToGSharpTranslator {
             // contract. Widen that slot instead of asserting each result.
             if !(type is ArrayTypeReference{ElementType: {IsNullable: false} element} array) ||
                 symbol!!.ReturnType is not IArrayTypeSymbol returnArray ||
-                returnArray.ElementType is not{IsReferenceType: true} returnElement ||
-                returnElement.NullableAnnotation != Microsoft
+                !CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(returnArray.ElementType) ||
+                returnArray
+                .ElementType
+                .NullableAnnotation != Microsoft
                 .CodeAnalysis
                 .NullableAnnotation
                 .None ||
@@ -460,7 +462,7 @@ partial class CSharpToGSharpTranslator {
         // source iterator call asks this same question, so the loop binding and
         // the iterator's rendered element cannot disagree.
         private func AwaitedReturnIsTainted(awaitedType ITypeSymbol?, symbol ISymbol?) bool {
-            if !(awaitedType != nil && awaitedType.IsReferenceType == true) ||
+            if awaitedType == nil || !CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(awaitedType) ||
                 awaitedType.NullableAnnotation == Microsoft
                 .CodeAnalysis
                 .NullableAnnotation
@@ -1516,8 +1518,8 @@ partial class CSharpToGSharpTranslator {
                 case property is IPropertySymbol: property.Type
                 default: default(ITypeSymbol?)
             }
-            if !(declaredType != nil && declaredType.IsReferenceType == true) ||
-                declaredType.NullableAnnotation == Microsoft
+            if !CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(declaredType) ||
+                declaredType!!.NullableAnnotation == Microsoft
                 .CodeAnalysis
                 .NullableAnnotation
                 .Annotated {
@@ -2407,7 +2409,7 @@ partial class CSharpToGSharpTranslator {
 
         private func ShouldPromoteToNullableReference(symbol ISymbol?, checkRefStorage bool = true) bool {
             let declared ITypeSymbol? = PromotableDeclaredType(symbol)
-            if !(declared != nil && declared.IsReferenceType == true) ||
+            if declared == nil || !CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(declared) ||
                 declared.NullableAnnotation == Microsoft
                 .CodeAnalysis
                 .NullableAnnotation
@@ -2421,7 +2423,9 @@ partial class CSharpToGSharpTranslator {
             // that is not constrained to a class (`T Value`) stays `T`, whatever
             // reference type the type argument substitutes, so a maybe-null
             // value stored into it keeps its bridge.
-            if PromotableDeclaredType(symbol?.OriginalDefinition)?.IsReferenceType != true {
+            if !CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(
+                PromotableDeclaredType(symbol?.OriginalDefinition)
+            ) {
                 return false
             }
             if checkRefStorage && this.TryGetRefStorageSlot(symbol, 0) is {} slot {
@@ -3990,7 +3994,7 @@ partial class CSharpToGSharpTranslator {
                 .CodeAnalysis
                 .NullableAnnotation
                 .Annotated &&
-                (type!!.IsReferenceType || type is ITypeParameterSymbol)
+                CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(type)
 
             private func HasExplicitTypeArguments(callee ExpressionSyntax) bool -> switch callee {
                 case _ is GenericNameSyntax: true

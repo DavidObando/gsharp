@@ -64,9 +64,9 @@ public sealed class Mp4Operation<TOutput>
             Environment.NewLine,
             Directory.GetFiles(appRunDir, "*.gs", SearchOption.AllDirectories).Select(File.ReadAllText)
         )
-        Assert.Equal(2, CountOccurrences(emitted, "Task.FromResult[TOutput?](default(TOutput?))"))
-        Assert.Contains("prop OperationTask Task[TOutput?]", emitted, StringComparison.Ordinal)
-        Assert.Contains("async func CompleteAsync() TOutput?", emitted, StringComparison.Ordinal)
+        Assert.Equal(2, CountOccurrences(emitted, "Task.FromResult[TOutput](default(TOutput))"))
+        Assert.Contains("prop OperationTask Task[TOutput]", emitted, StringComparison.Ordinal)
+        Assert.Contains("async func CompleteAsync() TOutput", emitted, StringComparison.Ordinal)
         Assert.True(
             appResult.Succeeded,
             "Expected default --via-sdk/gsc compilation to accept the Oahu Task.FromResult<TOutput?> shape. Stages: " +

@@ -475,7 +475,7 @@ partial class CSharpToGSharpTranslator {
                         this.context,
                         declaration!!.Type.GetLocation()
                     )
-                    if type == nil && tupleStorage.Type.IsReferenceType {
+                    if type == nil && CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(tupleStorage.Type) {
                         mapped = CSharpTypeMapper.WithNullable(
                             mapped,
                             this.InferredLocalDeclarationIsNullable(tupleStorage)
@@ -7188,7 +7188,7 @@ partial class CSharpToGSharpTranslator {
             // the branches into the nullable type instead of guessing the non-null
             // one. Restricted to reference-type results (a `Nullable<V>` value
             // result is handled by C#'s own lifting / numeric paths above).
-            if resultType != nil && resultType.IsReferenceType == true {
+            if CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(resultType) {
                 let nullableResult GTypeReference? = MakeNullable(
                     this.typeMapper.Map(resultType, this.context, conditional.GetLocation())
                 )

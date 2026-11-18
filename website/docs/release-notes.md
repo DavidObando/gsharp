@@ -22,6 +22,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Lower open generic `T?` and `default(T?)` in `cs2gs` to bare `T` and `default(T)` when type-parameter constraints do not prove a reference or value kind under ADR-0224, while preserving `T?` for proven `class`/`class?`/`struct`/`unmanaged`/concrete-reference bounds and preserving runtime semantics across callers, overrides, and `??=` without throwing assertions. (Fixes #6113)
+
 - Keep the SDK reference-assembly pack regression independent of installed Android workloads. Retain four inner builds and exact effective-framework path checks. (Fixes #6032)
 
 - Preserve symbolic receiver types in imported method labels for hover, signature help, and member completion. Show source-defined arguments instead of erased `object` placeholders. Keep fixed-array lengths, tuple names, and declared return nullability. Keep declared signatures separate from call-result narrowing. (Fixes #5492)

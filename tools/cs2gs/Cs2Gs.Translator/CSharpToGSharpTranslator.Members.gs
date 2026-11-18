@@ -876,11 +876,10 @@ partial class CSharpToGSharpTranslator {
                 // context (Avalonia x:Name fields are the common case) retain
                 // C#'s ability to hold/test null when translated as a standalone
                 // generated partial part.
-                if this.widenObliviousReferenceFields &&
-                    symbol
-                    ?.Type
-                    ?.IsReferenceType == true &&
-                    symbol
+                if this.widenObliviousReferenceFields && CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(
+                    symbol?.Type
+                ) &&
+                    symbol!!
                     .Type
                     .NullableAnnotation == Microsoft
                     .CodeAnalysis
