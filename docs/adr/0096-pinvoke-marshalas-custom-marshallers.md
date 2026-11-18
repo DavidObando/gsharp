@@ -28,6 +28,9 @@ Issue #762 (parent #706) closes the gap. The implementation adds:
 
 ## Decision
 
+ADR-0226 extends these validation and descriptor rules to P/Invoke return positions.
+It preserves the restrictions on `LibraryImport` string overrides and delegate return marshalling.
+
 ### 1. Syntax — `@MarshalAs(UnmanagedType.…)` on P/Invoke parameters
 
 The parser already accepts arbitrary `@Attribute(…)` annotations on parameters per ADR-0047 §3. No grammar change is required. The discriminator is purely the attribute type:

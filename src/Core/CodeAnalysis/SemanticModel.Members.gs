@@ -1345,7 +1345,7 @@ partial class SemanticModel {
                     method,
                     declaration: nil,
                     returnTypeOverride: MemberLookup.GetClrMethodReturnTypeSymbol(owner, method)
-                )
+                ){.SignatureReceiverType: owner}
                 function.AnchorContainingType(declaringType)
                 return function
             }

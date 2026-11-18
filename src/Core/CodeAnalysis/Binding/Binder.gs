@@ -1256,7 +1256,12 @@ partial class Binder {
                 .HasInvalidUserGoto &&
                 !ControlFlowGraph
                 .AllPathsReturn(lowered) {
+                let pushed = child.Diagnostics.PushPremiseIf(
+                    PrefixBindingContext.IsOpen(method.Declaration!!.Body),
+                    PrefixPremise.RestOfBody
+                )
                 child.Diagnostics.ReportAllPathsMustReturn(method.Declaration!!.Identifier.Location)
+                child.Diagnostics.PopPremiseIf(pushed)
             }
             AnalyzeFunctionBody(body, lowered, method, child.Diagnostics, child.binderCtx.References)
             let bodyDiagnostics = child.Diagnostics.ToImmutableArray()
@@ -4583,28 +4588,6 @@ partial class Binder {
             if elementType == nil {
                 return nil
             }
-            if !object.ReferenceEquals(syntax, binderCtx.UnconstrainedNullableSequenceElementReturn) &&
-                elementType is NullableTypeSymbol{UnderlyingType: TypeParameterSymbol typeParameter} {
-                let location = Invariant.Required(
-                    syntax.SequenceElementType,
-                    "IsSequence implies the parser set SequenceElementType",
-                    expression: "syntax.SequenceElementType"
-                )
-                    .Location
-                if $scope.IsDeferringUserGenericConstraintChecks() {
-                    $scope.GetPendingUserGenericConstraintChecks().Add(
-                        PendingUserGenericConstraintCheck(
-                            Diagnostics,
-                            ImmutableArray[TypeParameterSymbol].Empty,
-                            ImmutableArray.Create[TypeSymbol](typeParameter),
-                            location,
-                            () -> ReportUnconstrainedNullableSequenceElement(typeParameter, location)
-                        )
-                    )
-                } else {
-                    ReportUnconstrainedNullableSequenceElement(typeParameter, location)
-                }
-            }
             if syntax.IsAsyncSequence {
                 return AsyncSequenceTypeSymbol.Get(elementType)
             }
@@ -4711,12 +4694,13 @@ partial class Binder {
                     return nil
                 }
                 symbolicArgs.Add(ta)
-                // Issue #367: a by-ref-like (`ref struct`) type cannot be used as
-                // a generic type argument (e.g. `List[Span[int32]]`); the CLR
-                // forbids constructing a generic type over a by-ref-like type.
-                if TypeSymbol.IsByRefLike(ta) && !ClrTypeUtilities.GenericParameterAllowsByRefLike(clrOpenType, i) {
-                    let taLocation = topLevelTypeArguments[i].Identifier?.Location ?? identifierToken.Location
-                    Diagnostics.ReportByRefLikeEscape(taLocation, ta, "be used as a generic type argument")
+                if ReportByRefLikeGenericTypeArgument(
+                    Diagnostics,
+                    ta,
+                    topLevelTypeArguments[i].Identifier?.Location ?? identifierToken.Location,
+                    clrOpenType,
+                    i
+                ) {
                     return nil
                 }
                 // Issue #2391: this caller alone retains the established Int32
@@ -4869,11 +4853,11 @@ partial class Binder {
                     if ta == nil {
                         return nil
                     }
-                    // Issue #367: by-ref-like (`ref struct`) types are not permitted
-                    // as generic type arguments to a user-defined generic type.
-                    if TypeSymbol.IsByRefLike(ta) {
-                        let taLocation = elementTypeArguments[i].Identifier?.Location ?? identifierToken.Location
-                        Diagnostics.ReportByRefLikeEscape(taLocation, ta, "be used as a generic type argument")
+                    if ReportByRefLikeGenericTypeArgument(
+                        Diagnostics,
+                        ta,
+                        elementTypeArguments[i].Identifier?.Location ?? identifierToken.Location
+                    ) {
                         return nil
                     }
                     typeArgsBuilder.Add(ta)
@@ -5014,7 +4998,7 @@ partial class Binder {
         // `[]!string`); only the array itself, as the slot's top level, is
         // made platform by BindTypeClause.
         if syntax.IsNullable {
-            element = NullableTypeSymbol.Get(element)
+            element = binderCtx.BindSourceNullable(element, syntax.QuestionToken!!.Location)
         }
         if syntax.IsSlice {
             return SliceTypeSymbol.Get(element)
@@ -5038,19 +5022,6 @@ partial class Binder {
             return nil
         }
         return ArrayTypeSymbol.Get(element, length)
-    }
-
-    private func ReportUnconstrainedNullableSequenceElement(
-        typeParameter TypeParameterSymbol,
-        location TextLocation
-    ) bool {
-        if typeParameter.HasValueTypeConstraint ||
-            typeParameter.HasReferenceTypeConstraint ||
-            typeParameter.ClassConstraint != nil {
-            return false
-        }
-        Diagnostics.ReportUnconstrainedNullableSequenceElement(location, typeParameter.Name)
-        return true
     }
 
     private func ReportIllegalUnmanagedPointee(pointeeType TypeSymbol, location TextLocation) bool {
@@ -5148,7 +5119,7 @@ partial class Binder {
                     bound
                 }
             } else if syntax.IsNullable {
-                bound = NullableTypeSymbol.Get(bound)
+                bound = binderCtx.BindSourceNullable(bound, syntax.QuestionToken!!.Location)
             }
             // Issue #3315 / ADR-0159 addendum: the `?` after the closing `)` of a
             // parenthesized type clause marks the WHOLE inner type nullable —
@@ -5156,7 +5127,7 @@ partial class Binder {
             // already-nullable guard makes redundant spellings like `(int32?)?`
             // collapse instead of double-wrapping.
             if syntax.IsParenthesizedNullable && !(bound is NullableTypeSymbol) {
-                bound = NullableTypeSymbol.Get(bound!!)
+                bound = binderCtx.BindSourceNullable(bound!!, syntax.ParenthesizedQuestionToken!!.Location)
             }
             // ADR-0186 §9: inside an oblivious scope (`--nullability=oblivious`
             // or an enclosing `@Oblivious`), an unadorned reference type
@@ -5405,12 +5376,7 @@ partial class Binder {
             if ta == nil {
                 return nil
             }
-            if TypeSymbol.IsByRefLike(ta) {
-                Diagnostics.ReportByRefLikeEscape(
-                    taSyntax.Identifier?.Location ?? location,
-                    ta,
-                    "be used as a generic type argument"
-                )
+            if ReportByRefLikeGenericTypeArgument(Diagnostics, ta, taSyntax.Identifier?.Location ?? location) {
                 return nil
             }
             typeArgsBuilder.Add(ta)
@@ -5779,10 +5745,13 @@ partial class Binder {
                 return nil
             }
             symbolicArgs.Add(ta)
-            // Issue #367: by-ref-like types cannot serve as generic arguments.
-            if TypeSymbol.IsByRefLike(ta) && !ClrTypeUtilities.GenericParameterAllowsByRefLike(clrType, i) {
-                let taLocation = typeArguments[i].Identifier?.Location ?? identifierToken.Location
-                Diagnostics.ReportByRefLikeEscape(taLocation, ta, "be used as a generic type argument")
+            if ReportByRefLikeGenericTypeArgument(
+                Diagnostics,
+                ta,
+                typeArguments[i].Identifier?.Location ?? identifierToken.Location,
+                clrType,
+                i
+            ) {
                 return nil
             }
             let erasedArgument = if ta is EnumSymbol &&
@@ -6025,9 +5994,13 @@ partial class Binder {
                 return nil
             }
             symbolicArgs.Add(ta)
-            if TypeSymbol.IsByRefLike(ta) && !ClrTypeUtilities.GenericParameterAllowsByRefLike(nestedDef, i) {
-                let taLocation = argSyntaxes[i].Identifier?.Location ?? identifierToken.Location
-                Diagnostics.ReportByRefLikeEscape(taLocation, ta, "be used as a generic type argument")
+            if ReportByRefLikeGenericTypeArgument(
+                Diagnostics,
+                ta,
+                argSyntaxes[i].Identifier?.Location ?? identifierToken.Location,
+                nestedDef,
+                i
+            ) {
                 return nil
             }
             clrArgs[i] = ProjectGenericArgument(ta, typeof(object), &hasSymbolicArg)
@@ -7074,6 +7047,7 @@ partial class Binder {
             let parentScope = CreateRootScope(references, preprocessorSymbols)
             configureRoot?(parentScope)
             let binder = Binder(parentScope, function: nil)
+            binder.binderCtx.SourceNullableConstraintDepth++
             binder.$scope.GetStructuralAdapterRegistry().ProtocolCoverage = nativeCoverage
             binder.ImportNativeProtocols(syntaxTrees.FirstOrDefault()?.Root.Location ?? default(TextLocation))
             binder.ValidateFixedArrayImports(syntaxTrees.FirstOrDefault()?.Root.Location ?? default(TextLocation))
@@ -7665,6 +7639,7 @@ partial class Binder {
             // Issue #4453: top-level statements do not pass through
             // AnalyzeFunctionBody either; check their member accesses too.
             ProtectedReceiverDiagnostics.Report(topLevelBlock, synthesizedEntryPoint, binder.Diagnostics)
+            binder.binderCtx.CompleteSourceNullableConstraints()
             let diagnostics = binder.Diagnostics.ToImmutableArray()
             // Issue #3501 A2: synthesized ref-kind delegates (see
             // SynthesizedRefDelegateCache) join the declared named delegates so
@@ -7690,6 +7665,7 @@ partial class Binder {
                 statements.ToImmutable()
             )
             result.References = references ?? binder.$scope.References
+            result.SourceNullableAnnotationErrors = binder.binderCtx.SourceNullableAnnotationErrors
             result.PreprocessorSymbols = preprocessorSymbols ?? ImmutableHashSet[string].Empty
             result.DeclaredTypeAliases = declaredTypeAliases.ToImmutable()
             result.AliasDeclaringPackages = binder.$scope.GetAliasDeclaringPackages()
@@ -7743,6 +7719,7 @@ partial class Binder {
                     statements.ToImmutable()
                 ){
                     References = result.References,
+                    SourceNullableAnnotationErrors = result.SourceNullableAnnotationErrors,
                     PreprocessorSymbols = result.PreprocessorSymbols,
                     DeclaredTypeAliases = result.DeclaredTypeAliases,
                     AliasDeclaringPackages = result.AliasDeclaringPackages,
@@ -8596,7 +8573,13 @@ partial class Binder {
                     expression: "binder.statements.BindStatement(bodySyntax)"
                 )
             }
+            // ADR-0225: a label after the cut of an open body can still resolve a goto.
+            let labelsPushed = binder.Diagnostics.PushPremiseIf(
+                PrefixBindingContext.IsOpen(bodySyntax),
+                PrefixPremise.RestOfBody
+            )
             binder.statements.FinalizeUserLabels()
+            binder.Diagnostics.PopPremiseIf(labelsPushed)
             // ADR-0065 §2 Rule 3: a `convenience init` body must begin
             // with a `init(args)` self-delegation expression-statement.
             if convenienceConstructor != nil && convenienceConstructor.IsConvenience {
@@ -8612,8 +8595,15 @@ partial class Binder {
                 !binder
                 .statements
                 .HasInvalidUserGoto &&
-                !ControlFlowGraph.AllPathsReturn(lowered) {
+                !ControlFlowGraph
+                .AllPathsReturn(lowered) {
+                // ADR-0225: a body that is open at the cut can still end in a return.
+                let pushed = binder.Diagnostics.PushPremiseIf(
+                    PrefixBindingContext.IsOpen(bodySyntax),
+                    PrefixPremise.RestOfBody
+                )
                 binder.Diagnostics.ReportAllPathsMustReturn(allPathsReturnLocation)
+                binder.Diagnostics.PopPremiseIf(pushed)
             }
             AnalyzeFunctionBody(body, lowered, member, binder.Diagnostics, binder.binderCtx.References)
             return BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray())
@@ -11956,6 +11946,7 @@ partial class Binder {
             preserveLatestImportSyntaxTrees bool
         ) BoundScope {
             let parent = CreateRootScope(references ?? globalScope?.References, preprocessorSymbols)
+            parent.GetBindingServices().SourceNullableAnnotationErrors = globalScope.SourceNullableAnnotationErrors
             CopyPriorCellImports(globalScope, parent)
             let scope_ = BoundScope(parent)
             for package_ in globalScope.Packages {
@@ -12176,6 +12167,32 @@ partial class Binder {
             }
         }
 
+        internal func ReportByRefLikeGenericTypeArgument(
+            diagnostics DiagnosticBag,
+            argument TypeSymbol,
+            location TextLocation,
+            openDefinition Type? = nil,
+            index int32 = 0
+        ) bool {
+            if !TypeSymbol.IsByRefLike(argument) || ClrTypeUtilities.GenericParameterAllowsByRefLike(
+                openDefinition,
+                index
+            ) {
+                return false
+            }
+            let reason = "be used as a generic type argument"
+            let message = string.Format(
+                CultureInfo.CurrentCulture,
+                DiagnosticDescriptors.ByRefLikeEscape.MessageFormat,
+                argument,
+                reason
+            )
+            if !AlreadyReportedHere(diagnostics, DiagnosticDescriptors.ByRefLikeEscape.Id, message, location) {
+                diagnostics.ReportByRefLikeEscape(location, argument, reason)
+            }
+            return true
+        }
+
         /// Issue #4032: reports `GS0152` when a closed generic TYPE clause
         /// (`class MyHandler : Handler[MyOptions]`, `var h Handler[Bad]`,
         /// …) violates a constraint the imported definition declares.
@@ -12209,6 +12226,7 @@ partial class Binder {
         /// @param clrArgs The projected (possibly erased) CLR arguments.
         /// @param symbolicArgs The symbolic arguments, in the same order.
         /// @param location Where to anchor the diagnostic.
+        /// @param typeArgumentLocation The source location of each explicit type argument, when available.
         /// @returns `true` when a diagnostic was reported.
         internal func ReportUnsatisfiedGenericTypeConstraint(
             diagnostics DiagnosticBag,
@@ -12216,13 +12234,29 @@ partial class Binder {
             clrArgs[]?Type,
             symbolicArgs ImmutableArray[TypeSymbol],
             location TextLocation,
-            bindingScope BoundScope? = nil
+            bindingScope BoundScope? = nil,
+            typeArgumentLocation Func[int32, TextLocation]? = nil
         ) bool {
             if openDefinition == nil ||
                 clrArgs == nil ||
                 symbolicArgs.IsDefaultOrEmpty ||
                 symbolicArgs.Length != clrArgs.Length {
                 return false
+            }
+            // Validate symbolic arguments before erasure or an open sibling can hide a ref struct.
+            for var i = 0; i < symbolicArgs.Length; i++ {
+                if !TypeSymbol.IsByRefLike(symbolicArgs[i]) {
+                    continue
+                }
+                if ReportByRefLikeGenericTypeArgument(
+                    diagnostics,
+                    symbolicArgs[i],
+                    typeArgumentLocation?.Invoke(i) ?? location,
+                    openDefinition,
+                    i
+                ) {
+                    return true
+                }
             }
             if bindingScope is {} declaringScope && declaringScope.IsDeferringUserGenericConstraintChecks() {
                 // Headers cannot validate incomplete source constructor or interface contracts.

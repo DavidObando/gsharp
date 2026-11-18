@@ -1272,20 +1272,38 @@ public class Probe {
         let references = List[MetadataReference](
             CSharpProjectLoader.RuntimeReferences()
         ){MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location)}
-        let project = CSharpProjectLoader.LoadInMemory(
-            [](string, source string){("ManagedArraySwitchPositionalRecordAndDeconstruct.cs", source)},
-            references
-        )
-        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
-        let document = Assert.Single(project.Documents)
-        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
-        let text = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
-        Assert.Empty(context.Diagnostics)
+        let Translate = func (input string) string {
+            let project = CSharpProjectLoader.LoadInMemory(
+                [](string, source string){("ManagedArraySwitchPositionalRecordAndDeconstruct.cs", input)},
+                references
+            )
+            Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+            let document = Assert.Single(project.Documents)
+            let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+            let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+            Assert.Empty(context.Diagnostics)
+            return printed
+        }
+        let text = Translate(source)
         Assert.Contains("recordItem!!.Borrow()", text, StringComparison.Ordinal)
         Assert.Contains("boxItem!!.Borrow()", text, StringComparison.Ordinal)
         Assert.Contains("nullableItem!!.Borrow()", text, StringComparison.Ordinal)
-        let result = EmittedOracle.Evaluate(
+        let rejected = EmittedOracle.Evaluate(
             text + "\nProbe.Run()",
+            []string{typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location}
+        )
+        let error = Assert.Single(rejected.Diagnostics.Where((d GSharp.Core.CodeAnalysis.Diagnostic) -> d.IsError))
+        Assert.Equal("GS0641", error.Id)
+        Assert.Equal(text.IndexOf("T?", StringComparison.Ordinal) + 1, error.Location.Span.Start)
+        Assert.Equal(1, error.Location.Span.Length)
+        let supported = Translate(
+            source.Replace(
+                "record NullableHolder<T>(T? First, int Second);",
+                "record NullableHolder<T>(T? First, int Second) where T : class;"
+            )
+        )
+        let result = EmittedOracle.Evaluate(
+            supported + "\nProbe.Run()",
             []string{typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location}
         )
         Assert.Empty(result.Diagnostics)

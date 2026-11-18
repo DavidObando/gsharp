@@ -94,12 +94,14 @@ internal shared class ParameterMetadataEmitter {
     /// position's attributes. It has no name, and ECMA-335 II.22.33 requires it
     /// to precede the method's parameter rows, so a caller mints it before them.
     /// @param emitCtx The active emit context.
+    /// @param attributes Additional return parameter flags.
     /// @returns The return row's handle.
-    func AddReturnParameter(emitCtx EmitContext) ParameterHandle -> emitCtx.Metadata.AddParameter(
-        ParameterAttributes.None,
-        default(StringHandle),
-        sequenceNumber: 0
-    )
+    func AddReturnParameter(
+        emitCtx EmitContext,
+        attributes ParameterAttributes = ParameterAttributes.None
+    ) ParameterHandle -> emitCtx
+        .Metadata
+        .AddParameter(attributes, default(StringHandle), sequenceNumber: 0)
 
     /// Issue #4988: mints a compiler-shaped signature's `Param` rows — the
     /// sequence-0 return row when (cref:NeedsReturnParameter) asks for one,

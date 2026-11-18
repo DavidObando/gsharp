@@ -1723,6 +1723,17 @@ internal class LambdaBinder {
             !(boundBody is BoundErrorExpression) {
             returnType = placeholderReturnType
         }
+        if TypeSymbol.ContainsTypeParameter(returnType) {
+            let sourceReturns = ReturnTypeCollector()
+            sourceReturns.Visit(boundBody)
+            let inputs = sourceReturns
+                .ReturnTypes
+                .Append(boundBody.Type)
+                .Append(targetFunctionType?.ReturnType ?? TypeSymbol.Error)
+            if !binderCtx.ValidateSourceNullableResult(returnType, syntax.ArrowToken.Location, inputs) {
+                return BoundErrorExpression(syntax)
+            }
+        }
         if isAsync && isAsyncIteratorReturnType(returnType) {
             Diagnostics.ReportAsyncIteratorFunctionLiteralNotSupported(syntax.Location, returnType)
             return BoundErrorExpression(syntax)
@@ -2570,8 +2581,12 @@ internal class LambdaBinder {
         if returnType != TypeSymbol.Void &&
             returnType != TypeSymbol.Error &&
             !isIteratorReturnType(returnType) &&
-            !ControlFlowGraph.AllPathsReturn(Lowerer.Lower(body)) {
+            !ControlFlowGraph
+            .AllPathsReturn(Lowerer.Lower(body)) {
+            // ADR-0225: a body that is open at the cut can still end in a return.
+            let pushed = Diagnostics.PushPremiseIf(PrefixBindingContext.IsOpen(body.Syntax), PrefixPremise.RestOfBody)
             Diagnostics.ReportAllPathsMustReturn(location)
+            Diagnostics.PopPremiseIf(pushed)
         }
     }
 

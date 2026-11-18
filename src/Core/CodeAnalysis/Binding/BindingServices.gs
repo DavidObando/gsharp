@@ -26,6 +26,9 @@ import System.Reflection
 /// its own instance (see (cref:BoundScope.CreateIndependentBodyScope)) and never
 /// touches the coordinator's. Only one thread binds against a given root scope.
 internal class BindingServices {
+    internal var SourceNullableAnnotationErrors ImmutableHashSet[TypeParameterSymbol] =
+    ImmutableHashSet[TypeParameterSymbol].Empty
+
     /// Gets or sets the imported static `[Extension]` classes for instance-syntax
     /// extension-method dispatch (issue #294). Recomputed when any of the
     /// `CachedImportedExtension*` validation fields falls out of step.

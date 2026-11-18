@@ -3570,9 +3570,7 @@ class Conversion {
                 case nil: false
                 case _ is EnumSymbol: false
                 case s is StructSymbol: s.IsClass
-                case tp is TypeParameterSymbol: tp.HasReferenceTypeConstraint ||
-                    tp.ClassConstraint != nil ||
-                    tp.DependentBoundProvesReferenceType
+                case tp is TypeParameterSymbol: tp.ProvesNonUniversalReferenceConstraint
                 default: type.ClrType == nil || ClrTypeUtilities.IsReferenceTypeForVariance(type.ClrType)
             }
         }
@@ -6493,7 +6491,7 @@ class Conversion {
         // It deliberately does NOT cover an argument that HAS a real, closed CLR
         // type which is simply not injective — see
         // <see cref="TypeSymbol.ContainsFixedLengthArray"/>.
-        private func RequiresSymbolicTypeArgumentIdentity(type TypeSymbol?) bool {
+        internal func RequiresSymbolicTypeArgumentIdentity(type TypeSymbol?) bool {
             var type = type
             type = type?.StripToBareShape()
             if (type is SequenceTypeSymbol or AsyncSequenceTypeSymbol) &&
@@ -7091,7 +7089,7 @@ class Conversion {
         /// behaves as a reference type for conversion and equality purposes in both
         /// its nullable (`T?`) and non-nullable (`T`) forms.
         private func IsReferenceConstrainedTypeParameter(type TypeSymbol?) bool -> type is TypeParameterSymbol tp &&
-            (tp.HasReferenceTypeConstraint || tp.ClassConstraint != nil || tp.DependentBoundProvesReferenceType)
+            tp.ProvesNonUniversalReferenceConstraint
 
         private func HasExplicitUnboxingConversion(from TypeSymbol?, to TypeSymbol?) bool {
             var from = from

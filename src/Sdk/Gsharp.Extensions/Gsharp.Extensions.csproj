@@ -30,6 +30,8 @@
   -->
 
   <PropertyGroup>
+    <!-- Do not copy the pinned SDK's Extensions assembly over this project's outputs. -->
+    <GsharpNoExtensions>true</GsharpNoExtensions>
     <Language>Gsharp</Language>
     <DefaultLanguageSourceExtension>.gs</DefaultLanguageSourceExtension>
 

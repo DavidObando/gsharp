@@ -6174,7 +6174,8 @@ public class Demo
             runtimeOnlyLibrary bool = false,
             rejectConditionalIndexWarnings bool = false,
             strictIl bool = false,
-            expectedOutput string? = nil
+            expectedOutput string? = nil,
+            rejectedWarning string? = nil
         ) string {
             let libraryImage = if library == nil {
                 Array.Empty[byte]()
@@ -6240,7 +6241,8 @@ public class Demo
                         libraryImage,
                         runtimeOnlyLibrary,
                         strictIl,
-                        rejectConditionalIndexWarnings
+                        rejectConditionalIndexWarnings,
+                        rejectedWarning
                     ).Trim()
                 )
                 return printed
@@ -6286,7 +6288,8 @@ public class Demo
             libraryImage[]byte,
             runtimeOnlyLibrary bool = false,
             strictIl bool = false,
-            rejectConditionalIndexWarnings bool = false
+            rejectConditionalIndexWarnings bool = false,
+            rejectedWarning string? = nil
         ) string {
             let compiler string? = FindCompiler()
             Assert.True(
@@ -6336,6 +6339,12 @@ public class Demo
                 if rejectConditionalIndexWarnings {
                     Assert.True(
                         !compileOutput.Contains("GS0300", StringComparison.Ordinal),
+                        compileOutput + "\n" + printed
+                    )
+                }
+                if rejectedWarning != nil {
+                    Assert.True(
+                        !compileOutput.Contains(rejectedWarning, StringComparison.Ordinal),
                         compileOutput + "\n" + printed
                     )
                 }

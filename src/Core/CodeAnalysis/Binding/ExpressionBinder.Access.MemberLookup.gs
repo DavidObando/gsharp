@@ -437,17 +437,19 @@ internal partial class ExpressionBinder {
             receiver = declaredClrReceiver
             result = RewrapTransparentMemberResult(
                 result,
-                BoundImportedInstanceCallExpression(
-                    importedCall.Syntax,
-                    declaredClrReceiver,
-                    declaredClrMethod,
-                    importedCall.Type,
-                    importedCall.Arguments,
-                    importedCall.ArgumentRefKinds,
-                    importedCall.TypeArgumentSymbols,
-                    importedCall.ConstrainedReceiverTypeParameter,
-                    importedCall.ConstrainedInterfaceType,
-                    importedCall.IsNonVirtualBaseCall
+                importedCall.CopySignatureReturnTypeTo(
+                    BoundImportedInstanceCallExpression(
+                        importedCall.Syntax,
+                        declaredClrReceiver,
+                        declaredClrMethod,
+                        importedCall.Type,
+                        importedCall.Arguments,
+                        importedCall.ArgumentRefKinds,
+                        importedCall.TypeArgumentSymbols,
+                        importedCall.ConstrainedReceiverTypeParameter,
+                        importedCall.ConstrainedInterfaceType,
+                        importedCall.IsNonVirtualBaseCall
+                    )
                 )
             )
         } else if receiver != nil && binderCtx.TryGetNarrowedAccessPath(receiver, out receiverPath, out _) &&
@@ -714,14 +716,22 @@ internal partial class ExpressionBinder {
                 // create a new ImportedClassSymbol for the nested type and bind
                 // the right segment against it, enabling chained static/enum
                 // member access on nested types.
-                if classSymbol != nil &&
-                    TryResolveNestedTypeFromAccessorLeft(classSymbol, nested.LeftPart, out var nestedClassSymbol) {
-                    if nested.IsNullConditional {
-                        // Null-conditional on a type is semantically meaningless
-                        // but fall through to avoid a crash.
+                if classSymbol != nil {
+                    if TryResolveNestedTypeFromAccessorLeft(
+                        classSymbol,
+                        nested.LeftPart,
+                        out var nestedClassSymbol,
+                        out var nestedFailureHandled
+                    ) {
+                        if nested.IsNullConditional {
+                            // Null-conditional on a type is semantically meaningless.
+                            return BoundErrorExpression(nil)
+                        }
+                        return BindAccessorStep(nil, nestedClassSymbol, nested.RightPart)
+                    }
+                    if nestedFailureHandled {
                         return BoundErrorExpression(nil)
                     }
-                    return BindAccessorStep(nil, nestedClassSymbol, nested.RightPart)
                 }
                 let head = BindAccessorStep(receiver, classSymbol, nested.LeftPart, receiverSyntax, receiverStart)
                 if head is BoundErrorExpression {
@@ -734,7 +744,7 @@ internal partial class ExpressionBinder {
                 // read/write degenerates into a plain `.c` against `b`'s nullable
                 // type and reports "Cannot find member c".
                 if nested.IsNullConditional {
-                    return BindNullConditionalAccessExpressionCore(head, nested.RightPart)
+                    return BindNullConditionalAccessExpressionCore(head, nested.RightPart, nested.DotToken.Location)
                 }
                 let fullReceiverStart = receiverStart ?? receiverSyntax?.Span.Start ?? nested.LeftPart.Span.Start
                 return BindAccessorStep(head, nil, nested.RightPart, nested.LeftPart, fullReceiverStart)
@@ -2074,9 +2084,11 @@ internal partial class ExpressionBinder {
     private func TryResolveNestedTypeFromAccessorLeft(
         classSymbol ImportedClassSymbol,
         leftPart ExpressionSyntax,
-        @NotNullWhen(true) out nestedClassSymbol ImportedClassSymbol?
+        @NotNullWhen(true) out nestedClassSymbol ImportedClassSymbol?,
+        out failureHandled bool
     ) bool {
         nestedClassSymbol = nil
+        failureHandled = false
         if leftPart is NameExpressionSyntax nameExpr {
             let name = nameExpr.IdentifierToken.ValueText
             // Only resolve as a nested type when the name is NOT a static
@@ -2148,16 +2160,27 @@ internal partial class ExpressionBinder {
                 nestedGenericType,
                 combinedArgs.MoveToImmutable(),
                 leftPart,
-                out nestedClassSymbol
+                out nestedClassSymbol,
+                out failureHandled
             )
         }
         if leftPart is AccessorExpressionSyntax accessor {
             // Multi-level nesting: recursively resolve the left side first,
             // then resolve the right side as a nested type of that.
-            if !TryResolveNestedTypeFromAccessorLeft(classSymbol, accessor.LeftPart, out var intermediateSymbol) {
+            if !TryResolveNestedTypeFromAccessorLeft(
+                classSymbol,
+                accessor.LeftPart,
+                out var intermediateSymbol,
+                out failureHandled
+            ) {
                 return false
             }
-            return TryResolveNestedTypeFromAccessorLeft(intermediateSymbol, accessor.RightPart, out nestedClassSymbol)
+            return TryResolveNestedTypeFromAccessorLeft(
+                intermediateSymbol,
+                accessor.RightPart,
+                out nestedClassSymbol,
+                out failureHandled
+            )
         }
         return false
     }
@@ -2441,10 +2464,13 @@ internal partial class ExpressionBinder {
                 if whenNotNull is BoundErrorExpression || whenNotNull.Type == TypeSymbol.Error {
                     return BoundErrorExpression(nil)
                 }
-                let resultType = if whenNotNull.Type is NullableTypeSymbol {
-                    whenNotNull.Type
-                } else {
-                    cast[TypeSymbol](NullableTypeSymbol.Get(whenNotNull.Type))
+                let resultType = binderCtx.BindSourceNullable(
+                    whenNotNull.Type,
+                    syntax.OpenBracketToken.Location,
+                    isOperator: true
+                )
+                if resultType == TypeSymbol.Error {
+                    return BoundErrorExpression(syntax)
                 }
                 // Issue #1475: allocate the result slot for ANY value-type underlying
                 // recognised by symbol (user enum/struct, value-constrained type
@@ -2977,10 +3003,13 @@ internal partial class ExpressionBinder {
                     if whenNotNull is BoundErrorExpression {
                         return whenNotNull
                     }
-                    let resultType = if whenNotNull.Type is NullableTypeSymbol {
-                        whenNotNull.Type
-                    } else {
-                        cast[TypeSymbol](NullableTypeSymbol.Get(whenNotNull.Type))
+                    let resultType = binderCtx.BindSourceNullable(
+                        whenNotNull.Type,
+                        diagnosticLocation,
+                        isOperator: true
+                    )
+                    if resultType == TypeSymbol.Error {
+                        return BoundErrorExpression(outerSyntax)
                     }
                     var resultSlot LocalVariableSymbol? = nil
                     if resultType is NullableTypeSymbol nullableResult &&
@@ -5652,7 +5681,7 @@ internal partial class ExpressionBinder {
                     return head
                 }
                 if nested.IsNullConditional {
-                    return BindNullConditionalAccessExpressionCore(head, nested.RightPart)
+                    return BindNullConditionalAccessExpressionCore(head, nested.RightPart, nested.DotToken.Location)
                 }
                 return BindAccessorStep(head, nil, nested.RightPart, nested.LeftPart, leftName.Span.Start)
             }

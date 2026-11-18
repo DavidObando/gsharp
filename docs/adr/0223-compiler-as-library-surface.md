@@ -1,6 +1,6 @@
 # ADR-0223: A supported compiler-as-library surface for GSharp.Core
 
-- **Status**: Proposed
+- **Status**: Accepted (approved by the maintainer, 2026-11-17)
 - **Date**: 2026-11-16
 - **Phase**: Tooling
 - **Related**: ADR-0207 (bundled runtime discovery), ADR-0212 §8 (concurrent declaration binding), issue #3818 (host load contexts), issue #5623 (GS0634), Oats `docs/notes/gsharp-compiler-as-library.md`
@@ -26,9 +26,9 @@ Oats found that every API it calls is public, but the contract around those APIs
 - `GetMissingEntryPointDiagnostics()` returns GS0634 when the compilation is not a library, has no entry point, and is not a REPL submission. The host decides that the output is an executable, as `gsc` does with `/target:exe`. The host calls it only when no other error stops the output.
 - `CreateInternalErrorDiagnostic(Exception)` converts an exception that escapes the compiler into a diagnostic. It preserves an explicit diagnostic ID from an `EmitDiagnosticException` in the exception chain; otherwise, it returns GS9998. It uses an available `EmitDiagnosticException` source anchor. A host can report the returned diagnostic as `gsc` does.
 
-These are the only changes to code in this ADR.
+D1 changes no other code.
 
-### D2. Packaging (design only)
+### D2. Packaging (implemented, #6067)
 
 Publish `GSharp.Core` as its own NuGet package, `Gsharp.Compiler`, from the same build as `Gsharp.NET.Sdk`, with the same version.
 
@@ -39,7 +39,15 @@ Publish `GSharp.Core` as its own NuGet package, `Gsharp.Compiler`, from the same
 
 Until the package exists, `$(GsharpSdkToolsDirectory)compiler/GSharp.Core.dll` is the documented reference path. The SDK keeps the property name and that relative path for the 0.5 line.
 
-### D3. Hermetic reference sets (design only)
+Implementation notes:
+
+- `src/Sdk/Gsharp.Compiler/Gsharp.Compiler.gsproj` packs the build output of `src/Core`. It packs `GSharp.Core.pdb` beside the DLL in `lib/net10.0/`, so the package has no symbol package.
+- The package dependencies come from the `PackageReference` items of the pack project. `build/gsharp.build.props` defines the `System.Reflection.MetadataLoadContext` version once for `src/Core` and the pack project.
+- `runtimes/gsharp/` is a flat folder. NuGet does not select files from it, so a host does not reference them. A host gives the folder to the compiler as the bundled runtime directory (D4).
+- The SDK's `tools/compiler/`, `tools/gsgen/`, and `tools/formatter/` folders packed the bootstrap SDK's `Gsharp.Extensions.dll` and `Gsharp.Runtime.Channels.dll`. They now pack the files of the same build, as ADR-0210 does for `Gsharp.Runtime.Values.dll`.
+- `build/release-publish.py verify` checks that the SDK has one copy of each runtime assembly, and that `Gsharp.Compiler` has the same bytes, `GSharp.Core`, and the `System.Reflection.MetadataLoadContext` dependency.
+
+### D3. Hermetic reference sets (implemented)
 
 Add explicit factories to `ReferenceResolver`:
 
@@ -48,11 +56,20 @@ Add explicit factories to `ReferenceResolver`:
 - `WithRuntimeReferences(paths)` and `Default()` keep their behavior. Their documentation states that the result depends on the host process.
 - `CaptureHostAssemblies()` and the two-argument `WithRuntimeReferences` become public, so a host can capture the host snapshot once before work starts, as `gsc` does.
 
-### D4. Bundled runtime directory (design only)
+`packRoot` is the folder that contains the versions of `Microsoft.NETCore.App.Ref`. The factory selects the newest version, in semantic version order, that has the `ref/<tfm>` folder. It adds no host assembly as a fallback. It throws `DirectoryNotFoundException` when it finds no pack, or when the pack folder contains no assemblies.
+
+### D4. Bundled runtime directory (implemented, #6066)
 
 Replace the `internal` static `SdkToolsDirectory` with an explicit option. `ReferenceResolver` factories take an optional `runtimeDirectory` argument, and `ResolveDriverReferencePaths` takes the same argument. The search order is: the argument, then the folder beside the application, then `GSHARP_SDK_TOOLS_DIR`. A process-wide setter is not added, because two hosts in one process can need different SDK versions.
 
-### D5. Thread-safety contract (documentation now, stress test before "supported")
+### D5. Thread-safety contract (stress test added; item 1 not supported, see #6070)
+Implementation notes:
+
+- `Default(runtimeDirectory)`, `ForReferencePack(targetFramework, packRoot, runtimeDirectory)`, and `ResolveDriverReferencePaths(referencePaths, runtimeDirectory)` take the argument. `Default()` and the one-argument `ResolveDriverReferencePaths` stay, and use no runtime directory. `WithReferences` and `WithRuntimeReferences` take explicit paths and do not add bundled runtimes, so a host gives them the result of `ResolveDriverReferencePaths`.
+- In the runtime directory, the search uses the SDK layout (`extensions/`, `channels/`, `values/`) first, then the folder itself. The folder itself is the layout of `runtimes/gsharp/` in the D2 package.
+- `gsc` gives the `/sdktoolsdir:` switch, else `GSHARP_SDK_TOOLS_DIR`, as the argument, and turns off the resolver's own variable fallback. Its order does not change: the switch or the variable, then the folder beside `gsc`; a switch hides the variable.
+- `Default(runtimeDirectory)` loads the runtimes into a context that the resolver owns, and they replace host assemblies with the same simple name, so the resolver uses the files that it found. `Default()` keeps its behavior. Each request of a compiler worker has its own value. `gsi` gives `GSHARP_SDK_TOOLS_DIR` as the argument, so its order does not change either.
+- A library host that sets only the variable now gets the files beside the application first. Before, the variable came first.
 
 These statements describe the current code:
 
@@ -67,6 +84,8 @@ The proposed contract is:
 3. A host must not change process-wide state (`GSHARP_SDK_TOOLS_DIR`, and `SdkToolsDirectory` until D4) while a compilation runs.
 
 Item 1 is not yet verified. Before the documentation calls it supported, add a stress test that binds and emits many compilations in parallel against one resolver and compares each result with a serial run. Until then, hosts must serialize compilations that share a resolver, as Oats does.
+
+Result (#6068): `Adr0223SharedResolverStressTests` binds and emits each repository sample three times on parallel workers against one new resolver, then compares each result with a serial run. The compilations use one assembly name. The test passed in 40 of 40 separate test processes. The same work found #6070: `ReferenceResolver.CurrentAssemblyName` is state of the resolver, and each `Compilation` writes its assembly name to it. When compilations with different assembly names share a resolver, a compilation can bind its bodies with the name of another compilation, and its `InternalsVisibleTo` results are wrong. This occurs on one thread when the steps of two compilations interleave. Item 1 is therefore not supported. The resolver's semantic aggregate cache is keyed by the CLR type only, but the aggregate depends on the consumer assembly name (#6070, not verified). Until #6070 is fixed, a host uses one resolver for each assembly name, and it serializes the compilations that share a resolver: it runs each compilation from construction to its last query before it creates the next compilation. A host that needs concurrent compilations uses one resolver for each compilation.
 
 ### D6. Diagnostics that a host sees once
 

@@ -2071,26 +2071,6 @@ internal partial class DeclarationBinder {
                             )
                         }
                     }
-                    let nullableSequenceSpecializations = ExpandNullableSequenceIteratorSpecializations(methodSymbol)
-                    if nullableSequenceSpecializations.Length > 1 {
-                        for specialization in nullableSequenceSpecializations {
-                            if methodsBuilder.Any(
-                                (existing FunctionSymbol) -> BoundScope.FunctionSignaturesEqual(
-                                    existing,
-                                    specialization
-                                )
-                            ) {
-                                Diagnostics.ReportDuplicateOverloadSignature(
-                                    methodSyntax.Identifier.Location,
-                                    methodName,
-                                    Binder.FormatOverloadSignature(specialization)
-                                )
-                                break
-                            }
-                            methodsBuilder.Add(specialization)
-                        }
-                        continue
-                    }
                     // ADR-0149: a method declared with an explicit-interface
                     // qualifier clause (`func (IFoo) M(...)`) explicitly
                     // implements one interface member's own distinct body.
@@ -3536,26 +3516,6 @@ internal partial class DeclarationBinder {
                     }
                     if !isStaticPInvoke {
                         PInvokeBinder.ReportMarshalAsOnNonPInvokeFunction(methodSyntax, Diagnostics)
-                    }
-                    let nullableSequenceSpecializations = ExpandNullableSequenceIteratorSpecializations(methodSymbol)
-                    if nullableSequenceSpecializations.Length > 1 {
-                        for specialization in nullableSequenceSpecializations {
-                            if staticMethodsBuilder.Any(
-                                (existing FunctionSymbol) -> BoundScope.FunctionSignaturesEqual(
-                                    existing,
-                                    specialization
-                                )
-                            ) {
-                                Diagnostics.ReportDuplicateOverloadSignature(
-                                    methodSyntax.Identifier.Location,
-                                    methodName,
-                                    Binder.FormatOverloadSignature(specialization)
-                                )
-                                break
-                            }
-                            staticMethodsBuilder.Add(specialization)
-                        }
-                        continue
                     }
                     // ADR-0063 §11: detect duplicate-signature within the static block.
                     var hasDupSig = false

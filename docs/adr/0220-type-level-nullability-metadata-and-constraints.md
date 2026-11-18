@@ -40,5 +40,9 @@ Without metadata on these rows, C# consumers could not distinguish nullable from
 
 ## Consequences
 
+Explicit source `T?` must also satisfy [ADR-0224](0224-source-nullable-type-parameter-kind-constraints.md).
+`notnull` and nullable interface bounds alone do not prove its representation kind.
+These source eligibility rules do not change this ADR's metadata encoding or imported nullable annotations.
+
 - G# and C# emit identical `[Nullable]` and `[NullableContext]` bytes across `TypeDef`, `InterfaceImpl`, `GenericParam`, and `GenericParamConstraint` rows in the `#4988` / `#4996` twin matrix.
 - Cross-assembly and local generic constraints enforce `class`, `class?`, `notnull`, and annotated class/interface bounds uniformly.

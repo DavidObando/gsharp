@@ -1039,14 +1039,16 @@ func G(s string?) string {
         const decls = `func AsNilable[T](x T) T? {
     return x
 }`
+        SourceNullableKindAssertions.Reject(decls, "T", 1)
+        let referenceDecls = decls.Replace("[T]", "[T class?]")
         const alone = "    let k = AsNilable(Ob.Strings())\n    Console.WriteLine(NilableKeys()[k])"
-        let rejected = world.Compile(alone, NullabilityMode.PlatformTypes, decls)
+        let rejected = world.Compile(alone, NullabilityMode.PlatformTypes, referenceDecls)
         Assert.False(rejected.Success, Describe(rejected))
         // The witness: with a legal competitor, the nilable container must
         // lose rather than win-and-fail. Mutating out the outer-nullability
         // guard reddens this with GS0156.
         const competing = "    let k = AsNilable(Ob.Strings())\n    Console.WriteLine(NilableOrObjectKeys()[k])"
-        Assert.Equal("object", world.Run(competing, NullabilityMode.PlatformTypes, decls).Trim())
+        Assert.Equal("object", world.Run(competing, NullabilityMode.PlatformTypes, referenceDecls).Trim())
     }
 
     /// ADR-0186 §3 at a symbolic indexer parameter, <b>end to end</b> — and

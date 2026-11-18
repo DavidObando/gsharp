@@ -907,6 +907,18 @@ internal partial class ExpressionBinder {
             whenFalse = UnwrapSynthesizedRefDelegateBranch(whenFalse)
         }
         var resultType TypeSymbol? = ComputeConditionalResultType(whenTrue.Type, whenFalse.Type, targetType)
+        if !binderCtx.ValidateSourceNullableResult(
+            resultType,
+            syntax.QuestionToken.Location,
+            []TypeSymbol{whenTrue.Type, whenFalse.Type, targetType ?? TypeSymbol.Error}
+        ) {
+            if deferOnFailure {
+                Diagnostics.TruncateTo(diagMark)
+                Diagnostics.RestoreSuppressionsTo(suppressionMark)
+                return BoundErrorExpression(syntax)
+            }
+            return BoundErrorExpression(nil)
+        }
         if targetType == nil {
             resultType = MaterializeSynthesizedRefDelegateResultType(resultType, []BoundExpression{whenTrue, whenFalse})
         }
@@ -1107,6 +1119,18 @@ internal partial class ExpressionBinder {
             whenFalse = UnwrapSynthesizedRefDelegateBranch(whenFalse)
         }
         var resultType TypeSymbol? = ComputeConditionalResultType(whenTrue.Type, whenFalse.Type, targetType)
+        if !binderCtx.ValidateSourceNullableResult(
+            resultType,
+            syntax.IfKeyword.Location,
+            []TypeSymbol{whenTrue.Type, whenFalse.Type, targetType ?? TypeSymbol.Error}
+        ) {
+            if deferOnFailure {
+                Diagnostics.TruncateTo(diagMark)
+                Diagnostics.RestoreSuppressionsTo(suppressionMark)
+                return BoundErrorExpression(syntax)
+            }
+            return BoundErrorExpression(nil)
+        }
         if targetType == nil {
             resultType = MaterializeSynthesizedRefDelegateResultType(resultType, []BoundExpression{whenTrue, whenFalse})
         }
@@ -2193,6 +2217,16 @@ internal partial class ExpressionBinder {
             boundLeft.Type is TupleTypeSymbol &&
             boundRight.Type is TupleTypeSymbol {
             return BindTupleEquality(syntax, operatorKind, operatorLocation, operatorText, boundLeft, boundRight)
+        }
+        if operatorKind == SyntaxKind.QuestionQuestionToken &&
+            boundRight.Type == TypeSymbol.Null &&
+            !binderCtx
+            .ValidateSourceNullableResult(
+            boundLeft.Type,
+            operatorLocation,
+            []TypeSymbol{boundLeft.Type, boundRight.Type}
+        ) {
+            return BoundErrorExpression(nil)
         }
         var boundOperator BoundBinaryOperator? = BindBinaryOperatorWithNumericAdaptation(
             operatorKind,
@@ -3739,6 +3773,9 @@ internal partial class ExpressionBinder {
             if type is TupleTypeSymbol tuple {
                 return NullableTypeSymbol.Get(TupleTypeSymbol.ResolveNilElements(tuple))
             }
+            if type is TypeParameterSymbol {
+                return NullableTypeSymbol.Get(type)
+            }
             if !TypeSymbol.IsByRefLike(type) &&
                 (
                 type.IsValueType ||
@@ -4491,12 +4528,26 @@ internal partial class ExpressionBinder {
                             parameter.Position
                         )
                     }
-                } else if parameter.Member is ConstructorInfo targetCtor && receiverType != nil {
-                    nativeTarget = MemberLookup.GetClrMethodParameterTypeSymbol(
-                        receiverType,
-                        targetCtor,
-                        parameter.Position
+                } else if parameter.Member is ConstructorInfo targetCtor {
+                    let constructorReceiver = receiverType ??
+                        (
+                        if openGenericDefinition != nil && !symbolicTypeArguments.IsDefaultOrEmpty {
+                            ImportedTypeSymbol.GetConstructed(
+                                targetCtor.DeclaringType,
+                                openGenericDefinition,
+                                symbolicTypeArguments
+                            )
+                        } else {
+                            default(TypeSymbol?)
+                        }
                     )
+                    if constructorReceiver != nil {
+                        nativeTarget = MemberLookup.GetClrMethodParameterTypeSymbol(
+                            constructorReceiver,
+                            targetCtor,
+                            parameter.Position
+                        )
+                    }
                 }
                 if clrParameterType.IsByRef && nativeTarget is ByRefTypeSymbol byRefTarget {
                     nativeTarget = byRefTarget.PointeeType
@@ -4552,6 +4603,42 @@ internal partial class ExpressionBinder {
                 ) {
                     return ClrOverloadResolution.ImplicitConversionKind.Reference
                 }
+                // A CLR erasure can invent identity just as it can hide a valid conversion.
+                // Function arguments retain the contextual delegate classifier's return-conversion rank.
+                if !clrParameterType.IsByRef &&
+                    sourceType is not FunctionTypeSymbol &&
+                    TypeSymbol
+                    .ContainsSameCompilationUserType(sourceType) {
+                    let symbolicConversion = Conversion.ClassifyNonStructural(sourceType, nativeTarget)
+                    if TypeSymbol.ContainsSameCompilationUserType(nativeTarget) {
+                        if symbolicConversion.IsIdentity ||
+                            (
+                            symbolicConversion.IsImplicit &&
+                                TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(sourceType, nativeTarget)
+                        ) {
+                            return ClrOverloadResolution.ImplicitConversionKind.Identity
+                        }
+                        if symbolicConversion.IsImplicit {
+                            return if Conversion.IsReferenceLikeTarget(sourceType.StripToBareShape()) {
+                                ClrOverloadResolution.ImplicitConversionKind.Reference
+                            } else {
+                                ClrOverloadResolution.ImplicitConversionKind.Boxing
+                            }
+                        }
+                    }
+                    if Conversion.RequiresSymbolicTypeArgumentIdentity(sourceType) &&
+                        !nativeTarget
+                        .StripToBareShape()
+                        .ConstructedTypeArguments
+                        .IsDefaultOrEmpty &&
+                        !TypeSymbol.ContainsTypeParameter(nativeTarget) &&
+                        !symbolicConversion.IsImplicit &&
+                        !Conversion.HasClrArgumentRuntimeRelation(sourceType, nativeTarget) &&
+                        !ConversionClassifier
+                        .HasUserDefinedImplicitConversionForTypes(sourceType, nativeTarget) {
+                        return ClrOverloadResolution.ImplicitConversionKind.None
+                    }
+                }
                 if sourceType.ClrType != nil || !TypeSymbol.ContainsSameCompilationUserType(sourceType) ||
                     !DeclaresImplicitOperator(sourceType) {
                     return nil
@@ -4587,7 +4674,7 @@ internal partial class ExpressionBinder {
                         if hasUserDefined {
                             ClrOverloadResolution.ImplicitConversionKind.UserDefinedImplicit
                         } else {
-                            ClrOverloadResolution.ImplicitConversionKind.None
+                            nil
                         }
                     )
                 }

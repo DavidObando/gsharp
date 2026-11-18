@@ -10,6 +10,7 @@ import System.IO
 import System.Linq
 import System.Reflection
 import System.Text
+import System.Text.Json
 import System.Text.RegularExpressions
 import System.Runtime.InteropServices
 import System.Xml.Linq
@@ -56,6 +57,9 @@ class SdkCompileRunner {
         analyzerVerifierPackageVersion string?,
         warningsNotAsErrors string? = nil
     ) SdkCompileResult {
+        // The child runs from the repository root (#6029), so keep relative paths' meaning.
+        let generatedProjectPath = Path.GetFullPath(generatedProjectPath)
+        let artifactDirectory = Path.GetFullPath(artifactDirectory)
         let repoRoot string? = GsharpTestProjectRunner.TryFindRepoRoot()
         if sdkMoniker == nil {
             return SdkCompileResult.Unavailable(
@@ -109,14 +113,24 @@ class SdkCompileRunner {
                 projectNugetConfig,
                 warningsNotAsErrors
             )
+            let buildEnvironment = IsolatedNugetEnvironment(SharedMirroredNugetRoot(artifactDirectory))
+            let buildWorkingDirectory = BuildWorkingDirectory(repoRoot, projectDirectory!!)
             let result = ProcessRunner.Run(
                 "dotnet",
                 args,
-                projectDirectory,
+                buildWorkingDirectory,
                 MirroredBuildTimeout,
-                IsolatedNugetEnvironment(SharedMirroredNugetRoot(artifactDirectory))
+                buildEnvironment
             )
             File.WriteAllText(Path.Combine(artifactDirectory, "sdk.build.log"), result.Output ?? string.Empty)
+            this.CaptureFailureArtifacts(
+                artifactDirectory,
+                args,
+                buildWorkingDirectory,
+                sdkMoniker,
+                buildEnvironment,
+                result
+            )
             var diagnostics = GscInvoker.ParseDiagnostics(result.Output)
             if result.ExitCode != 0 && !diagnostics.Any((d GscDiagnostic) -> d.IsError) {
                 // Issue #3634: surface MSBuild-relayed GSxxxx errors (.targets-
@@ -132,7 +146,13 @@ class SdkCompileRunner {
                 diagnostics = diagnostics.Concat(relayed).ToList()
             }
             let assemblyPath string? = if result.ExitCode == 0 {
-                ResolveTargetPath(generatedProjectPath, projectDirectory, config, artifactDirectory)
+                ResolveTargetPath(
+                    generatedProjectPath,
+                    projectDirectory,
+                    buildWorkingDirectory,
+                    config,
+                    artifactDirectory
+                )
             } else {
                 default(string?)
             }
@@ -214,6 +234,8 @@ class SdkCompileRunner {
         if string.IsNullOrEmpty(appRunDir) {
             throw ArgumentException("An app run directory is required.", "appRunDir")
         }
+        // The child runs from the repository root (#6029), so keep a relative run directory's meaning.
+        let appRunDir = Path.GetFullPath(appRunDir)
         if string.IsNullOrWhiteSpace(projectName) {
             throw ArgumentException("A project name is required.", "projectName")
         }
@@ -330,14 +352,17 @@ class SdkCompileRunner {
             // restore/build alike (mirrors GsharpTestProjectRunner.Run).
             args.Add("-p:RestoreConfigFile=" + repoNugetConfig)
         }
+        let buildEnvironment = IsolatedNugetEnvironment(appRunDir)
+        let buildWorkingDirectory = BuildWorkingDirectory(repoRoot, appRunDir)
         let result = ProcessRunner.Run(
             "dotnet",
             args,
-            appRunDir,
+            buildWorkingDirectory,
             TimeSpan.FromMinutes(10),
-            IsolatedNugetEnvironment(appRunDir)
+            buildEnvironment
         )
         File.WriteAllText(Path.Combine(appRunDir, "sdk.build.log"), result.Output ?? string.Empty)
+        this.CaptureFailureArtifacts(appRunDir, args, buildWorkingDirectory, sdkVersion, buildEnvironment, result)
         var diagnostics = GscInvoker.ParseDiagnostics(result.Output)
         if result.ExitCode != 0 && diagnostics.Count((d GscDiagnostic) -> d.IsError) == 0 {
             // Issue #3634: before synthesizing an opaque fallback, surface any
@@ -379,7 +404,57 @@ class SdkCompileRunner {
         return SdkCompileResult.Completed(result.ExitCode, result.Output, diagnostics, assemblyPath)
     }
 
+    private func CaptureFailureArtifacts(
+        artifactDirectory string,
+        arguments IReadOnlyList[string],
+        workingDirectory string,
+        gsharpSdkVersion string?,
+        environment IReadOnlyDictionary[string, string],
+        buildResult ProcessRunResult
+    ) {
+        if buildResult.ExitCode == 0 && !buildResult.TimedOut {
+            return
+        }
+        let sdkResult = ProcessRunner.Run(
+            "dotnet",
+            []string{"--version"},
+            workingDirectory,
+            TimeSpan.FromSeconds(10),
+            environment
+        )
+        SdkCompileRunner.WriteFailureArtifacts(
+            artifactDirectory,
+            arguments,
+            workingDirectory,
+            gsharpSdkVersion,
+            buildResult,
+            sdkResult
+        )
+    }
+
     shared {
+        internal func WriteFailureArtifacts(
+            artifactDirectory string,
+            arguments IReadOnlyList[string],
+            workingDirectory string,
+            gsharpSdkVersion string?,
+            buildResult ProcessRunResult,
+            sdkResult ProcessRunResult
+        ) {
+            if buildResult.ExitCode == 0 && !buildResult.TimedOut {
+                return
+            }
+            File.WriteAllText(Path.Combine(artifactDirectory, "sdk.build.stdout.log"), buildResult.Stdout)
+            File.WriteAllText(Path.Combine(artifactDirectory, "sdk.build.stderr.log"), buildResult.Stderr)
+            File.WriteAllText(
+                Path.Combine(artifactDirectory, "sdk.build.diagnostics.json"),
+                JsonSerializer.Serialize(
+                    SdkBuildFailureDiagnostics(arguments, workingDirectory, gsharpSdkVersion, buildResult, sdkResult),
+                    JsonSerializerOptions{WriteIndented: true, PropertyNamingPolicy: JsonNamingPolicy.CamelCase}
+                )
+            )
+        }
+
         /// Issue #4498: the wall-clock budget for a mirrored `dotnet build`.
         /// It is separate from (cref:MirroredTestRunTimeout), which it used to
         /// share. One build invocation compiles the app AND its whole project-reference
@@ -516,6 +591,14 @@ class SdkCompileRunner {
             [GsharpTestProjectRunner.SourceRootEnvironmentVariable] = string.Empty
         }
 
+        internal func BuildWorkingDirectory(repositoryRoot string?, projectDirectory string) string {
+            // Issue #6029: generated projects sit outside the repo, so use its global.json SDK pin.
+            if !string.IsNullOrEmpty(repositoryRoot) {
+                return repositoryRoot
+            }
+            return projectDirectory
+        }
+
         internal func MirroredTestEnvironment(artifactRoot string, sourceRoot string?) IReadOnlyDictionary[
             string,
             string
@@ -530,8 +613,11 @@ class SdkCompileRunner {
             if !Directory.Exists(canonicalSourceRoot) {
                 throw DirectoryNotFoundException("Stage-4 source root does not exist: '$canonicalSourceRoot'.")
             }
+            // Issue #6096: a fixed glibc mmap threshold maps each native block of 128 KB or more separately.
+            // A free then returns the block to the OS, so freed Roslyn images do not stay in malloc arenas.
             let environment = Dictionary[string, string](IsolatedNugetEnvironment(artifactRoot)){
-                [GsharpTestProjectRunner.SourceRootEnvironmentVariable] = canonicalSourceRoot
+                [GsharpTestProjectRunner.SourceRootEnvironmentVariable] = canonicalSourceRoot,
+                ["MALLOC_MMAP_THRESHOLD_"] = "131072"
             }
             return environment
         }
@@ -917,6 +1003,9 @@ class SdkCompileRunner {
             sourceRoot string?,
             timeout TimeSpan
         ) ProcessRunResult {
+            // The child runs from the repository root (#6029), so keep relative paths' meaning.
+            let generatedProjectPath = Path.GetFullPath(generatedProjectPath)
+            let artifactDirectory = Path.GetFullPath(artifactDirectory)
             let projectDirectory string? = Path.GetDirectoryName(Path.GetFullPath(generatedProjectPath))
             let repoRoot string? = GsharpTestProjectRunner.TryFindRepoRoot()
             let projectNugetConfig = Directory.EnumerateFiles(projectDirectory!!).FirstOrDefault(
@@ -958,7 +1047,7 @@ class SdkCompileRunner {
                         "--",
                         CSharpTestOracle.RunSettingsArgument
                     },
-                    projectDirectory,
+                    BuildWorkingDirectory(repoRoot, projectDirectory!!),
                     timeout,
                     MirroredTestEnvironment(SharedMirroredNugetRoot(artifactDirectory), sourceRoot)
                 )
@@ -1331,6 +1420,7 @@ class SdkCompileRunner {
         private func ResolveTargetPath(
             projectPath string,
             projectDirectory string?,
+            workingDirectory string,
             config string,
             artifactDirectory string
         ) string? {
@@ -1343,7 +1433,7 @@ class SdkCompileRunner {
                     "-p:Configuration=" + (config ?? "Release"),
                     "-p:Cs2GsArtifactRoot=" + artifactDirectory
                 },
-                projectDirectory,
+                workingDirectory,
                 TimeSpan.FromMinutes(2),
                 IsolatedNugetEnvironment(SharedMirroredNugetRoot(artifactDirectory))
             )
@@ -1715,6 +1805,72 @@ class SdkCompileRunner {
                 " and no parseable diagnostic."
             return GscDiagnostic("GS9999", fallbackMessage, "error", relativeFile, 1, 1)
         }
+    }
+}
+
+internal class SdkBuildFailureDiagnostics {
+    init(
+        arguments IReadOnlyList[string],
+        workingDirectory string,
+        gsharpSdkVersion string?,
+        buildResult ProcessRunResult,
+        sdkResult ProcessRunResult
+    ) {
+        this.FileName = "dotnet"
+        this.Arguments = arguments.ToArray()
+        this.WorkingDirectory = workingDirectory
+        this.GsharpSdkVersion = gsharpSdkVersion
+        this.ExitCode = buildResult.ExitCode
+        this.TimedOut = buildResult.TimedOut
+        this.DotnetSdkVersion = sdkResult.Stdout.Trim()
+        this.DotnetSdkExitCode = sdkResult.ExitCode
+        this.DotnetSdkTimedOut = sdkResult.TimedOut
+        this.DotnetSdkStdout = sdkResult.Stdout
+        this.DotnetSdkStderr = sdkResult.Stderr
+    }
+
+    prop FileName string {
+        get;
+    }
+
+    prop Arguments[]string {
+        get;
+    }
+
+    prop WorkingDirectory string {
+        get;
+    }
+
+    prop GsharpSdkVersion string? {
+        get;
+    }
+
+    prop ExitCode int32 {
+        get;
+    }
+
+    prop TimedOut bool {
+        get;
+    }
+
+    prop DotnetSdkVersion string {
+        get;
+    }
+
+    prop DotnetSdkExitCode int32 {
+        get;
+    }
+
+    prop DotnetSdkTimedOut bool {
+        get;
+    }
+
+    prop DotnetSdkStdout string {
+        get;
+    }
+
+    prop DotnetSdkStderr string {
+        get;
     }
 }
 

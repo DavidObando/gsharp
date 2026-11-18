@@ -17,7 +17,7 @@ class InterfaceAdaptationReviewTests {
     @Fact
     func RichPlansRemainBindingSpecificAcrossNullableSequenceSpecializations() {
         using let fixture = NativeSliceLanguageTests.Fixture()
-        let dll = fixture.Compile(`package RichNullableSequenceSpecializations
+        const source = `package RichNullableSequenceSpecializations
 import System
 interface Reader[T] { func Read() T; }
 func values[T](value T) sequence[T?] {
@@ -34,7 +34,16 @@ func Main() {
     for value in values[string]("specialized") {
         if value != nil { Console.WriteLine(value) }
     }
-}`, "rich-nullable-sequence-specializations", executable: true)
+}`
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(source, []string{"T"}, 1)
+        let start = source.IndexOf("func values[T]", StringComparison.Ordinal)
+        let body = source.Substring(start, source.IndexOf("func Main()", StringComparison.Ordinal) - start)
+        let supported = source.Replace(
+            body,
+            body.Replace("values[T]", "values[T struct]") + body.Replace("values[T]", "references[T class?]")
+        )
+            .Replace("values[string]", "references[string]")
+        let dll = fixture.Compile(supported, "rich-nullable-sequence-specializations", executable: true)
         IlVerifier.Verify(dll)
         Assert.Equal(`46
 specialized

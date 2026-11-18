@@ -96,7 +96,10 @@ partial class BoundScope {
     /// Creates a worker boundary over canonical declarations. Synthesis remains coordinator-owned.
     internal func CreateIndependentBodyScope() BoundScope -> BoundScope(this){
         independentBodyRoot = true,
-        bindingServices = BindingServices(){BodyBindingOptions = GetBindingServices().BodyBindingOptions}
+        bindingServices = BindingServices(){
+            BodyBindingOptions = GetBindingServices().BodyBindingOptions,
+            SourceNullableAnnotationErrors = GetBindingServices().SourceNullableAnnotationErrors
+        }
     }
 
     private prop SynthesisParent BoundScope? {

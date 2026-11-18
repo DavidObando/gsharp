@@ -204,6 +204,11 @@
         <GsharpSdkPackSource>%(FullPath)</GsharpSdkPackSource>
         <!-- ADR-0210: all tool copies use the SDK-owned ABI, not the bootstrap runtime. -->
         <GsharpSdkPackSource Condition="'%(Filename)' == 'Gsharp.Runtime.Values'">$(BaseOutputPath)Gsharp.Runtime.Values/%(Filename)%(Extension)</GsharpSdkPackSource>
+        <!-- ADR-0223 D2: the SDK ships one copy of each G# runtime assembly. A tool publish copies
+             the bootstrap SDK's Extensions and Channels files. Pack the files of this build instead,
+             which are also the files under tools/extensions/ and tools/channels/. -->
+        <GsharpSdkPackSource Condition="'%(Filename)' == 'Gsharp.Extensions'">$(BaseOutputPath)Gsharp.Extensions/%(Filename)%(Extension)</GsharpSdkPackSource>
+        <GsharpSdkPackSource Condition="'%(Filename)' == 'Gsharp.Runtime.Channels'">$(BaseOutputPath)Gsharp.Runtime.Channels/%(Filename)%(Extension)</GsharpSdkPackSource>
       </_GsharpSdkPackagePayload>
     </ItemGroup>
     <Error Condition="!Exists('%(_GsharpSdkPackagePayload.GsharpSdkPackSource)')"
@@ -276,27 +281,14 @@
        tools/task/ (BuildTask) and tools/compiler/ (gsc). -->
   <Target Name="PackGsharpExtensions" BeforeTargets="_GetPackageFiles" DependsOnTargets="Build">
     <PropertyGroup>
-      <_GsharpCompilerProject>$(MSBuildThisFileDirectory)../../Compiler/Compiler.gsproj</_GsharpCompilerProject>
-      <_GsharpExtensionsProject>$(MSBuildThisFileDirectory)..\Gsharp.Extensions\Gsharp.Extensions.csproj</_GsharpExtensionsProject>
-      <_GsharpExtensionsOutDir>$(IntermediateOutputPath)gsharp-extensions\</_GsharpExtensionsOutDir>
+      <_GsharpExtensionsOutDir>$(BaseOutputPath)\Gsharp.Extensions\</_GsharpExtensionsOutDir>
     </PropertyGroup>
-    <!-- Gsharp.Extensions is built with the bootstrap SDK, which requires
-         gsc.dll at out/bin/$(Configuration)/Compiler/gsc.dll. When this
-         SDK is packed directly (e.g. e2e tests running
-         `dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj`),
-         MSBuild's own ProjectReference walker doesn't traverse the
-         Compiler arrow from inside Extensions.csproj because the nested
-         MSBuild call below disables project-references. Build Compiler
-         explicitly here so its output exists before the bootstrap fires. -->
-    <MSBuild Projects="$(_GsharpCompilerProject)" Targets="Build" Properties="Configuration=$(Configuration)" />
-    <RemoveDir Directories="$(_GsharpExtensionsOutDir)" Condition="Exists('$(_GsharpExtensionsOutDir)')" />
-    <MSBuild Projects="$(_GsharpExtensionsProject)" Targets="Build" Properties="Configuration=$(Configuration);OutputPath=$(_GsharpExtensionsOutDir);BuildProjectReferences=false" />
     <ItemGroup>
       <_GsharpExtensionsPayload Include="$(_GsharpExtensionsOutDir)Gsharp.Extensions.dll" />
       <_GsharpExtensionsPayload Include="$(_GsharpExtensionsOutDir)Gsharp.Extensions.xml" Condition="Exists('$(_GsharpExtensionsOutDir)Gsharp.Extensions.xml')" />
       <_GsharpExtensionsPayload Include="$(_GsharpExtensionsOutDir)Gsharp.Extensions.pdb" Condition="Exists('$(_GsharpExtensionsOutDir)Gsharp.Extensions.pdb')" />
     </ItemGroup>
-    <Error Condition="'@(_GsharpExtensionsPayload)' == ''" Text="Expected Gsharp.Extensions build output not found under '$(_GsharpExtensionsOutDir)'." />
+    <Error Condition="!Exists('$(_GsharpExtensionsOutDir)Gsharp.Extensions.dll')" Text="Expected Gsharp.Extensions build output not found under '$(_GsharpExtensionsOutDir)'." />
     <ItemGroup>
       <None Include="@(_GsharpExtensionsPayload)" Pack="true" PackagePath="tools\extensions\" Visible="false" />
     </ItemGroup>

@@ -655,7 +655,28 @@ The v1 supported `UnmanagedType` values are `LPStr`, `LPWStr`, `LPUTF8Str`, `BSt
 
 The annotation is a CLR *pseudo-custom* attribute: the binder validates the combination, the emitter writes a `FieldMarshal` table row (ECMA-335 II.23.4) plus `ParameterAttributes.HasFieldMarshal` on the Param row, and no `CustomAttribute` row is added. This matches C#'s `[MarshalAs]` shape exactly and round-trips through `ildasm` / ILSpy.
 
-**Interaction with `@LibraryImport`.** `@MarshalAs` on a non-string `@LibraryImport` parameter is honoured by writing the FieldMarshal row on the outer Param. `@MarshalAs` on a `@LibraryImport` *string* parameter is rejected with GS0360 — the function-wide `StringMarshalling:` knob is the canonical per-call lever for string encoding under the source-generator-shaped P/Invoke.
+**Interaction with `@LibraryImport`.** `@MarshalAs` on a non-string `@LibraryImport` parameter is honoured by writing FieldMarshal rows on both the outer wrapper and the inner P/Invoke parameters. `@MarshalAs` on a `@LibraryImport` *string* parameter is rejected with GS0360 — the function-wide `StringMarshalling:` knob is the canonical per-call lever for string encoding under the source-generator-shaped P/Invoke.
+
+### Return `@MarshalAs` overrides
+
+Use `@return:MarshalAs(...)` to override a P/Invoke return representation.
+For example, a native one-byte boolean return needs `U1`; an unannotated `bool` keeps the four-byte `BOOL` default.
+
+```gs
+@DllImport("native")
+@return:MarshalAs(UnmanagedType.U1)
+func IsReady() bool;
+```
+
+The compiler emits `HasFieldMarshal` and the descriptor on the return Param row, whose sequence is zero.
+For `@LibraryImport`, both the managed wrapper and the hidden P/Invoke carry the override.
+Non-string overrides use the inner P/Invoke's runtime marshaller.
+Other return attributes remain on the public method.
+
+Return overrides use the parameter compatibility rules and diagnostics GS0357–GS0360.
+`ByValArray` and `ByValTStr` return forms are rejected with GS0360 because inline representations require fields.
+`@LibraryImport` string returns also reject `@MarshalAs`; use the function-wide `StringMarshalling:` setting and its non-owning return policy.
+Delegate return `@MarshalAs` remains unsupported (GS0360).
 
 The diagnostics introduced by this feature are GS0357 (unsupported `UnmanagedType`), GS0358 (type mismatch), GS0359 (missing required knob), and GS0360 (rejected combination).
 
