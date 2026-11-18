@@ -1532,6 +1532,7 @@ internal partial class ExpressionBinder {
                 ) ??
                     bound
             }
+            bound = ApplyConditionalCallElision(bound)
             CallCandidateRecorder.Stamp(frame, bound)
             return bound
         } finally {

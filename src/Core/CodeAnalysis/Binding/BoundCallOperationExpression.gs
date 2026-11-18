@@ -63,6 +63,12 @@ abstract class BoundCallOperationExpression : BoundExpression {
         set;
     }
 
+    /// Gets whether conditional processing omits this call and all its operands.
+    internal prop IsElidedConditionalCall bool {
+        get;
+        set;
+    }
+
     /// Gets the arguments, in source order.
     abstract prop Arguments ImmutableArray[BoundExpression] {
         get;

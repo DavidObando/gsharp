@@ -6057,6 +6057,9 @@ internal partial class StatementBinder {
             if node == nil {
                 return
             }
+            if node is BoundCallOperationExpression{IsElidedConditionalCall: true} {
+                return
+            }
             if IsCallableType(node.Type) ||
                 node is BoundCallOperationExpression or
                 BoundFunctionLiteralExpression or
@@ -11844,6 +11847,9 @@ internal partial class StatementBinder {
         }
 
         internal func HasShallowExpressionEffects(node BoundExpression) bool {
+            if node is BoundCallOperationExpression{IsElidedConditionalCall: true} {
+                return false
+            }
             if IsStableSystemIndexOperation(node) {
                 return false
             }
@@ -11878,7 +11884,7 @@ internal partial class StatementBinder {
                 return false
             }
             return switch node {
-                case _ is BoundCallExpression{IsConditionalElided: true}: false
+                case _ is BoundCallOperationExpression{IsElidedConditionalCall: true}: false
                 case _ is BoundCallOperationExpression or
                     BoundClrConstructorCallExpression or
                     BoundConstructorChainingExpression or

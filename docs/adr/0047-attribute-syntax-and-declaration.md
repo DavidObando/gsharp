@@ -159,14 +159,14 @@ A small, closed set of attributes drive compiler behaviour today (the binder's h
 The rule "if it is on the recognised list, the binder still emits the `CustomAttribute` row" applies — recognition does not suppress emission. This is what makes the resulting assembly indistinguishable from a C#-produced one to downstream tools.
 
 Source conditional functions must return `void`, including static and instance members (`GS0212`).
-Source static, instance, extension, generic, and base calls use the same elision decision.
-Source overrides inherit conditional symbols from their source base methods.
+Source and imported static, instance, extension, generic, and base calls use the same elision decision.
+Overrides inherit conditional symbols from source and imported base methods.
+Imported inheritance follows virtual slots, not unrelated hidden methods.
 An elided call evaluates neither its receiver nor its arguments, including through `?.`.
 Multiple conditional symbols use OR semantics.
 The existing `Compilation.PreprocessorSymbols` option supplies compilation-wide symbols.
 G# does not implement lexical `#define` or `#undef` directives.
 These rules do not add conditional method-group restrictions.
-Imported-call handling remains unchanged; issue #6100 tracks imported conditional elision.
 Translation must separately preserve the source call site's effective symbol state (issue #6101).
 The compiler does not infer active symbols from conditional metadata.
 

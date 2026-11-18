@@ -169,7 +169,7 @@ shared class BaseCallForwarderRewriter {
             node BoundImportedInstanceCallExpression
         ) BoundExpression {
             let rewritten = cast[BoundImportedInstanceCallExpression](base.RewriteImportedInstanceCallExpression(node))
-            if !rewritten.IsNonVirtualBaseCall || !this.ForwardsBaseCalls {
+            if rewritten.IsElidedConditionalCall || !rewritten.IsNonVirtualBaseCall || !this.ForwardsBaseCalls {
                 return rewritten
             }
             let forwarder = this.CreateImportedForwarder(rewritten, out var enclosingMethodTypeParameters)

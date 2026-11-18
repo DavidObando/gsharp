@@ -1547,7 +1547,7 @@ internal partial class ExpressionBinder {
             }
         }
         $scope = $scope.Pop()
-        if whenNotNull is BoundCallExpression{IsConditionalElided: true} {
+        if whenNotNull is BoundCallOperationExpression{IsElidedConditionalCall: true} {
             return whenNotNull
         }
         // Issue #1213: a null-conditional invocation whose access produces no

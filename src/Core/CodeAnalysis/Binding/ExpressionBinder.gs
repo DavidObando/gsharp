@@ -1632,7 +1632,14 @@ internal partial class ExpressionBinder {
             let entryAliases = GetCurrentExpressionCallableAliases()
             // Issue #2620: discard context must reach wrappers and tail-if arms,
             // not merely suppress the final void-result check.
-            let result = BindExpressionpublic(syntax, canBeVoid)
+            var result = BindExpressionpublic(syntax, canBeVoid)
+            if result is BoundCallOperationExpression ||
+                syntax is CallExpressionSyntax or
+                AccessorExpressionSyntax or
+                BaseClassCallExpressionSyntax or
+                BaseInterfaceCallExpressionSyntax {
+                result = ApplyConditionalCallElision(result)
+            }
             if !canBeVoid && result.Type == TypeSymbol.Void {
                 Diagnostics.ReportExpressionMustHaveValue(syntax.Location)
                 return BoundErrorExpression(nil)
