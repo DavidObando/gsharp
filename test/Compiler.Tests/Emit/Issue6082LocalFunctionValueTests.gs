@@ -211,6 +211,42 @@ shared class Probe {
 
     shared {
         func Cases() sequence[[]object] {
+            for variation in[](Name string, Literal string){("local", `func(n int32) int32 {
+                    calls++
+                    let later = n + 1
+                    return first(later)
+                }`), ("parameter", `func(later int32) int32 {
+                    calls++
+                    return first(later + 1)
+                }`), ("enclosing-local", `func(n int32) int32 {
+                    calls++
+                    let later = n + 1
+                    let inner = func() int32 { return later }
+                    return first(inner())
+                }`), ("nested-forward-run", `func(n int32) int32 {
+                    calls++
+                    let inner = func() int32 { return later() }
+                    let later = func() int32 { return n + 1 }
+                    return first(inner())
+                }`), ("qualified-member", `func(n int32) int32 {
+                    calls++
+                    return first(holder.later(n))
+                }`)} {
+                yield []object{"shadowed-forward-" + variation.Name, `
+class Holder { func later(n int32) int32 { return n + 1 } }
+`, `
+        var calls = 0
+        let holder = Holder()
+        let first = func(n int32) int32 { return n + 1 }
+        let callback = ` + variation.Literal + `
+        let later = func(n int32) int32 { return first(n) }
+        let next = func(n int32) int32 { return callback(n) }
+        let alias = callback
+        let result = List[int32](){40}.Select(callback).Single()
+        let following = next(0)
+        return "$result:$following:$calls:${Object.ReferenceEquals(callback, alias)}"
+`, "42:2:2:True", true}
+            }
             yield []object{"shadowed-local-address-keeps-closure-value", `
 func Bump(ref value int32) { value++ }
 `, `

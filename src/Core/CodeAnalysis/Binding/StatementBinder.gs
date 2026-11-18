@@ -1231,6 +1231,7 @@ internal partial class StatementBinder {
             }
             let groupEnds = [end - start]int32
             let direct = [end - start]bool
+            let scopeIndex = ClosureScopeIndex()
             var hasCrossReference = false
             for var idx = start; idx < end; idx++ {
                 let decl = cast[VariableDeclarationSyntax](statementSyntaxes[idx])
@@ -1247,7 +1248,14 @@ internal partial class StatementBinder {
                         case call is CallExpressionSyntax: call.Identifier.Text
                         default: default(string?)
                     }
-                    if referencedName != nil && siblingIndices.TryGetValue(referencedName, out var overloads) {
+                    if referencedName != nil && siblingIndices.TryGetValue(referencedName, out var overloads) &&
+                        !(
+                        node.Parent is AccessorExpressionSyntax accessor && object.ReferenceEquals(
+                            accessor.RightPart,
+                            node
+                        )
+                    ) &&
+                        !IsShadowedInsideLiteral(referencedName, node, literal, scopeIndex) {
                         hasCrossReference |= referencedName != selfName
                         let lastSibling = overloads[overloads.Count - 1]
                         if lastSibling > idx {
@@ -1266,6 +1274,40 @@ internal partial class StatementBinder {
                 }
             }
             return (direct, hasCrossReference)
+        }
+
+        private func IsShadowedInsideLiteral(
+            name string,
+            site SyntaxNode,
+            literal FunctionLiteralExpressionSyntax,
+            index ClosureScopeIndex
+        ) bool {
+            var child = site
+            for var ancestor = site.Parent; ancestor != nil; ancestor = ancestor!!.Parent {
+                if ancestor is BlockStatementSyntax or
+                    BlockExpressionSyntax or
+                    ForClauseStatementSyntax &&
+                    index
+                    .DeclarationsOf(ancestor).TryGetValue(name, out var declarations) {
+                    for declaration in declarations {
+                        if declaration.Span.End <= site.Span.Start || index.AreInSameLocalFunctionRun(
+                            ancestor,
+                            declaration,
+                            child
+                        ) {
+                            return true
+                        }
+                    }
+                }
+                if IsScopeOwner(ancestor) && index.ParametersOf(ancestor).Contains(name) {
+                    return true
+                }
+                if object.ReferenceEquals(ancestor, literal) {
+                    return false
+                }
+                child = ancestor
+            }
+            return false
         }
 
         private func IsSyntacticallyInfiniteLoop(statement BoundForInfiniteStatement) bool {
