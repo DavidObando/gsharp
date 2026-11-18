@@ -10,7 +10,13 @@ import Xunit
 open class Issue6082LocalFunctionValueTests {
     @Theory
     @MemberData("Cases")
-    func OrdinaryClosures_RetainFunctionValues(name string, declarations string, body string, expected string) {
+    func OrdinaryClosures_RetainFunctionValues(
+        name string,
+        declarations string,
+        body string,
+        expected string,
+        verifyIl bool
+    ) {
         let directory = Path.Combine(AppContext.BaseDirectory, "issue-6082", Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(directory)
         try {
@@ -30,7 +36,10 @@ shared class Probe {
                 0,
                 Program.Main([]string{"/target:library", "/targetframework:net10.0", "/out:" + assembly, source})
             )
-            IlVerifier.Verify(assembly)
+            // ILVerify does not implement calli. Function-pointer cases execute the emitted method instead.
+            if verifyIl {
+                IlVerifier.Verify(assembly)
+            }
             let emitted = EmittedFixture.Load(assembly)
             Assert.Equal(expected, emitted.GetType("Issue6082.Probe")!!.GetMethod("Run")!!.Invoke(nil, nil))
         } finally {
@@ -52,7 +61,7 @@ class B {
         let b = B()
         let set = HashSet[int](){2}
         return "${b.F(List[int](){0}, set)}:${b.F(List[int](){1}, set)}:${b.F(List[int](){1, 2}, set)}"
-`, "True:False:True"}
+`, "True:False:True", true}
             yield []object{"backward-chain-and-later-sibling", "", `
         var calls = 0
         var target = 2
@@ -70,7 +79,7 @@ class B {
         let changed = alias(3)
         let read = List[int](){5}.Select(D).Single()
         return "$zero:$hit:$miss:$changed:$calls:$read:${Object.ReferenceEquals(C, alias)}:${Object.ReferenceEquals(C, C)}"
-`, "True:True:False:True:4:9:True:True"}
+`, "True:True:False:True:4:9:True:True", true}
             yield []object{"callback-before-forward-group", "", `
         var calls = 0
         let before = func(n int) int { return calls + n }
@@ -93,7 +102,7 @@ class B {
         let b = List[int](){4}.Select(before).Single()
         let c = second(1)
         return "$a:$b:$c:${callback(4)}"
-`, "1:5:2:6"}
+`, "1:5:2:6", true}
             yield []object{"callback-after-transitive-forward-group", "", `
         var calls = 0
         let first = func(n int) int { return second(n) }
@@ -111,7 +120,39 @@ class B {
         let b = List[int](){4}.Select(after).Single()
         let c = third(1)
         return "$a:$b:$c:${callback(4)}"
-`, "1:5:2:6"}
+`, "1:5:2:6", true}
+            yield []object{"backward-chain-first-pointer", "", `
+        let first = func(n int32) int32 { return n + 1 }
+        let second = func(n int32) int32 { return first(n) }
+        unsafe {
+            let fp = &first
+            return "${fp(41)}"
+        }
+`, "42", false}
+            yield []object{"backward-chain-second-pointer", "", `
+        let first = func(n int32) int32 { return n + 1 }
+        let second = func(n int32) int32 { return first(n) }
+        unsafe {
+            let fp = &second
+            return "${fp(41)}"
+        }
+`, "42", false}
+            yield []object{"pointer-chain-with-capturing-callback", "", `
+        var calls = 0
+        let first = func(n int32) int32 { return n + 1 }
+        let second = func(n int32) int32 { return first(n) }
+        let callback = func(n int32) int32 {
+            calls++
+            return second(n)
+        }
+        let alias = callback
+        unsafe {
+            let fp = &second
+            let result = fp(41)
+            let mapped = List[int32](){1, 2}.Select(callback).Sum()
+            return "$result:$mapped:$calls:${Object.ReferenceEquals(callback, alias)}"
+        }
+`, "42:5:2:True", false}
         }
     }
 }

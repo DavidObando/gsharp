@@ -512,6 +512,10 @@ internal partial class StatementBinder {
         let blockFrameIndex = binderCtx.NarrowedVariables.Count
         let memberNotNullFrame = binderCtx.PushNarrowingFrame(Dictionary[AccessPath, TypeSymbol]())
         var completedCleanupExit NarrowingState? = nil
+        var nonGenericRunStart = startIndex
+        var nonGenericRunEnd = startIndex
+        var nonGenericGroupEnds = Array.Empty[int32]()
+        var addressedLocalFunctionNames HashSet[string]? = nil
         try {
             for var i = startIndex; i < statementSyntaxes.Length; i++ {
                 let statementSyntax = statementSyntaxes[i]
@@ -542,21 +546,29 @@ internal partial class StatementBinder {
                     )
                     continue
                 }
-                // Only forward references require direct-call groups. Keep ordinary closure values outside the required region (#6082).
+                // Forward references and function pointers require direct-call regions. Keep other literals as closure values (#6082).
                 if IsNonGenericLocalFunctionLiteralDeclaration(statementSyntax) &&
-                    prepareGenericLocalFunctionDeclaration != nil &&
-                    i +
-                    1 < statementSyntaxes.Length &&
-                    statementSyntaxes[i + 1].SyntaxTree == statementSyntax.SyntaxTree &&
-                    IsNonGenericLocalFunctionLiteralDeclaration(statementSyntaxes[i + 1]) {
-                    var runEnd = i
-                    while runEnd < statementSyntaxes.Length &&
-                        statementSyntaxes[runEnd].SyntaxTree == statementSyntax.SyntaxTree &&
-                        IsNonGenericLocalFunctionLiteralDeclaration(statementSyntaxes[runEnd]) {
-                        runEnd++
+                    prepareGenericLocalFunctionDeclaration != nil {
+                    if i >= nonGenericRunEnd {
+                        nonGenericRunStart = i
+                        nonGenericRunEnd = i + 1
+                        while nonGenericRunEnd < statementSyntaxes.Length &&
+                            statementSyntaxes[nonGenericRunEnd].SyntaxTree == statementSyntax.SyntaxTree &&
+                            IsNonGenericLocalFunctionLiteralDeclaration(statementSyntaxes[nonGenericRunEnd]) {
+                            nonGenericRunEnd++
+                        }
+                        let addressedNames = addressedLocalFunctionNames ??
+                            CollectAddressedLocalFunctionNames(statementSyntaxes)
+                        addressedLocalFunctionNames = addressedNames
+                        nonGenericGroupEnds = GetNonGenericLocalFunctionLiteralGroupEnds(
+                            statementSyntaxes,
+                            i,
+                            nonGenericRunEnd,
+                            addressedNames
+                        )
                     }
-                    let groupEnd = GetNonGenericLocalFunctionLiteralGroupEnd(statementSyntaxes, i, runEnd)
-                    if groupEnd > i + 1 {
+                    let groupEnd = nonGenericGroupEnds[i - nonGenericRunStart]
+                    if groupEnd > i {
                         i = BindLocalFunctionLiteralGroup(
                             statementSyntaxes,
                             i,
@@ -988,8 +1000,8 @@ internal partial class StatementBinder {
         /// (see `StatementBinder.Narrowing.cs`'s
         /// `bindFunctionLiteralWithSelfDeclaration` self-recursion path) to
         /// avoid silently changing every ordinary `let f = func ...` in the
-        /// language. Only forward references require a group of consecutive non-generic members.
-        /// (cref:GetNonGenericLocalFunctionLiteralGroupEnd) keeps other members on the delegate-valued-variable path.
+        /// language. Forward references and function pointers require direct-call regions.
+        /// (cref:GetNonGenericLocalFunctionLiteralGroupEnds) keeps other members on the delegate-valued-variable path.
         /// An explicit outer type clause
         /// (`let f (int32) -> int32 = func ...`) is also excluded: the
         /// direct-call path's signature comes entirely from the LITERAL (its own
@@ -1034,23 +1046,46 @@ internal partial class StatementBinder {
             }
         )
 
-        /// Finds the smallest consecutive region required by this declaration's forward references.
-        /// Backward references and self-recursion retain delegate-valued variables (#6082).
-        /// Extend the region when an included member references another later sibling.
-        private func GetNonGenericLocalFunctionLiteralGroupEnd(
+        private func CollectAddressedLocalFunctionNames(statements ImmutableArray[StatementSyntax]) HashSet[string] {
+            let names = HashSet[string]()
+            for statement in statements {
+                for node in statement.DescendantNodesAndSelf() {
+                    if node is UnaryExpressionSyntax unary && unary.OperatorToken.Kind == SyntaxKind.AmpersandToken {
+                        var operand = unary.Operand
+                        while operand is ParenthesizedExpressionSyntax parenthesized {
+                            operand = parenthesized.Expression
+                        }
+                        if operand is NameExpressionSyntax name {
+                            names.Add(name.IdentifierToken.Text)
+                        }
+                    }
+                }
+            }
+            return names
+        }
+
+        /// Plans each adjacent run once. Forward references and addressed functions' dependencies require direct-call regions.
+        /// Other backward references and self-recursion retain delegate-valued variables (#6082).
+        private func GetNonGenericLocalFunctionLiteralGroupEnds(
             statementSyntaxes ImmutableArray[StatementSyntax],
             start int32,
-            end int32
-        ) int32 {
+            end int32,
+            addressedNames HashSet[string]
+        )[]int32 {
             let siblingIndices = Dictionary[string, int32]()
             for var idx = start; idx < end; idx++ {
                 siblingIndices[(cast[VariableDeclarationSyntax](statementSyntaxes[idx])).Identifier.Text] = idx
             }
-            var groupEnd = start + 1
-            for var idx = start; idx < groupEnd; idx++ {
+            let groupEnds = [end - start]int32
+            let references = List[List[int32]](end - start)
+            var hasCrossReference = false
+            for var idx = start; idx < end; idx++ {
                 let decl = cast[VariableDeclarationSyntax](statementSyntaxes[idx])
                 let selfName = decl.Identifier.Text
                 let literal = cast[FunctionLiteralExpressionSyntax](decl.Initializer!!)
+                let dependencies = List[int32]()
+                references.Add(dependencies)
+                groupEnds[idx - start] = idx
                 for node in literal.Body.DescendantNodesAndSelf() {
                     // A direct call (`second(x)`) is its own syntax node with an
                     // `Identifier` token — it is NOT a NameExpressionSyntax
@@ -1064,13 +1099,49 @@ internal partial class StatementBinder {
                     if referencedName != nil && referencedName != selfName && siblingIndices.TryGetValue(
                         referencedName,
                         out var siblingIndex
-                    ) &&
-                        siblingIndex > idx {
-                        groupEnd = Math.Max(groupEnd, siblingIndex + 1)
+                    ) {
+                        hasCrossReference = true
+                        dependencies.Add(siblingIndex)
+                        if siblingIndex > idx {
+                            groupEnds[idx - start] = Math.Max(groupEnds[idx - start], siblingIndex + 1)
+                        }
                     }
                 }
             }
-            return groupEnd
+            // Only cross-referencing runs previously had function-symbol identity and supported function pointers.
+            if hasCrossReference {
+                let visited = HashSet[int32]()
+                let worklist = Stack[int32]()
+                for var idx = start; idx < end; idx++ {
+                    let name = (cast[VariableDeclarationSyntax](statementSyntaxes[idx])).Identifier.Text
+                    if addressedNames.Contains(name) && visited.Add(idx) {
+                        worklist.Push(idx)
+                    }
+                }
+                while worklist.Count > 0 {
+                    let idx = worklist.Pop()
+                    groupEnds[idx - start] = Math.Max(groupEnds[idx - start], idx + 1)
+                    for dependency in references[idx - start] {
+                        let first = Math.Min(idx, dependency)
+                        groupEnds[first - start] = Math.Max(groupEnds[first - start], Math.Max(idx, dependency) + 1)
+                        if visited.Add(dependency) {
+                            worklist.Push(dependency)
+                        }
+                    }
+                }
+            }
+            for var idx = start; idx < end; idx++ {
+                var regionEnd = groupEnds[idx - start]
+                if regionEnd <= idx {
+                    continue
+                }
+                for var member = idx + 1; member < regionEnd; member++ {
+                    regionEnd = Math.Max(regionEnd, groupEnds[member - start])
+                }
+                groupEnds[idx - start] = regionEnd
+                idx = regionEnd - 1
+            }
+            return groupEnds
         }
 
         private func IsSyntacticallyInfiniteLoop(statement BoundForInfiniteStatement) bool {
