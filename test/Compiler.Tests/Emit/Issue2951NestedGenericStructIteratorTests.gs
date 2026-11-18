@@ -5,6 +5,7 @@
 package GSharp.Compiler.Tests.Emit
 
 import GSharp.Compiler
+import GSharp.Compiler.Tests
 import GSharp.Tests
 import System
 import System.Diagnostics
@@ -304,7 +305,16 @@ for value in cell.vals[int32](46) {
 for value in cell.vals[string]("s") {
     Console.WriteLine(value == nil ? "string:nil" : value)
 }`
-        AssertLoadsAndRuns(Source, "NestedIteratorComposesWithNullableGenericSpecialization", `45
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(Source, []string{"U"}, 1)
+        let supported = Source.Replace("func vals[U]", "func vals[U struct]").Replace(`            yield nil
+        }`, `            yield nil
+        }
+        func refs[U class?](value U) sequence[U?] {
+            Console.WriteLine(Marker)
+            yield value
+            yield nil
+        }`).Replace("cell.vals[string]", "cell.refs[string]")
+        AssertLoadsAndRuns(supported, "NestedIteratorComposesWithNullableGenericSpecialization", `45
 46
 int:nil
 45

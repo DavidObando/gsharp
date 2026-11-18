@@ -1851,7 +1851,13 @@ internal partial class StatementBinder {
         if binderCtx.CurrentFallthroughTarget is not{} target {
             // Well-placed, but this is the switch's final arm — there is no
             // next body to fall into.
+            // ADR-0225: another arm can follow in a switch that is open at the cut.
+            let pushed = Diagnostics.PushPremiseIf(
+                PrefixBindingContext.IsInOpen(syntax, SyntaxKind.SwitchStatement),
+                PrefixPremise.RestOfStatement
+            )
             Diagnostics.ReportFallthroughInFinalArm(syntax.Keyword.Location)
+            Diagnostics.PopPremiseIf(pushed)
             return BindErrorStatement()
         }
         if currentStatementListFallsThrough {

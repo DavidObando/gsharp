@@ -296,6 +296,11 @@ internal partial class StatementBinder {
         }
         RestoreExternalCallableAliases(callableExits ?? callableEntry)
         RestoreNonNullByRefVariables(nonNullByRefExits ?? nonNullByRefEntry)
+        // ADR-0225: a switch that is open at the cut can still get the missing arms.
+        let exhaustivenessPushed = Diagnostics.PushPremiseIf(
+            PrefixBindingContext.IsOpen(syntax),
+            PrefixPremise.RestOfStatement
+        )
         let isExhaustive = ExhaustivenessAnalyzer.AnalyzeSwitchStatement(
             syntax.SwitchKeyword.Location,
             switchType,
@@ -303,6 +308,7 @@ internal partial class StatementBinder {
             $scope.GetDeclaredStructs(),
             Diagnostics
         )
+        Diagnostics.PopPremiseIf(exhaustivenessPushed)
         let result = BoundPatternSwitchStatement(syntax, discriminant, boundArms, isExhaustive)
         if !(hasCatchAll || isExhaustive) {
             joinExits.Add(binderCtx.Narrowing)
@@ -429,14 +435,18 @@ internal partial class StatementBinder {
             // ADR-0177 A: a bare `catch { … }` carries no type clause and means
             // `catch (System.Exception)`, exactly as in C#.
             var catchType = exceptionType
+            // An unresolved clause type already has GS0113. Its real type is
+            // unknown, so it takes no part in the GS0573 coverage check.
+            var catchTypeResolved = true
             if catchSyntax.TypeClause != nil {
                 let declared TypeSymbol? = bindTypeClause(catchSyntax.TypeClause)
                 if declared != nil {
                     catchType = declared
                 }
+                catchTypeResolved = declared != nil && declared != TypeSymbol.Error
             }
             for covered in unfilteredCoverage {
-                if IsCaughtBy(catchType, covered) {
+                if catchTypeResolved && IsCaughtBy(catchType, covered) {
                     Diagnostics.ReportUnreachableCatchClause(
                         (catchSyntax.TypeClause ?? cast[SyntaxNode](catchSyntax.CatchKeyword)).Location,
                         covered,
@@ -492,7 +502,7 @@ internal partial class StatementBinder {
             AddBranchExits(joinExits, body)
             RestoreThenBranchConditionKills(catchOuterKills, catchEntry)
             $scope = $scope.Pop()
-            if filter == nil {
+            if filter == nil && catchTypeResolved {
                 unfilteredCoverage.Add(catchType)
             }
             catches.Add(BoundCatchClause(catchType, variable, filter, body, exitsThroughFinally: false))
@@ -547,7 +557,14 @@ internal partial class StatementBinder {
             RestoreNonNullByRefVariables(nonNullByRefExits ?? nonNullByRefEntry)
         }
         if catches.Count == 0 && finallyBlock == nil {
+            // ADR-0225: a catch or finally clause can follow a try block that is open at the cut, or a
+            // try statement that is the last construct before the cut.
+            let pushed = Diagnostics.PushPremiseIf(
+                PrefixBindingContext.IsOpen(syntax) || PrefixBindingContext.IsLastBeforeCut(syntax),
+                PrefixPremise.RestOfStatement
+            )
             Diagnostics.ReportTryWithoutCatchOrFinally(syntax.TryKeyword.Location)
+            Diagnostics.PopPremiseIf(pushed)
             return BindErrorStatement()
         }
         // Issue #836: a `yield` lexically inside a `try` block that also
@@ -1327,17 +1344,19 @@ internal partial class StatementBinder {
                 rebuilt = copy
             }
             case call is BoundImportedInstanceCallExpression {
-                rebuilt = BoundImportedInstanceCallExpression(
-                    call.Syntax,
-                    captureReceiver(call.Receiver),
-                    call.Method,
-                    call.Type,
-                    CaptureArguments(call.Arguments, captureArgument),
-                    call.ArgumentRefKinds,
-                    call.TypeArgumentSymbols,
-                    call.ConstrainedReceiverTypeParameter,
-                    call.ConstrainedInterfaceType,
-                    call.IsNonVirtualBaseCall
+                rebuilt = call.CopySignatureReturnTypeTo(
+                    BoundImportedInstanceCallExpression(
+                        call.Syntax,
+                        captureReceiver(call.Receiver),
+                        call.Method,
+                        call.Type,
+                        CaptureArguments(call.Arguments, captureArgument),
+                        call.ArgumentRefKinds,
+                        call.TypeArgumentSymbols,
+                        call.ConstrainedReceiverTypeParameter,
+                        call.ConstrainedInterfaceType,
+                        call.IsNonVirtualBaseCall
+                    )
                 )
             }
             case call is BoundBaseClassCallExpression {
@@ -2729,6 +2748,8 @@ internal partial class StatementBinder {
         // so, because starting work only to cancel it is rarely intended.
         for cell in cells {
             if !cell.WasAwaited {
+                // ADR-0225: a later statement of a scope that is open at the cut can await the binding.
+                let pushed = Diagnostics.PushPremiseIf(PrefixBindingContext.IsOpen(syntax), PrefixPremise.RestOfBody)
                 Diagnostics.ReportAsyncLetNeverAwaited(
                     Invariant.Required(
                         cell.DeclaringSyntax,
@@ -2738,6 +2759,7 @@ internal partial class StatementBinder {
                         .Location,
                     cell.Name
                 )
+                Diagnostics.PopPremiseIf(pushed)
             }
         }
         $scope = $scope.Pop()

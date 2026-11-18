@@ -725,10 +725,9 @@ internal shared class ClrOverloadResolution {
     /// type-parameter slot from a genuine (cref:object) parameter after
     /// both have erased to (cref:object) for reflection.
     /// @param symbolicArgumentConversionClassifier Issue #4054: optional binder callback that preserves a
-    /// same-compilation
-    /// argument's symbolic identity long enough to classify a user-defined
-    /// implicit conversion to the candidate parameter. Imported arguments keep
-    /// using the CLR classifier unchanged.
+    /// same-compilation argument's symbolic identity when CLR erasure loses or invents a conversion.
+    /// Null defers to CLR classification; None authoritatively rejects the candidate,
+    /// including CLR identity matches and contextual fallback paths.
     /// @param trailingParameterCountToIgnore Optional per-candidate count of trailing ABI-only parameters
     /// excluded
     /// from applicability and ranking.
@@ -5902,19 +5901,16 @@ internal shared class ClrOverloadResolution {
                     isExpanded: false,
                     resolvedTypeArgSymbols: resolvedTypeArgSymbols
                 )
-                if (
-                    paramTypes[i].IsByRef ||
-                        !(
-                        conv == ImplicitConversionKind.Identity &&
-                            IsErasedGenericParameterSlot(rawCandidate, paramIndex, explicitTypeArgIsGenuine)
-                    )
-                ) &&
-                    symbolicArgumentConversionClassifier?(
+                if symbolicArgumentConversionClassifier?(
                     i,
                     paramTypes[i],
                     parameters[paramIndex],
                     resolvedTypeArgSymbols
                 ) is {} symbolicConversion {
+                    if symbolicConversion == ImplicitConversionKind.None {
+                        ok = false
+                        break
+                    }
                     if symbolicConversion == ImplicitConversionKind.DelegateRefKindMismatch {
                         if conv != ImplicitConversionKind.Identity {
                             ok = false
@@ -6448,19 +6444,15 @@ internal shared class ClrOverloadResolution {
                 isExpanded: true,
                 resolvedTypeArgSymbols: resolvedTypeArgSymbols
             )
-            if (
-                target.IsByRef ||
-                    !(
-                    conv == ImplicitConversionKind.Identity &&
-                        IsErasedGenericParameterSlot(rawCandidate, slot, explicitTypeArgIsGenuine)
-                )
-            ) &&
-                symbolicArgumentConversionClassifier?(
+            if symbolicArgumentConversionClassifier?(
                 i,
                 target,
                 parameters[slot],
                 resolvedTypeArgSymbols
             ) is {} symbolicConversion {
+                if symbolicConversion == ImplicitConversionKind.None {
+                    return
+                }
                 if symbolicConversion == ImplicitConversionKind.DelegateRefKindMismatch {
                     if conv != ImplicitConversionKind.Identity {
                         return

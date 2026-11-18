@@ -17,6 +17,7 @@ description: "Index of the G# design decisions."
 | ADR | Title | Summary |
 | --- | --- | --- |
 | [0001](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0001-null-model.md) | Absence / null model — Kotlin-style nullable types | Uses explicit nullable `T?`, `nil`, safe access, and assertion instead of a universal null. |
+| [0224](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0224-source-nullable-type-parameter-kind-constraints.md) | Source nullable type parameters require a proven representation kind | Restricts source annotations and nullable-producing operators to proven reference or nonnullable value kinds. Preserves ordinary `T`, imported CLR annotations, and the existing ABI; replaces the unimplemented companion proposal. |
 | [0073](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0073-null-conditional-indexing.md) | Null-conditional indexing `a?[i]` | Adds the `?[` token; result lifts to the nullable form of the indexer's return type; receiver evaluated exactly once; rejected as assignment LHS. |
 | [0008](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0008-variable-bindings.md) | Variable bindings — keep Go's `var`/`const`/`:=`, add `let` | Original decision; the `:=` short-declaration leg was superseded by ADR-0077. |
 | [0077](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0077-drop-colon-equals-short-variable-declaration.md) | Drop `:=` short variable declaration | Removes `:=` from the language; the parser hard-rejects it with `GS0305` and a context-sensitive `let`/`var`/`for … in …` migration suggestion. |
@@ -132,6 +133,7 @@ description: "Index of the G# design decisions."
 | [0027](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0027-roslyn-fork-decision.md) | Roslyn-fork decision for v1.0 — stay on the bespoke emitter | Keeps the direct metadata emitter instead of adopting a Roslyn fork for v1.0. |
 | [0028](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0028-multi-package-emit.md) | Multi-package emit model — Option B, C#-faithful | Defines how multiple packages map to emitted CLR namespaces/types. |
 | [0048](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0048-portable-pdb-emit.md) | Portable PDB emit | Adds portable PDB, source mapping, and debug-symbol policy to the emitter. |
+| [0223](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0223-compiler-as-library-surface.md) | Compiler-as-library surface | Makes entry-point and internal-error diagnostics public, adds hermetic reference sets, and defines packaging, runtime discovery, and a thread-safety contract for `GSharp.Core` hosts. |
 
 ## 0.3 ADRs (0105-0146)
 

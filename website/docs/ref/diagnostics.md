@@ -2218,20 +2218,14 @@ nothing to pin; use the buffer directly as a `*T` pointer instead
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| GS0508 | Error | A nullable sequence element uses a type parameter that is not constrained to `struct` or a reference type. |
+| GS0508 | Error | Historical iterator-only diagnostic; source nullable type parameters now use GS0641. |
 
-`sequence[T?]` needs one stable CLR element representation. Iterator return
-types are specialized into `class` and `struct` variants automatically.
-Other unconstrained sequence type positions still require an explicit
-`struct`, `class`, or base-class constraint.
-
-A call from another unconstrained generic context cannot select either
-specialized iterator variant. Constrain the enclosing type parameter to
-`struct`, `class`, or a base class. Named or explicit arguments do not resolve
-that call: in this case
-it reports GS0266, and a nullable value-type argument may instead report
-GS0152. G# rejects source overloads differentiated only by constraints with
-GS0264, even though iterator specialization synthesizes equivalent variants.
+`sequence[T?]` needs one stable CLR element representation.
+ADR-0224 applies the same source eligibility rule as other `T?` positions.
+The compiler no longer generates implicit reference/value iterator variants.
+Declare the appropriate constrained families explicitly.
+Use different names when their CLR signatures would otherwise collide.
+Source overloads differentiated only by constraints still report GS0264.
 
 ## P/Invoke interpreter boundary (GS0514, retired)
 
@@ -2404,10 +2398,13 @@ above retain their longer explanations and examples.
 | GS0636 | Error | A `goto` enters a nested block from outside that block.  | |
 | GS0638 | Error | Cannot take the pointer value of a fixed-size buffer in movable storage outside a `fixed` statement; pin it with `fixed` or index an element directly (`name[i]`).  | |
 | GS0639 | Error | Lazy declaration dependencies exceed the available execution stack. | Reduce or split cross-declaration attribute dependencies. The compiler reports this error instead of terminating the process. |
+| GS0640 | Error | A property declaration has an initializer (`prop X T = value`). The `PropertyDecl` grammar has no initializer. | Declare a field (`var X T = value`) or assign the property in `init`. |
+| GS0641 | Error | A source annotation or nullable-producing operator requires `T?`, but `T` has no proven reference or nonnullable value kind. | Constrain the actual domain with `class`, `class?`, a sufficient reference-class bound, `struct`, or `unmanaged`. `notnull`, interface-only bounds, and a dependent parameter's bare class bound are insufficient. Use bare `T` for a complete nullable type argument. See ADR-0224. |
+| GS0642 | Error | A constructor initializer uses a target other than `base` after `:`. | Use `: base(args)` for a superclass constructor, or `convenience init() { init(args) }` for same-class chaining. |
 | GS0499 | Error | A field assignment targets a temporary struct value rather than writable storage.  | |
 | GS0500 | Error | A user-defined compound-assignment operator is not an instance method with exactly one parameter and no return value.  | |
 | GS0501 | Error | Imported metadata exposes multiple public parameterless members with the same name, so reflection lookup is ambiguous.  | |
-| GS0505 | Error | A call cannot choose between compiler-generated reference-type and value-type variants of a nullable iterator because the caller's type parameter is unconstrained.  | |
+| GS0505 | Error | Historical nullable-iterator specialization diagnostic. Unsupported source annotations now report GS0641. | |
 | GS9008 | Error | A pointer bound by `fixed` cannot be captured by a closure because the closure may outlive the pin. | A lambda inside `fixed p *int32 = xs` captures `p`. |
 
 ## Rethrow outside a catch handler (GS0570, GS0571)

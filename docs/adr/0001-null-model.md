@@ -21,6 +21,7 @@ Adopt the **Kotlin-style** model:
 
 - Reference types are non-null by default. Nullability is opted into with the postfix `?` type operator: `string?`, `User?`, `List[int]?`.
 - Value types use the same `T?` spelling, lowered to `System.Nullable<T>` in IL.
+- Explicit source `T?` over an open parameter requires a proven reference or nonnullable value kind; see [ADR-0224](0224-source-nullable-type-parameter-kind-constraints.md).
 - `nil` is the only inhabitant of the bottom of nullable types; assigning `nil` to a non-nullable is a binder diagnostic.
 - Operators: safe call `?.`, null-coalescing `??` (originally spelled `?:`; respelled by ADR-0116, issue #941), null-assert `!!`.
 - Flow-typed smart casts narrow a nullable to non-null after a `!= nil` check inside the controlled block.

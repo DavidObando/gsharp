@@ -2667,7 +2667,11 @@ internal partial class StatementBinder {
         expression BoundExpression,
         callableAliases IReadOnlyCollection[VariableSymbol]? = nil
     ) Dictionary[AccessPath, TypeSymbol]? {
-        let anchor = expression.Syntax ?? FindSyntaxAnchor(expression)
+        var anchor = expression.Syntax ?? FindSyntaxAnchor(expression)
+        // A member's syntax excludes its receiver. Include the receiver when checking for assignment facts.
+        while anchor?.Parent is AccessorExpressionSyntax accessor {
+            anchor = accessor
+        }
         if anchor == nil || !ContainsNullCoalescingAssignmentSyntax(anchor) {
             return nil
         }

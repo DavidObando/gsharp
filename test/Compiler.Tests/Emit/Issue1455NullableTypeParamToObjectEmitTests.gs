@@ -48,7 +48,8 @@ func Main() {
     let h = Holder[int32](7)
     Console.WriteLine(h.Stash()[0]!!.ToString()!!)
 }`
-        let output = CompileAndRun(source)
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(source, []string{"TOutput"}, 1)
+        let output = CompileAndRun(source.Replace("Holder[TOutput]", "Holder[TOutput struct]"))
         Assert.Equal("7${Environment.NewLine}", output)
     }
 
@@ -72,7 +73,8 @@ func Main() {
     let h = Holder[int32](42)
     Console.WriteLine(h.AsObject()!!.ToString()!!)
 }`
-        let output = CompileAndRun(source)
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(source, []string{"TOutput"}, 1)
+        let output = CompileAndRun(source.Replace("Holder[TOutput]", "Holder[TOutput struct]"))
         Assert.Equal("42${Environment.NewLine}", output)
     }
 
@@ -96,7 +98,8 @@ func Main() {
     let h = Holder[int32](9)
     Console.WriteLine(h.AsComparable()!!.CompareTo(9).ToString()!!)
 }`
-        let output = CompileAndRun(source)
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(source, []string{"T"}, 1)
+        let output = CompileAndRun(source.Replace("[T IComparable]", "[T IComparable struct]"))
         Assert.Equal("0${Environment.NewLine}", output)
     }
 

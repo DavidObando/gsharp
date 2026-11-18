@@ -77,16 +77,20 @@ abstract class BoundCallOperationExpression : BoundExpression {
         /// an imported generic method closed over a user-defined type reflects a
         /// placeholder return type, so deriving it from [`method`](paramref)
         /// would report the placeholder (PR #3968 review).
+        /// @param receiverType The symbolic receiver at the binding site.
+        /// @param methodTypeArguments The method's symbolic type arguments.
         /// @returns The callee symbol.
         internal func ImportedCallee(
             method MethodInfo,
-            returnType TypeSymbol
+            returnType TypeSymbol,
+            receiverType TypeSymbol? = nil,
+            methodTypeArguments ImmutableArray[TypeSymbol?] = default(ImmutableArray[TypeSymbol?])
         ) ImportedFunctionSymbol -> ImportedFunctionSymbol(
             method.Name,
             ImportedClassSymbol(method.DeclaringType ?? typeof(object), declaration: nil),
             method,
             declaration: nil,
             returnTypeOverride: returnType
-        )
+        ){.SignatureReceiverType: receiverType, .SignatureMethodTypeArguments: methodTypeArguments}
     }
 }

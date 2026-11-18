@@ -303,7 +303,13 @@ for value in values[bool](true) { Console.WriteLine(boolText(value)) }
 for value in values[string]("x") { Console.WriteLine(stringText(value)) }
 for value in values(9) { Console.WriteLine(intText(value)) }
 for value in values("y") { Console.WriteLine(stringText(value)) }`
-        AssertEmittedProgram(Source, `5
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(Source, []string{"T"}, 1)
+        let migrated = Source
+            .Replace("values[T]", "values[T struct]")
+            .Replace("values[string]", "referenceValues[string]")
+            .Replace("values(\"y\")", "referenceValues(\"y\")") +
+            "\nfunc referenceValues[T class?](value T) sequence[T?] { yield value\nyield nil }"
+        AssertEmittedProgram(migrated, `5
 nil
 7
 nil
@@ -346,7 +352,19 @@ async func collect() {
 }
 
 collect().Wait()`
-        AssertEmittedProgram(Source, `5
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(Source, []string{"T"}, 1)
+        let migrated = Source.Replace("values[T]", "values[T struct]").Replace(
+            "values[string]",
+            "referenceValues[string]"
+        ) +
+            `
+async func referenceValues[T class?](value T) async sequence[T?] {
+    await using let resource = Resource{}
+    yield value
+    await Task.Delay(1)
+    yield nil
+}`
+        AssertEmittedProgram(migrated, `5
 nil
 disposed
 x
@@ -366,7 +384,13 @@ func empty[T]() sequence[T?] { yield nil }
 
 for value in empty[int32]() { Console.WriteLine(intText(value)) }
 for value in empty[string]() { Console.WriteLine(stringText(value)) }`
-        AssertEmittedProgram(Source, `nil
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(Source, []string{"T"}, 1)
+        let migrated = Source.Replace("empty[T]", "empty[T struct]").Replace(
+            "empty[string]",
+            "referenceEmpty[string]"
+        ) +
+            "\nfunc referenceEmpty[T class?]() sequence[T?] { yield nil }"
+        AssertEmittedProgram(migrated, `nil
 nil
 `, "GenericNullableSequenceSupportsExplicitTypeArgumentsWithoutValueArguments")
     }
@@ -384,7 +408,8 @@ func values[T](value T) sequence[T?] {
 
 var concrete sequence[int32?] = values[int32](5)
 for value in concrete { Console.WriteLine(text(value)) }`
-        AssertEmittedProgram(Source, `5
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(Source, []string{"T"}, 1)
+        AssertEmittedProgram(Source.Replace("values[T]", "values[T struct]"), `5
 nil
 `, "SpecializedGenericIteratorResultConvertsToConcreteNullableSequence")
     }
@@ -436,7 +461,8 @@ for value in Box.staticValues[int32](4) { Console.WriteLine(text(value)) }
 for value in box.instanceEmpty[int32]() { Console.WriteLine(text(value)) }
 for value in Box.staticEmpty[int32]() { Console.WriteLine(text(value)) }
 for value in box.receiverValues[int32](5) { Console.WriteLine(text(value)) }`
-        AssertEmittedProgram(Source, `1
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(Source, []string{"T"}, 7)
+        AssertEmittedProgram(Source.Replace("[T]", "[T struct]"), `1
 nil
 2
 nil
@@ -469,16 +495,27 @@ async func asyncValues[T](value T) async sequence[T?] {
 }
 
 Console.WriteLine("ok")`
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(Source, []string{"T"}, 2)
+        let migrated = Source.Replace("[T]", "[T struct]") + `
+func referenceValues[T class?](value T) sequence[T?] {
+    yield value
+    yield nil
+}
+async func referenceAsyncValues[T class?](value T) async sequence[T?] {
+    yield value
+    await Task.Delay(1)
+    yield nil
+}`
         let assemblyPath = Compile(
-            Source,
+            migrated,
             "GenericNullableSequenceMetadataUsesMatchingSpecializedSignaturesAndInterfaces"
         )
         IlVerifier.Verify(assemblyPath)
         let assembly = EmittedFixture.Load(assemblyPath)
         let types = assembly.GetTypes()
         Assert.NotEmpty(types)
-        AssertSpecializedMethods(types, "values", typeof(IEnumerable[_]))
-        AssertSpecializedMethods(types, "asyncValues", typeof(IAsyncEnumerable[_]))
+        AssertDeclaredMethods(types, "values", "referenceValues", typeof(IEnumerable[_]))
+        AssertDeclaredMethods(types, "asyncValues", "referenceAsyncValues", typeof(IAsyncEnumerable[_]))
         AssertSpecializedIteratorInterfaces(types, typeof(IEnumerable[_]))
         AssertSpecializedIteratorInterfaces(types, typeof(IAsyncEnumerable[_]))
         Assert.Equal(
@@ -508,35 +545,19 @@ nil
     }
 
     @Fact
-    func UnconstrainedNullableSequenceOutsideIteratorStillReportsSingleGS0508() {
+    func UnconstrainedNullableSequenceOutsideIteratorReportsSourceKindDiagnostic() {
         const Source = "package Issue2927DiagnosticGuard\nfunc consume[T](values sequence[T?]) int32 -> 1"
-        AssertSingleGS0508(Source, "UnconstrainedNullableSequenceOutsideIteratorStillReportsSingleGS0508")
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(Source, []string{"T"}, 1)
     }
 
     @Fact
-    func UnconstrainedNullableSequenceNonIteratorReturnStillReportsGS0508() {
+    func UnconstrainedNullableSequenceNonIteratorReturnPreservesIndependentReturnError() {
         const Source = "package Issue2927NonIteratorReturnDiagnosticGuard\nfunc consume[T]() sequence[T?] -> nil"
-        let result = InvokeCompiler(Source, "UnconstrainedNullableSequenceNonIteratorReturnStillReportsGS0508")
-        Assert.NotEqual(0, result.ExitCode)
-        Assert.Equal(
-            1,
-            result
-                .Output
-                .Split(Environment.NewLine)
-                .Count((line string) -> line.Contains("error GS0508:", StringComparison.Ordinal))
-        )
-        Assert.Equal(
-            1,
-            result
-                .Output
-                .Split(Environment.NewLine)
-                .Count((line string) -> line.Contains("error GS0155:", StringComparison.Ordinal))
-        )
-        Assert.False(File.Exists(result.AssemblyPath))
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(Source, []string{"T"}, 1, []string{"GS0155"})
     }
 
     @Fact
-    func UnconstrainedEnclosingTypeParameterIteratorStillReportsSingleGS0508() {
+    func UnconstrainedEnclosingTypeParameterIteratorReportsSourceKindDiagnostic() {
         const Source = `package Issue2927EnclosingTypeDiagnosticGuard
 class Box[T] {
     func values(value T) sequence[T?] {
@@ -544,13 +565,17 @@ class Box[T] {
         yield nil
     }
 }`
-        AssertSingleGS0508(Source, "UnconstrainedEnclosingTypeParameterIteratorStillReportsSingleGS0508")
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(Source, []string{"T"}, 1)
     }
 
     @Fact
     func SpecializedIteratorBodyDiagnosticIsReportedOnce() {
         const Source = "package Issue2927DiagnosticDeduplication\nfunc values[T](value T) sequence[T?] { yield missing }"
-        let result = InvokeCompiler(Source, "SpecializedIteratorBodyDiagnosticIsReportedOnce")
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(Source, []string{"T"}, 1, []string{"GS0125"})
+        let result = InvokeCompiler(
+            Source.Replace("[T]", "[T struct]"),
+            "SpecializedIteratorBodyDiagnosticIsReportedOnce"
+        )
         Assert.NotEqual(0, result.ExitCode)
         Assert.Equal(
             1,
@@ -595,50 +620,15 @@ func opt[T](v T) sequence[T?] {
 }
 let value int32? = 1
 let values = opt[int32?](2)`
-        AssertSingleDiagnostic(
-            InvokeCompiler(
-                InferredSource,
-                "UnconstrainedGenericCallsCharacterizeSpecializedIteratorDiagnostics" + "_inferred"
-            ),
-            "GS0505",
-            "type parameter 'U' is not constrained"
-        )
-        AssertSingleDiagnostic(
-            InvokeCompiler(
-                NamedSource,
-                "UnconstrainedGenericCallsCharacterizeSpecializedIteratorDiagnostics" + "_named"
-            ),
-            "GS0505",
-            "type parameter 'U' is not constrained"
-        )
-        AssertSingleDiagnostic(
-            InvokeCompiler(
-                ExplicitSource,
-                "UnconstrainedGenericCallsCharacterizeSpecializedIteratorDiagnostics" + "_explicit"
-            ),
-            "GS0505",
-            "type parameter 'U' is not constrained"
-        )
-        AssertSingleDiagnostic(
-            InvokeCompiler(
-                AsyncSource,
-                "UnconstrainedGenericCallsCharacterizeSpecializedIteratorDiagnostics" + "_async"
-            ),
-            "GS0505",
-            "type parameter 'U' is not constrained"
-        )
-        AssertSingleDiagnostic(
-            InvokeCompiler(
-                NullableSource,
-                "UnconstrainedGenericCallsCharacterizeSpecializedIteratorDiagnostics" + "_nullable"
-            ),
-            "GS0152",
-            "does not satisfy the 'struct' constraint."
-        )
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(InferredSource, []string{"T"}, 1)
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(NamedSource, []string{"T"}, 1)
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(ExplicitSource, []string{"T"}, 1)
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(AsyncSource, []string{"T"}, 1)
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(NullableSource, []string{"T"}, 1)
     }
 
     @Fact
-    func UnconstrainedInstanceNullableIteratorCallReportsGS0505() {
+    func UnconstrainedInstanceNullableIteratorCallReportsSourceKindDiagnostic() {
         const Source = `package Issue2958InstanceDiagnostic
 class Box {
     func opt[T](v T) sequence[T?] {
@@ -647,11 +637,7 @@ class Box {
     }
 }
 func relay[U](box Box, u U) { let values = box.opt(u) }`
-        AssertSingleDiagnostic(
-            InvokeCompiler(Source, "UnconstrainedInstanceNullableIteratorCallReportsGS0505"),
-            "GS0505",
-            "type parameter 'U' is not constrained"
-        )
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(Source, []string{"T"}, 1)
     }
 
     @Fact
@@ -668,7 +654,7 @@ let result = pick(1)`
     }
 
     @Fact
-    func MixedNullableIteratorCandidateSetStillReportsGS0266() {
+    func MixedNullableIteratorCandidateSetRejectsTheUnsupportedDeclaration() {
         const Source = `package Issue2958MixedAmbiguityGuard
 import System
 func opt[T](v T) sequence[T?] {
@@ -679,10 +665,11 @@ func opt[T class](v T, fallback int32 = 0) sequence[T?] {
     throw Exception()
 }
 func relay[U](u U) { let values = opt(u) }`
-        AssertSingleDiagnostic(
-            InvokeCompiler(Source, "MixedNullableIteratorCandidateSetStillReportsGS0266"),
-            "GS0266",
-            "Disambiguate with explicit types or named arguments."
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(
+            Source,
+            []string{"T"},
+            1,
+            occurrences: []int32{0}
         )
     }
 
@@ -698,11 +685,7 @@ func opt[T](v T, right string = "") sequence[T?] {
     yield nil
 }
 func relay[U](u U) { let values = opt(u) }`
-        AssertSingleDiagnostic(
-            InvokeCompiler(Source, "MultipleNullableIteratorDeclarationsStillReportGS0266"),
-            "GS0266",
-            "Disambiguate with explicit types or named arguments."
-        )
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(Source, []string{"T"}, 2, []string{"GS0266"})
     }
 
     shared {
@@ -714,7 +697,12 @@ func relay[U](u U) { let values = opt(u) }`
             Assert.Equal(expected, RunBounded(assemblyPath, name))
         }
 
-        private func AssertSpecializedMethods(types[]Type, methodName string, openReturnType Type) {
+        private func AssertDeclaredMethods(
+            types[]Type,
+            valueMethodName string,
+            referenceMethodName string,
+            openReturnType Type
+        ) {
             let methods = types
                 .SelectMany(
                 func (type Type) IEnumerable[MethodInfo] {
@@ -723,7 +711,7 @@ func relay[U](u U) { let values = opt(u) }`
                     )
                 }
             )
-                .Where((method MethodInfo) -> method.Name == methodName)
+                .Where((method MethodInfo) -> method.Name == valueMethodName || method.Name == referenceMethodName)
                 .ToArray()
             Assert.Equal(2, methods.Length)
             let referenceMethod = methods.Single(
@@ -733,6 +721,7 @@ func relay[U](u U) { let values = opt(u) }`
                         .GenericParameterAttributes & GenericParameterAttributes.ReferenceTypeConstraint
                 ) != 0
             )
+            Assert.Equal(referenceMethodName, referenceMethod.Name)
             let valueMethod = methods.Single(
                 (method MethodInfo) -> (
                     method
@@ -740,6 +729,7 @@ func relay[U](u U) { let values = opt(u) }`
                         .GenericParameterAttributes & GenericParameterAttributes.NotNullableValueTypeConstraint
                 ) != 0
             )
+            Assert.Equal(valueMethodName, valueMethod.Name)
             Assert.Equal(openReturnType, referenceMethod.ReturnType.GetGenericTypeDefinition())
             Assert.True(referenceMethod.ReturnType.GetGenericArguments()[0].IsGenericParameter)
             Assert.Equal(openReturnType, valueMethod.ReturnType.GetGenericTypeDefinition())
@@ -786,19 +776,6 @@ func relay[U](u U) { let values = opt(u) }`
             Assert.True(result.ExitCode == 0, ("$name" + `: gsc failed:
 ` + "${result.Output}"))
             return result.AssemblyPath
-        }
-
-        private func AssertSingleGS0508(source string, name string) {
-            let result = InvokeCompiler(source, name)
-            Assert.NotEqual(0, result.ExitCode)
-            let diagnostics = result
-                .Output
-                .Split(Environment.NewLine)
-                .Where((line string) -> line.Contains("error GS", StringComparison.Ordinal))
-                .ToArray()
-            Assert.Single(diagnostics)
-            Assert.Contains("error GS0508:", diagnostics[0], StringComparison.Ordinal)
-            Assert.False(File.Exists(result.AssemblyPath), "gsc must not emit an assembly after GS0508")
         }
 
         private func AssertSingleDiagnostic(

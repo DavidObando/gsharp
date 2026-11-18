@@ -4096,7 +4096,7 @@ internal partial class ExpressionBinder {
         let resultType = if targetType is NullableTypeSymbol {
             targetType
         } else {
-            cast[TypeSymbol](NullableTypeSymbol.Get(targetType))
+            binderCtx.BindSourceNullable(targetType, syntax.AsKeyword.Location, isOperator: true)
         }
         return BoundAsExpression(syntax, expression, resultType)
     }
@@ -4206,7 +4206,7 @@ internal partial class ExpressionBinder {
     }
 
     private func IsTypeParameterConstrainedToReferenceType(tp TypeParameterSymbol) bool {
-        return tp.HasReferenceTypeConstraint || tp.ClassConstraint != nil || tp.DependentBoundProvesReferenceType
+        return tp.ProvesNonUniversalReferenceConstraint
     }
 
     private func IsTypeParameterConstrainedToUnmanaged(tp TypeParameterSymbol) bool {

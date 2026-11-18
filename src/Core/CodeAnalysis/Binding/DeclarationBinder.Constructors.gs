@@ -1390,6 +1390,10 @@ internal partial class DeclarationBinder {
         if ctorSyntax.IsConvenience {
             constructorSymbol.MarkConvenience()
         }
+        // The parser diagnoses invalid targets. Do not bind their arguments or synthesize an implicit base call.
+        if ctorSyntax.BaseColonToken != nil && !ctorSyntax.HasBaseInitializer {
+            return constructorSymbol
+        }
         // Resolve the explicit `: base(args)` initializer, or the implicit
         // zero-argument base call of a designated constructor, with the
         // constructor parameters in scope so explicit arguments can be

@@ -49,27 +49,22 @@ func Issue1701ASink[T class](x T?) object -> x
     }
 
     @Fact
-    func UnconstrainedNullableTypeParam_ToObject_StillCompiles() {
-        // #1455 guard: an unconstrained T's `!!T` box works for both struct
-        // and reference instantiations, so this must NOT be blocked.
+    func UnconstrainedNullableTypeParam_RequiresKnownKind() {
         let source = `
 package p
 func Issue1701BSink[T](x T?) object -> x
 `
-        Assert.Empty(Evaluate(source).Diagnostics)
+        SourceNullableKindAssertions.Reject(source, "T", 1)
     }
 
     @Fact
-    func InterfaceConstrainedNullableTypeParam_ToInterface_StillCompiles() {
-        // #1455 guard: interface-only constraint is not provably
-        // reference-nullable (a struct can implement the interface), so this
-        // must NOT be blocked.
+    func InterfaceConstrainedNullableTypeParam_RequiresKnownKind() {
         let source = `
 package p
 import System
 func Issue1701GSink[T IComparable](x T?) IComparable -> x
 `
-        Assert.Empty(Evaluate(source).Diagnostics)
+        SourceNullableKindAssertions.Reject(source, "T", 1)
     }
 
     @Fact

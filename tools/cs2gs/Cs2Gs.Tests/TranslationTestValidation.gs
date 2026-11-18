@@ -13,10 +13,29 @@ import GSharp.Core.CodeAnalysis.Text
 import System
 import System.Collections.Immutable
 import System.Linq
+import System.Text.RegularExpressions
 import Xunit
 
 /// Shared validation for G# emitted by cs2gs translation tests.
 internal shared class TranslationTestValidation {
+    func AssertSourceNullableKindRejection(source string, parameter string) {
+        let annotations = Regex.Matches(source, `\b` + Regex.Escape(parameter) + `\?`)
+        Assert.NotEmpty(annotations)
+        let tree = SyntaxTree.Parse(SourceText.From(source))
+        let scope_ = Binder.BindGlobalScope(previous: nil, ImmutableArray.Create(tree))
+        let errors = scope_
+            .Diagnostics
+            .Concat(Binder.BindProgram(scope_).Diagnostics)
+            .Where((d Diagnostic) -> d.IsError)
+            .ToArray()
+        Assert.Equal(annotations.Count, errors.Length)
+        for var i = 0; i < errors.Length; i++ {
+            Assert.Equal("GS0641", errors[i].Id)
+            Assert.Equal(annotations[i].Index + parameter.Length, errors[i].Location.Span.Start)
+            Assert.Equal(1, errors[i].Location.Span.Length)
+        }
+    }
+
     /// Asserts that emitted G# parses and binds without errors.
     /// @param sources One or more emitted G# source files.
     /// @returns The first source's round-trip result for callers that retain detailed parse assertions.

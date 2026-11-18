@@ -354,7 +354,7 @@ class GscInvoker {
                         "-p:RestoreConfigFile=" + Path.Combine(scratchDir, "nuget.config"),
                         "-p:RestorePackagesPath=" + fullPackagesRoot
                     },
-                    scratchDir,
+                    SdkCompileRunner.BuildWorkingDirectory(repoRoot, scratchDir),
                     TimeSpan.FromMinutes(2)
                 )
                 return result.ExitCode == 0

@@ -73,6 +73,22 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         }
     )
 
+    /// GS0640: a property declaration has an initializer, which the `PropertyDecl` grammar does not allow.
+    /// @param location The text location of the `=` token.
+    /// @param propertyName The property name.
+    func ReportPropertyInitializerNotSupported(location TextLocation, propertyName string) -> Report(
+        location,
+        DiagnosticDescriptors.PropertyInitializerNotSupported,
+        propertyName
+    )
+
+    /// Reports an invalid target in a constructor initializer.
+    /// @param location The text location of the initializer target.
+    internal func ReportInvalidConstructorInitializerTarget(location TextLocation) -> Report(
+        location,
+        DiagnosticDescriptors.InvalidConstructorInitializerTarget
+    )
+
     /// Reports that the `inline` modifier was combined with `data` or `record`.
     /// @param location The text location of the conflicting modifier.
     func ReportInlineCannotBeCombinedWithData(location TextLocation) -> Report(

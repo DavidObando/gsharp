@@ -104,9 +104,15 @@ v
 broken
 6
 `
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(Source, []string{"T"}, 1)
         let directory = CreateWorkDirectory()
         try {
-            let assemblyPath = CompileSource(Source, directory, "Issue2962Chains.dll", target: "exe")
+            let assemblyPath = CompileSource(
+                Source.Replace("interface INullable[T]", "interface INullable[T class?]"),
+                directory,
+                "Issue2962Chains.dll",
+                target: "exe"
+            )
             let _ = EmittedFixture.Load(assemblyPath).GetTypes()
             Assert.Equal(Expected, RunChild(assemblyPath, directory))
         } finally {
@@ -129,11 +135,18 @@ struct C : I[string] {
 func Read[T I[string]](w T) int32 {
     return T.V.Length
 }`
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(
+            Source,
+            []string{"T"},
+            1,
+            otherErrors: []string{"GS0158"},
+            isLibrary: true
+        )
         let directory = CreateWorkDirectory()
         try {
             let sourcePath = Path.Combine(directory, "Issue2962Nullable.gs")
             let outputPath = Path.Combine(directory, "Issue2962Nullable.dll")
-            File.WriteAllText(sourcePath, Source)
+            File.WriteAllText(sourcePath, Source.Replace("interface I[T]", "interface I[T class?]"))
             let (exitCode, output) = Compile(
                 "/out:" + outputPath,
                 "/target:library",
@@ -168,11 +181,18 @@ func Read[T I[string]](w T) string {
     let value string = T.V
     return value
 }`
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(
+            Source,
+            []string{"T"},
+            1,
+            otherErrors: []string{"GS0155"},
+            isLibrary: true
+        )
         let directory = CreateWorkDirectory()
         try {
             let sourcePath = Path.Combine(directory, "Issue2962NullableAssignment.gs")
             let outputPath = Path.Combine(directory, "Issue2962NullableAssignment.dll")
-            File.WriteAllText(sourcePath, Source)
+            File.WriteAllText(sourcePath, Source.Replace("interface I[T]", "interface I[T class?]"))
             let (exitCode, output) = Compile(
                 "/out:" + outputPath,
                 "/target:library",

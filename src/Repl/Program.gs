@@ -116,6 +116,11 @@ shared class Program {
         default(string?)
     }
 
+    /// ADR-0223 D4: gsi keeps the bundled runtime order of ADR-0207. The GSHARP_SDK_TOOLS_DIR folder
+    /// comes before the folder beside gsi.
+    /// @returns The folder, or `null` when the variable is not set.
+    private func SdkToolsDirectory() string? -> Environment.GetEnvironmentVariable("GSHARP_SDK_TOOLS_DIR")
+
     /// Starts the interactive TUI on the emitted submission-chaining
     /// (cref:Engine.EmittedSessionEngine) (ADR-0156; the only
     /// interactive engine since Phase 3c deleted the tree-walking evaluator).
@@ -124,7 +129,7 @@ shared class Program {
             Console.Error.WriteLine("gsi requires an interactive terminal")
             return 1
         }
-        let effectiveReferences = ReferenceResolver.ResolveDriverReferencePaths(references)
+        let effectiveReferences = ReferenceResolver.ResolveDriverReferencePaths(references, SdkToolsDirectory())
         return ReplHost.Run(EmittedSessionEngine(effectiveReferences))
     }
 
@@ -135,7 +140,7 @@ shared class Program {
     /// straight through, and its integer result is the exit code.
     private func RunScript(scriptPath string, references List[string]) int32 {
         let tree = SyntaxTree.Load(scriptPath)
-        let effectiveReferences = ReferenceResolver.ResolveDriverReferencePaths(references)
+        let effectiveReferences = ReferenceResolver.ResolveDriverReferencePaths(references, SdkToolsDirectory())
         using let resolver = ReferenceResolver.WithRuntimeReferences(effectiveReferences)
         let compilation = Compilation(resolver, tree)
         var result EmittedProgramResult

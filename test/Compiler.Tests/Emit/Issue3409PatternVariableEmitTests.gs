@@ -328,7 +328,8 @@ Console.WriteLine(CloseAsync(1).Result)
 Console.WriteLine(Describe[string]("t"))
 Console.WriteLine(Describe[string](nil))
 Console.WriteLine(Resource.Disposed)`
-        let result = CompileAndRun(Source)
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(Source, []string{"T"}, 1)
+        let result = CompileAndRun(Source.Replace("Describe[T](", "Describe[T class?]("))
         Assert.Equal(0, result.ExitCode)
         Assert.Equal(
             string.Join(

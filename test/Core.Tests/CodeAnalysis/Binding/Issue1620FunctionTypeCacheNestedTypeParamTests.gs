@@ -76,8 +76,10 @@ func Main() {
         Assert.Empty(GetDiagnostics(source))
     }
 
-    @Fact
-    func TwoGenericFunctions_SameLetterNullableT_BothBind() {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func TwoGenericFunctions_SameLetterNullableT_RequireKindAndKeepDistinctParameters(referenceKind bool) {
         let source = `package Issue1620NullableT
 
 func applyA[T](x T, f (T?) -> int32) int32 {
@@ -90,7 +92,13 @@ func Main() {
     var ra = applyA(1, (x) -> 1)
     var rb = applyB("s", (x) -> 2)
 }`
-        Assert.Empty(GetDiagnostics(source))
+        SourceNullableKindAssertions.Reject(source, "T", 2)
+        let migrated = if referenceKind {
+            source.Replace("[T]", "[T class?]").Replace("applyA(1,", "applyA(\"r\",")
+        } else {
+            source.Replace("[T]", "[T struct]").Replace("applyB(\"s\",", "applyB(2,")
+        }
+        Assert.Empty(GetDiagnostics(migrated))
     }
 
     @Fact

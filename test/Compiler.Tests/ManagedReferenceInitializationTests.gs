@@ -87,7 +87,7 @@ open class Parent {
 class Child : Parent {
     var Other readonly managed[int32]
     var Marker int32 = Trace.Mark("F")
-    init(value int32) : Parent(readonly managed(value), Trace.Mark("A")) {
+    init(value int32) : base(readonly managed(value), Trace.Mark("A")) {
         this.Other = readonly managed(value)
         Trace.Mark("C")
     }
@@ -108,7 +108,7 @@ True
     @Theory
     @InlineData("interface Bad { shared { var Value managed[int32] } }")
     @InlineData(
-        "open class Base(Value managed[int32]) { }\nclass Bad : Base { init(scoped p managed[int32]) : Base(p) { } }"
+        "open class Base(Value managed[int32]) { }\nclass Bad : Base { init(scoped p managed[int32]) : base(p) { } }"
     )
     @InlineData("class Bad { shared { var Value int32 = 1\nvar Pointer managed[int32] = managed(Value) } }")
     func OutOfBodyContractsRejectEscapesAndUninitializedStorage(declaration string) {

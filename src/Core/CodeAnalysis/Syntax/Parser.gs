@@ -25,6 +25,13 @@ open partial class Parser {
 
     private var tokens ImmutableArray[SyntaxToken]
     private var position int32
+
+    // The token index, bag index, and diagnostic of the last GS0005 from MatchToken.
+    // Other diagnostics can come between two failed matches at one token. The bag
+    // check makes a GS0005 that a speculative parse rolled back not count.
+    private var lastUnexpectedTokenPosition int32 = -1
+    private var lastUnexpectedTokenIndex int32 = -1
+    private var lastUnexpectedTokenDiagnostic Diagnostic?
     private var allowedInt64Magnitude SyntaxToken?
 
     private var stopAtTopLevelLogical bool
@@ -134,6 +141,25 @@ open partial class Parser {
         this.tokens = tokens.ToImmutableArray()
         DocumentationTokens = docTokens.ToImmutable()
         Diagnostics.AddRange(lexer.Diagnostics)
+    }
+
+    /// Initializes a new instance of the (cref:Parser) class over tokens that a prefix parse prepared
+    /// (ADR-0225). The token list ends with an end-of-file token.
+    /// @param syntaxTree The prefix tree.
+    /// @param tokens The tokens, without trivia.
+    /// @param documentationTokens The documentation comment tokens.
+    /// @param lexerDiagnostics The lexer diagnostics of the tokens.
+    internal init(
+        syntaxTree SyntaxTree,
+        tokens ImmutableArray[SyntaxToken],
+        documentationTokens ImmutableArray[SyntaxToken],
+        lexerDiagnostics IEnumerable[Diagnostic]
+    ) {
+        Diagnostics = DiagnosticBag()
+        this.syntaxTree = syntaxTree
+        this.tokens = tokens
+        DocumentationTokens = documentationTokens
+        Diagnostics.AddRange(lexerDiagnostics)
     }
 
     /// Gets tiagnostic bag associated to this parser.
@@ -610,8 +636,33 @@ open partial class Parser {
         if Current.Kind == kind {
             return NextToken()
         }
-        Diagnostics.ReportUnexpectedToken(TextLocation(syntaxTree.Text, Current.Span), Current.Kind, kind)
+        // Report GS0005 once for each token where the parser stops. A second
+        // expected-token error at the same token only repeats the first one.
+        if !IsRepeatedUnexpectedToken() {
+            let countBefore = Diagnostics.Count
+            Diagnostics.ReportUnexpectedToken(TextLocation(syntaxTree.Text, Current.Span), Current.Kind, kind)
+            if Diagnostics.Count > countBefore {
+                lastUnexpectedTokenPosition = position
+                lastUnexpectedTokenIndex = Diagnostics.Count - 1
+                lastUnexpectedTokenDiagnostic = Diagnostics.LastAdded
+            }
+        }
         return SyntaxToken.Missing(syntaxTree, kind, Current.Position)
+    }
+
+    private func IsRepeatedUnexpectedToken() bool {
+        if position == lastUnexpectedTokenPosition &&
+            lastUnexpectedTokenDiagnostic is {} reported &&
+            Diagnostics.ContainsAt(lastUnexpectedTokenIndex, reported) {
+            return true
+        }
+        if Diagnostics.LastAdded is not{} last {
+            return false
+        }
+        let lastSpan = last.Location.Span
+        let currentSpan = Current.Span
+        let sameToken = lastSpan.Start == currentSpan.Start && lastSpan.Length == currentSpan.Length
+        return sameToken && last.Id == DiagnosticDescriptors.UnexpectedToken.Id
     }
 
     shared {
