@@ -22,6 +22,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Replace recursive closure-chain traversal and full callable-state copies in `StatementBinder.AssignedRootsCollector` with an explicit heap work stack and immutable persistent state. Deep closure-call chains no longer overflow the compiler host stack or allocate quadratically, while preserving callable provenance, argument-dependent effects, cycles, and captured-write invalidation. (Fixes #6111)
+
 - Keep the SDK reference-assembly pack regression independent of installed Android workloads. Retain four inner builds and exact effective-framework path checks. (Fixes #6032)
 
 - Preserve symbolic receiver types in imported method labels for hover, signature help, and member completion. Show source-defined arguments instead of erased `object` placeholders. Keep fixed-array lengths, tuple names, and declared return nullability. Keep declared signatures separate from call-result narrowing. (Fixes #5492)

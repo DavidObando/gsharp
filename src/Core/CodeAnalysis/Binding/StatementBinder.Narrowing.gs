@@ -5730,8 +5730,8 @@ internal partial class StatementBinder {
             VariableSymbol,
             BoundExpression
         ]()
-        private let normalCallableState CallableAliasState = CallableAliasState()
-        private let allEntryCallableState CallableAliasState = CallableAliasState()
+        private var normalCallableState CallableAliasState = CallableAliasState.Empty
+        private var allEntryCallableState CallableAliasState = CallableAliasState.Empty
         private let visitedFunctionLiterals HashSet[BoundFunctionLiteralExpression] = HashSet[
             BoundFunctionLiteralExpression
         ]()
@@ -5762,6 +5762,25 @@ internal partial class StatementBinder {
         private var hasAliasSensitiveOperations bool
         private var hasControlTransfer bool
 
+        // Explicit heap stacks eliminate host-stack growth on arbitrarily deep closure-call chains and AST nesting.
+        private let workStack List[WalkStep] = List[WalkStep]()
+        private let savedStates List[(Normal CallableAliasState, AllEntry CallableAliasState)] = List[
+            (Normal CallableAliasState, AllEntry CallableAliasState)
+        ]()
+        private let conditionResults List[
+            (
+                WhenTrue(Normal CallableAliasState, AllEntry CallableAliasState),
+                WhenFalse(Normal CallableAliasState, AllEntry CallableAliasState)
+            )
+        ] = List[
+            (
+                WhenTrue(Normal CallableAliasState, AllEntry CallableAliasState),
+                WhenFalse(Normal CallableAliasState, AllEntry CallableAliasState)
+            )
+        ]()
+        private let literalFrames List[FunctionLiteralFrame] = List[FunctionLiteralFrame]()
+        private var isProcessingWorkStack bool
+
         init(
             assignmentPreservesNarrowing((BoundAssignmentExpression, TypeSymbol) -> bool)?,
             externalFunctionValues IEnumerable[VariableSymbol]? = nil,
@@ -5779,8 +5798,339 @@ internal partial class StatementBinder {
             VisitedCatchFilters = List[ExpressionSyntax]()
             this.assignmentPreservesNarrowing = assignmentPreservesNarrowing
             if externalFunctionValues != nil {
-                this.normalCallableState.External.UnionWith(externalFunctionValues)
-                this.allEntryCallableState.External.UnionWith(externalFunctionValues)
+                this.normalCallableState = this.normalCallableState.WithInitialExternal(
+                    externalFunctionValues,
+                    isClosureAssigned
+                )
+                this.allEntryCallableState = this.allEntryCallableState.WithInitialExternal(
+                    externalFunctionValues,
+                    isClosureAssigned
+                )
+            }
+        }
+
+        private enum WalkStepKind {
+            VisitStatement,
+            VisitExpression,
+            VisitPattern,
+            VisitCondition,
+            ConditionAndMid,
+            ConditionAndEnd,
+            ConditionOrMid,
+            ConditionOrEnd,
+            ConditionNegateEnd,
+            ConditionLeafEnd,
+            ConditionDiscardResult,
+            PossiblySkippedEnd,
+            ExpressionPostChecks,
+            VariableDeclarationEnd,
+            AssignmentExpressionEnd,
+            IndirectAssignmentEnd,
+            BinaryRightAndCheck,
+            BinaryEqualityCheck,
+            ConstantPatternEnd,
+            PropertyPatternField,
+            ReturnStatementEnd,
+            ConditionalGotoEnd,
+            IfAfterCondition,
+            IfAfterThen,
+            IfAfterElse,
+            IfLetStep,
+            SwitchStep,
+            TryStep,
+            LoopStep,
+            StructLiteralStep,
+            CallSiteStep,
+            IndirectCallEmptyArgsEnd,
+            CallableInvokeEmptyArgsEnd,
+            ApplyCallableArgsStep,
+            ApplyCallableArgPost,
+            CallableTargetsStep,
+            AnalyzeCallableVariableStep,
+            AnalyzeCallableVariablePost,
+            FunctionLiteralExit
+        }
+
+        private data struct WalkStep(
+            Kind WalkStepKind,
+            Node object? = nil,
+            State object? = nil,
+            Flag bool = false,
+            Index int32 = 0
+        ) { }
+
+        private data struct FunctionLiteralFrame(
+            Literal BoundFunctionLiteralExpression,
+            Body BoundStatement,
+            DeclaredBefore int32,
+            JumpedBefore int32,
+            OuterReturnState(Normal CallableAliasState, AllEntry CallableAliasState)?,
+            OuterTryReturnState(Normal CallableAliasState, AllEntry CallableAliasState)?,
+            OuterFinallyDepth int32
+        ) { }
+
+        private sealed class IfBranchFrame {
+            var AfterCondition(Normal CallableAliasState, AllEntry CallableAliasState)
+            var WhenFalse(Normal CallableAliasState, AllEntry CallableAliasState)
+            var ThenState(Normal CallableAliasState, AllEntry CallableAliasState)
+            let Condition BoundExpression
+            let ThenNode BoundNode?
+            let ElseNode BoundNode?
+            let IsStatement bool
+
+            init(
+                afterCondition(Normal CallableAliasState, AllEntry CallableAliasState),
+                whenFalse(Normal CallableAliasState, AllEntry CallableAliasState),
+                condition BoundExpression,
+                thenNode BoundNode?,
+                elseNode BoundNode?,
+                isStatement bool
+            ) {
+                AfterCondition = afterCondition
+                WhenFalse = whenFalse
+                ThenState = afterCondition
+                Condition = condition
+                ThenNode = thenNode
+                ElseNode = elseNode
+                IsStatement = isStatement
+            }
+        }
+
+        private sealed class IfLetFrame {
+            let Statements ImmutableArray[BoundStatement]
+            let ElseLabel BoundLabel
+            var Index int32
+            var Phase int32
+            var ElseEntry(Normal CallableAliasState, AllEntry CallableAliasState)?
+            var AfterHeader(Normal CallableAliasState, AllEntry CallableAliasState)
+            var ThenState(Normal CallableAliasState, AllEntry CallableAliasState)
+
+            init(
+                statements ImmutableArray[BoundStatement],
+                elseLabel BoundLabel,
+                initial(Normal CallableAliasState, AllEntry CallableAliasState)
+            ) {
+                Statements = statements
+                ElseLabel = elseLabel
+                Index = 0
+                Phase = 0
+                ElseEntry = nil
+                AfterHeader = initial
+                ThenState = initial
+            }
+        }
+
+        private sealed class SwitchFrame {
+            let IsStatement bool
+            let IsVoidExpression bool
+            let SwitchArms[]?BoundPatternSwitchArm
+            let ExprArms[]?BoundSwitchExpressionArm
+            let BranchStart(Normal CallableAliasState, AllEntry CallableAliasState)
+            var DispatchState(Normal CallableAliasState, AllEntry CallableAliasState)
+            var Joined(Normal CallableAliasState, AllEntry CallableAliasState)?
+            var CanMiss bool
+            var ArmIndex int32
+            var Phase int32
+            var PatternFailure(Normal CallableAliasState, AllEntry CallableAliasState)
+            var GuardFailure(Normal CallableAliasState, AllEntry CallableAliasState)
+
+            init(
+                isStatement bool,
+                isVoidExpression bool,
+                switchArms[]?BoundPatternSwitchArm,
+                exprArms[]?BoundSwitchExpressionArm,
+                branchStart(Normal CallableAliasState, AllEntry CallableAliasState),
+                canMiss bool
+            ) {
+                IsStatement = isStatement
+                IsVoidExpression = isVoidExpression
+                SwitchArms = switchArms
+                ExprArms = exprArms
+                BranchStart = branchStart
+                DispatchState = branchStart
+                Joined = nil
+                CanMiss = canMiss
+                ArmIndex = 0
+                Phase = 0
+                PatternFailure = branchStart
+                GuardFailure = branchStart
+            }
+        }
+
+        private sealed class TryFrame {
+            let Node BoundTryStatement
+            let HasFinally bool
+            let OuterTryReturnState(Normal CallableAliasState, AllEntry CallableAliasState)?
+            let BranchStart(Normal CallableAliasState, AllEntry CallableAliasState)
+            let OuterTryAssignments HashSet[VariableSymbol]?
+            let AssignedInTry HashSet[VariableSymbol]
+            var TryState(Normal CallableAliasState, AllEntry CallableAliasState)
+            var ExceptionalState(Normal CallableAliasState, AllEntry CallableAliasState)
+            var FinallyEntries CallableAliasState
+            var JoinedNormal CallableAliasState?
+            var JoinedAllEntry CallableAliasState?
+            var TryReturnState(Normal CallableAliasState, AllEntry CallableAliasState)?
+            var DeclaredStart int32
+            var JumpedStart int32
+            var ClauseIndex int32
+            var Phase int32
+
+            init(
+                node BoundTryStatement,
+                hasFinally bool,
+                outerTryReturnState(Normal CallableAliasState, AllEntry CallableAliasState)?,
+                branchStart(Normal CallableAliasState, AllEntry CallableAliasState),
+                outerTryAssignments HashSet[VariableSymbol]?,
+                assignedInTry HashSet[VariableSymbol]
+            ) {
+                Node = node
+                HasFinally = hasFinally
+                OuterTryReturnState = outerTryReturnState
+                BranchStart = branchStart
+                OuterTryAssignments = outerTryAssignments
+                AssignedInTry = assignedInTry
+                TryState = branchStart
+                ExceptionalState = branchStart
+                FinallyEntries = branchStart.AllEntry
+                Phase = 0
+            }
+        }
+
+        private sealed class LoopFrame {
+            let Body BoundStatement
+            let IterationRunsUserCode bool
+            var Previous(Normal CallableAliasState, AllEntry CallableAliasState)
+
+            init(
+                body BoundStatement,
+                iterationRunsUserCode bool,
+                entry(Normal CallableAliasState, AllEntry CallableAliasState)
+            ) {
+                Body = body
+                IterationRunsUserCode = iterationRunsUserCode
+                Previous = entry
+            }
+        }
+
+        private sealed class StructLiteralFrame {
+            let Steps List[(Value BoundExpression, InvalidateAfter bool)]
+            var Index int32
+
+            init(steps List[(Value BoundExpression, InvalidateAfter bool)]) {
+                Steps = steps
+                Index = 0
+            }
+        }
+
+        private enum CallSiteRefMode {
+            None,
+            RefKindsBeforeApply,
+            ImportedParamsBeforeApply,
+            ParametersAfterApply,
+            ClrCtorAfterApply,
+            FunctionPointerAfterApply
+        }
+
+        private enum CallSiteIndirectMode {
+            None,
+            IndirectCall,
+            CallableValueInvoke
+        }
+
+        private sealed class CallSiteFrame {
+            let Arguments ImmutableArray[BoundExpression]
+            let RefKinds ImmutableArray[RefKind]
+            let Parameters ImmutableArray[ParameterSymbol]
+            let ImportedParameters[]?ParameterInfo
+            let FunctionPointerTypes ImmutableArray[TypeSymbol]
+            let ApplyArguments bool
+            let InvalidateUnknownAfter bool
+            let RefMode CallSiteRefMode
+            let IndirectMode CallSiteIndirectMode
+            let IndirectTarget BoundExpression?
+            var TargetState(Normal CallableAliasState, AllEntry CallableAliasState)?
+            var Snapshots[]?CallableProvenance?
+            var ArgIndex int32
+            var Phase int32
+
+            init(
+                arguments ImmutableArray[BoundExpression],
+                applyArguments bool,
+                refMode CallSiteRefMode = CallSiteRefMode.None,
+                refKinds ImmutableArray[RefKind] = default(ImmutableArray[RefKind]),
+                parameters ImmutableArray[ParameterSymbol] = default(ImmutableArray[ParameterSymbol]),
+                importedParameters[]?ParameterInfo = nil,
+                functionPointerTypes ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol]),
+                invalidateUnknownAfter bool = false,
+                indirectMode CallSiteIndirectMode = CallSiteIndirectMode.None,
+                indirectTarget BoundExpression? = nil
+            ) {
+                Arguments = arguments
+                ApplyArguments = applyArguments
+                RefMode = refMode
+                RefKinds = refKinds
+                Parameters = parameters
+                ImportedParameters = importedParameters
+                FunctionPointerTypes = functionPointerTypes
+                InvalidateUnknownAfter = invalidateUnknownAfter
+                IndirectMode = indirectMode
+                IndirectTarget = indirectTarget
+                ArgIndex = 0
+                Phase = 0
+            }
+        }
+
+        private sealed class ApplyCallableArgsFrame {
+            let Snapshots[]?CallableProvenance?
+            var Previous(Normal CallableAliasState, AllEntry CallableAliasState)
+            var Index int32
+
+            init(snapshots[]?CallableProvenance?, previous(Normal CallableAliasState, AllEntry CallableAliasState)) {
+                Snapshots = snapshots
+                Previous = previous
+                Index = 0
+            }
+        }
+
+        private sealed class CallableTargetsFrame {
+            let EntryState(Normal CallableAliasState, AllEntry CallableAliasState)
+            let Combined List[BoundFunctionLiteralExpression]
+            let NormalSet HashSet[BoundFunctionLiteralExpression]?
+            let AllSet HashSet[BoundFunctionLiteralExpression]?
+            let ArgumentSnapshots[]?CallableProvenance?
+            var JoinedNormal CallableAliasState?
+            var JoinedAllEntry CallableAliasState?
+            var Index int32
+
+            init(
+                entryState(Normal CallableAliasState, AllEntry CallableAliasState),
+                combined List[BoundFunctionLiteralExpression],
+                normalSet HashSet[BoundFunctionLiteralExpression]?,
+                allSet HashSet[BoundFunctionLiteralExpression]?,
+                joinedNormal CallableAliasState?,
+                joinedAllEntry CallableAliasState?,
+                argumentSnapshots[]?CallableProvenance?
+            ) {
+                EntryState = entryState
+                Combined = combined
+                NormalSet = normalSet
+                AllSet = allSet
+                JoinedNormal = joinedNormal
+                JoinedAllEntry = joinedAllEntry
+                ArgumentSnapshots = argumentSnapshots
+                Index = 0
+            }
+        }
+
+        private sealed class AnalyzeVariablePostState {
+            let IsNormalUnknown bool
+            let IsExternal bool
+            let IsUnknown bool
+
+            init(isNormalUnknown bool, isExternal bool, isUnknown bool) {
+                IsNormalUnknown = isNormalUnknown
+                IsExternal = isExternal
+                IsUnknown = isUnknown
             }
         }
 
@@ -5971,34 +6321,561 @@ internal partial class StatementBinder {
             .Except(normalCallableState.Unknown)
             .Where((variable VariableSymbol) -> !normalCallableState.Literals.ContainsKey(variable))
 
-        protected open override func VisitIndirectAssignmentExpression(node BoundIndirectAssignmentExpression) {
-            base.VisitIndirectAssignmentExpression(node)
-            var pointer = node.Pointer
-            while pointer is BoundConversionExpression conversion {
-                pointer = conversion.Expression
+        open override func VisitStatement(node BoundStatement?) {
+            if node == nil {
+                return
             }
-            while pointer is BoundUnaryExpression{Op: {Kind: BoundUnaryOperatorKind.NullAssertion}} assertion {
-                pointer = assertion.Operand
-            }
-            if pointer is BoundAddressOfExpression address {
-                RecordWritableReference(address.Operand, invalidateCallableState: true, isDirectWrite: true)
-            } else if pointer is BoundVariableExpression variable && writableReferenceAliases.TryGetValue(
-                variable.Variable,
-                out var operand
-            ) {
-                RecordWritableReference(operand, invalidateCallableState: true, isDirectWrite: true)
-            } else {
-                MayMutateAnyRoot = true
-                MayMutateAnyRootViaPointer = true
+            PushStatement(node)
+            if !isProcessingWorkStack {
+                ProcessWorkStack()
             }
         }
 
-        open override func VisitStatement(node BoundStatement?) {
-            if node != nil && MeasureStatementEffects {
+        open override func VisitExpression(node BoundExpression?) {
+            if node == nil {
+                return
+            }
+            PushExpression(node)
+            if !isProcessingWorkStack {
+                ProcessWorkStack()
+            }
+        }
+
+        open override func VisitPattern(node BoundPattern?) {
+            if node == nil {
+                return
+            }
+            PushPattern(node)
+            if !isProcessingWorkStack {
+                ProcessWorkStack()
+            }
+        }
+
+        private func PushStep(
+            kind WalkStepKind,
+            node object? = nil,
+            state object? = nil,
+            flag bool = false,
+            index int32 = 0
+        ) {
+            workStack.Add(WalkStep(kind, node, state, flag, index))
+        }
+
+        private func PushStatement(node BoundStatement?) {
+            if node != nil {
+                workStack.Add(WalkStep(WalkStepKind.VisitStatement, node))
+            }
+        }
+
+        private func PushExpression(node BoundExpression?) {
+            if node != nil {
+                workStack.Add(WalkStep(WalkStepKind.VisitExpression, node))
+            }
+        }
+
+        private func PushPattern(node BoundPattern?) {
+            if node != nil {
+                workStack.Add(WalkStep(WalkStepKind.VisitPattern, node))
+            }
+        }
+
+        private func PushCondition(node BoundExpression) {
+            workStack.Add(WalkStep(WalkStepKind.VisitCondition, node))
+        }
+
+        private func PushExpressionList(items ImmutableArray[BoundExpression]) {
+            if items.IsDefaultOrEmpty {
+                return
+            }
+            for var i = items.Length - 1; i >= 0; i-- {
+                PushExpression(items[i])
+            }
+        }
+
+        private func PushStatementList(items ImmutableArray[BoundStatement]) {
+            if items.IsDefaultOrEmpty {
+                return
+            }
+            for var i = items.Length - 1; i >= 0; i-- {
+                PushStatement(items[i])
+            }
+        }
+
+        private func PushPossiblySkippedStatement(node BoundStatement) {
+            savedStates.Add(CaptureCallableState())
+            PushStep(WalkStepKind.PossiblySkippedEnd)
+            PushStatement(node)
+        }
+
+        private func PushPossiblySkippedExpression(node BoundExpression?) {
+            if node == nil {
+                return
+            }
+            savedStates.Add(CaptureCallableState())
+            PushStep(WalkStepKind.PossiblySkippedEnd)
+            PushExpression(node)
+        }
+
+        private func PushPossiblySkippedPattern(node BoundPattern) {
+            savedStates.Add(CaptureCallableState())
+            PushStep(WalkStepKind.PossiblySkippedEnd)
+            PushPattern(node)
+        }
+
+        private func ProcessWorkStack() {
+            let wasProcessing = isProcessingWorkStack
+            isProcessingWorkStack = true
+            try {
+                while workStack.Count > 0 {
+                    let topIndex = workStack.Count - 1
+                    let step = workStack[topIndex]
+                    workStack.RemoveAt(topIndex)
+                    switch step.Kind {
+                        case WalkStepKind.VisitStatement {
+                            ProcessStatement(cast[BoundStatement](step.Node!!))
+                        }
+                        case WalkStepKind.VisitExpression {
+                            ProcessExpression(cast[BoundExpression](step.Node!!))
+                        }
+                        case WalkStepKind.VisitPattern {
+                            ProcessPattern(cast[BoundPattern](step.Node!!))
+                        }
+                        case WalkStepKind.VisitCondition {
+                            ProcessCondition(cast[BoundExpression](step.Node!!))
+                        }
+                        case WalkStepKind.ConditionAndMid {
+                            let (leftTrue, leftFalse) = PopConditionResult()
+                            savedStates.Add(leftFalse)
+                            RestoreCallableState(leftTrue)
+                            PushStep(WalkStepKind.ConditionAndEnd)
+                            PushCondition(cast[BoundExpression](step.Node!!))
+                        }
+                        case WalkStepKind.ConditionAndEnd {
+                            let (rightTrue, rightFalse) = PopConditionResult()
+                            let leftFalse = PopSavedState()
+                            let whenFalse = JoinCallableStates(leftFalse, rightFalse)
+                            RestoreCallableState(JoinCallableStates(rightTrue, whenFalse))
+                            conditionResults.Add((rightTrue, whenFalse))
+                        }
+                        case WalkStepKind.ConditionOrMid {
+                            let (leftTrue, leftFalse) = PopConditionResult()
+                            savedStates.Add(leftTrue)
+                            RestoreCallableState(leftFalse)
+                            PushStep(WalkStepKind.ConditionOrEnd)
+                            PushCondition(cast[BoundExpression](step.Node!!))
+                        }
+                        case WalkStepKind.ConditionOrEnd {
+                            let (rightTrue, rightFalse) = PopConditionResult()
+                            let leftTrue = PopSavedState()
+                            let whenTrue = JoinCallableStates(leftTrue, rightTrue)
+                            RestoreCallableState(JoinCallableStates(whenTrue, rightFalse))
+                            conditionResults.Add((whenTrue, rightFalse))
+                        }
+                        case WalkStepKind.ConditionNegateEnd {
+                            let (operandTrue, operandFalse) = PopConditionResult()
+                            conditionResults.Add((operandFalse, operandTrue))
+                        }
+                        case WalkStepKind.ConditionLeafEnd {
+                            let after = CaptureCallableState()
+                            conditionResults.Add((after, after))
+                        }
+                        case WalkStepKind.ConditionDiscardResult {
+                            PopConditionResult()
+                        }
+                        case WalkStepKind.PossiblySkippedEnd {
+                            let branchStart = PopSavedState()
+                            RestoreCallableState(JoinCallableStates(branchStart, CaptureCallableState()))
+                        }
+                        case WalkStepKind.ExpressionPostChecks {
+                            ProcessExpressionPostChecks(cast[BoundExpression](step.Node!!), step.Flag)
+                        }
+                        case WalkStepKind.VariableDeclarationEnd {
+                            let decl = cast[BoundVariableDeclaration](step.Node!!)
+                            let inFunctionLiteral = visitedFunctionLiterals.Count > 0
+                            normalCallableState = normalCallableState.ApplyVariableDeclaration(
+                                decl,
+                                inFunctionLiteral,
+                                isClosureAssigned,
+                                isPlainUnaliasedLocal: IsPlainUnaliasedLocal
+                            )
+                            allEntryCallableState = allEntryCallableState.ApplyVariableDeclaration(
+                                decl,
+                                inFunctionLiteral,
+                                isClosureAssigned,
+                                isPlainUnaliasedLocal: IsPlainUnaliasedLocal
+                            )
+                        }
+                        case WalkStepKind.AssignmentExpressionEnd {
+                            let assign = cast[BoundAssignmentExpression](step.Node!!)
+                            let protectedGlobalRoot = step.State as GlobalVariableSymbol
+                            if assign.Variable != nil {
+                                enclosingAssignments.Pop()
+                            }
+                            if protectedGlobalRoot != nil {
+                                enclosingGlobalAssignments.Pop()
+                            }
+                            if assign.Variable != nil {
+                                writableReferenceAliases.Remove(assign.Variable)
+                                tryAssignedVariables?.Add(assign.Variable)
+                                normalCallableState = normalCallableState.ApplyAssignment(
+                                    assign,
+                                    pendingConditionalTargets.Count,
+                                    mayShareStorage,
+                                    tryAssignedVariables,
+                                    isClosureAssigned,
+                                    IsPlainUnaliasedLocal
+                                )
+                                allEntryCallableState = allEntryCallableState.ApplyAssignment(
+                                    assign,
+                                    pendingConditionalTargets.Count,
+                                    mayShareStorage,
+                                    tryAssignedVariables,
+                                    isClosureAssigned,
+                                    IsPlainUnaliasedLocal
+                                )
+                                Roots.Add(assign.Variable)
+                                if !assignments.TryGetValue(assign.Variable, out var rootAssignments) {
+                                    rootAssignments = List[BoundAssignmentExpression]()
+                                    assignments.Add(assign.Variable, rootAssignments)
+                                }
+                                rootAssignments.Add(assign)
+                            }
+                        }
+                        case WalkStepKind.IndirectAssignmentEnd {
+                            let indirectAssign = cast[BoundIndirectAssignmentExpression](step.Node!!)
+                            var pointer = indirectAssign.Pointer
+                            while pointer is BoundConversionExpression conversion {
+                                pointer = conversion.Expression
+                            }
+                            while pointer is BoundUnaryExpression{
+                                Op: {Kind: BoundUnaryOperatorKind.NullAssertion}
+                            } assertion {
+                                pointer = assertion.Operand
+                            }
+                            if pointer is BoundAddressOfExpression address {
+                                RecordWritableReference(
+                                    address.Operand,
+                                    invalidateCallableState: true,
+                                    isDirectWrite: true
+                                )
+                            } else if pointer is BoundVariableExpression variable &&
+                                writableReferenceAliases
+                                .TryGetValue(variable.Variable, out var operand) {
+                                RecordWritableReference(operand, invalidateCallableState: true, isDirectWrite: true)
+                            } else {
+                                MayMutateAnyRoot = true
+                                MayMutateAnyRootViaPointer = true
+                            }
+                        }
+                        case WalkStepKind.BinaryRightAndCheck {
+                            let bin = cast[BoundBinaryExpression](step.Node!!)
+                            if step.Flag && AlreadyProcessedExpressions != nil && visitedFunctionLiterals.Count == 0 {
+                                localProcessedExpressions.Add(bin)
+                            }
+                            PushStep(WalkStepKind.BinaryEqualityCheck, bin)
+                            PushExpression(bin.Right)
+                        }
+                        case WalkStepKind.BinaryEqualityCheck {
+                            let bin = cast[BoundBinaryExpression](step.Node!!)
+                            if StatementBinder.BinaryEqualityRunsUserCode(bin) {
+                                // ADR-0208 R19 (#5710, #5326): structural equality calls `Equals`, which can be user code.
+                                MarkMayMutateGlobalRoots(writesReferenceStorage: false)
+                                InvalidateCallableStateForUnknownClosure()
+                                callExpressions.Add(bin)
+                            }
+                        }
+                        case WalkStepKind.ConstantPatternEnd {
+                            let pattern = cast[BoundConstantPattern](step.Node!!)
+                            // ADR-0208 R19 (#5593, #5326): the test can call the input's `Equals`, which can be user code.
+                            if StatementBinder.ConstantPatternRunsUserCode(pattern) {
+                                MarkMayMutateGlobalRoots(writesReferenceStorage: false)
+                                InvalidateCallableStateForUnknownClosure()
+                                if BoundBinaryOperator.Bind(
+                                    SyntaxKind.EqualsEqualsToken,
+                                    TypeSymbol.Object,
+                                    TypeSymbol.Object
+                                ) is {} eqOp {
+                                    callExpressions.Add(
+                                        BoundBinaryExpression(
+                                            pattern.Syntax,
+                                            BoundDefaultExpression(pattern.Syntax, pattern.Type),
+                                            eqOp,
+                                            pattern.Value,
+                                            isChecked: false
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                        case WalkStepKind.PropertyPatternField {
+                            let propPattern = cast[BoundPropertyPattern](step.Node!!)
+                            let index = step.Index
+                            if index < propPattern.Fields.Length {
+                                let field = propPattern.Fields[index]
+                                // A computed property of a pattern runs its getter.
+                                if field.Property is {} property && StatementBinder.SourcePropertyRunsUserCode(
+                                    property,
+                                    propPattern.Type
+                                ) {
+                                    MarkMayMutateGlobalRoots()
+                                    InvalidateCallableStateForUnknownClosure()
+                                }
+                                // ADR-0208 R16 (#5231): so does an imported property that is not on the stable list.
+                                if StatementBinder.ClrMemberReadRunsUserCode(field.ClrMember) {
+                                    MarkMayMutateGlobalRoots()
+                                    InvalidateCallableStateForUnknownClosure()
+                                }
+                                if index + 1 < propPattern.Fields.Length {
+                                    PushStep(WalkStepKind.PropertyPatternField, propPattern, index: index + 1)
+                                }
+                                PushPossiblySkippedPattern(field.Pattern)
+                            }
+                        }
+                        case WalkStepKind.ReturnStatementEnd {
+                            RecordFunctionLiteralReturn()
+                        }
+                        case WalkStepKind.ConditionalGotoEnd {
+                            let condGoto = cast[BoundConditionalGotoStatement](step.Node!!)
+                            jumpedRegionLabels.Add(condGoto.Label)
+                            if !visitedLabels.Contains(condGoto.Label) {
+                                pendingConditionalTargets.Add(condGoto.Label)
+                            }
+                        }
+                        case WalkStepKind.IfAfterCondition {
+                            let frame = cast[IfBranchFrame](step.State!!)
+                            let (whenTrue, whenFalse) = PopConditionResult()
+                            frame.AfterCondition = CaptureCallableState()
+                            frame.WhenFalse = whenFalse
+                            RestoreCallableState(whenTrue)
+                            PushStep(WalkStepKind.IfAfterThen, state: frame)
+                            if frame.IsStatement {
+                                PushStatement(frame.ThenNode as BoundStatement)
+                            } else {
+                                PushExpression(frame.ThenNode as BoundExpression)
+                            }
+                        }
+                        case WalkStepKind.IfAfterThen {
+                            let frame = cast[IfBranchFrame](step.State!!)
+                            frame.ThenState = CaptureCallableState()
+                            RestoreCallableState(frame.WhenFalse)
+                            PushStep(WalkStepKind.IfAfterElse, state: frame)
+                            if frame.IsStatement {
+                                PushStatement(frame.ElseNode as BoundStatement)
+                            } else {
+                                PushExpression(frame.ElseNode as BoundExpression)
+                            }
+                        }
+                        case WalkStepKind.IfAfterElse {
+                            let frame = cast[IfBranchFrame](step.State!!)
+                            let elseState = CaptureCallableState()
+                            if frame.IsStatement {
+                                let thenStatement = frame.ThenNode as BoundStatement
+                                let elseStatement = frame.ElseNode as BoundStatement
+                                var joined(Normal CallableAliasState, AllEntry CallableAliasState)? = nil
+                                if !StatementBinder.EndsInUnconditionalExit(thenStatement, gotoExits: false) {
+                                    joined = JoinCallableStates(joined, frame.ThenState)
+                                }
+                                if elseStatement == nil || !StatementBinder.EndsInUnconditionalExit(
+                                    elseStatement,
+                                    gotoExits: false
+                                ) {
+                                    joined = JoinCallableStates(joined, elseState)
+                                }
+                                RestoreCallableState(joined ?? frame.AfterCondition)
+                            } else {
+                                RestoreCallableState(JoinCallableStates(frame.ThenState, elseState))
+                            }
+                        }
+                        case WalkStepKind.IfLetStep {
+                            ProcessIfLetStep(cast[IfLetFrame](step.State!!))
+                        }
+                        case WalkStepKind.SwitchStep {
+                            ProcessSwitchStep(cast[SwitchFrame](step.State!!))
+                        }
+                        case WalkStepKind.TryStep {
+                            ProcessTryStep(cast[TryFrame](step.State!!))
+                        }
+                        case WalkStepKind.LoopStep {
+                            ProcessLoopStep(cast[LoopFrame](step.State!!), step.Flag)
+                        }
+                        case WalkStepKind.StructLiteralStep {
+                            let frame = cast[StructLiteralFrame](step.State!!)
+                            if step.Flag {
+                                normalCallableState = normalCallableState.InvalidateClosureAssigned(
+                                    isClosureAssigned,
+                                    tryAssignedVariables
+                                )
+                                allEntryCallableState = allEntryCallableState.InvalidateClosureAssigned(
+                                    isClosureAssigned,
+                                    tryAssignedVariables
+                                )
+                            }
+                            if frame.Index < frame.Steps.Count {
+                                let entry = frame.Steps[frame.Index]
+                                frame.Index++
+                                PushStep(WalkStepKind.StructLiteralStep, state: frame, flag: entry.InvalidateAfter)
+                                PushExpression(entry.Value)
+                            }
+                        }
+                        case WalkStepKind.CallSiteStep {
+                            ProcessCallSiteStep(cast[CallSiteFrame](step.State!!))
+                        }
+                        case WalkStepKind.IndirectCallEmptyArgsEnd {
+                            let call = cast[BoundIndirectCallExpression](step.Node!!)
+                            let targetState = CaptureCallableState()
+                            InvalidateRefKindArguments(call.Arguments, call.ArgumentRefKinds)
+                            AnalyzeCallableInvocation(call.Target, targetState, nil)
+                        }
+                        case WalkStepKind.CallableInvokeEmptyArgsEnd {
+                            let call = cast[BoundImportedInstanceCallExpression](step.Node!!)
+                            let targetState = CaptureCallableState()
+                            InvalidateImportedParameterRefArguments(call.Arguments, call.Method.GetParameters())
+                            AnalyzeCallableInvocation(call.Receiver, targetState, nil)
+                        }
+                        case WalkStepKind.ApplyCallableArgsStep {
+                            ProcessApplyCallableArgsStep(cast[ApplyCallableArgsFrame](step.State!!))
+                        }
+                        case WalkStepKind.ApplyCallableArgPost {
+                            let snapshots = cast[[]?CallableProvenance?](step.Node!!)
+                            if snapshots!![step.Index] is {} snapshot {
+                                if snapshot.IsExternal {
+                                    MarkMayMutateGlobalRoots(runsSourceCode: false)
+                                }
+                                if snapshot.IsNormalUnknown {
+                                    normalCallableState = normalCallableState.InvalidateClosureAssigned(
+                                        isClosureAssigned,
+                                        tryAssignedVariables
+                                    )
+                                }
+                                if snapshot.IsUnknown {
+                                    MayMutateAnyRoot = true
+                                    allEntryCallableState = allEntryCallableState.InvalidateClosureAssigned(
+                                        isClosureAssigned,
+                                        tryAssignedVariables
+                                    )
+                                }
+                            }
+                        }
+                        case WalkStepKind.CallableTargetsStep {
+                            ProcessCallableTargetsStep(cast[CallableTargetsFrame](step.State!!))
+                        }
+                        case WalkStepKind.AnalyzeCallableVariableStep {
+                            AnalyzeCallableVariable(cast[VariableSymbol](step.Node!!))
+                        }
+                        case WalkStepKind.AnalyzeCallableVariablePost {
+                            let post = cast[AnalyzeVariablePostState](step.State!!)
+                            MayMutateAnyRoot |= post.IsUnknown
+                            if post.IsNormalUnknown {
+                                normalCallableState = normalCallableState.InvalidateClosureAssigned(
+                                    isClosureAssigned,
+                                    tryAssignedVariables
+                                )
+                            }
+                            if post.IsUnknown {
+                                allEntryCallableState = allEntryCallableState.InvalidateClosureAssigned(
+                                    isClosureAssigned,
+                                    tryAssignedVariables
+                                )
+                            }
+                            if post.IsExternal {
+                                MarkMayMutateGlobalRoots(runsSourceCode: false)
+                                MayMutateWritableReferenceRoots = true
+                                RecordReferenceStorageWrite(nil)
+                            }
+                        }
+                        case WalkStepKind.FunctionLiteralExit {
+                            let frameIdx = literalFrames.Count - 1
+                            let frame = literalFrames[frameIdx]
+                            literalFrames.RemoveAt(frameIdx)
+                            if !StatementBinder.EndsInUnconditionalExit(frame.Body, gotoExits: false) {
+                                functionLiteralReturnState = JoinCallableStates(
+                                    functionLiteralReturnState,
+                                    CaptureCallableState()
+                                )
+                            }
+                            if functionLiteralReturnState is {} exitState {
+                                RestoreCallableState(exitState)
+                            }
+                            functionLiteralReturnState = frame.OuterReturnState
+                            functionLiteralTryReturnState = frame.OuterTryReturnState
+                            functionLiteralFinallyDepth = frame.OuterFinallyDepth
+                            if declaredRegionLabels.Count > frame.DeclaredBefore {
+                                declaredRegionLabels.RemoveRange(
+                                    frame.DeclaredBefore,
+                                    declaredRegionLabels.Count - frame.DeclaredBefore
+                                )
+                            }
+                            if jumpedRegionLabels.Count > frame.JumpedBefore {
+                                jumpedRegionLabels.RemoveRange(
+                                    frame.JumpedBefore,
+                                    jumpedRegionLabels.Count - frame.JumpedBefore
+                                )
+                            }
+                            visitedFunctionLiterals.Remove(frame.Literal)
+                        }
+                    }
+                }
+            } finally {
+                isProcessingWorkStack = wasProcessing
+            }
+        }
+
+        private func PopSavedState()(Normal CallableAliasState, AllEntry CallableAliasState) {
+            let idx = savedStates.Count - 1
+            let state = savedStates[idx]
+            savedStates.RemoveAt(idx)
+            return state
+        }
+
+        private func PopConditionResult()(
+            WhenTrue(Normal CallableAliasState, AllEntry CallableAliasState),
+            WhenFalse(Normal CallableAliasState, AllEntry CallableAliasState)
+        ) {
+            let idx = conditionResults.Count - 1
+            let result = conditionResults[idx]
+            conditionResults.RemoveAt(idx)
+            return result
+        }
+
+        private func RecordFunctionLiteralReturn() {
+            if visitedFunctionLiterals.Count > 0 {
+                if functionLiteralFinallyDepth > 0 {
+                    functionLiteralTryReturnState = JoinCallableStates(
+                        functionLiteralTryReturnState,
+                        CaptureCallableState()
+                    )
+                } else {
+                    functionLiteralReturnState = JoinCallableStates(functionLiteralReturnState, CaptureCallableState())
+                }
+            }
+        }
+
+        private func ProcessCondition(expression BoundExpression) {
+            switch expression {
+                case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.LogicalAnd {
+                    PushStep(WalkStepKind.ConditionAndMid, binary.Right)
+                    PushCondition(binary.Left)
+                }
+                case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.LogicalOr {
+                    PushStep(WalkStepKind.ConditionOrMid, binary.Right)
+                    PushCondition(binary.Left)
+                }
+                case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation {
+                    PushStep(WalkStepKind.ConditionNegateEnd)
+                    PushCondition(unary.Operand)
+                }
+                default {
+                    PushStep(WalkStepKind.ConditionLeafEnd)
+                    PushExpression(expression)
+                }
+            }
+        }
+
+        private func ProcessStatement(node BoundStatement) {
+            if MeasureStatementEffects {
                 CompilationMeasurements.Count("narrowing.effect-node-visits")
             }
-            if node != nil &&
-                knownStatements != nil &&
+            if knownStatements != nil &&
                 enclosingAssignments.Count == 0 &&
                 enclosingGlobalAssignments.Count == 0 &&
                 visitedFunctionLiterals.Count == 0 &&
@@ -6015,8 +6892,18 @@ internal partial class StatementBinder {
                 .TryGetValue(node, out var known) {
                 Roots.UnionWith(known.AssignedRoots)
                 for root in known.AssignedRoots {
-                    normalCallableState.InvalidateVariable(root, mayShareStorage)
-                    allEntryCallableState.InvalidateVariable(root, mayShareStorage)
+                    normalCallableState = normalCallableState.InvalidateVariable(
+                        root,
+                        mayShareStorage,
+                        isClosureAssigned: isClosureAssigned,
+                        isPlainUnaliasedLocal: IsPlainUnaliasedLocal
+                    )
+                    allEntryCallableState = allEntryCallableState.InvalidateVariable(
+                        root,
+                        mayShareStorage,
+                        isClosureAssigned: isClosureAssigned,
+                        isPlainUnaliasedLocal: IsPlainUnaliasedLocal
+                    )
                 }
                 CompilationMeasurements.Count("narrowing.effects-child-reuses")
                 return
@@ -6049,18 +6936,523 @@ internal partial class StatementBinder {
                 if !visitedLabels.Contains(gotoStatement.Label) {
                     pendingConditionalTargets.Add(gotoStatement.Label)
                 } else if callableInvocationCountsAtLabel.TryGetValue(gotoStatement.Label, out var invocationStart) {
-                    for var i = invocationStart; i < callableInvocations.Count; i++ {
-                        AnalyzeCallableVariable(callableInvocations[i])
+                    let invocationEnd = callableInvocations.Count
+                    for var i = invocationEnd - 1; i >= invocationStart; i-- {
+                        PushStep(WalkStepKind.AnalyzeCallableVariableStep, callableInvocations[i])
                     }
                 }
             }
-            base.VisitStatement(node)
+            switch node.Kind {
+                case BoundNodeKind.BlockStatement {
+                    let block = cast[BoundBlockStatement](node)
+                    let statements = block.Statements
+                    let count = statements.Length
+                    if block.Syntax is IfLetStatementSyntax &&
+                        count >= 5 &&
+                        statements[count - 4] is BoundGotoStatement endGoto &&
+                        statements[count - 3] is BoundLabelStatement elseLabel &&
+                        statements[count - 1] is BoundLabelStatement endLabel &&
+                        endGoto.Label == endLabel
+                        .Label {
+                        let frame = IfLetFrame(statements, elseLabel.Label, CaptureCallableState())
+                        PushStep(WalkStepKind.IfLetStep, state: frame)
+                    } else {
+                        PushStatementList(statements)
+                    }
+                }
+                case BoundNodeKind.VariableDeclaration {
+                    let decl = cast[BoundVariableDeclaration](node)
+                    if decl.Initializer != nil && TryGetWritableReferenceOperand(decl.Initializer, out var operand) {
+                        writableReferenceAliases[decl.Variable] = operand
+                    }
+                    PushStep(WalkStepKind.VariableDeclarationEnd, decl)
+                    if decl.Initializer != nil {
+                        PushExpression(decl.Initializer)
+                    }
+                }
+                case BoundNodeKind.LocalFunctionDeclaration {
+                    PushExpression((cast[BoundLocalFunctionDeclaration](node)).Literal)
+                }
+                case BoundNodeKind.IfStatement {
+                    let ifStmt = cast[BoundIfStatement](node)
+                    let frame = IfBranchFrame(
+                        CaptureCallableState(),
+                        CaptureCallableState(),
+                        ifStmt.Condition,
+                        ifStmt.ThenStatement,
+                        ifStmt.ElseStatement,
+                        isStatement: true
+                    )
+                    PushStep(WalkStepKind.IfAfterCondition, state: frame)
+                    PushCondition(ifStmt.Condition)
+                }
+                case BoundNodeKind.ForInfiniteStatement {
+                    let loopStmt = cast[BoundForInfiniteStatement](node)
+                    StartLoopBodyFixedPoint(loopStmt.Body, iterationRunsUserCode: false)
+                }
+                case BoundNodeKind.ForEllipsisStatement {
+                    let loopStmt = cast[BoundForEllipsisStatement](node)
+                    PushStep(
+                        WalkStepKind.LoopStep,
+                        state: LoopFrame(loopStmt.Body, false, CaptureCallableState()),
+                        flag: false
+                    )
+                    PushExpression(loopStmt.UpperBound)
+                    PushExpression(loopStmt.LowerBound)
+                }
+                case BoundNodeKind.ForRangeStatement {
+                    let loopStmt = cast[BoundForRangeStatement](node)
+                    let runsUserCode = loopStmt.IterationKind != ForRangeKind.Indexed
+                    let frame = LoopFrame(loopStmt.Body, runsUserCode, CaptureCallableState())
+                    // ADR-0208 R11 (#5170): lowering adds GetEnumerator, MoveNext and Current calls, and an
+                    // iterator body runs inside them. Indexed iteration runs no user code.
+                    PushStep(WalkStepKind.LoopStep, state: frame, flag: false)
+                    PushExpression(loopStmt.Collection)
+                }
+                case BoundNodeKind.AwaitForRangeStatement {
+                    let loopStmt = cast[BoundAwaitForRangeStatement](node)
+                    let frame = LoopFrame(loopStmt.Body, true, CaptureCallableState())
+                    PushStep(WalkStepKind.LoopStep, state: frame, flag: false)
+                    PushExpression(loopStmt.Stream)
+                }
+                case BoundNodeKind.LabelStatement,
+                BoundNodeKind.GotoStatement,
+                BoundNodeKind.RethrowStatement,
+                BoundNodeKind.AwaitYieldPoint,
+                BoundNodeKind.AwaitResumePoint { }
+                case BoundNodeKind.ConditionalGotoStatement {
+                    let condGoto = cast[BoundConditionalGotoStatement](node)
+                    PushStep(WalkStepKind.ConditionalGotoEnd, condGoto)
+                    PushExpression(condGoto.Condition)
+                }
+                case BoundNodeKind.ReturnStatement {
+                    let ret = cast[BoundReturnStatement](node)
+                    if ret.Expression != nil {
+                        if visitedFunctionLiterals.Count > 0 {
+                            PushStep(WalkStepKind.ReturnStatementEnd)
+                        }
+                        PushExpression(ret.Expression)
+                    } else {
+                        RecordFunctionLiteralReturn()
+                    }
+                }
+                case BoundNodeKind.ExpressionStatement {
+                    PushExpression((cast[BoundExpressionStatement](node)).Expression)
+                }
+                case BoundNodeKind.TryStatement {
+                    let tryStmt = cast[BoundTryStatement](node)
+                    ContainsTry = true
+                    if tryStmt.Syntax is TryStatementSyntax trySyntax {
+                        for clause in trySyntax.CatchClauses {
+                            if clause.Filter != nil {
+                                VisitedCatchFilters.Add(clause.Filter)
+                            }
+                        }
+                    }
+                    let hasFinally = tryStmt.FinallyBlock != nil && visitedFunctionLiterals.Count > 0
+                    let outerTryReturnState = functionLiteralTryReturnState
+                    if hasFinally {
+                        functionLiteralFinallyDepth++
+                        functionLiteralTryReturnState = nil
+                    }
+                    let branchStart = CaptureCallableState()
+                    let outerTryAssignments = tryAssignedVariables
+                    let assignedInTry = HashSet[VariableSymbol]()
+                    tryAssignedVariables = assignedInTry
+                    let frame = TryFrame(
+                        tryStmt,
+                        hasFinally,
+                        outerTryReturnState,
+                        branchStart,
+                        outerTryAssignments,
+                        assignedInTry
+                    )
+                    frame.Phase = 1
+                    PushStep(WalkStepKind.TryStep, state: frame)
+                    PushStatement(tryStmt.TryBlock)
+                }
+                case BoundNodeKind.ThrowStatement {
+                    PushExpression((cast[BoundThrowStatement](node)).Expression)
+                }
+                case BoundNodeKind.PatternSwitchStatement {
+                    let sw = cast[BoundPatternSwitchStatement](node)
+                    let frame = SwitchFrame(
+                        isStatement: true,
+                        isVoidExpression: false,
+                        sw.GetDispatchArms().ToArray(),
+                        nil,
+                        CaptureCallableState(),
+                        canMiss: !sw.IsExhaustive
+                    )
+                    PushStep(WalkStepKind.SwitchStep, state: frame)
+                    PushExpression(sw.Discriminant)
+                }
+                case BoundNodeKind.GoStatement {
+                    let goStmt = cast[BoundGoStatement](node)
+                    if goStmt.Sink != nil {
+                        PushExpression(goStmt.Sink)
+                    }
+                    PushExpression(goStmt.Expression)
+                }
+                case BoundNodeKind.FixedStatement {
+                    let fixedStmt = cast[BoundFixedStatement](node)
+                    PushStatement(fixedStmt.Body)
+                    PushExpression(fixedStmt.PinnedSource)
+                }
+                case BoundNodeKind.YieldStatement {
+                    PushExpression((cast[BoundYieldStatement](node)).Expression)
+                }
+                default {
+                    throw InvalidOperationException("BoundTreeWalker: unexpected statement kind '${node.Kind}'.")
+                }
+            }
         }
 
-        open override func VisitExpression(node BoundExpression?) {
-            if node == nil {
+        private func ProcessIfLetStep(frame IfLetFrame) {
+            let statements = frame.Statements
+            let count = statements.Length
+            if frame.Phase == 0 {
+                while frame.Index < count - 5 {
+                    let current = statements[frame.Index]
+                    frame.Index++
+                    if current is BoundConditionalGotoStatement condGoto &&
+                        condGoto.Label == frame.ElseLabel &&
+                        !condGoto.JumpIfTrue {
+                        frame.Phase = 1
+                        PushStep(WalkStepKind.IfLetStep, state: frame)
+                        PushCondition(condGoto.Condition)
+                        return
+                    }
+                    frame.Phase = 0
+                    PushStep(WalkStepKind.IfLetStep, state: frame)
+                    PushStatement(current)
+                    return
+                }
+                frame.AfterHeader = CaptureCallableState()
+                frame.Phase = 2
+                PushStep(WalkStepKind.IfLetStep, state: frame)
+                PushStatement(statements[count - 5])
                 return
             }
+            if frame.Phase == 1 {
+                let (whenTrue, whenFalse) = PopConditionResult()
+                frame.ElseEntry = JoinCallableStates(frame.ElseEntry, whenFalse)
+                RestoreCallableState(whenTrue)
+                frame.Phase = 0
+                PushStep(WalkStepKind.IfLetStep, state: frame)
+                return
+            }
+            if frame.Phase == 2 {
+                frame.ThenState = CaptureCallableState()
+                RestoreCallableState(frame.ElseEntry ?? frame.AfterHeader)
+                frame.Phase = 3
+                PushStep(WalkStepKind.IfLetStep, state: frame)
+                PushStatement(statements[count - 2])
+                return
+            }
+            let elseState = CaptureCallableState()
+            let thenStatement = statements[count - 5]
+            let elseStatement = statements[count - 2]
+            var joined(Normal CallableAliasState, AllEntry CallableAliasState)? = nil
+            if !StatementBinder.EndsInUnconditionalExit(thenStatement, gotoExits: false) {
+                joined = JoinCallableStates(joined, frame.ThenState)
+            }
+            if !StatementBinder.EndsInUnconditionalExit(elseStatement, gotoExits: false) {
+                joined = JoinCallableStates(joined, elseState)
+            }
+            RestoreCallableState(joined ?? frame.AfterHeader)
+        }
+
+        private func ProcessSwitchStep(frame SwitchFrame) {
+            if frame.Phase == 0 {
+                let branchStart = CaptureCallableState()
+                let updated = SwitchFrame(
+                    frame.IsStatement,
+                    frame.IsVoidExpression,
+                    frame.SwitchArms,
+                    frame.ExprArms,
+                    branchStart,
+                    frame.CanMiss
+                )
+                let armCount = if updated.IsStatement {
+                    updated.SwitchArms!!.Length
+                } else {
+                    updated.ExprArms!!.Length
+                }
+                if armCount == 0 {
+                    if updated.CanMiss && (updated.IsStatement || updated.IsVoidExpression) {
+                        updated.Joined = JoinCallableStates(updated.Joined, updated.DispatchState)
+                    }
+                    RestoreCallableState(updated.Joined ?? updated.BranchStart)
+                    return
+                }
+                updated.Phase = 1
+                RestoreCallableState(updated.DispatchState)
+                PushStep(WalkStepKind.SwitchStep, state: updated)
+                PushPattern(
+                    if updated.IsStatement {
+                        updated.SwitchArms!![0].Pattern
+                    } else {
+                        updated.ExprArms!![0].Pattern
+                    }
+                )
+                return
+            }
+            if frame.IsStatement {
+                let arms = frame.SwitchArms!!
+                let arm = arms[frame.ArmIndex]
+                if frame.Phase == 1 {
+                    frame.PatternFailure = CaptureCallableState()
+                    frame.Phase = 2
+                    PushStep(WalkStepKind.SwitchStep, state: frame)
+                    PushExpression(arm.Guard)
+                    return
+                }
+                if frame.Phase == 2 {
+                    frame.GuardFailure = CaptureCallableState()
+                    frame.Phase = 3
+                    PushStep(WalkStepKind.SwitchStep, state: frame)
+                    PushStatement(arm.Body)
+                    return
+                }
+                if !StatementBinder.EndsInUnconditionalExit(arm.Body, gotoExits: false) {
+                    frame.Joined = JoinCallableStates(frame.Joined, CaptureCallableState())
+                }
+                if arm.IsCatchAll {
+                    frame.CanMiss = false
+                } else {
+                    frame.DispatchState = if arm.Guard == nil {
+                        frame.PatternFailure
+                    } else if arm.PatternMatchesAllInputs {
+                        frame.GuardFailure
+                    } else {
+                        JoinCallableStates(frame.PatternFailure, frame.GuardFailure)
+                    }
+                }
+                frame.ArmIndex++
+                if frame.ArmIndex < arms.Length {
+                    frame.Phase = 1
+                    RestoreCallableState(frame.DispatchState)
+                    PushStep(WalkStepKind.SwitchStep, state: frame)
+                    PushPattern(arms[frame.ArmIndex].Pattern)
+                    return
+                }
+                if frame.CanMiss {
+                    frame.Joined = JoinCallableStates(frame.Joined, frame.DispatchState)
+                }
+                RestoreCallableState(frame.Joined ?? frame.BranchStart)
+                return
+            }
+            let arms = frame.ExprArms!!
+            let arm = arms[frame.ArmIndex]
+            if frame.Phase == 1 {
+                frame.PatternFailure = CaptureCallableState()
+                frame.Phase = 2
+                PushStep(WalkStepKind.SwitchStep, state: frame)
+                PushExpression(arm.Guard)
+                return
+            }
+            if frame.Phase == 2 {
+                frame.GuardFailure = CaptureCallableState()
+                frame.Phase = 3
+                PushStep(WalkStepKind.SwitchStep, state: frame)
+                PushExpression(arm.Result)
+                return
+            }
+            var done = false
+            frame.Joined = JoinCallableStates(frame.Joined, CaptureCallableState())
+            if arm.IsCatchAll {
+                frame.CanMiss = false
+                done = true
+            } else {
+                frame.DispatchState = if arm.Guard == nil {
+                    frame.PatternFailure
+                } else if arm.PatternMatchesAllInputs {
+                    frame.GuardFailure
+                } else {
+                    JoinCallableStates(frame.PatternFailure, frame.GuardFailure)
+                }
+            }
+            frame.ArmIndex++
+            if !done && frame.ArmIndex < arms.Length {
+                frame.Phase = 1
+                RestoreCallableState(frame.DispatchState)
+                PushStep(WalkStepKind.SwitchStep, state: frame)
+                PushPattern(arms[frame.ArmIndex].Pattern)
+                return
+            }
+            if frame.CanMiss && frame.IsVoidExpression {
+                frame.Joined = JoinCallableStates(frame.Joined, frame.DispatchState)
+            }
+            RestoreCallableState(frame.Joined ?? frame.BranchStart)
+        }
+
+        private func ProcessTryStep(frame TryFrame) {
+            let node = frame.Node
+            if frame.Phase == 1 {
+                tryAssignedVariables = frame.OuterTryAssignments
+                frame.OuterTryAssignments?.UnionWith(frame.AssignedInTry)
+                frame.TryState = CaptureCallableState()
+                frame.ExceptionalState = (
+                    frame.BranchStart.Normal.InvalidateVariables(frame.AssignedInTry),
+                    frame.BranchStart.AllEntry.InvalidateVariables(frame.AssignedInTry)
+                )
+                frame.ClauseIndex = 0
+                frame.Phase = 2
+                // Fall through to find first filter prepass.
+
+            }
+            if frame.Phase == 2 {
+                while frame.ClauseIndex < node.CatchClauses.Length {
+                    let clause = node.CatchClauses[frame.ClauseIndex]
+                    frame.ClauseIndex++
+                    if clause.Filter != nil {
+                        RestoreCallableState(frame.ExceptionalState)
+                        frame.Phase = 3
+                        PushStep(WalkStepKind.TryStep, state: frame)
+                        PushExpression(clause.Filter)
+                        return
+                    }
+                }
+                frame.Phase = 4
+            } else if frame.Phase == 3 {
+                frame.ExceptionalState = JoinCallableStates(frame.ExceptionalState, CaptureCallableState())
+                frame.Phase = 2
+                PushStep(WalkStepKind.TryStep, state: frame)
+                return
+            }
+            if frame.Phase == 4 {
+                frame.FinallyEntries = CallableAliasState.Join(frame.TryState.AllEntry, frame.ExceptionalState.AllEntry)
+                let tryExits = StatementBinder.EndsInUnconditionalExit(node.TryBlock, gotoExits: false)
+                frame.JoinedNormal = if tryExits {
+                    nil
+                } else {
+                    frame.TryState.Normal
+                }
+                frame.JoinedAllEntry = if tryExits {
+                    nil
+                } else {
+                    frame.TryState.AllEntry
+                }
+                frame.ClauseIndex = 0
+                frame.Phase = 5
+            }
+            if frame.Phase == 5 {
+                if frame.ClauseIndex < node.CatchClauses.Length {
+                    let clause = node.CatchClauses[frame.ClauseIndex]
+                    RestoreCallableState(frame.ExceptionalState)
+                    frame.Phase = 6
+                    PushStep(WalkStepKind.TryStep, state: frame)
+                    PushStatement(clause.Body)
+                    if clause.Filter != nil {
+                        PushExpression(clause.Filter)
+                    }
+                    return
+                }
+                frame.Phase = 7
+            } else if frame.Phase == 6 {
+                let clause = node.CatchClauses[frame.ClauseIndex]
+                frame.ClauseIndex++
+                let catchState = CaptureCallableState()
+                frame.FinallyEntries = CallableAliasState.Join(frame.FinallyEntries, catchState.AllEntry)
+                if !StatementBinder.EndsInUnconditionalExit(clause.Body, gotoExits: false) {
+                    frame.JoinedNormal = CallableAliasState.Join(frame.JoinedNormal, catchState.Normal)
+                    frame.JoinedAllEntry = CallableAliasState.Join(frame.JoinedAllEntry, catchState.AllEntry)
+                }
+                if frame.ClauseIndex < node.CatchClauses.Length {
+                    frame.Phase = 5
+                    PushStep(WalkStepKind.TryStep, state: frame)
+                    return
+                }
+                frame.Phase = 7
+            }
+            if frame.Phase == 7 {
+                let tryReturnState = functionLiteralTryReturnState
+                if frame.HasFinally {
+                    functionLiteralFinallyDepth--
+                    functionLiteralTryReturnState = frame.OuterTryReturnState
+                    if tryReturnState is {} returningState {
+                        frame.FinallyEntries = CallableAliasState.Join(frame.FinallyEntries, returningState.AllEntry)
+                    }
+                }
+                if node.FinallyBlock != nil {
+                    frame.TryReturnState = tryReturnState
+                    frame.DeclaredStart = declaredRegionLabels.Count
+                    frame.JumpedStart = jumpedRegionLabels.Count
+                    let finallyNormalEntry = if tryReturnState is {} returningEntry {
+                        CallableAliasState.Join(frame.JoinedNormal, returningEntry.Normal)
+                    } else {
+                        frame.JoinedNormal
+                    }
+                    normalCallableState = finallyNormalEntry ?? frame.FinallyEntries
+                    allEntryCallableState = frame.FinallyEntries
+                    frame.Phase = 8
+                    PushStep(WalkStepKind.TryStep, state: frame)
+                    PushStatement(node.FinallyBlock)
+                } else {
+                    normalCallableState = frame.JoinedNormal ?? frame.FinallyEntries
+                    allEntryCallableState = frame.JoinedAllEntry ?? frame.FinallyEntries
+                }
+                return
+            }
+            if frame.HasFinally && frame.TryReturnState != nil && !StatementBinder.EndsInUnconditionalExit(
+                node.FinallyBlock,
+                gotoExits: false
+            ) {
+                let returnAfterFinally = CaptureCallableState()
+                if functionLiteralFinallyDepth > 0 {
+                    functionLiteralTryReturnState = JoinCallableStates(
+                        functionLiteralTryReturnState,
+                        returnAfterFinally
+                    )
+                } else {
+                    functionLiteralReturnState = JoinCallableStates(functionLiteralReturnState, returnAfterFinally)
+                }
+            }
+            if frame.JoinedNormal == nil || StatementBinder.EndsInUnconditionalExit(
+                node.FinallyBlock,
+                gotoExits: false
+            ) ||
+                HasEscapingRegionJump(frame.DeclaredStart, frame.JumpedStart) {
+                normalCallableState = allEntryCallableState
+            }
+        }
+
+        private func StartLoopBodyFixedPoint(body BoundStatement, iterationRunsUserCode bool) {
+            if iterationRunsUserCode {
+                MarkMayMutateGlobalRoots()
+            }
+            let frame = LoopFrame(body, iterationRunsUserCode, CaptureCallableState())
+            PushStep(WalkStepKind.LoopStep, state: frame, flag: true)
+            PushStatement(body)
+        }
+
+        private func ProcessLoopStep(frame LoopFrame, afterIteration bool) {
+            if !afterIteration {
+                if frame.IterationRunsUserCode {
+                    MarkMayMutateGlobalRoots()
+                }
+                frame.Previous = CaptureCallableState()
+                PushStep(WalkStepKind.LoopStep, state: frame, flag: true)
+                PushStatement(frame.Body)
+                return
+            }
+            if frame.IterationRunsUserCode {
+                MarkMayMutateGlobalRoots()
+            }
+            MergeCallableState(frame.Previous)
+            let joined = CaptureCallableState()
+            if CallableStatesEqual(frame.Previous, joined) {
+                RestoreCallableState(joined)
+                return
+            }
+            frame.Previous = joined
+            RestoreCallableState(joined)
+            PushStep(WalkStepKind.LoopStep, state: frame, flag: true)
+            PushStatement(frame.Body)
+        }
+
+        private func ProcessExpression(node BoundExpression) {
             if IsCallableType(node.Type) ||
                 node is BoundCallOperationExpression or
                 BoundFunctionLiteralExpression or
@@ -6076,8 +7468,8 @@ internal partial class StatementBinder {
                     node,
                     out var exitAliases
                 ) {
-                    normalCallableState.SetExternalOnly(exitAliases)
-                    allEntryCallableState.SetExternalOnly(exitAliases)
+                    normalCallableState = normalCallableState.WithExternalOnly(exitAliases, isClosureAssigned)
+                    allEntryCallableState = allEntryCallableState.WithExternalOnly(exitAliases, isClosureAssigned)
                 }
                 return
             }
@@ -6164,11 +7556,12 @@ internal partial class StatementBinder {
                 MarkMayMutateGlobalRoots(invalidateCallableAliases: false)
                 runsEscapedClosureHere = true
             }
-            if node is BoundFunctionLiteralExpression nestedLiteral {
-                for captured in nestedLiteral.CapturedVariables {
-                    normalCallableState.CapturedVariables.Add(captured)
-                    allEntryCallableState.CapturedVariables.Add(captured)
-                }
+            if node is BoundFunctionLiteralExpression nestedLiteral &&
+                !nestedLiteral
+                .CapturedVariables
+                .IsDefaultOrEmpty {
+                normalCallableState = normalCallableState.AddCapturedVariables(nestedLiteral.CapturedVariables)
+                allEntryCallableState = allEntryCallableState.AddCapturedVariables(nestedLiteral.CapturedVariables)
             }
             if StatementBinder.HasDirectCalleeEffects(node) && !IsCallableValueInvocation(node) {
                 // Struct literals invalidate callable state at each execution phase in VisitStructLiteralExpression.
@@ -6200,7 +7593,470 @@ internal partial class StatementBinder {
             if node is BoundCallOperationExpression call {
                 RecordCallSiteAliasing(call)
             }
-            base.VisitExpression(node)
+
+            let needsPostChecks = runsEscapedClosureHere || node is BoundCallOperationExpression
+            if IsLeafExpression(node.Kind) {
+                if needsPostChecks {
+                    ProcessExpressionPostChecks(node, runsEscapedClosureHere)
+                }
+                return
+            }
+            if needsPostChecks {
+                PushStep(WalkStepKind.ExpressionPostChecks, node, flag: runsEscapedClosureHere)
+            }
+
+            switch node.Kind {
+                case BoundNodeKind.MethodGroupExpression {
+                    PushExpression((cast[BoundMethodGroupExpression](node)).Receiver)
+                }
+                case BoundNodeKind.AssignmentExpression {
+                    let assign = cast[BoundAssignmentExpression](node)
+                    let assignedValue = UnwrapCallable(assign.Expression)
+                    if !assignedValue.Type.IsValueType && !(assignedValue is BoundLiteralExpression{Value: nil}) {
+                        // Erased callable copies still transfer provenance in evaluation order.
+                        hasAliasSensitiveOperations = true
+                    }
+                    let protectedGlobalRoot GlobalVariableSymbol? = assign.Variable as GlobalVariableSymbol
+                    if protectedGlobalRoot != nil {
+                        enclosingGlobalAssignments.Push(protectedGlobalRoot)
+                    }
+                    if assign.Variable != nil {
+                        enclosingAssignments.Push(assign.Variable)
+                    }
+                    PushStep(WalkStepKind.AssignmentExpressionEnd, assign, protectedGlobalRoot)
+                    PushExpression(assign.Expression)
+                }
+                case BoundNodeKind.UnaryExpression {
+                    PushExpression((cast[BoundUnaryExpression](node)).Operand)
+                }
+                case BoundNodeKind.BinaryExpression {
+                    let bin = cast[BoundBinaryExpression](node)
+                    if bin.Op.Kind is BoundBinaryOperatorKind.LogicalAnd or BoundBinaryOperatorKind.LogicalOr {
+                        PushStep(WalkStepKind.ConditionDiscardResult)
+                        PushCondition(bin)
+                    } else if bin.Op.Kind == BoundBinaryOperatorKind.NullCoalesce {
+                        PushExpression(bin.Left)
+                        // Note: stack is LIFO, so push Right before Left!
+                        workStack.RemoveAt(workStack.Count - 1)
+                        PushPossiblySkippedExpression(bin.Right)
+                        PushExpression(bin.Left)
+                    } else if bin.Left is not BoundBinaryExpression {
+                        PushStep(WalkStepKind.BinaryEqualityCheck, bin)
+                        PushExpression(bin.Right)
+                        PushExpression(bin.Left)
+                    } else {
+                        let spine = List[BoundBinaryExpression]()
+                        var current BoundExpression = bin
+                        while current is BoundBinaryExpression stepBin &&
+                            stepBin
+                            .Op
+                            .Kind is not(
+                            BoundBinaryOperatorKind.LogicalAnd or
+                                BoundBinaryOperatorKind.LogicalOr or
+                                BoundBinaryOperatorKind.NullCoalesce
+                        ) {
+                            spine.Add(stepBin)
+                            let left = stepBin.Left
+                            if AlreadyProcessedExpressions != nil &&
+                                visitedFunctionLiterals.Count == 0 &&
+                                (
+                                AlreadyProcessedExpressions!!.Contains(left) || localProcessedExpressions.Contains(left)
+                            ) {
+                                current = left
+                                break
+                            }
+                            current = left
+                        }
+                        for var i = 0; i < spine.Count; i++ {
+                            let stepBin = spine[i]
+                            PushStep(
+                                WalkStepKind.BinaryRightAndCheck,
+                                stepBin,
+                                flag: !object.ReferenceEquals(stepBin, bin)
+                            )
+                        }
+                        PushExpression(current)
+                    }
+                }
+                case BoundNodeKind.CallExpression {
+                    let call = cast[BoundCallExpression](node)
+                    PushCallableArguments(call.Arguments)
+                }
+                case BoundNodeKind.FunctionPointerInvocationExpression {
+                    let call = cast[BoundFunctionPointerInvocationExpression](node)
+                    if call.Arguments.Length > 0 || call.FunctionPointerType.ParameterTypes.Length > 0 {
+                        let frame = CallSiteFrame(
+                            call.Arguments,
+                            applyArguments: true,
+                            refMode: CallSiteRefMode.FunctionPointerAfterApply,
+                            functionPointerTypes: call.FunctionPointerType.ParameterTypes
+                        )
+                        PushStep(WalkStepKind.CallSiteStep, state: frame)
+                    }
+                    PushExpression(call.Pointer)
+                }
+                case BoundNodeKind.ConversionExpression {
+                    PushExpression((cast[BoundConversionExpression](node)).Expression)
+                }
+                case BoundNodeKind.ImportedCallExpression {
+                    let call = cast[BoundImportedCallExpression](node)
+                    PushCallableArguments(call.Arguments, call.Function.Method)
+                }
+                case BoundNodeKind.ImportedInstanceCallExpression {
+                    let call = cast[BoundImportedInstanceCallExpression](node)
+                    if IsCallableValueInvocation(call) {
+                        if call.Arguments.Length == 0 {
+                            PushStep(WalkStepKind.CallableInvokeEmptyArgsEnd, call)
+                        } else {
+                            let frame = CallSiteFrame(
+                                call.Arguments,
+                                applyArguments: true,
+                                refMode: CallSiteRefMode.ImportedParamsBeforeApply,
+                                importedParameters: call.Method.GetParameters(),
+                                indirectMode: CallSiteIndirectMode.CallableValueInvoke,
+                                indirectTarget: call.Receiver
+                            )
+                            PushStep(WalkStepKind.CallSiteStep, state: frame)
+                        }
+                    } else {
+                        PushCallableArguments(call.Arguments, call.Method)
+                    }
+                    PushExpression(call.Receiver)
+                }
+                case BoundNodeKind.ConstrainedStaticCallExpression {
+                    let call = cast[BoundConstrainedStaticCallExpression](node)
+                    PushCallableArguments(call.Arguments)
+                }
+                case BoundNodeKind.ArrayCreationExpression {
+                    let arr = cast[BoundArrayCreationExpression](node)
+                    PushExpressionList(arr.Elements)
+                    if arr.DimensionExpressions.Length > 1 {
+                        PushExpressionList(arr.DimensionExpressions)
+                    } else if arr.LengthExpression != nil {
+                        PushExpression(arr.LengthExpression)
+                    }
+                }
+                case BoundNodeKind.StackAllocExpression {
+                    let stackAlloc = cast[BoundStackAllocExpression](node)
+                    PushExpressionList(stackAlloc.InitializerElements)
+                    PushExpression(stackAlloc.Count)
+                }
+                case BoundNodeKind.MapLiteralExpression {
+                    let mapLiteral = cast[BoundMapLiteralExpression](node)
+                    for var i = mapLiteral.Entries.Length - 1; i >= 0; i-- {
+                        let entry = mapLiteral.Entries[i]
+                        PushExpression(entry.Value)
+                        PushExpression(entry.Key)
+                    }
+                }
+                case BoundNodeKind.IndexExpression {
+                    let idx = cast[BoundIndexExpression](node)
+                    PushExpressionList(idx.Indices)
+                    PushExpression(idx.Target)
+                }
+                case BoundNodeKind.IndexAssignmentExpression {
+                    let idx = cast[BoundIndexAssignmentExpression](node)
+                    PushExpression(idx.Value)
+                    PushExpressionList(idx.Indices)
+                    PushExpression(idx.TargetExpression)
+                }
+                case BoundNodeKind.LenExpression {
+                    PushExpression((cast[BoundLenExpression](node)).Operand)
+                }
+                case BoundNodeKind.StructLiteralExpression {
+                    PushStructLiteral(cast[BoundStructLiteralExpression](node))
+                }
+                case BoundNodeKind.BlockExpression {
+                    let block = cast[BoundBlockExpression](node)
+                    PushExpression(block.Expression)
+                    PushStatementList(block.Statements)
+                }
+                case BoundNodeKind.ConstructorCallExpression {
+                    let ctor = cast[BoundConstructorCallExpression](node)
+                    let parameters = ctor
+                        .SelectedConstructor
+                        ?.Parameters ??
+                        ctor
+                        .StructType
+                        .PrimaryConstructorParameters
+                    if ctor.Arguments.Length > 0 {
+                        let frame = CallSiteFrame(
+                            ctor.Arguments,
+                            applyArguments: true,
+                            refMode: if parameters.IsDefaultOrEmpty {
+                                CallSiteRefMode.None
+                            } else {
+                                CallSiteRefMode.ParametersAfterApply
+                            },
+                            parameters: parameters
+                        )
+                        PushStep(WalkStepKind.CallSiteStep, state: frame)
+                    }
+                }
+                case BoundNodeKind.UserInstanceCallExpression {
+                    let call = cast[BoundUserInstanceCallExpression](node)
+                    PushCallableArguments(call.Arguments)
+                    PushExpression(call.Receiver)
+                }
+                case BoundNodeKind.BaseInterfaceCallExpression {
+                    let call = cast[BoundBaseInterfaceCallExpression](node)
+                    PushCallableArguments(call.Arguments)
+                    PushExpression(call.Receiver)
+                }
+                case BoundNodeKind.BaseClassCallExpression {
+                    let call = cast[BoundBaseClassCallExpression](node)
+                    // ADR-0208 R11 (#5170): a base method or computed accessor runs user code.
+                    if call.Method != nil {
+                        MarkMayMutateGlobalRoots(
+                            writesReferenceStorage: call.IsPropertyAccessor,
+                            invalidateCallableAliases: false
+                        )
+                    }
+                    if call.Method is {} method {
+                        let frame = CallSiteFrame(
+                            call.Arguments,
+                            applyArguments: true,
+                            refMode: CallSiteRefMode.ParametersAfterApply,
+                            parameters: method.Parameters,
+                            invalidateUnknownAfter: true
+                        )
+                        PushStep(WalkStepKind.CallSiteStep, state: frame)
+                    } else {
+                        PushCallableArguments(call.Arguments)
+                    }
+                    PushExpression(call.Receiver)
+                }
+                case BoundNodeKind.FieldAccessExpression {
+                    PushExpression((cast[BoundFieldAccessExpression](node)).Receiver)
+                }
+                case BoundNodeKind.FieldAssignmentExpression {
+                    let assign = cast[BoundFieldAssignmentExpression](node)
+                    assignedFields.Add(assign.Field.OriginalDefinition ?? assign.Field)
+                    PushExpression(assign.Value)
+                    PushExpression(assign.ReceiverExpression)
+                }
+                case BoundNodeKind.PropertyAccessExpression {
+                    PushExpression((cast[BoundPropertyAccessExpression](node)).Receiver)
+                }
+                case BoundNodeKind.PropertyAssignmentExpression {
+                    let assign = cast[BoundPropertyAssignmentExpression](node)
+                    assignedProperties.Add(assign.Property.OriginalDefinition ?? assign.Property)
+                    PushExpression(assign.Value)
+                    PushExpression(assign.Receiver)
+                }
+                case BoundNodeKind.NullConditionalAccessExpression {
+                    let nullCond = cast[BoundNullConditionalAccessExpression](node)
+                    captureReceivers[nullCond.Capture] = nullCond.Receiver
+                    PushPossiblySkippedExpression(nullCond.WhenNotNull)
+                    PushExpression(nullCond.Receiver)
+                }
+                case BoundNodeKind.TupleLiteralExpression {
+                    PushExpressionList((cast[BoundTupleLiteralExpression](node)).Elements)
+                }
+                case BoundNodeKind.TupleElementAccessExpression {
+                    PushExpression((cast[BoundTupleElementAccessExpression](node)).Receiver)
+                }
+                case BoundNodeKind.ClrMethodGroupExpression {
+                    PushExpression((cast[BoundClrMethodGroupExpression](node)).Receiver)
+                }
+                case BoundNodeKind.IndirectCallExpression {
+                    let call = cast[BoundIndirectCallExpression](node)
+                    if call.Arguments.Length == 0 {
+                        PushStep(WalkStepKind.IndirectCallEmptyArgsEnd, call)
+                    } else {
+                        let frame = CallSiteFrame(
+                            call.Arguments,
+                            applyArguments: true,
+                            refMode: CallSiteRefMode.RefKindsBeforeApply,
+                            refKinds: call.ArgumentRefKinds,
+                            indirectMode: CallSiteIndirectMode.IndirectCall,
+                            indirectTarget: call.Target
+                        )
+                        PushStep(WalkStepKind.CallSiteStep, state: frame)
+                    }
+                    PushExpression(call.Target)
+                }
+                case BoundNodeKind.InterpolatedStringExpression {
+                    let interp = cast[BoundInterpolatedStringExpression](node)
+                    for var i = interp.Parts.Length - 1; i >= 0; i-- {
+                        let part = interp.Parts[i]
+                        if !part.IsLiteral {
+                            if interp.Handler != nil {
+                                PushPossiblySkippedExpression(part.Value)
+                            } else {
+                                PushExpression(part.Value)
+                            }
+                        }
+                    }
+                    if interp.Handler != nil && !interp.Handler.ForwardedArguments.IsDefaultOrEmpty {
+                        PushExpressionList(interp.Handler.ForwardedArguments)
+                    }
+                }
+                case BoundNodeKind.ClrConstructorCallExpression {
+                    let ctor = cast[BoundClrConstructorCallExpression](node)
+                    if ctor.Arguments.Length > 0 {
+                        let frame = CallSiteFrame(
+                            ctor.Arguments,
+                            applyArguments: true,
+                            refMode: CallSiteRefMode.ClrCtorAfterApply,
+                            refKinds: ctor.ArgumentRefKinds,
+                            importedParameters: ctor.Constructor.GetParameters()
+                        )
+                        PushStep(WalkStepKind.CallSiteStep, state: frame)
+                    }
+                }
+                case BoundNodeKind.ClrStaticCallExpression {
+                    let call = cast[BoundClrStaticCallExpression](node)
+                    PushCallableArguments(call.Arguments, call.Method)
+                }
+                case BoundNodeKind.ClrPropertyAccessExpression {
+                    PushExpression((cast[BoundClrPropertyAccessExpression](node)).Receiver)
+                }
+                case BoundNodeKind.ClrPropertyAssignmentExpression {
+                    let assign = cast[BoundClrPropertyAssignmentExpression](node)
+                    PushExpression(assign.Value)
+                    PushExpression(assign.Receiver)
+                }
+                case BoundNodeKind.ClrEventSubscriptionExpression {
+                    let sub = cast[BoundClrEventSubscriptionExpression](node)
+                    PushExpression(sub.Handler)
+                    PushExpression(sub.Receiver)
+                }
+                case BoundNodeKind.EventSubscriptionExpression {
+                    let sub = cast[BoundEventSubscriptionExpression](node)
+                    PushExpression(sub.Handler)
+                    PushExpression(sub.Receiver)
+                }
+                case BoundNodeKind.ClrBinaryOperatorExpression {
+                    let bin = cast[BoundClrBinaryOperatorExpression](node)
+                    PushExpression(bin.Right)
+                    PushExpression(bin.Left)
+                }
+                case BoundNodeKind.ClrUnaryOperatorExpression {
+                    PushExpression((cast[BoundClrUnaryOperatorExpression](node)).Operand)
+                }
+                case BoundNodeKind.ClrConversionCallExpression {
+                    let conv = cast[BoundClrConversionCallExpression](node)
+                    PushCallableArguments(ImmutableArray.Create(conv.Source))
+                }
+                case BoundNodeKind.ClrIndexExpression {
+                    let idx = cast[BoundClrIndexExpression](node)
+                    PushExpressionList(idx.Arguments)
+                    PushExpression(idx.Target)
+                }
+                case BoundNodeKind.ClrIndexAssignmentExpression {
+                    let idx = cast[BoundClrIndexAssignmentExpression](node)
+                    PushExpression(idx.Value)
+                    PushExpressionList(idx.Arguments)
+                    PushExpression(idx.TargetExpression)
+                }
+                case BoundNodeKind.AwaitExpression {
+                    PushExpression((cast[BoundAwaitExpression](node)).Expression)
+                }
+                case BoundNodeKind.SwitchExpression {
+                    let sw = cast[BoundSwitchExpression](node)
+                    let frame = SwitchFrame(
+                        isStatement: false,
+                        isVoidExpression: sw.Type == TypeSymbol.Void,
+                        nil,
+                        sw.GetDispatchArms().ToArray(),
+                        CaptureCallableState(),
+                        canMiss: true
+                    )
+                    PushStep(WalkStepKind.SwitchStep, state: frame)
+                    PushExpression(sw.Discriminant)
+                }
+                case BoundNodeKind.AddressOfExpression {
+                    let addr = cast[BoundAddressOfExpression](node)
+                    if !addr.IsReadOnly {
+                        RecordWritableReference(addr.Operand)
+                    }
+                    PushExpression(addr.Operand)
+                }
+                case BoundNodeKind.ManagedReferenceExpression {
+                    PushExpression((cast[BoundManagedReferenceExpression](node)).Location)
+                }
+                case BoundNodeKind.ManagedFieldKeyExpression {
+                    PushExpression((cast[BoundManagedFieldKeyExpression](node)).Parent)
+                }
+                case BoundNodeKind.ConditionalAddressExpression {
+                    let condAddr = cast[BoundConditionalAddressExpression](node)
+                    let frame = IfBranchFrame(
+                        CaptureCallableState(),
+                        CaptureCallableState(),
+                        condAddr.Condition,
+                        condAddr.WhenTrueOperand,
+                        condAddr.WhenFalseOperand,
+                        isStatement: false
+                    )
+                    PushStep(WalkStepKind.IfAfterCondition, state: frame)
+                    PushCondition(condAddr.Condition)
+                }
+                case BoundNodeKind.ConditionalExpression {
+                    let cond = cast[BoundConditionalExpression](node)
+                    let frame = IfBranchFrame(
+                        CaptureCallableState(),
+                        CaptureCallableState(),
+                        cond.Condition,
+                        cond.WhenTrue,
+                        cond.WhenFalse,
+                        isStatement: false
+                    )
+                    PushStep(WalkStepKind.IfAfterCondition, state: frame)
+                    PushCondition(cond.Condition)
+                }
+                case BoundNodeKind.ThrowExpression {
+                    PushExpression((cast[BoundThrowExpression](node)).Expression)
+                }
+                case BoundNodeKind.DereferenceExpression {
+                    PushExpression((cast[BoundDereferenceExpression](node)).Operand)
+                }
+                case BoundNodeKind.IndirectAssignmentExpression {
+                    let indirectAssign = cast[BoundIndirectAssignmentExpression](node)
+                    PushStep(WalkStepKind.IndirectAssignmentEnd, indirectAssign)
+                    PushExpression(indirectAssign.Value)
+                    PushExpression(indirectAssign.Pointer)
+                }
+                case BoundNodeKind.SpillSequenceExpression {
+                    let spill = cast[BoundSpillSequenceExpression](node)
+                    PushExpression(spill.Value)
+                    PushStatementList(spill.SideEffects)
+                }
+                case BoundNodeKind.IsExpression {
+                    let isExpr = cast[BoundIsExpression](node)
+                    PushPattern(isExpr.Pattern)
+                    PushExpression(isExpr.Expression)
+                }
+                case BoundNodeKind.AsExpression {
+                    PushExpression((cast[BoundAsExpression](node)).Expression)
+                }
+                case BoundNodeKind.ConstructorChainingExpression {
+                    PushExpressionList((cast[BoundConstructorChainingExpression](node)).Arguments)
+                }
+                default {
+                    throw InvalidOperationException("BoundTreeWalker: unexpected expression kind '${node.Kind}'.")
+                }
+            }
+        }
+
+        private func IsLeafExpression(kind BoundNodeKind) bool -> switch kind {
+            case BoundNodeKind.ErrorExpression,
+            BoundNodeKind.Utf8StringExpression,
+            BoundNodeKind.PatternOperandExpression,
+            BoundNodeKind.LiteralExpression,
+            BoundNodeKind.VariableExpression,
+            BoundNodeKind.DefaultExpression,
+            BoundNodeKind.TypeParameterConstructionExpression,
+            BoundNodeKind.TypeOfExpression,
+            BoundNodeKind.SizeOfExpression,
+            BoundNodeKind.FunctionPointerFromMethodExpression,
+            BoundNodeKind.FunctionLiteralExpression,
+            BoundNodeKind.StateMachineAwaitOnCompleted,
+            BoundNodeKind.StateMachineBuilderMoveNext: true
+            default: false
+        }
+
+        private func ProcessExpressionPostChecks(node BoundExpression, runsEscapedClosureHere bool) {
             if runsEscapedClosureHere {
                 InvalidateCallableStateForUnknownClosure()
             }
@@ -6235,6 +8091,310 @@ internal partial class StatementBinder {
                     }
                 }
             }
+        }
+
+        private func ProcessPattern(node BoundPattern) {
+            switch node.Kind {
+                case BoundNodeKind.DiscardPattern { }
+                case BoundNodeKind.TypePattern {
+                    PushPattern((cast[BoundTypePattern](node)).PropertyPattern)
+                }
+                case BoundNodeKind.ConstantPattern {
+                    let pattern = cast[BoundConstantPattern](node)
+                    PushStep(WalkStepKind.ConstantPatternEnd, pattern)
+                    PushExpression(pattern.Value)
+                }
+                case BoundNodeKind.RelationalPattern {
+                    let pattern = cast[BoundRelationalPattern](node)
+                    PushExpression(pattern.Test ?? pattern.Value)
+                }
+                case BoundNodeKind.PropertyPattern {
+                    let pattern = cast[BoundPropertyPattern](node)
+                    if pattern.Fields.Length > 0 {
+                        PushStep(WalkStepKind.PropertyPatternField, pattern, index: 0)
+                    }
+                }
+                case BoundNodeKind.ListPattern {
+                    let pattern = cast[BoundListPattern](node)
+                    // ADR-0208 R19 (#5593): the `Length`/`Count` getter and the indexer of an indexable input (R16, R17).
+                    if StatementBinder.ListPatternRunsUserCode(pattern) {
+                        MarkMayMutateGlobalRoots()
+                        InvalidateCallableStateForUnknownClosure()
+                    }
+                    for var i = pattern.Elements.Length - 1; i >= 0; i-- {
+                        PushPossiblySkippedPattern(pattern.Elements[i])
+                    }
+                }
+                case BoundNodeKind.SlicePattern {
+                    PushPattern((cast[BoundSlicePattern](node)).Pattern)
+                }
+                case BoundNodeKind.BinaryPattern {
+                    let pattern = cast[BoundBinaryPattern](node)
+                    PushPossiblySkippedPattern(pattern.Right)
+                    PushPattern(pattern.Left)
+                }
+                case BoundNodeKind.NotPattern {
+                    PushPattern((cast[BoundNotPattern](node)).Pattern)
+                }
+                default {
+                    throw InvalidOperationException("BoundTreeWalker: unexpected pattern kind '${node.Kind}'.")
+                }
+            }
+        }
+
+        private func PushStructLiteral(node BoundStructLiteralExpression) {
+            let steps = List[(Value BoundExpression, InvalidateAfter bool)]()
+            let consumed = HashSet[BoundFieldInitializer]()
+            let type = node.StructType
+            let definition = type.Definition ?? type
+            let spillsPrimaryInLexicalOrder = !node.IsZeroInitialization &&
+                node.CopySource == nil &&
+                !node.CallsPrimaryConstructor &&
+                type.HasDeclaredPrimaryConstructor &&
+                definition.NeedsSynthesizedValueStructDefaultCtor
+            if node.CallsPrimaryConstructor {
+                for parameter in type.PrimaryConstructorParameters {
+                    if node.GetPrimaryArgument(parameter.Name) is {} primaryArgument {
+                        consumed.Add(primaryArgument)
+                        steps.Add((primaryArgument.Value, false))
+                    }
+                }
+            } else if spillsPrimaryInLexicalOrder {
+                let primaryFields = HashSet[FieldSymbol]()
+                for argument in node.GetPrimaryConstructorArguments() {
+                    primaryFields.Add(argument.Field)
+                }
+                for initializer in node.Initializers {
+                    if initializer.IsDeclarationInitializer {
+                        consumed.Add(initializer)
+                        continue
+                    }
+                    let target FieldSymbol? = initializer.Field ?? initializer.Property?.BackingField
+                    if target != nil && primaryFields.Contains(target) {
+                        consumed.Add(initializer)
+                        steps.Add((initializer.Value, false))
+                    }
+                }
+            }
+            let invalidateAfterPrimary = (
+                node.CallsDataConstructor ||
+                    node.CallsPrimaryConstructor ||
+                    spillsPrimaryInLexicalOrder ||
+                    type.IsClass ||
+                    definition.NeedsSynthesizedValueStructDefaultCtor
+            ) &&
+                StatementBinder.ConstructionRunsUserCode(type)
+            let primaryEndIndex = steps.Count
+            for initializer in node.Initializers {
+                if !consumed.Contains(initializer) &&
+                    !(initializer.IsDeclarationInitializer && definition.NeedsSynthesizedValueStructDefaultCtor) {
+                    let invalidateAfter = initializer.Property is {} property &&
+                        StatementBinder.SourcePropertyRunsUserCode(property, receiverType: nil)
+                    steps.Add((initializer.Value, invalidateAfter))
+                }
+            }
+            if steps.Count > 0 || invalidateAfterPrimary {
+                // Invalidate after primary arguments (at primaryEndIndex), or immediately if primaryEndIndex == 0.
+                let frame = StructLiteralFrame(steps)
+                if invalidateAfterPrimary && primaryEndIndex > 0 {
+                    // Split into primary steps, then invalidate, then remaining steps.
+                    let primarySteps = steps.GetRange(0, primaryEndIndex)
+                    let remainingSteps = steps.GetRange(primaryEndIndex, steps.Count - primaryEndIndex)
+                    if remainingSteps.Count > 0 {
+                        PushStep(WalkStepKind.StructLiteralStep, state: StructLiteralFrame(remainingSteps), flag: false)
+                    }
+                    PushStep(WalkStepKind.StructLiteralStep, state: StructLiteralFrame(primarySteps), flag: false)
+                    // Wait: invalidate needs to run AFTER primarySteps and BEFORE remainingSteps!
+                    // Replace the order on stack: remainingSteps (flag: true) runs invalidate first!
+                    workStack.RemoveRange(
+                        workStack.Count - (
+                            if remainingSteps.Count > 0 {
+                                2
+                            } else {
+                                1
+                            }
+                        ),
+                        if remainingSteps.Count > 0 {
+                            2
+                        } else {
+                            1
+                        }
+                    )
+                    PushStep(WalkStepKind.StructLiteralStep, state: StructLiteralFrame(remainingSteps), flag: true)
+                    PushStep(WalkStepKind.StructLiteralStep, state: StructLiteralFrame(primarySteps), flag: false)
+                } else {
+                    PushStep(WalkStepKind.StructLiteralStep, state: frame, flag: invalidateAfterPrimary)
+                }
+            }
+            if node.CopySource != nil {
+                PushExpression(node.CopySource)
+            }
+        }
+
+        private func PushCallableArguments(
+            arguments ImmutableArray[BoundExpression],
+            method System.Reflection.MethodInfo? = nil
+        ) {
+            if arguments.IsDefaultOrEmpty {
+                return
+            }
+            let applyArguments = method == nil || !StatementBinder.DefersImportedCallbackArguments(method)
+            let frame = CallSiteFrame(arguments, applyArguments)
+            PushStep(WalkStepKind.CallSiteStep, state: frame)
+        }
+
+        private func ProcessCallSiteStep(frame CallSiteFrame) {
+            if frame.Phase == 0 {
+                if frame.IndirectMode != CallSiteIndirectMode.None {
+                    frame.TargetState = CaptureCallableState()
+                }
+                frame.Phase = 1
+            }
+            if frame.Phase == 1 {
+                if frame.ArgIndex > 0 {
+                    let visitedArg = frame.Arguments[frame.ArgIndex - 1]
+                    if IsCallableType(visitedArg.Type) {
+                        if frame.Snapshots == nil {
+                            frame.Snapshots = [frame.Arguments.Length]CallableProvenance?
+                        }
+                        frame.Snapshots!![frame.ArgIndex - 1] = SnapshotCallableArgument(visitedArg)
+                    }
+                }
+                if frame.ArgIndex < frame.Arguments.Length {
+                    let nextArg = frame.Arguments[frame.ArgIndex]
+                    frame.ArgIndex++
+                    PushStep(WalkStepKind.CallSiteStep, state: frame)
+                    PushExpression(nextArg)
+                    return
+                }
+                for argument in frame.Arguments {
+                    InvalidateWritableArgumentExpression(argument)
+                }
+                if frame.RefMode == CallSiteRefMode.RefKindsBeforeApply {
+                    InvalidateRefKindArguments(frame.Arguments, frame.RefKinds)
+                } else if frame.RefMode == CallSiteRefMode.ImportedParamsBeforeApply &&
+                    frame.ImportedParameters != nil {
+                    InvalidateImportedParameterRefArguments(frame.Arguments, frame.ImportedParameters)
+                }
+                frame.Phase = 2
+                if frame.ApplyArguments && frame.Snapshots != nil {
+                    PushStep(WalkStepKind.CallSiteStep, state: frame)
+                    StartApplyCallableArguments(frame.Snapshots)
+                    return
+                }
+            }
+            if frame.Phase == 2 {
+                if frame.RefMode == CallSiteRefMode.ParametersAfterApply {
+                    InvalidateParameterRefArguments(frame.Arguments, frame.Parameters)
+                } else if frame.RefMode == CallSiteRefMode.ClrCtorAfterApply {
+                    InvalidateRefKindArguments(frame.Arguments, frame.RefKinds)
+                    if frame.ImportedParameters != nil {
+                        InvalidateImportedParameterRefArguments(frame.Arguments, frame.ImportedParameters)
+                    }
+                } else if frame.RefMode == CallSiteRefMode.FunctionPointerAfterApply {
+                    let count = Math.Min(frame.Arguments.Length, frame.FunctionPointerTypes.Length)
+                    for var i = 0; i < count; i++ {
+                        if frame.FunctionPointerTypes[i] is ByRefTypeSymbol {
+                            RecordWritableReference(frame.Arguments[i], invalidateCallableState: true)
+                        }
+                    }
+                }
+                if frame.InvalidateUnknownAfter {
+                    InvalidateCallableStateForUnknownClosure()
+                }
+                if frame.IndirectMode != CallSiteIndirectMode.None && frame.IndirectTarget != nil {
+                    AnalyzeCallableInvocation(frame.IndirectTarget, frame.TargetState, frame.Snapshots)
+                }
+            }
+        }
+
+        private func StartApplyCallableArguments(snapshots[]?CallableProvenance?) {
+            if snapshots == nil {
+                return
+            }
+            let frame = ApplyCallableArgsFrame(snapshots, CaptureCallableState())
+            PushStep(WalkStepKind.ApplyCallableArgsStep, state: frame)
+        }
+
+        private func ProcessApplyCallableArgsStep(frame ApplyCallableArgsFrame) {
+            let snapshots = frame.Snapshots!!
+            while frame.Index < snapshots.Length {
+                let idx = frame.Index
+                frame.Index++
+                if snapshots[idx] is not{} snapshot {
+                    continue
+                }
+                let hasTargets = (snapshot.NormalTargets != nil && snapshot.NormalTargets.Count > 0) ||
+                    (snapshot.AllTargets != nil && snapshot.AllTargets.Count > 0)
+                if hasTargets {
+                    PushStep(WalkStepKind.ApplyCallableArgsStep, state: frame)
+                    PushStep(WalkStepKind.ApplyCallableArgPost, snapshots, index: idx)
+                    PushCallableTargets(
+                        snapshot.NormalTargets,
+                        normalKeepsEntry: true,
+                        snapshot.AllTargets,
+                        allKeepsEntry: true
+                    )
+                    return
+                }
+                if snapshot.IsExternal {
+                    MarkMayMutateGlobalRoots(runsSourceCode: false)
+                }
+                if snapshot.IsNormalUnknown {
+                    normalCallableState = normalCallableState.InvalidateClosureAssigned(
+                        isClosureAssigned,
+                        tryAssignedVariables
+                    )
+                }
+                if snapshot.IsUnknown {
+                    MayMutateAnyRoot = true
+                    allEntryCallableState = allEntryCallableState.InvalidateClosureAssigned(
+                        isClosureAssigned,
+                        tryAssignedVariables
+                    )
+                }
+            }
+            MergeCallableState(frame.Previous)
+            let joined = CaptureCallableState()
+            if CallableStatesEqual(frame.Previous, joined) {
+                RestoreCallableState(joined)
+                return
+            }
+            frame.Previous = joined
+            frame.Index = 0
+            PushStep(WalkStepKind.ApplyCallableArgsStep, state: frame)
+        }
+
+        private func ProcessCallableTargetsStep(frame CallableTargetsFrame) {
+            if frame.Index > 0 {
+                let finished = frame.Combined[frame.Index - 1]
+                let exitState = CaptureCallableState()
+                if frame.NormalSet != nil && frame.NormalSet.Contains(finished) {
+                    frame.JoinedNormal = CallableAliasState.Join(frame.JoinedNormal, exitState.Normal)
+                }
+                if frame.AllSet != nil && frame.AllSet.Contains(finished) {
+                    frame.JoinedAllEntry = CallableAliasState.Join(frame.JoinedAllEntry, exitState.AllEntry)
+                }
+            }
+            while frame.Index < frame.Combined.Count {
+                let literal = frame.Combined[frame.Index]
+                frame.Index++
+                if literal.Body == nil || visitedFunctionLiterals.Contains(literal) {
+                    if frame.NormalSet != nil && frame.NormalSet.Contains(literal) {
+                        frame.JoinedNormal = CallableAliasState.Join(frame.JoinedNormal, frame.EntryState.Normal)
+                    }
+                    if frame.AllSet != nil && frame.AllSet.Contains(literal) {
+                        frame.JoinedAllEntry = CallableAliasState.Join(frame.JoinedAllEntry, frame.EntryState.AllEntry)
+                    }
+                    continue
+                }
+                RestoreCallableState(frame.EntryState)
+                PushStep(WalkStepKind.CallableTargetsStep, state: frame)
+                PushFunctionLiteralBody(literal, frame.ArgumentSnapshots)
+                return
+            }
+            normalCallableState = frame.JoinedNormal ?? frame.EntryState.Normal
+            allEntryCallableState = frame.JoinedAllEntry ?? frame.EntryState.AllEntry
         }
 
         // ADR-0208 R12 (#5171): whether [`root`](paramref) may name the storage of another
@@ -6420,262 +8580,6 @@ internal partial class StatementBinder {
                 InvalidatesNarrowing(root, narrowedType)
         )
 
-        protected open override func VisitIndirectCallExpression(node BoundIndirectCallExpression) {
-            VisitExpression(node.Target)
-            let targetState = CaptureCallableState()
-            let argumentSnapshots = VisitAndSnapshotCallableArguments(node.Arguments)
-            InvalidateRefKindArguments(node.Arguments, node.ArgumentRefKinds)
-            ApplyCallableArguments(argumentSnapshots)
-            AnalyzeCallableInvocation(node.Target, targetState, argumentSnapshots)
-        }
-
-        private func VisitPossiblySkipped(visit() -> void) {
-            // A skipped operand cannot erase an earlier callable target.
-            VisitAlternativePaths(() -> { }, visit)
-        }
-
-        private func VisitAlternativePaths(whenTrue() -> void, whenFalse() -> void) {
-            let branchStart = CaptureCallableState()
-            whenTrue()
-            let thenState = CaptureCallableState()
-            RestoreCallableState(branchStart)
-            whenFalse()
-            RestoreCallableState(JoinCallableStates(thenState, CaptureCallableState()))
-        }
-
-        private func VisitCondition(expression BoundExpression)(
-            WhenTrue(Normal CallableAliasState, AllEntry CallableAliasState),
-            WhenFalse(Normal CallableAliasState, AllEntry CallableAliasState)
-        ) {
-            switch expression {
-                case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.LogicalAnd {
-                    let (leftTrue, leftFalse) = VisitCondition(binary.Left)
-                    RestoreCallableState(leftTrue)
-                    let (rightTrue, rightFalse) = VisitCondition(binary.Right)
-                    let whenFalse = JoinCallableStates(leftFalse, rightFalse)
-                    RestoreCallableState(JoinCallableStates(rightTrue, whenFalse))
-                    return (rightTrue, whenFalse)
-                }
-                case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.LogicalOr {
-                    let (leftTrue, leftFalse) = VisitCondition(binary.Left)
-                    RestoreCallableState(leftFalse)
-                    let (rightTrue, rightFalse) = VisitCondition(binary.Right)
-                    let whenTrue = JoinCallableStates(leftTrue, rightTrue)
-                    RestoreCallableState(JoinCallableStates(whenTrue, rightFalse))
-                    return (whenTrue, rightFalse)
-                }
-                case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation {
-                    let (operandTrue, operandFalse) = VisitCondition(unary.Operand)
-                    return (operandFalse, operandTrue)
-                }
-                default {
-                    VisitExpression(expression)
-                    let after = CaptureCallableState()
-                    return (after, CloneCallableState(after))
-                }
-            }
-        }
-
-        protected open override func VisitBinaryExpression(node BoundBinaryExpression) {
-            if node.Op.Kind is BoundBinaryOperatorKind.LogicalAnd or BoundBinaryOperatorKind.LogicalOr {
-                VisitCondition(node)
-                return
-            }
-            if node.Op.Kind == BoundBinaryOperatorKind.NullCoalesce {
-                VisitExpression(node.Left)
-                VisitPossiblySkipped(() -> VisitExpression(node.Right))
-                return
-            }
-            if node.Left is not BoundBinaryExpression {
-                VisitExpression(node.Left)
-                VisitExpression(node.Right)
-                if StatementBinder.BinaryEqualityRunsUserCode(node) {
-                    // ADR-0208 R19 (#5710, #5326): structural equality calls `Equals`, which can be user code.
-                    MarkMayMutateGlobalRoots(writesReferenceStorage: false)
-                    InvalidateCallableStateForUnknownClosure()
-                    callExpressions.Add(node)
-                }
-                return
-            }
-            let spine = Stack[BoundBinaryExpression]()
-            var current BoundExpression = node
-            while current is BoundBinaryExpression bin &&
-                bin
-                .Op
-                .Kind is not(
-                BoundBinaryOperatorKind.LogicalAnd or
-                    BoundBinaryOperatorKind.LogicalOr or
-                    BoundBinaryOperatorKind.NullCoalesce
-            ) {
-                spine.Push(bin)
-                let left = bin.Left
-                if AlreadyProcessedExpressions != nil &&
-                    visitedFunctionLiterals.Count == 0 &&
-                    (AlreadyProcessedExpressions!!.Contains(left) || localProcessedExpressions.Contains(left)) {
-                    current = left
-                    break
-                }
-                current = left
-            }
-            VisitExpression(current)
-            while spine.Count > 0 {
-                let bin = spine.Pop()
-                if !object.ReferenceEquals(bin, node) &&
-                    AlreadyProcessedExpressions != nil &&
-                    visitedFunctionLiterals.Count == 0 {
-                    localProcessedExpressions.Add(bin)
-                }
-                VisitExpression(bin.Right)
-                if StatementBinder.BinaryEqualityRunsUserCode(bin) {
-                    MarkMayMutateGlobalRoots(writesReferenceStorage: false)
-                    InvalidateCallableStateForUnknownClosure()
-                    callExpressions.Add(bin)
-                }
-            }
-        }
-
-        protected open override func VisitNullConditionalAccessExpression(node BoundNullConditionalAccessExpression) {
-            // The access is bound on a synthetic capture: remember the receiver behind it.
-            captureReceivers[node.Capture] = node.Receiver
-            VisitExpression(node.Receiver)
-            VisitPossiblySkipped(() -> VisitExpression(node.WhenNotNull))
-        }
-
-        protected open override func VisitInterpolatedStringExpression(node BoundInterpolatedStringExpression) {
-            if node.Handler != nil && !node.Handler.ForwardedArguments.IsDefaultOrEmpty {
-                for arg in node.Handler.ForwardedArguments {
-                    VisitExpression(arg)
-                }
-            }
-            for part in node.Parts {
-                if !part.IsLiteral {
-                    if node.Handler != nil {
-                        VisitPossiblySkipped(() -> VisitExpression(part.Value))
-                    } else {
-                        VisitExpression(part.Value)
-                    }
-                }
-            }
-        }
-
-        protected open override func VisitConditionalExpression(node BoundConditionalExpression) {
-            let (whenTrue, whenFalse) = VisitCondition(node.Condition)
-            RestoreCallableState(whenTrue)
-            VisitExpression(node.WhenTrue)
-            let thenState = CaptureCallableState()
-            RestoreCallableState(whenFalse)
-            VisitExpression(node.WhenFalse)
-            RestoreCallableState(JoinCallableStates(thenState, CaptureCallableState()))
-        }
-
-        protected open override func VisitConditionalAddressExpression(node BoundConditionalAddressExpression) {
-            let (whenTrue, whenFalse) = VisitCondition(node.Condition)
-            RestoreCallableState(whenTrue)
-            VisitExpression(node.WhenTrueOperand)
-            let thenState = CaptureCallableState()
-            RestoreCallableState(whenFalse)
-            VisitExpression(node.WhenFalseOperand)
-            RestoreCallableState(JoinCallableStates(thenState, CaptureCallableState()))
-        }
-
-        protected open override func VisitBinaryPattern(node BoundBinaryPattern) {
-            VisitPattern(node.Left)
-            VisitPossiblySkipped(() -> VisitPattern(node.Right))
-        }
-
-        protected open override func VisitPropertyPattern(node BoundPropertyPattern) {
-            for field in node.Fields {
-                // A computed property of a pattern runs its getter.
-                if field.Property is {} property && StatementBinder.SourcePropertyRunsUserCode(property, node.Type) {
-                    MarkMayMutateGlobalRoots()
-                    InvalidateCallableStateForUnknownClosure()
-                }
-                // ADR-0208 R16 (#5231): so does an imported property that is not on the stable list.
-                if StatementBinder.ClrMemberReadRunsUserCode(field.ClrMember) {
-                    MarkMayMutateGlobalRoots()
-                    InvalidateCallableStateForUnknownClosure()
-                }
-                VisitPossiblySkipped(() -> VisitPattern(field.Pattern))
-            }
-        }
-
-        protected open override func VisitConstantPattern(node BoundConstantPattern) {
-            base.VisitConstantPattern(node)
-            // ADR-0208 R19 (#5593, #5326): the test can call the input's `Equals`, which can be user code.
-            if StatementBinder.ConstantPatternRunsUserCode(node) {
-                MarkMayMutateGlobalRoots(writesReferenceStorage: false)
-                InvalidateCallableStateForUnknownClosure()
-                if BoundBinaryOperator.Bind(
-                    SyntaxKind.EqualsEqualsToken,
-                    TypeSymbol.Object,
-                    TypeSymbol.Object
-                ) is {} eqOp {
-                    callExpressions.Add(
-                        BoundBinaryExpression(
-                            node.Syntax,
-                            BoundDefaultExpression(node.Syntax, node.Type),
-                            eqOp,
-                            node.Value,
-                            isChecked: false
-                        )
-                    )
-                }
-            }
-        }
-
-        protected open override func VisitListPattern(node BoundListPattern) {
-            // ADR-0208 R19 (#5593): the `Length`/`Count` getter and the indexer of an indexable input (R16, R17).
-            if StatementBinder.ListPatternRunsUserCode(node) {
-                MarkMayMutateGlobalRoots()
-                InvalidateCallableStateForUnknownClosure()
-            }
-            for element in node.Elements {
-                VisitPossiblySkipped(() -> VisitPattern(element))
-            }
-        }
-
-        protected open override func VisitCallExpression(node BoundCallExpression) {
-            VisitCallableArguments(node.Arguments)
-        }
-
-        protected open override func VisitImportedCallExpression(node BoundImportedCallExpression) {
-            VisitCallableArguments(node.Arguments, node.Function.Method)
-        }
-
-        protected open override func VisitConstrainedStaticCallExpression(node BoundConstrainedStaticCallExpression) {
-            VisitCallableArguments(node.Arguments)
-        }
-
-        protected open override func VisitClrStaticCallExpression(node BoundClrStaticCallExpression) {
-            VisitCallableArguments(node.Arguments, node.Method)
-        }
-
-        protected open override func VisitUserInstanceCallExpression(node BoundUserInstanceCallExpression) {
-            VisitExpression(node.Receiver)
-            VisitCallableArguments(node.Arguments)
-        }
-
-        protected open override func VisitBaseInterfaceCallExpression(node BoundBaseInterfaceCallExpression) {
-            VisitExpression(node.Receiver)
-            VisitCallableArguments(node.Arguments)
-        }
-
-        protected open override func VisitBaseClassCallExpression(node BoundBaseClassCallExpression) {
-            // ADR-0208 R11 (#5170): a base method or computed accessor runs user code.
-            if node.Method != nil {
-                MarkMayMutateGlobalRoots(
-                    writesReferenceStorage: node.IsPropertyAccessor,
-                    invalidateCallableAliases: false
-                )
-            }
-            VisitExpression(node.Receiver)
-            VisitCallableArguments(node.Arguments)
-            if node.Method is {} method {
-                InvalidateParameterRefArguments(node.Arguments, method.Parameters)
-                InvalidateCallableStateForUnknownClosure()
-            }
-        }
-
         // `callback.Invoke()` on a delegate value: the explicit form of `callback()`.
         private func IsCallableValueInvocation(
             node BoundExpression
@@ -6684,110 +8588,6 @@ internal partial class StatementBinder {
             Receiver: {Type: var receiverType}
         } &&
             IsCallableType(receiverType)
-
-        protected open override func VisitImportedInstanceCallExpression(node BoundImportedInstanceCallExpression) {
-            VisitExpression(node.Receiver)
-            if IsCallableValueInvocation(node) {
-                let targetState = CaptureCallableState()
-                let argumentSnapshots = VisitAndSnapshotCallableArguments(node.Arguments)
-                InvalidateImportedParameterRefArguments(node.Arguments, node.Method.GetParameters())
-                ApplyCallableArguments(argumentSnapshots)
-                AnalyzeCallableInvocation(node.Receiver, targetState, argumentSnapshots)
-                return
-            }
-            VisitCallableArguments(node.Arguments, node.Method)
-        }
-
-        protected open override func VisitFunctionPointerInvocationExpression(
-            node BoundFunctionPointerInvocationExpression
-        ) {
-            VisitExpression(node.Pointer)
-            VisitCallableArguments(node.Arguments)
-            let parameterTypes = node.FunctionPointerType.ParameterTypes
-            let count = Math.Min(node.Arguments.Length, parameterTypes.Length)
-            for var i = 0; i < count; i++ {
-                if parameterTypes[i] is ByRefTypeSymbol {
-                    RecordWritableReference(node.Arguments[i], invalidateCallableState: true)
-                }
-            }
-        }
-
-        protected open override func VisitConstructorCallExpression(node BoundConstructorCallExpression) {
-            VisitCallableArguments(node.Arguments)
-            let parameters = node.SelectedConstructor?.Parameters ?? node.StructType.PrimaryConstructorParameters
-            if !parameters.IsDefaultOrEmpty {
-                InvalidateParameterRefArguments(node.Arguments, parameters)
-            }
-        }
-
-        protected open override func VisitStructLiteralExpression(node BoundStructLiteralExpression) {
-            if node.CopySource != nil {
-                VisitExpression(node.CopySource)
-            }
-            let consumed = HashSet[BoundFieldInitializer]()
-            let type = node.StructType
-            let definition = type.Definition ?? type
-            let spillsPrimaryInLexicalOrder = !node.IsZeroInitialization &&
-                node.CopySource == nil &&
-                !node.CallsPrimaryConstructor &&
-                type.HasDeclaredPrimaryConstructor &&
-                definition.NeedsSynthesizedValueStructDefaultCtor
-            if node.CallsPrimaryConstructor {
-                for parameter in type.PrimaryConstructorParameters {
-                    if node.GetPrimaryArgument(parameter.Name) is {} primaryArgument {
-                        consumed.Add(primaryArgument)
-                        VisitExpression(primaryArgument.Value)
-                    }
-                }
-            } else if spillsPrimaryInLexicalOrder {
-                let primaryFields = HashSet[FieldSymbol]()
-                for argument in node.GetPrimaryConstructorArguments() {
-                    primaryFields.Add(argument.Field)
-                }
-                for initializer in node.Initializers {
-                    if initializer.IsDeclarationInitializer {
-                        consumed.Add(initializer)
-                        continue
-                    }
-                    let target FieldSymbol? = initializer.Field ?? initializer.Property?.BackingField
-                    if target != nil && primaryFields.Contains(target) {
-                        consumed.Add(initializer)
-                        VisitExpression(initializer.Value)
-                    }
-                }
-            }
-            if (
-                node.CallsDataConstructor ||
-                    node.CallsPrimaryConstructor ||
-                    spillsPrimaryInLexicalOrder ||
-                    type.IsClass ||
-                    definition.NeedsSynthesizedValueStructDefaultCtor
-            ) &&
-                StatementBinder
-                .ConstructionRunsUserCode(type) {
-                normalCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
-                allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
-            }
-            for initializer in node.Initializers {
-                if !consumed.Contains(initializer) &&
-                    !(initializer.IsDeclarationInitializer && definition.NeedsSynthesizedValueStructDefaultCtor) {
-                    VisitExpression(initializer.Value)
-                }
-                if initializer.Property is {} property && StatementBinder.SourcePropertyRunsUserCode(
-                    property,
-                    receiverType: nil
-                ) {
-                    normalCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
-                    allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
-                }
-            }
-        }
-
-        protected open override func VisitClrConstructorCallExpression(node BoundClrConstructorCallExpression) {
-            VisitCallableArguments(node.Arguments)
-            InvalidateRefKindArguments(node.Arguments, node.ArgumentRefKinds)
-            InvalidateImportedParameterRefArguments(node.Arguments, node.Constructor.GetParameters())
-        }
 
         private func InvalidateRefKindArguments(
             arguments ImmutableArray[BoundExpression],
@@ -6828,58 +8628,31 @@ internal partial class StatementBinder {
             }
         }
 
-        protected open override func VisitClrConversionCallExpression(node BoundClrConversionCallExpression) {
-            VisitCallableArguments(ImmutableArray.Create(node.Source))
-        }
-
         private data struct CallableProvenance(
-            NormalTargets[]?BoundFunctionLiteralExpression,
+            NormalTargets ImmutableHashSet[BoundFunctionLiteralExpression]?,
             IsNormalExternal bool,
             IsNormalUnknown bool,
-            AllTargets[]?BoundFunctionLiteralExpression,
+            AllTargets ImmutableHashSet[BoundFunctionLiteralExpression]?,
             IsExternal bool,
             IsUnknown bool
         ) { }
 
         private func SnapshotCallableArgument(argument BoundExpression) CallableProvenance {
             let hasNormalTargets = normalCallableState.TryGetFunctionLiterals(argument, out var normalLiterals)
-            let normalTargetArray = normalLiterals?.ToArray()
             let isNormalExternal = normalCallableState.IsExternalCallable(argument)
             let isNormalUnknown = normalCallableState.IsUnknownCallable(argument) ||
                 (!hasNormalTargets && !isNormalExternal)
             let hasAllTargets = allEntryCallableState.TryGetFunctionLiterals(argument, out var allLiterals)
-            let allTargetArray = allLiterals?.ToArray()
             let isExternal = allEntryCallableState.IsExternalCallable(argument)
             let isUnknown = allEntryCallableState.IsUnknownCallable(argument) || (!hasAllTargets && !isExternal)
             return CallableProvenance(
-                normalTargetArray,
+                normalLiterals,
                 isNormalExternal,
                 isNormalUnknown,
-                allTargetArray,
+                allLiterals,
                 isExternal,
                 isUnknown
             )
-        }
-
-        private func VisitAndSnapshotCallableArguments(
-            arguments ImmutableArray[BoundExpression]
-        )[]?CallableProvenance? {
-            var snapshots[]?CallableProvenance? = nil
-            for var i = 0; i < arguments.Length; i++ {
-                let argument = arguments[i]
-                VisitExpression(argument)
-                if !IsCallableType(argument.Type) {
-                    continue
-                }
-                if snapshots == nil {
-                    snapshots = [arguments.Length]CallableProvenance?
-                }
-                snapshots[i] = SnapshotCallableArgument(argument)
-            }
-            for argument in arguments {
-                InvalidateWritableArgumentExpression(argument)
-            }
-            return snapshots
         }
 
         private func InvalidateWritableArgumentExpression(expression BoundExpression) {
@@ -6895,363 +8668,6 @@ internal partial class StatementBinder {
             } else if current is BoundConditionalExpression conditional {
                 InvalidateWritableArgumentExpression(conditional.WhenTrue)
                 InvalidateWritableArgumentExpression(conditional.WhenFalse)
-            }
-        }
-
-        private func ApplyCallableArguments(snapshots[]?CallableProvenance?) {
-            if snapshots == nil {
-                return
-            }
-            var previous = CaptureCallableState()
-            while true {
-                for maybeSnapshot in snapshots {
-                    if maybeSnapshot is not{} snapshot {
-                        continue
-                    }
-                    VisitCallableTargets(
-                        snapshot.NormalTargets,
-                        normalKeepsEntry: true,
-                        snapshot.AllTargets,
-                        allKeepsEntry: true
-                    )
-                    if snapshot.IsExternal {
-                        MarkMayMutateGlobalRoots(runsSourceCode: false)
-                    }
-                    if snapshot.IsNormalUnknown {
-                        normalCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
-                    }
-                    if snapshot.IsUnknown {
-                        MayMutateAnyRoot = true
-                        allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
-                    }
-                }
-                MergeCallableState(previous)
-                let joined = CaptureCallableState()
-                if CallableStatesEqual(previous, joined) {
-                    RestoreCallableState(joined)
-                    return
-                }
-                previous = joined
-            }
-        }
-
-        private func VisitCallableArguments(
-            arguments ImmutableArray[BoundExpression],
-            method System.Reflection.MethodInfo? = nil
-        ) {
-            let snapshots = VisitAndSnapshotCallableArguments(arguments)
-            if method == nil || !StatementBinder.DefersImportedCallbackArguments(method) {
-                ApplyCallableArguments(snapshots)
-            }
-        }
-
-        protected open override func VisitVariableDeclaration(node BoundVariableDeclaration) {
-            if node.Initializer != nil && TryGetWritableReferenceOperand(node.Initializer, out var operand) {
-                writableReferenceAliases[node.Variable] = operand
-            }
-            base.VisitVariableDeclaration(node)
-            let inFunctionLiteral = visitedFunctionLiterals.Count > 0
-            normalCallableState.ApplyVariableDeclaration(node, inFunctionLiteral)
-            allEntryCallableState.ApplyVariableDeclaration(node, inFunctionLiteral)
-        }
-
-        protected open override func VisitBlockStatement(node BoundBlockStatement) {
-            let statements = node.Statements
-            let count = statements.Length
-            if node.Syntax is IfLetStatementSyntax &&
-                count >= 5 &&
-                statements[count - 4] is BoundGotoStatement endGoto &&
-                statements[count - 3] is BoundLabelStatement elseLabel &&
-                statements[count - 1] is BoundLabelStatement endLabel &&
-                endGoto.Label == endLabel
-                .Label {
-                var elseEntry(Normal CallableAliasState, AllEntry CallableAliasState)? = nil
-                for var i = 0; i < count - 5; i++ {
-                    let current = statements[i]
-                    if current is BoundConditionalGotoStatement condGoto &&
-                        condGoto.Label == elseLabel.Label &&
-                        !condGoto
-                        .JumpIfTrue {
-                        let (whenTrue, whenFalse) = VisitCondition(condGoto.Condition)
-                        elseEntry = JoinCallableStates(elseEntry, whenFalse)
-                        RestoreCallableState(whenTrue)
-                    } else {
-                        VisitStatement(current)
-                    }
-                }
-                let afterHeader = CaptureCallableState()
-                let thenStatement = statements[count - 5]
-                let elseStatement = statements[count - 2]
-                VisitStatement(thenStatement)
-                let thenState = CaptureCallableState()
-                RestoreCallableState(elseEntry ?? afterHeader)
-                VisitStatement(elseStatement)
-                let elseState = CaptureCallableState()
-                var joined(Normal CallableAliasState, AllEntry CallableAliasState)? = nil
-                if !StatementBinder.EndsInUnconditionalExit(thenStatement, gotoExits: false) {
-                    joined = JoinCallableStates(joined, thenState)
-                }
-                if !StatementBinder.EndsInUnconditionalExit(elseStatement, gotoExits: false) {
-                    joined = JoinCallableStates(joined, elseState)
-                }
-                RestoreCallableState(joined ?? afterHeader)
-                return
-            }
-            base.VisitBlockStatement(node)
-        }
-
-        protected open override func VisitIfStatement(node BoundIfStatement) {
-            let (whenTrue, whenFalse) = VisitCondition(node.Condition)
-            let afterCondition = CaptureCallableState()
-            RestoreCallableState(whenTrue)
-            VisitStatement(node.ThenStatement)
-            let thenState = CaptureCallableState()
-            RestoreCallableState(whenFalse)
-            VisitStatement(node.ElseStatement)
-            let elseState = CaptureCallableState()
-            var joined(Normal CallableAliasState, AllEntry CallableAliasState)? = nil
-            if !StatementBinder.EndsInUnconditionalExit(node.ThenStatement, gotoExits: false) {
-                joined = JoinCallableStates(joined, thenState)
-            }
-            if node.ElseStatement == nil || !StatementBinder.EndsInUnconditionalExit(
-                node.ElseStatement,
-                gotoExits: false
-            ) {
-                joined = JoinCallableStates(joined, elseState)
-            }
-            RestoreCallableState(joined ?? afterCondition)
-        }
-
-        protected open override func VisitConditionalGotoStatement(node BoundConditionalGotoStatement) {
-            VisitExpression(node.Condition)
-            jumpedRegionLabels.Add(node.Label)
-            if !visitedLabels.Contains(node.Label) {
-                pendingConditionalTargets.Add(node.Label)
-            }
-        }
-
-        protected open override func VisitForInfiniteStatement(
-            node BoundForInfiniteStatement
-        ) -> VisitPossiblySkippedBody(node.Body)
-
-        protected open override func VisitForEllipsisStatement(node BoundForEllipsisStatement) {
-            VisitExpression(node.LowerBound)
-            VisitExpression(node.UpperBound)
-            VisitPossiblySkippedBody(node.Body)
-        }
-
-        protected open override func VisitForRangeStatement(node BoundForRangeStatement) {
-            VisitExpression(node.Collection)
-            // ADR-0208 R11 (#5170): lowering adds GetEnumerator, MoveNext and Current calls, and an
-            // iterator body runs inside them. Indexed iteration runs no user code.
-            let runsUserCode = node.IterationKind != ForRangeKind.Indexed
-            if runsUserCode {
-                MarkMayMutateGlobalRoots()
-            }
-            VisitPossiblySkippedBody(node.Body, runsUserCode)
-        }
-
-        protected open override func VisitAwaitForRangeStatement(node BoundAwaitForRangeStatement) {
-            VisitExpression(node.Stream)
-            MarkMayMutateGlobalRoots()
-            VisitPossiblySkippedBody(node.Body, iterationRunsUserCode: true)
-        }
-
-        protected open override func VisitPatternSwitchStatement(node BoundPatternSwitchStatement) {
-            VisitExpression(node.Discriminant)
-            let branchStart = CaptureCallableState()
-            var dispatchState = CloneCallableState(branchStart)
-            var canMiss = !node.IsExhaustive
-            var joined(Normal CallableAliasState, AllEntry CallableAliasState)? = nil
-            for arm in node.GetDispatchArms() {
-                RestoreCallableState(dispatchState)
-                VisitPattern(arm.Pattern)
-                let patternFailure = CaptureCallableState()
-                VisitExpression(arm.Guard)
-                let guardFailure = CaptureCallableState()
-                VisitStatement(arm.Body)
-                if !StatementBinder.EndsInUnconditionalExit(arm.Body, gotoExits: false) {
-                    joined = JoinCallableStates(joined, CaptureCallableState())
-                }
-                if arm.IsCatchAll {
-                    canMiss = false
-                } else {
-                    dispatchState = if arm.Guard == nil {
-                        patternFailure
-                    } else if arm.PatternMatchesAllInputs {
-                        guardFailure
-                    } else {
-                        JoinCallableStates(patternFailure, guardFailure)
-                    }
-                }
-            }
-            if canMiss {
-                joined = JoinCallableStates(joined, dispatchState)
-            }
-            RestoreCallableState(joined ?? branchStart)
-        }
-
-        protected open override func VisitSwitchExpression(node BoundSwitchExpression) {
-            VisitExpression(node.Discriminant)
-            let branchStart = CaptureCallableState()
-            var dispatchState = CloneCallableState(branchStart)
-            var canMiss = true
-            var joined(Normal CallableAliasState, AllEntry CallableAliasState)? = nil
-            for arm in node.GetDispatchArms() {
-                RestoreCallableState(dispatchState)
-                VisitPattern(arm.Pattern)
-                let patternFailure = CaptureCallableState()
-                VisitExpression(arm.Guard)
-                let guardFailure = CaptureCallableState()
-                VisitExpression(arm.Result)
-                joined = JoinCallableStates(joined, CaptureCallableState())
-                if arm.IsCatchAll {
-                    canMiss = false
-                    break
-                }
-                dispatchState = if arm.Guard == nil {
-                    patternFailure
-                } else if arm.PatternMatchesAllInputs {
-                    guardFailure
-                } else {
-                    JoinCallableStates(patternFailure, guardFailure)
-                }
-            }
-            // The unmatched path includes evaluated guards, but no result.
-            if node.Type == TypeSymbol.Void && canMiss {
-                joined = JoinCallableStates(joined, dispatchState)
-            }
-            RestoreCallableState(joined ?? branchStart)
-        }
-
-        protected open override func VisitReturnStatement(node BoundReturnStatement) {
-            base.VisitReturnStatement(node)
-            if visitedFunctionLiterals.Count > 0 {
-                if functionLiteralFinallyDepth > 0 {
-                    functionLiteralTryReturnState = JoinCallableStates(
-                        functionLiteralTryReturnState,
-                        CaptureCallableState()
-                    )
-                } else {
-                    functionLiteralReturnState = JoinCallableStates(functionLiteralReturnState, CaptureCallableState())
-                }
-            }
-        }
-
-        protected open override func VisitTryStatement(node BoundTryStatement) {
-            ContainsTry = true
-            if node.Syntax is TryStatementSyntax trySyntax {
-                for clause in trySyntax.CatchClauses {
-                    if clause.Filter != nil {
-                        VisitedCatchFilters.Add(clause.Filter)
-                    }
-                }
-            }
-            let hasFinally = node.FinallyBlock != nil && visitedFunctionLiterals.Count > 0
-            let outerTryReturnState = functionLiteralTryReturnState
-            if hasFinally {
-                functionLiteralFinallyDepth++
-                functionLiteralTryReturnState = nil
-            }
-            let branchStart = CaptureCallableState()
-            let outerTryAssignments = tryAssignedVariables
-            let assignedInTry = HashSet[VariableSymbol]()
-            tryAssignedVariables = assignedInTry
-            VisitStatement(node.TryBlock)
-            tryAssignedVariables = outerTryAssignments
-            outerTryAssignments?.UnionWith(assignedInTry)
-            let tryState = CaptureCallableState()
-            let exceptionalNormal = branchStart.Normal.Clone()
-            let exceptionalAllEntry = branchStart.AllEntry.Clone()
-            for variable in assignedInTry {
-                exceptionalNormal.Literals.Remove(variable)
-                exceptionalNormal.External.Remove(variable)
-                exceptionalNormal.Unknown.Add(variable)
-                exceptionalAllEntry.Literals.Remove(variable)
-                exceptionalAllEntry.External.Remove(variable)
-                exceptionalAllEntry.Unknown.Add(variable)
-            }
-            var exceptionalState = (Normal: exceptionalNormal, AllEntry: exceptionalAllEntry)
-            // ADR-0208 R10 (#5168): a replacement exception reaches a clause after the filters of
-            // all clauses ran, so every handler starts from the state with their effects.
-            for clause in node.CatchClauses {
-                if clause.Filter != nil {
-                    RestoreCallableState(exceptionalState)
-                    VisitExpression(clause.Filter)
-                    exceptionalState = JoinCallableStates(exceptionalState, CaptureCallableState())
-                }
-            }
-            var finallyEntries = CallableAliasState.Join(tryState.AllEntry.Clone(), exceptionalState.AllEntry)
-            var joinedNormal CallableAliasState? = if StatementBinder.EndsInUnconditionalExit(
-                node.TryBlock,
-                gotoExits: false
-            ) {
-                nil
-            } else {
-                tryState.Normal
-            }
-            var joinedAllEntry CallableAliasState? = if StatementBinder.EndsInUnconditionalExit(
-                node.TryBlock,
-                gotoExits: false
-            ) {
-                nil
-            } else {
-                tryState.AllEntry
-            }
-            for clause in node.CatchClauses {
-                RestoreCallableState(exceptionalState)
-                VisitExpression(clause.Filter)
-                VisitStatement(clause.Body)
-                let catchState = CaptureCallableState()
-                finallyEntries = CallableAliasState.Join(finallyEntries, catchState.AllEntry)
-                if !StatementBinder.EndsInUnconditionalExit(clause.Body, gotoExits: false) {
-                    joinedNormal = CallableAliasState.Join(joinedNormal, catchState.Normal)
-                    joinedAllEntry = CallableAliasState.Join(joinedAllEntry, catchState.AllEntry)
-                }
-            }
-            let tryReturnState = functionLiteralTryReturnState
-            if hasFinally {
-                functionLiteralFinallyDepth--
-                functionLiteralTryReturnState = outerTryReturnState
-                if tryReturnState is {} returningState {
-                    finallyEntries = CallableAliasState.Join(finallyEntries, returningState.AllEntry)
-                }
-            }
-            if node.FinallyBlock != nil {
-                let declaredStart = declaredRegionLabels.Count
-                let jumpedStart = jumpedRegionLabels.Count
-                let finallyNormalEntry = if tryReturnState is {} returningEntry {
-                    CallableAliasState.Join(joinedNormal, returningEntry.Normal)
-                } else {
-                    joinedNormal
-                }
-                normalCallableState.RestoreFrom(finallyNormalEntry ?? finallyEntries)
-                allEntryCallableState.RestoreFrom(finallyEntries)
-                VisitStatement(node.FinallyBlock)
-                if hasFinally && tryReturnState != nil && !StatementBinder.EndsInUnconditionalExit(
-                    node.FinallyBlock,
-                    gotoExits: false
-                ) {
-                    let returnAfterFinally = CaptureCallableState()
-                    if functionLiteralFinallyDepth > 0 {
-                        functionLiteralTryReturnState = JoinCallableStates(
-                            functionLiteralTryReturnState,
-                            returnAfterFinally
-                        )
-                    } else {
-                        functionLiteralReturnState = JoinCallableStates(functionLiteralReturnState, returnAfterFinally)
-                    }
-                }
-                if joinedNormal == nil || StatementBinder.EndsInUnconditionalExit(
-                    node.FinallyBlock,
-                    gotoExits: false
-                ) ||
-                    HasEscapingRegionJump(declaredStart, jumpedStart) {
-                    normalCallableState.RestoreFrom(allEntryCallableState)
-                }
-            } else {
-                normalCallableState.RestoreFrom(joinedNormal ?? finallyEntries)
-                allEntryCallableState.RestoreFrom(joinedAllEntry ?? finallyEntries)
             }
         }
 
@@ -7277,38 +8693,19 @@ internal partial class StatementBinder {
             return false
         }
 
-        private func VisitPossiblySkippedBody(body BoundStatement, iterationRunsUserCode bool = false) {
-            let entry = CaptureCallableState()
-            var previous = entry
-            while true {
-                RestoreCallableState(previous)
-                VisitStatement(body)
-                if iterationRunsUserCode {
-                    MarkMayMutateGlobalRoots()
-                }
-                MergeCallableState(previous)
-                let joined = CaptureCallableState()
-                if CallableStatesEqual(previous, joined) {
-                    RestoreCallableState(joined)
-                    return
-                }
-                previous = joined
-            }
-        }
-
         private func CaptureCallableState()(Normal CallableAliasState, AllEntry CallableAliasState) -> (
-            normalCallableState.Clone(),
-            allEntryCallableState.Clone()
+            normalCallableState,
+            allEntryCallableState
         )
 
         private func RestoreCallableState(state(Normal CallableAliasState, AllEntry CallableAliasState)) {
-            normalCallableState.RestoreFrom(state.Normal)
-            allEntryCallableState.RestoreFrom(state.AllEntry)
+            normalCallableState = state.Normal
+            allEntryCallableState = state.AllEntry
         }
 
         private func MergeCallableState(state(Normal CallableAliasState, AllEntry CallableAliasState)) {
-            normalCallableState.MergeFrom(state.Normal)
-            allEntryCallableState.MergeFrom(state.AllEntry)
+            normalCallableState = normalCallableState.MergeFrom(state.Normal)
+            allEntryCallableState = allEntryCallableState.MergeFrom(state.AllEntry)
         }
 
         private func AnalyzeCallableInvocation(
@@ -7318,13 +8715,19 @@ internal partial class StatementBinder {
         ) {
             let callable = UnwrapCallable(expression)
             if callable is BoundFunctionLiteralExpression direct {
-                VisitFunctionLiteralBody(direct, argumentSnapshots)
+                PushFunctionLiteralBody(direct, argumentSnapshots)
                 return
             }
             if callable is not BoundVariableExpression variable {
                 MayMutateAnyRoot = true
-                normalCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
-                allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
+                normalCallableState = normalCallableState.InvalidateClosureAssigned(
+                    isClosureAssigned,
+                    tryAssignedVariables
+                )
+                allEntryCallableState = allEntryCallableState.InvalidateClosureAssigned(
+                    isClosureAssigned,
+                    tryAssignedVariables
+                )
                 return
             }
             callableInvocations.Add(variable.Variable)
@@ -7344,29 +8747,42 @@ internal partial class StatementBinder {
                 .LocalParameters
                 .Contains(variable) && !allSource.LocalParameters.Contains(variable)
             normalSource.Literals.TryGetValue(variable, out var normalLiterals)
-            let normalTargetArray = normalLiterals?.ToArray()
             let isNormalExternal = isReadonlyCallableParameter || normalSource.External.Contains(variable)
             let isNormalUnknown = normalSource.Unknown.Contains(variable) ||
                 (!isNormalExternal && normalLiterals == nil)
             allSource.Literals.TryGetValue(variable, out var allLiterals)
-            let allTargetArray = allLiterals?.ToArray()
             let isExternal = isReadonlyCallableParameter || allSource.External.Contains(variable)
             let isUnknown = allSource.Unknown.Contains(variable) || (!isExternal && allLiterals == nil)
-            VisitCallableTargets(
-                normalTargetArray,
-                isNormalExternal || isNormalUnknown,
-                allTargetArray,
-                isExternal || isUnknown,
-                argumentSnapshots
-            )
+            let hasTargets = (normalLiterals != nil && normalLiterals.Count > 0) ||
+                (allLiterals != nil && allLiterals.Count > 0)
+            if hasTargets {
+                PushStep(
+                    WalkStepKind.AnalyzeCallableVariablePost,
+                    state: AnalyzeVariablePostState(isNormalUnknown, isExternal, isUnknown)
+                )
+                PushCallableTargets(
+                    normalLiterals,
+                    isNormalExternal || isNormalUnknown,
+                    allLiterals,
+                    isExternal || isUnknown,
+                    argumentSnapshots
+                )
+                return
+            }
             // A read-only callable parameter originates outside this function
             // and cannot capture this function's local slots.
             MayMutateAnyRoot |= isUnknown
             if isNormalUnknown {
-                normalCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
+                normalCallableState = normalCallableState.InvalidateClosureAssigned(
+                    isClosureAssigned,
+                    tryAssignedVariables
+                )
             }
             if isUnknown {
-                allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
+                allEntryCallableState = allEntryCallableState.InvalidateClosureAssigned(
+                    isClosureAssigned,
+                    tryAssignedVariables
+                )
             }
             if isExternal {
                 MarkMayMutateGlobalRoots(runsSourceCode: false)
@@ -7375,15 +8791,32 @@ internal partial class StatementBinder {
             }
         }
 
-        private func VisitCallableTargets(
-            normalTargets[]?BoundFunctionLiteralExpression,
+        private func PushCallableTargets(
+            normalTargets ImmutableHashSet[BoundFunctionLiteralExpression]?,
             normalKeepsEntry bool,
-            allTargets[]?BoundFunctionLiteralExpression,
+            allTargets ImmutableHashSet[BoundFunctionLiteralExpression]?,
             allKeepsEntry bool,
             argumentSnapshots[]?CallableProvenance? = nil
         ) {
-            if (normalTargets == nil || normalTargets.Length == 0) && (allTargets == nil || allTargets.Length == 0) {
+            let normalCount = normalTargets?.Count ?? 0
+            let allCount = allTargets?.Count ?? 0
+            if normalCount == 0 && allCount == 0 {
                 return
+            }
+            // Single-target fast path avoids allocating HashSet/List/frame on straight-line closure chains.
+            if !normalKeepsEntry && !allKeepsEntry && normalCount == 1 && allCount == 1 {
+                var singleNormal BoundFunctionLiteralExpression? = nil
+                for literal in normalTargets!! {
+                    singleNormal = literal
+                }
+                var singleAll BoundFunctionLiteralExpression? = nil
+                for literal in allTargets!! {
+                    singleAll = literal
+                }
+                if singleNormal != nil && object.ReferenceEquals(singleNormal, singleAll) {
+                    PushFunctionLiteralBody(singleNormal, argumentSnapshots)
+                    return
+                }
             }
             let entryState = CaptureCallableState()
             let normalSet = if normalTargets == nil {
@@ -7396,7 +8829,7 @@ internal partial class StatementBinder {
             } else {
                 HashSet[BoundFunctionLiteralExpression](allTargets)
             }
-            let combined = List[BoundFunctionLiteralExpression]()
+            let combined = List[BoundFunctionLiteralExpression](normalCount + allCount)
             let seen = HashSet[BoundFunctionLiteralExpression]()
             if normalTargets != nil {
                 for literal in normalTargets {
@@ -7412,43 +8845,34 @@ internal partial class StatementBinder {
                     }
                 }
             }
-            var joinedNormal CallableAliasState? = if normalKeepsEntry {
-                entryState.Normal.Clone()
+            let joinedNormal CallableAliasState? = if normalKeepsEntry {
+                entryState.Normal
             } else {
                 default(CallableAliasState?)
             }
-            var joinedAllEntry CallableAliasState? = if allKeepsEntry {
-                entryState.AllEntry.Clone()
+            let joinedAllEntry CallableAliasState? = if allKeepsEntry {
+                entryState.AllEntry
             } else {
                 default(CallableAliasState?)
             }
-            for literal in combined {
-                if literal.Body == nil || visitedFunctionLiterals.Contains(literal) {
-                    if normalSet != nil && normalSet.Contains(literal) {
-                        joinedNormal = CallableAliasState.Join(joinedNormal, entryState.Normal)
-                    }
-                    if allSet != nil && allSet.Contains(literal) {
-                        joinedAllEntry = CallableAliasState.Join(joinedAllEntry, entryState.AllEntry)
-                    }
-                    continue
-                }
-                RestoreCallableState(CloneCallableState(entryState))
-                VisitFunctionLiteralBody(literal, argumentSnapshots)
-                let exitState = CaptureCallableState()
-                if normalSet != nil && normalSet.Contains(literal) {
-                    joinedNormal = CallableAliasState.Join(joinedNormal, exitState.Normal)
-                }
-                if allSet != nil && allSet.Contains(literal) {
-                    joinedAllEntry = CallableAliasState.Join(joinedAllEntry, exitState.AllEntry)
-                }
-            }
-            normalCallableState.RestoreFrom(joinedNormal ?? entryState.Normal)
-            allEntryCallableState.RestoreFrom(joinedAllEntry ?? entryState.AllEntry)
+            let frame = CallableTargetsFrame(
+                entryState,
+                combined,
+                normalSet,
+                allSet,
+                joinedNormal,
+                joinedAllEntry,
+                argumentSnapshots
+            )
+            PushStep(WalkStepKind.CallableTargetsStep, state: frame)
         }
 
         private func InvalidateCallableStateForUnknownClosure() {
-            normalCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
-            allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
+            normalCallableState = normalCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
+            allEntryCallableState = allEntryCallableState.InvalidateClosureAssigned(
+                isClosureAssigned,
+                tryAssignedVariables
+            )
         }
 
         // [`runsSourceCode`](paramref) is false for a call through a callable value: it keeps its own classification
@@ -7487,8 +8911,14 @@ internal partial class StatementBinder {
         private func MarkRunsEscapedClosure(invalidateCallableAliases bool = true) {
             MayRunEscapedClosure = true
             if invalidateCallableAliases {
-                normalCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
-                allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
+                normalCallableState = normalCallableState.InvalidateClosureAssigned(
+                    isClosureAssigned,
+                    tryAssignedVariables
+                )
+                allEntryCallableState = allEntryCallableState.InvalidateClosureAssigned(
+                    isClosureAssigned,
+                    tryAssignedVariables
+                )
             }
             if enclosingAssignments.Count == 0 {
                 if escapedClosureProtectedRoots == nil {
@@ -7511,16 +8941,16 @@ internal partial class StatementBinder {
         func MayRunEscapedClosureOn(root VariableSymbol) bool -> MayRunEscapedClosure &&
             (escapedClosureProtectedRoots == nil || !escapedClosureProtectedRoots!!.Contains(root))
 
-        private func VisitFunctionLiteralBody(
+        private func PushFunctionLiteralBody(
             literal BoundFunctionLiteralExpression,
             argumentSnapshots[]?CallableProvenance? = nil
         ) {
             if literal.Body is not{} body || !visitedFunctionLiterals.Add(literal) {
                 return
             }
-            for captured in literal.CapturedVariables {
-                normalCallableState.CapturedVariables.Add(captured)
-                allEntryCallableState.CapturedVariables.Add(captured)
+            if !literal.CapturedVariables.IsDefaultOrEmpty {
+                normalCallableState = normalCallableState.AddCapturedVariables(literal.CapturedVariables)
+                allEntryCallableState = allEntryCallableState.AddCapturedVariables(literal.CapturedVariables)
             }
             let parameters = literal.Function.Parameters
             for var i = 0; i < parameters.Length; i++ {
@@ -7529,102 +8959,57 @@ internal partial class StatementBinder {
                     continue
                 }
                 if argumentSnapshots != nil && i < argumentSnapshots.Length && argumentSnapshots[i] is {} snapshot {
-                    normalCallableState.ApplyParameterSnapshot(
+                    normalCallableState = normalCallableState.ApplyParameterSnapshot(
                         parameter,
                         snapshot.NormalTargets,
                         snapshot.IsNormalExternal,
-                        snapshot.IsNormalUnknown
+                        snapshot.IsNormalUnknown,
+                        isClosureAssigned,
+                        IsPlainUnaliasedLocal
                     )
-                    allEntryCallableState.ApplyParameterSnapshot(
+                    allEntryCallableState = allEntryCallableState.ApplyParameterSnapshot(
                         parameter,
                         snapshot.AllTargets,
                         snapshot.IsExternal,
-                        snapshot.IsUnknown
+                        snapshot.IsUnknown,
+                        isClosureAssigned,
+                        IsPlainUnaliasedLocal
                     )
                 } else {
-                    normalCallableState.ApplyParameterSnapshot(parameter, nil, isExternal: false, isUnknown: true)
-                    allEntryCallableState.ApplyParameterSnapshot(parameter, nil, isExternal: false, isUnknown: true)
+                    normalCallableState = normalCallableState.ApplyParameterSnapshot(
+                        parameter,
+                        nil,
+                        isExternal: false,
+                        isUnknown: true,
+                        isClosureAssigned,
+                        IsPlainUnaliasedLocal
+                    )
+                    allEntryCallableState = allEntryCallableState.ApplyParameterSnapshot(
+                        parameter,
+                        nil,
+                        isExternal: false,
+                        isUnknown: true,
+                        isClosureAssigned,
+                        IsPlainUnaliasedLocal
+                    )
                 }
             }
-            let declaredBefore = declaredRegionLabels.Count
-            let jumpedBefore = jumpedRegionLabels.Count
-            let outerReturnState = functionLiteralReturnState
-            let outerTryReturnState = functionLiteralTryReturnState
-            let outerFinallyDepth = functionLiteralFinallyDepth
+            literalFrames.Add(
+                FunctionLiteralFrame(
+                    literal,
+                    body,
+                    declaredRegionLabels.Count,
+                    jumpedRegionLabels.Count,
+                    functionLiteralReturnState,
+                    functionLiteralTryReturnState,
+                    functionLiteralFinallyDepth
+                )
+            )
             functionLiteralReturnState = nil
             functionLiteralTryReturnState = nil
             functionLiteralFinallyDepth = 0
-            try {
-                VisitStatement(body)
-                if !StatementBinder.EndsInUnconditionalExit(body, gotoExits: false) {
-                    functionLiteralReturnState = JoinCallableStates(functionLiteralReturnState, CaptureCallableState())
-                }
-                if functionLiteralReturnState is {} exitState {
-                    RestoreCallableState(exitState)
-                }
-            } finally {
-                functionLiteralReturnState = outerReturnState
-                functionLiteralTryReturnState = outerTryReturnState
-                functionLiteralFinallyDepth = outerFinallyDepth
-                if declaredRegionLabels.Count > declaredBefore {
-                    declaredRegionLabels.RemoveRange(declaredBefore, declaredRegionLabels.Count - declaredBefore)
-                }
-                if jumpedRegionLabels.Count > jumpedBefore {
-                    jumpedRegionLabels.RemoveRange(jumpedBefore, jumpedRegionLabels.Count - jumpedBefore)
-                }
-                visitedFunctionLiterals.Remove(literal)
-            }
-        }
-
-        protected open override func VisitAssignmentExpression(node BoundAssignmentExpression) {
-            let assignedValue = UnwrapCallable(node.Expression)
-            if !assignedValue.Type.IsValueType && !(assignedValue is BoundLiteralExpression{Value: nil}) {
-                // Erased callable copies still transfer provenance in evaluation order.
-                hasAliasSensitiveOperations = true
-            }
-            let protectedGlobalRoot GlobalVariableSymbol? = node.Variable as GlobalVariableSymbol
-            if protectedGlobalRoot != nil {
-                enclosingGlobalAssignments.Push(protectedGlobalRoot)
-            }
-            if node.Variable != nil {
-                enclosingAssignments.Push(node.Variable)
-            }
-            base.VisitAssignmentExpression(node)
-            if node.Variable != nil {
-                enclosingAssignments.Pop()
-            }
-            if protectedGlobalRoot != nil {
-                enclosingGlobalAssignments.Pop()
-            }
-            if node.Variable != nil {
-                writableReferenceAliases.Remove(node.Variable)
-                tryAssignedVariables?.Add(node.Variable)
-                normalCallableState.ApplyAssignment(
-                    node,
-                    pendingConditionalTargets.Count,
-                    mayShareStorage,
-                    tryAssignedVariables
-                )
-                allEntryCallableState.ApplyAssignment(
-                    node,
-                    pendingConditionalTargets.Count,
-                    mayShareStorage,
-                    tryAssignedVariables
-                )
-                Roots.Add(node.Variable)
-                if !assignments.TryGetValue(node.Variable, out var rootAssignments) {
-                    rootAssignments = List[BoundAssignmentExpression]()
-                    assignments.Add(node.Variable, rootAssignments)
-                }
-                rootAssignments.Add(node)
-            }
-        }
-
-        protected open override func VisitAddressOfExpression(node BoundAddressOfExpression) {
-            if !node.IsReadOnly {
-                RecordWritableReference(node.Operand)
-            }
-            base.VisitAddressOfExpression(node)
+            PushStep(WalkStepKind.FunctionLiteralExit)
+            PushStatement(body)
         }
 
         private func RecordWritableReference(
@@ -7659,8 +9044,20 @@ internal partial class StatementBinder {
                     callAliasedRoots.Add(ResolveStorage(variable.Variable))
                 }
                 if invalidateCallableState {
-                    normalCallableState.InvalidateVariable(variable.Variable, mayShareStorage, tryAssignedVariables)
-                    allEntryCallableState.InvalidateVariable(variable.Variable, mayShareStorage, tryAssignedVariables)
+                    normalCallableState = normalCallableState.InvalidateVariable(
+                        variable.Variable,
+                        mayShareStorage,
+                        tryAssignedVariables,
+                        isClosureAssigned,
+                        IsPlainUnaliasedLocal
+                    )
+                    allEntryCallableState = allEntryCallableState.InvalidateVariable(
+                        variable.Variable,
+                        mayShareStorage,
+                        tryAssignedVariables,
+                        isClosureAssigned,
+                        IsPlainUnaliasedLocal
+                    )
                 }
                 return
             }
@@ -7688,132 +9085,310 @@ internal partial class StatementBinder {
             } else {
                 Roots.Add(path.Root)
                 if invalidateCallableState {
-                    normalCallableState.InvalidateVariable(path.Root, mayShareStorage, tryAssignedVariables)
-                    allEntryCallableState.InvalidateVariable(path.Root, mayShareStorage, tryAssignedVariables)
+                    normalCallableState = normalCallableState.InvalidateVariable(
+                        path.Root,
+                        mayShareStorage,
+                        tryAssignedVariables,
+                        isClosureAssigned,
+                        IsPlainUnaliasedLocal
+                    )
+                    allEntryCallableState = allEntryCallableState.InvalidateVariable(
+                        path.Root,
+                        mayShareStorage,
+                        tryAssignedVariables,
+                        isClosureAssigned,
+                        IsPlainUnaliasedLocal
+                    )
                 }
             }
         }
 
-        protected open override func VisitFieldAssignmentExpression(node BoundFieldAssignmentExpression) {
-            assignedFields.Add(node.Field.OriginalDefinition ?? node.Field)
-            base.VisitFieldAssignmentExpression(node)
-        }
+        private func IsPlainUnaliasedLocal(variable VariableSymbol) bool -> variable is LocalVariableSymbol{
+            RefKind: RefKind.None
+        } &&
+            (isClosureAssigned == nil || !isClosureAssigned(variable))
 
-        protected open override func VisitPropertyAssignmentExpression(node BoundPropertyAssignmentExpression) {
-            assignedProperties.Add(node.Property.OriginalDefinition ?? node.Property)
-            base.VisitPropertyAssignmentExpression(node)
-        }
-
+        // Immutable persistent callable-alias state; structural sharing makes Capture/Restore O(1) and prevents
+        // quadratic copying across closure-call chains.
         private sealed class CallableAliasState {
-            let Literals Dictionary[VariableSymbol, HashSet[BoundFunctionLiteralExpression]] = Dictionary[
-                VariableSymbol,
-                HashSet[BoundFunctionLiteralExpression]
-            ]()
-            let Unknown HashSet[VariableSymbol] = HashSet[VariableSymbol]()
-            let External HashSet[VariableSymbol] = HashSet[VariableSymbol]()
-            let LocalParameters HashSet[VariableSymbol] = HashSet[VariableSymbol]()
-            let CapturedVariables HashSet[VariableSymbol] = HashSet[VariableSymbol]()
-
-            func Clone() CallableAliasState {
-                let copy = CallableAliasState()
-                copy.MergeFrom(this)
-                return copy
+            private init(
+                literals ImmutableDictionary[VariableSymbol, ImmutableHashSet[BoundFunctionLiteralExpression]],
+                unknown ImmutableHashSet[VariableSymbol],
+                external ImmutableHashSet[VariableSymbol],
+                localParameters ImmutableHashSet[VariableSymbol],
+                capturedVariables ImmutableHashSet[VariableSymbol],
+                closureAssignedKeys ImmutableHashSet[VariableSymbol],
+                aliasedOrExternalKeys ImmutableHashSet[VariableSymbol]
+            ) {
+                Literals = literals
+                Unknown = unknown
+                External = external
+                LocalParameters = localParameters
+                CapturedVariables = capturedVariables
+                ClosureAssignedKeys = closureAssignedKeys
+                AliasedOrExternalKeys = aliasedOrExternalKeys
             }
 
-            func RestoreFrom(other CallableAliasState) {
-                Literals.Clear()
-                Unknown.Clear()
-                External.Clear()
-                LocalParameters.Clear()
-                CapturedVariables.Clear()
-                MergeFrom(other)
-            }
+            let Literals ImmutableDictionary[VariableSymbol, ImmutableHashSet[BoundFunctionLiteralExpression]]
+            let Unknown ImmutableHashSet[VariableSymbol]
+            let External ImmutableHashSet[VariableSymbol]
+            let LocalParameters ImmutableHashSet[VariableSymbol]
+            let CapturedVariables ImmutableHashSet[VariableSymbol]
+            let ClosureAssignedKeys ImmutableHashSet[VariableSymbol]
+            let AliasedOrExternalKeys ImmutableHashSet[VariableSymbol]
 
-            func SetExternalOnly(externalAliases HashSet[VariableSymbol]) {
-                Literals.Clear()
-                Unknown.Clear()
-                External.Clear()
-                External.UnionWith(externalAliases)
-            }
-
-            func MergeFrom(other CallableAliasState) {
-                for entry in other.Literals {
-                    if !Literals.TryGetValue(entry.Key, out var literals) {
-                        literals = HashSet[BoundFunctionLiteralExpression]()
-                        Literals.Add(entry.Key, literals)
+            func WithInitialExternal(
+                externalFunctionValues IEnumerable[VariableSymbol],
+                isClosureAssigned((VariableSymbol) -> bool)?
+            ) CallableAliasState {
+                var external = External
+                var closureKeys = ClosureAssignedKeys
+                var aliasedKeys = AliasedOrExternalKeys
+                for variable in externalFunctionValues {
+                    external = external.Add(variable)
+                    if isClosureAssigned != nil && isClosureAssigned(variable) {
+                        closureKeys = closureKeys.Add(variable)
                     }
-                    literals.UnionWith(entry.Value)
+                    if variable is not LocalVariableSymbol{RefKind: RefKind.None} ||
+                        (isClosureAssigned != nil && isClosureAssigned(variable)) {
+                        aliasedKeys = aliasedKeys.Add(variable)
+                    }
                 }
-                Unknown.UnionWith(other.Unknown)
-                External.UnionWith(other.External)
-                LocalParameters.UnionWith(other.LocalParameters)
-                CapturedVariables.UnionWith(other.CapturedVariables)
+                return With(external: external, closureAssignedKeys: closureKeys, aliasedOrExternalKeys: aliasedKeys)
+            }
+
+            func WithExternalOnly(
+                externalAliases HashSet[VariableSymbol],
+                isClosureAssigned((VariableSymbol) -> bool)?
+            ) CallableAliasState {
+                var external = ImmutableHashSet[VariableSymbol].Empty
+                var closureKeys = ImmutableHashSet[VariableSymbol].Empty
+                var aliasedKeys = ImmutableHashSet[VariableSymbol].Empty
+                for variable in externalAliases {
+                    external = external.Add(variable)
+                    if isClosureAssigned != nil && isClosureAssigned(variable) {
+                        closureKeys = closureKeys.Add(variable)
+                    }
+                    if variable is not LocalVariableSymbol{RefKind: RefKind.None} ||
+                        (isClosureAssigned != nil && isClosureAssigned(variable)) {
+                        aliasedKeys = aliasedKeys.Add(variable)
+                    }
+                }
+                return CallableAliasState(
+                    ImmutableDictionary[VariableSymbol, ImmutableHashSet[BoundFunctionLiteralExpression]].Empty,
+                    ImmutableHashSet[VariableSymbol].Empty,
+                    external,
+                    LocalParameters,
+                    CapturedVariables,
+                    closureKeys,
+                    aliasedKeys
+                )
+            }
+
+            func AddCapturedVariables(captured ImmutableArray[VariableSymbol]) CallableAliasState {
+                var set = CapturedVariables
+                for variable in captured {
+                    set = set.Add(variable)
+                }
+                return With(capturedVariables: set)
+            }
+
+            func MergeFrom(other CallableAliasState) CallableAliasState {
+                if object.ReferenceEquals(this, other) {
+                    return this
+                }
+                var literals = Literals
+                if !object.ReferenceEquals(literals, other.Literals) && !other.Literals.IsEmpty {
+                    for entry in other.Literals {
+                        if !literals.TryGetValue(entry.Key, out var existing) {
+                            literals = literals.Add(entry.Key, entry.Value)
+                        } else if !object.ReferenceEquals(existing, entry.Value) {
+                            let merged = existing.Union(entry.Value)
+                            if !object.ReferenceEquals(merged, existing) {
+                                literals = literals.SetItem(entry.Key, merged)
+                            }
+                        }
+                    }
+                }
+                let unknown = UnionSet(Unknown, other.Unknown)
+                let external = UnionSet(External, other.External)
+                let localParameters = UnionSet(LocalParameters, other.LocalParameters)
+                let capturedVariables = UnionSet(CapturedVariables, other.CapturedVariables)
+                let closureAssignedKeys = UnionSet(ClosureAssignedKeys, other.ClosureAssignedKeys)
+                let aliasedOrExternalKeys = UnionSet(AliasedOrExternalKeys, other.AliasedOrExternalKeys)
+                return With(
+                    literals: literals,
+                    unknown: unknown,
+                    external: external,
+                    localParameters: localParameters,
+                    capturedVariables: capturedVariables,
+                    closureAssignedKeys: closureAssignedKeys,
+                    aliasedOrExternalKeys: aliasedOrExternalKeys
+                )
             }
 
             func ApplyParameterSnapshot(
                 parameter ParameterSymbol,
-                targets[]?BoundFunctionLiteralExpression,
+                targets ImmutableHashSet[BoundFunctionLiteralExpression]?,
                 isExternal bool,
-                isUnknown bool
-            ) {
-                LocalParameters.Add(parameter)
+                isUnknown bool,
+                isClosureAssigned((VariableSymbol) -> bool)?,
+                isPlainUnaliasedLocal((VariableSymbol) -> bool)
+            ) CallableAliasState {
+                let localParameters = LocalParameters.Add(parameter)
                 let preserveCaptured = CapturedVariables.Contains(parameter)
-                if targets != nil && targets.Length > 0 {
-                    if preserveCaptured && Literals.TryGetValue(parameter, out var existing) {
-                        existing.UnionWith(targets)
+                var literals = Literals
+                if targets != nil && targets.Count > 0 {
+                    if preserveCaptured && literals.TryGetValue(parameter, out var existing) {
+                        let merged = existing.Union(targets)
+                        if !object.ReferenceEquals(merged, existing) {
+                            literals = literals.SetItem(parameter, merged)
+                        }
                     } else {
-                        Literals[parameter] = HashSet[BoundFunctionLiteralExpression](targets)
+                        literals = literals.SetItem(parameter, targets)
                     }
                 } else if !preserveCaptured {
-                    Literals.Remove(parameter)
+                    literals = literals.Remove(parameter)
                 }
+                var external = External
                 if isExternal {
-                    External.Add(parameter)
+                    external = external.Add(parameter)
                 } else if !preserveCaptured {
-                    External.Remove(parameter)
+                    external = external.Remove(parameter)
                 }
-                if isUnknown || ((targets == nil || targets.Length == 0) && !isExternal) {
-                    Unknown.Add(parameter)
+                var unknown = Unknown
+                if isUnknown || ((targets == nil || targets.Count == 0) && !isExternal) {
+                    unknown = unknown.Add(parameter)
                 } else if !preserveCaptured {
-                    Unknown.Remove(parameter)
+                    unknown = unknown.Remove(parameter)
                 }
+                let (closureKeys, aliasedKeys) = UpdateTrackingKeys(
+                    parameter,
+                    literals,
+                    external,
+                    unknown,
+                    isClosureAssigned,
+                    isPlainUnaliasedLocal
+                )
+                return With(
+                    literals: literals,
+                    unknown: unknown,
+                    external: external,
+                    localParameters: localParameters,
+                    closureAssignedKeys: closureKeys,
+                    aliasedOrExternalKeys: aliasedKeys
+                )
             }
 
             func InvalidateVariable(
                 variable VariableSymbol,
                 mayShareStorage((VariableSymbol, VariableSymbol) -> bool)?,
-                tryAssignedVariables HashSet[VariableSymbol]? = nil
-            ) {
-                Literals.Remove(variable)
-                External.Remove(variable)
-                Unknown.Add(variable)
+                tryAssignedVariables HashSet[VariableSymbol]? = nil,
+                isClosureAssigned((VariableSymbol) -> bool)? = nil,
+                isPlainUnaliasedLocal((VariableSymbol) -> bool)? = nil
+            ) CallableAliasState {
+                var literals = Literals.Remove(variable)
+                var external = External.Remove(variable)
+                var unknown = Unknown.Add(variable)
+                var closureKeys = ClosureAssignedKeys.Remove(variable)
+                var aliasedKeys = AliasedOrExternalKeys
+                if isPlainUnaliasedLocal == nil || !isPlainUnaliasedLocal(variable) {
+                    aliasedKeys = aliasedKeys.Add(variable)
+                }
                 tryAssignedVariables?.Add(variable)
                 if mayShareStorage != nil {
-                    for other in Literals.Keys.Concat(External).Concat(Unknown).ToArray() {
-                        if !object.ReferenceEquals(other, variable) && mayShareStorage(variable, other) {
-                            Literals.Remove(other)
-                            External.Remove(other)
-                            Unknown.Add(other)
-                            tryAssignedVariables?.Add(other)
-                        }
-                    }
+                    let invalidated = InvalidateSharingVariables(
+                        variable,
+                        mayShareStorage,
+                        tryAssignedVariables,
+                        literals,
+                        external,
+                        unknown,
+                        closureKeys,
+                        aliasedKeys,
+                        isPlainUnaliasedLocal
+                    )
+                    literals = invalidated.Literals
+                    external = invalidated.External
+                    unknown = invalidated.Unknown
+                    closureKeys = invalidated.ClosureKeys
                 }
+                return With(
+                    literals: literals,
+                    unknown: unknown,
+                    external: external,
+                    closureAssignedKeys: closureKeys,
+                    aliasedOrExternalKeys: aliasedKeys
+                )
+            }
+
+            func InvalidateVariables(variables HashSet[VariableSymbol]) CallableAliasState {
+                if variables.Count == 0 {
+                    return this
+                }
+                var literals = Literals
+                var external = External
+                var unknown = Unknown
+                var closureKeys = ClosureAssignedKeys
+                for variable in variables {
+                    literals = literals.Remove(variable)
+                    external = external.Remove(variable)
+                    unknown = unknown.Add(variable)
+                    closureKeys = closureKeys.Remove(variable)
+                }
+                return With(literals: literals, unknown: unknown, external: external, closureAssignedKeys: closureKeys)
             }
 
             func EqualsState(other CallableAliasState) bool {
-                return Unknown.SetEquals(other.Unknown) && External.SetEquals(other.External) &&
-                    LocalParameters.SetEquals(other.LocalParameters) && CapturedVariables.SetEquals(
-                    other.CapturedVariables
-                ) &&
-                    Literals.Count == other
+                if object.ReferenceEquals(this, other) {
+                    return true
+                }
+                if Literals.Count != other
                     .Literals
-                    .Count &&
-                    Literals
-                    .All(
-                    (entry KeyValuePair[VariableSymbol, HashSet[BoundFunctionLiteralExpression]]) -> other
-                        .Literals
-                        .TryGetValue(entry.Key, out var literals) && entry.Value.SetEquals(literals)
-                )
+                    .Count ||
+                    Unknown.Count != other
+                    .Unknown
+                    .Count ||
+                    External.Count != other
+                    .External
+                    .Count ||
+                    LocalParameters.Count != other
+                    .LocalParameters
+                    .Count ||
+                    CapturedVariables.Count != other
+                    .CapturedVariables
+                    .Count {
+                    return false
+                }
+                if !object.ReferenceEquals(Unknown, other.Unknown) && !Unknown.SetEquals(other.Unknown) {
+                    return false
+                }
+                if !object.ReferenceEquals(External, other.External) && !External.SetEquals(other.External) {
+                    return false
+                }
+                if !object.ReferenceEquals(LocalParameters, other.LocalParameters) && !LocalParameters.SetEquals(
+                    other.LocalParameters
+                ) {
+                    return false
+                }
+                if !object.ReferenceEquals(CapturedVariables, other.CapturedVariables) && !CapturedVariables.SetEquals(
+                    other.CapturedVariables
+                ) {
+                    return false
+                }
+                if !object.ReferenceEquals(Literals, other.Literals) {
+                    for entry in Literals {
+                        if !other.Literals.TryGetValue(entry.Key, out var otherLiterals) {
+                            return false
+                        }
+                        if !object.ReferenceEquals(entry.Value, otherLiterals) && !entry.Value.SetEquals(
+                            otherLiterals
+                        ) {
+                            return false
+                        }
+                    }
+                }
+                return true
             }
 
             func IsExternalCallable(expression BoundExpression) bool -> StatementBinder.IsExternalCallableSource(
@@ -7825,18 +9400,25 @@ internal partial class StatementBinder {
             func InvalidateClosureAssigned(
                 isClosureAssigned((VariableSymbol) -> bool)?,
                 tryAssignedVariables HashSet[VariableSymbol]? = nil
-            ) {
-                if isClosureAssigned == nil {
-                    return
+            ) CallableAliasState {
+                if isClosureAssigned == nil || ClosureAssignedKeys.IsEmpty {
+                    return this
                 }
-                for variable in Literals.Keys.Concat(External).ToArray() {
-                    if isClosureAssigned(variable) {
-                        Literals.Remove(variable)
-                        External.Remove(variable)
-                        Unknown.Add(variable)
-                        tryAssignedVariables?.Add(variable)
-                    }
+                var literals = Literals
+                var external = External
+                var unknown = Unknown
+                for variable in ClosureAssignedKeys {
+                    literals = literals.Remove(variable)
+                    external = external.Remove(variable)
+                    unknown = unknown.Add(variable)
+                    tryAssignedVariables?.Add(variable)
                 }
+                return With(
+                    literals: literals,
+                    unknown: unknown,
+                    external: external,
+                    closureAssignedKeys: ImmutableHashSet[VariableSymbol].Empty
+                )
             }
 
             func IsUnknownCallable(expression BoundExpression) bool -> UnwrapCallable(
@@ -7849,11 +9431,11 @@ internal partial class StatementBinder {
                 @System
                     .Diagnostics
                     .CodeAnalysis
-                    .NotNullWhen(true) out literals IReadOnlyCollection[BoundFunctionLiteralExpression]?
+                    .NotNullWhen(true) out literals ImmutableHashSet[BoundFunctionLiteralExpression]?
             ) bool {
                 let callable = UnwrapCallable(expression)
                 if callable is BoundFunctionLiteralExpression direct {
-                    literals = []BoundFunctionLiteralExpression{direct}
+                    literals = ImmutableHashSet.Create(direct)
                     return true
                 }
                 if callable is BoundVariableExpression variable && Literals.TryGetValue(
@@ -7867,157 +9449,447 @@ internal partial class StatementBinder {
                 return false
             }
 
-            func ApplyVariableDeclaration(node BoundVariableDeclaration, inFunctionLiteral bool = false) {
+            func ApplyVariableDeclaration(
+                node BoundVariableDeclaration,
+                inFunctionLiteral bool = false,
+                isClosureAssigned((VariableSymbol) -> bool)? = nil,
+                isPlainUnaliasedLocal((VariableSymbol) -> bool)? = nil
+            ) CallableAliasState {
+                var localParameters = LocalParameters
                 if inFunctionLiteral {
-                    LocalParameters.Add(node.Variable)
+                    localParameters = localParameters.Add(node.Variable)
                 }
                 if node.Initializer is not{} initializer {
-                    return
+                    return With(localParameters: localParameters)
                 }
                 let preserveCaptured = inFunctionLiteral && CapturedVariables.Contains(node.Variable)
                 let externalCallable = IsExternalCallable(initializer)
                 let unknownCallable = IsUnknownCallable(initializer)
-                if TryGetFunctionLiterals(initializer, out var literals) {
-                    if preserveCaptured && Literals.TryGetValue(node.Variable, out var existing) {
-                        existing.UnionWith(literals)
+                var literals = Literals
+                var unknown = Unknown
+                var external = External
+                if TryGetFunctionLiterals(initializer, out var targetLiterals) {
+                    if preserveCaptured && literals.TryGetValue(node.Variable, out var existing) {
+                        let merged = existing.Union(targetLiterals)
+                        if !object.ReferenceEquals(merged, existing) {
+                            literals = literals.SetItem(node.Variable, merged)
+                        }
                     } else {
-                        Literals[node.Variable] = HashSet[BoundFunctionLiteralExpression](literals)
+                        literals = literals.SetItem(node.Variable, targetLiterals)
                     }
                     if unknownCallable {
-                        Unknown.Add(node.Variable)
+                        unknown = unknown.Add(node.Variable)
                     } else if !preserveCaptured {
-                        Unknown.Remove(node.Variable)
+                        unknown = unknown.Remove(node.Variable)
                     }
                     if externalCallable {
-                        External.Add(node.Variable)
+                        external = external.Add(node.Variable)
                     } else if !preserveCaptured {
-                        External.Remove(node.Variable)
+                        external = external.Remove(node.Variable)
                     }
                 } else if externalCallable {
                     if !preserveCaptured {
-                        Literals.Remove(node.Variable)
+                        literals = literals.Remove(node.Variable)
                     }
                     if unknownCallable {
-                        Unknown.Add(node.Variable)
+                        unknown = unknown.Add(node.Variable)
                     } else if !preserveCaptured {
-                        Unknown.Remove(node.Variable)
+                        unknown = unknown.Remove(node.Variable)
                     }
-                    External.Add(node.Variable)
+                    external = external.Add(node.Variable)
                 } else {
                     if !preserveCaptured {
-                        Literals.Remove(node.Variable)
-                        External.Remove(node.Variable)
+                        literals = literals.Remove(node.Variable)
+                        external = external.Remove(node.Variable)
                     }
-                    Unknown.Add(node.Variable)
+                    unknown = unknown.Add(node.Variable)
                 }
+                let (closureKeys, aliasedKeys) = UpdateTrackingKeys(
+                    node.Variable,
+                    literals,
+                    external,
+                    unknown,
+                    isClosureAssigned,
+                    isPlainUnaliasedLocal
+                )
+                return With(
+                    literals: literals,
+                    unknown: unknown,
+                    external: external,
+                    localParameters: localParameters,
+                    closureAssignedKeys: closureKeys,
+                    aliasedOrExternalKeys: aliasedKeys
+                )
             }
 
             func ApplyAssignment(
                 node BoundAssignmentExpression,
                 pendingConditionalTargetsCount int32,
                 mayShareStorage((VariableSymbol, VariableSymbol) -> bool)?,
-                tryAssignedVariables HashSet[VariableSymbol]? = nil
-            ) {
+                tryAssignedVariables HashSet[VariableSymbol]? = nil,
+                isClosureAssigned((VariableSymbol) -> bool)? = nil,
+                isPlainUnaliasedLocal((VariableSymbol) -> bool)? = nil
+            ) CallableAliasState {
                 if node.Variable == nil {
-                    return
+                    return this
                 }
+                var literals = Literals
+                var unknown = Unknown
+                var external = External
+                var closureKeys = ClosureAssignedKeys
+                var aliasedKeys = AliasedOrExternalKeys
                 // ADR-0208 R12 (#5171): a callable stored through a `ref` alias is stored in every
                 // variable that shares its storage, and the callee is unknown.
                 if mayShareStorage != nil {
-                    for other in Literals.Keys.Concat(External).Concat(Unknown).ToArray() {
-                        if !object.ReferenceEquals(other, node.Variable) && mayShareStorage(node.Variable, other) {
-                            Literals.Remove(other)
-                            External.Remove(other)
-                            Unknown.Add(other)
-                            tryAssignedVariables?.Add(other)
-                        }
-                    }
+                    let invalidated = InvalidateSharingVariables(
+                        node.Variable,
+                        mayShareStorage,
+                        tryAssignedVariables,
+                        literals,
+                        external,
+                        unknown,
+                        closureKeys,
+                        aliasedKeys,
+                        isPlainUnaliasedLocal
+                    )
+                    literals = invalidated.Literals
+                    external = invalidated.External
+                    unknown = invalidated.Unknown
+                    closureKeys = invalidated.ClosureKeys
                 }
                 let preserveCaptured = LocalParameters.Contains(node.Variable) && CapturedVariables.Contains(
                     node.Variable
                 )
                 let externalCallable = IsExternalCallable(node.Expression)
                 let unknownCallable = IsUnknownCallable(node.Expression)
-                if TryGetFunctionLiterals(node.Expression, out var literals) {
-                    if (pendingConditionalTargetsCount > 0 || preserveCaptured) && Literals.TryGetValue(
+                if TryGetFunctionLiterals(node.Expression, out var targetLiterals) {
+                    if (pendingConditionalTargetsCount > 0 || preserveCaptured) && literals.TryGetValue(
                         node.Variable,
                         out var existing
                     ) {
-                        existing.UnionWith(literals)
+                        let merged = existing.Union(targetLiterals)
+                        if !object.ReferenceEquals(merged, existing) {
+                            literals = literals.SetItem(node.Variable, merged)
+                        }
                     } else {
-                        Literals[node.Variable] = HashSet[BoundFunctionLiteralExpression](literals)
+                        literals = literals.SetItem(node.Variable, targetLiterals)
                     }
                     if unknownCallable {
-                        Unknown.Add(node.Variable)
+                        unknown = unknown.Add(node.Variable)
                     } else if pendingConditionalTargetsCount == 0 && !preserveCaptured {
-                        Unknown.Remove(node.Variable)
+                        unknown = unknown.Remove(node.Variable)
                     }
                     if externalCallable {
-                        MarkExternalAssignment(node.Variable, pendingConditionalTargetsCount)
+                        let marked = MarkExternalAssignment(
+                            node.Variable,
+                            pendingConditionalTargetsCount,
+                            external,
+                            unknown
+                        )
+                        external = marked.External
+                        unknown = marked.Unknown
                     } else if pendingConditionalTargetsCount == 0 && !preserveCaptured {
-                        External.Remove(node.Variable)
+                        external = external.Remove(node.Variable)
                     }
                 } else if externalCallable {
                     if pendingConditionalTargetsCount == 0 && !preserveCaptured {
-                        Literals.Remove(node.Variable)
+                        literals = literals.Remove(node.Variable)
                     }
                     if unknownCallable {
-                        Unknown.Add(node.Variable)
+                        unknown = unknown.Add(node.Variable)
                     } else if pendingConditionalTargetsCount == 0 && !preserveCaptured {
-                        Unknown.Remove(node.Variable)
+                        unknown = unknown.Remove(node.Variable)
                     }
-                    MarkExternalAssignment(node.Variable, pendingConditionalTargetsCount)
+                    let marked = MarkExternalAssignment(
+                        node.Variable,
+                        pendingConditionalTargetsCount,
+                        external,
+                        unknown
+                    )
+                    external = marked.External
+                    unknown = marked.Unknown
                 } else {
                     if pendingConditionalTargetsCount == 0 && !preserveCaptured {
-                        Literals.Remove(node.Variable)
-                        External.Remove(node.Variable)
+                        literals = literals.Remove(node.Variable)
+                        external = external.Remove(node.Variable)
                     }
-                    Unknown.Add(node.Variable)
+                    unknown = unknown.Add(node.Variable)
                 }
+                let tracked = UpdateTrackingKeysWithBases(
+                    node.Variable,
+                    literals,
+                    external,
+                    unknown,
+                    closureKeys,
+                    aliasedKeys,
+                    isClosureAssigned,
+                    isPlainUnaliasedLocal
+                )
+                closureKeys = tracked.ClosureKeys
+                aliasedKeys = tracked.AliasedKeys
+                return With(
+                    literals: literals,
+                    unknown: unknown,
+                    external: external,
+                    closureAssignedKeys: closureKeys,
+                    aliasedOrExternalKeys: aliasedKeys
+                )
+            }
+
+            private func With(
+                literals ImmutableDictionary[VariableSymbol, ImmutableHashSet[BoundFunctionLiteralExpression]]? = nil,
+                unknown ImmutableHashSet[VariableSymbol]? = nil,
+                external ImmutableHashSet[VariableSymbol]? = nil,
+                localParameters ImmutableHashSet[VariableSymbol]? = nil,
+                capturedVariables ImmutableHashSet[VariableSymbol]? = nil,
+                closureAssignedKeys ImmutableHashSet[VariableSymbol]? = nil,
+                aliasedOrExternalKeys ImmutableHashSet[VariableSymbol]? = nil
+            ) CallableAliasState {
+                let nextLiterals = literals ?? Literals
+                let nextUnknown = unknown ?? Unknown
+                let nextExternal = external ?? External
+                let nextLocalParameters = localParameters ?? LocalParameters
+                let nextCapturedVariables = capturedVariables ?? CapturedVariables
+                let nextClosureKeys = closureAssignedKeys ?? ClosureAssignedKeys
+                let nextAliasedKeys = aliasedOrExternalKeys ?? AliasedOrExternalKeys
+                if object.ReferenceEquals(nextLiterals, Literals) && object.ReferenceEquals(nextUnknown, Unknown) &&
+                    object.ReferenceEquals(nextExternal, External) && object.ReferenceEquals(
+                    nextLocalParameters,
+                    LocalParameters
+                ) &&
+                    object.ReferenceEquals(nextCapturedVariables, CapturedVariables) && object.ReferenceEquals(
+                    nextClosureKeys,
+                    ClosureAssignedKeys
+                ) &&
+                    object.ReferenceEquals(nextAliasedKeys, AliasedOrExternalKeys) {
+                    return this
+                }
+                return CallableAliasState(
+                    nextLiterals,
+                    nextUnknown,
+                    nextExternal,
+                    nextLocalParameters,
+                    nextCapturedVariables,
+                    nextClosureKeys,
+                    nextAliasedKeys
+                )
+            }
+
+            private func UpdateTrackingKeys(
+                variable VariableSymbol,
+                literals ImmutableDictionary[VariableSymbol, ImmutableHashSet[BoundFunctionLiteralExpression]],
+                external ImmutableHashSet[VariableSymbol],
+                unknown ImmutableHashSet[VariableSymbol],
+                isClosureAssigned((VariableSymbol) -> bool)?,
+                isPlainUnaliasedLocal((VariableSymbol) -> bool)?
+            )(ClosureKeys ImmutableHashSet[VariableSymbol], AliasedKeys ImmutableHashSet[VariableSymbol]) ->
+            UpdateTrackingKeysWithBases(
+                variable,
+                literals,
+                external,
+                unknown,
+                ClosureAssignedKeys,
+                AliasedOrExternalKeys,
+                isClosureAssigned,
+                isPlainUnaliasedLocal
+            )
+
+            private func UpdateTrackingKeysWithBases(
+                variable VariableSymbol,
+                literals ImmutableDictionary[VariableSymbol, ImmutableHashSet[BoundFunctionLiteralExpression]],
+                external ImmutableHashSet[VariableSymbol],
+                unknown ImmutableHashSet[VariableSymbol],
+                closureKeys ImmutableHashSet[VariableSymbol],
+                aliasedKeys ImmutableHashSet[VariableSymbol],
+                isClosureAssigned((VariableSymbol) -> bool)?,
+                isPlainUnaliasedLocal((VariableSymbol) -> bool)?
+            )(ClosureKeys ImmutableHashSet[VariableSymbol], AliasedKeys ImmutableHashSet[VariableSymbol]) {
+                var nextClosure = closureKeys
+                if isClosureAssigned != nil && isClosureAssigned(variable) {
+                    if literals.ContainsKey(variable) || external.Contains(variable) {
+                        nextClosure = nextClosure.Add(variable)
+                    } else {
+                        nextClosure = nextClosure.Remove(variable)
+                    }
+                }
+                var nextAliased = aliasedKeys
+                if isPlainUnaliasedLocal == nil || !isPlainUnaliasedLocal(variable) {
+                    if literals.ContainsKey(variable) || external.Contains(variable) || unknown.Contains(variable) {
+                        nextAliased = nextAliased.Add(variable)
+                    } else {
+                        nextAliased = nextAliased.Remove(variable)
+                    }
+                }
+                return (nextClosure, nextAliased)
+            }
+
+            private func InvalidateSharingVariables(
+                variable VariableSymbol,
+                mayShareStorage((VariableSymbol, VariableSymbol) -> bool),
+                tryAssignedVariables HashSet[VariableSymbol]?,
+                literals ImmutableDictionary[VariableSymbol, ImmutableHashSet[BoundFunctionLiteralExpression]],
+                external ImmutableHashSet[VariableSymbol],
+                unknown ImmutableHashSet[VariableSymbol],
+                closureKeys ImmutableHashSet[VariableSymbol],
+                aliasedKeys ImmutableHashSet[VariableSymbol],
+                isPlainUnaliasedLocal((VariableSymbol) -> bool)?
+            )(
+                Literals ImmutableDictionary[VariableSymbol, ImmutableHashSet[BoundFunctionLiteralExpression]],
+                External ImmutableHashSet[VariableSymbol],
+                Unknown ImmutableHashSet[VariableSymbol],
+                ClosureKeys ImmutableHashSet[VariableSymbol]
+            ) {
+                var nextLiterals = literals
+                var nextExternal = external
+                var nextUnknown = unknown
+                var nextClosureKeys = closureKeys
+                // Plain unaliased locals can only share storage with tracked ref/external/closure-assigned variables.
+                if isPlainUnaliasedLocal != nil && isPlainUnaliasedLocal(variable) {
+                    if aliasedKeys.IsEmpty {
+                        return (nextLiterals, nextExternal, nextUnknown, nextClosureKeys)
+                    }
+                    for other in aliasedKeys {
+                        if !object.ReferenceEquals(other, variable) && mayShareStorage(variable, other) {
+                            nextLiterals = nextLiterals.Remove(other)
+                            nextExternal = nextExternal.Remove(other)
+                            nextUnknown = nextUnknown.Add(other)
+                            nextClosureKeys = nextClosureKeys.Remove(other)
+                            tryAssignedVariables?.Add(other)
+                        }
+                    }
+                    return (nextLiterals, nextExternal, nextUnknown, nextClosureKeys)
+                }
+                for entry in literals {
+                    let other = entry.Key
+                    if !object.ReferenceEquals(other, variable) && mayShareStorage(variable, other) {
+                        nextLiterals = nextLiterals.Remove(other)
+                        nextExternal = nextExternal.Remove(other)
+                        nextUnknown = nextUnknown.Add(other)
+                        nextClosureKeys = nextClosureKeys.Remove(other)
+                        tryAssignedVariables?.Add(other)
+                    }
+                }
+                for other in external {
+                    if !object.ReferenceEquals(other, variable) && mayShareStorage(variable, other) {
+                        nextExternal = nextExternal.Remove(other)
+                        nextUnknown = nextUnknown.Add(other)
+                        nextClosureKeys = nextClosureKeys.Remove(other)
+                        tryAssignedVariables?.Add(other)
+                    }
+                }
+                for other in unknown {
+                    if !object.ReferenceEquals(other, variable) && mayShareStorage(variable, other) {
+                        tryAssignedVariables?.Add(other)
+                    }
+                }
+                return (nextLiterals, nextExternal, nextUnknown, nextClosureKeys)
             }
 
             // An assignment reached only on some paths (pendingConditionalTargetsCount > 0:
             // a conditional goto to a later label is still pending) leaves the other paths with whatever
             // the variable held before. Only a variable already known external
             // stays external; anything else becomes unknown (fail-safe).
-            private func MarkExternalAssignment(variable VariableSymbol, pendingConditionalTargetsCount int32) {
-                if pendingConditionalTargetsCount > 0 && !External.Contains(variable) {
-                    Unknown.Add(variable)
-                    return
+            private func MarkExternalAssignment(
+                variable VariableSymbol,
+                pendingConditionalTargetsCount int32,
+                external ImmutableHashSet[VariableSymbol],
+                unknown ImmutableHashSet[VariableSymbol]
+            )(External ImmutableHashSet[VariableSymbol], Unknown ImmutableHashSet[VariableSymbol]) {
+                if pendingConditionalTargetsCount > 0 && !external.Contains(variable) {
+                    return (external, unknown.Add(variable))
                 }
-                External.Add(variable)
+                return (external.Add(variable), unknown)
             }
 
             shared {
-                func Join(left CallableAliasState?, right CallableAliasState) CallableAliasState {
-                    if left == nil {
-                        return right.Clone()
+                let Empty CallableAliasState = CallableAliasState(
+                    ImmutableDictionary[VariableSymbol, ImmutableHashSet[BoundFunctionLiteralExpression]].Empty,
+                    ImmutableHashSet[VariableSymbol].Empty,
+                    ImmutableHashSet[VariableSymbol].Empty,
+                    ImmutableHashSet[VariableSymbol].Empty,
+                    ImmutableHashSet[VariableSymbol].Empty,
+                    ImmutableHashSet[VariableSymbol].Empty,
+                    ImmutableHashSet[VariableSymbol].Empty
+                )
+
+                private func UnionSet(
+                    left ImmutableHashSet[VariableSymbol],
+                    right ImmutableHashSet[VariableSymbol]
+                ) ImmutableHashSet[VariableSymbol] {
+                    if object.ReferenceEquals(left, right) || right.IsEmpty {
+                        return left
                     }
-                    let joined = left.Clone()
-                    let variables = joined
-                        .Literals
-                        .Keys
-                        .Concat(joined.Unknown)
-                        .Concat(joined.External)
-                        .Concat(right.Literals.Keys)
-                        .Concat(right.Unknown)
-                        .Concat(right.External)
-                        .ToHashSet()
-                    for variable in variables {
-                        let hasLeft = joined.Literals.ContainsKey(variable) || joined.Unknown.Contains(variable) ||
-                            joined
-                            .External
-                            .Contains(variable)
-                        let hasRight = right.Literals.ContainsKey(variable) || right.Unknown.Contains(variable) ||
-                            right
-                            .External
-                            .Contains(variable)
-                        if !hasLeft || !hasRight {
-                            joined.Unknown.Add(variable)
+                    if left.IsEmpty {
+                        return right
+                    }
+                    return left.Union(right)
+                }
+
+                func Join(left CallableAliasState?, right CallableAliasState) CallableAliasState {
+                    if left == nil || object.ReferenceEquals(left, right) {
+                        return right
+                    }
+                    let sameLiterals = object.ReferenceEquals(left.Literals, right.Literals)
+                    let sameUnknown = object.ReferenceEquals(left.Unknown, right.Unknown)
+                    let sameExternal = object.ReferenceEquals(left.External, right.External)
+                    var literals = left.Literals
+                    var unknown = UnionSet(left.Unknown, right.Unknown)
+                    let external = UnionSet(left.External, right.External)
+                    if !sameLiterals || !sameUnknown || !sameExternal {
+                        if !sameLiterals {
+                            for entry in left.Literals {
+                                if right.Literals.TryGetValue(entry.Key, out var rightSet) {
+                                    if !object.ReferenceEquals(entry.Value, rightSet) {
+                                        let merged = entry.Value.Union(rightSet)
+                                        if !object.ReferenceEquals(merged, entry.Value) {
+                                            literals = literals.SetItem(entry.Key, merged)
+                                        }
+                                    }
+                                } else if !right.Unknown.Contains(entry.Key) && !right.External.Contains(entry.Key) {
+                                    unknown = unknown.Add(entry.Key)
+                                }
+                            }
+                            for entry in right.Literals {
+                                if !left.Literals.ContainsKey(entry.Key) {
+                                    literals = literals.SetItem(entry.Key, entry.Value)
+                                    if !left.Unknown.Contains(entry.Key) && !left.External.Contains(entry.Key) {
+                                        unknown = unknown.Add(entry.Key)
+                                    }
+                                }
+                            }
+                        }
+                        if !sameExternal {
+                            for variable in left.External {
+                                if !right.External.Contains(variable) && !right.Unknown.Contains(variable) &&
+                                    !right
+                                    .Literals
+                                    .ContainsKey(variable) {
+                                    unknown = unknown.Add(variable)
+                                }
+                            }
+                            for variable in right.External {
+                                if !left.External.Contains(variable) && !left.Unknown.Contains(variable) &&
+                                    !left
+                                    .Literals
+                                    .ContainsKey(variable) {
+                                    unknown = unknown.Add(variable)
+                                }
+                            }
                         }
                     }
-                    joined.MergeFrom(right)
-                    return joined
+                    let localParameters = UnionSet(left.LocalParameters, right.LocalParameters)
+                    let capturedVariables = UnionSet(left.CapturedVariables, right.CapturedVariables)
+                    let closureAssignedKeys = UnionSet(left.ClosureAssignedKeys, right.ClosureAssignedKeys)
+                    let aliasedOrExternalKeys = UnionSet(left.AliasedOrExternalKeys, right.AliasedOrExternalKeys)
+                    return left.With(
+                        literals: literals,
+                        unknown: unknown,
+                        external: external,
+                        localParameters: localParameters,
+                        capturedVariables: capturedVariables,
+                        closureAssignedKeys: closureAssignedKeys,
+                        aliasedOrExternalKeys: aliasedOrExternalKeys
+                    )
                 }
             }
         }
@@ -8044,11 +9916,6 @@ internal partial class StatementBinder {
             ) bool -> left
                 .Normal
                 .EqualsState(right.Normal) && left.AllEntry.EqualsState(right.AllEntry)
-
-            private func CloneCallableState(state(Normal CallableAliasState, AllEntry CallableAliasState))(
-                Normal CallableAliasState,
-                AllEntry CallableAliasState
-            ) -> (state.Normal.Clone(), state.AllEntry.Clone())
 
             private func JoinCallableStates(
                 left(Normal CallableAliasState, AllEntry CallableAliasState)?,
