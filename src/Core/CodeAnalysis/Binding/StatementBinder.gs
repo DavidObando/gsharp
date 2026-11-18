@@ -544,8 +544,6 @@ internal partial class StatementBinder {
         private let function FunctionSymbol
         private let variable VariableSymbol
         private let functionType FunctionTypeSymbol
-        private var replacements int32
-
         init(function FunctionSymbol, variable VariableSymbol, functionType FunctionTypeSymbol) {
             this.function = function
             this.variable = variable
@@ -557,7 +555,6 @@ internal partial class StatementBinder {
 
         protected override func RewriteIndirectCallExpression(node BoundIndirectCallExpression) BoundExpression {
             if node.Target is BoundVariableExpression target && object.ReferenceEquals(target.Variable, variable) {
-                replacements++
                 let arguments = node.Arguments.Select((a BoundExpression) -> RewriteExpression(a)).ToImmutableArray()
                 return BoundCallExpression(node.Syntax, function, arguments, node.Type)
             }
@@ -566,7 +563,6 @@ internal partial class StatementBinder {
 
         protected override func RewriteVariableExpression(node BoundVariableExpression) BoundExpression {
             if object.ReferenceEquals(node.Variable, variable) {
-                replacements++
                 return BoundMethodGroupExpression(node.Syntax, function, functionType)
             }
             return node
@@ -582,9 +578,11 @@ internal partial class StatementBinder {
         }
 
         protected override func RewriteFunctionLiteralExpression(node BoundFunctionLiteralExpression) BoundExpression {
-            let before = replacements
             let body = cast[BoundBlockStatement](RewriteStatement(node.Body))
-            if replacements == before {
+            // A transitive capture can change even when this body's expressions do not.
+            if object.ReferenceEquals(body, node.Body) && !node.CapturedVariables.Any(
+                (v VariableSymbol) -> object.ReferenceEquals(v, variable)
+            ) {
                 return node
             }
             let rewritten = BoundFunctionLiteralExpression(

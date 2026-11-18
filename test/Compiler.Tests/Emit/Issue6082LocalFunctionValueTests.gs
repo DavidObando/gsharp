@@ -279,6 +279,24 @@ class B {
         let next = func(n int32) int32 { return helper(n) }
         return "${next(41)}"
 `, "42", true}
+            yield []object{"recursion-through-cyclic-nested-locals", "", `
+        let helper = func(n int32) int32 {
+            if n == 0 { return 1 }
+            var visits = 0
+            let first = func(depth int32) int32 {
+                visits++
+                return second(depth)
+            }
+            let second = func(depth int32) int32 {
+                if depth == 0 { return helper(n - 1) }
+                return first(depth - 1)
+            }
+            let result = first(1) + 1
+            return if visits == 2 { result } else { -1000 }
+        }
+        let next = func(n int32) int32 { return helper(n) }
+        return "${next(41)}"
+`, "42", true}
         }
     }
 }
