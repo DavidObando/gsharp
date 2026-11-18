@@ -59,22 +59,57 @@ open class Issue2290CrossAssemblyTypeIdentityTests {
         Assert.True(reverse.IsIdentity)
     }
 
-    @Fact
-    func TwoSeparateResolvers_SameDll_ResolveDataClass_SemanticAggregates_AsIdentityConvertible() {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func TwoSeparateResolvers_SameDll_ResolveDataClass_SemanticAggregates_AsIdentityConvertible(generic bool) {
         let libraryPath = EmitLibrary(
-            DataClassLibrarySource,
-            "TwoSeparateResolvers_SameDll_ResolveDataClass_SemanticAggregates_AsIdentityConvertible"
+            if generic {
+                "package A.B\npublic data class Chapter[T](Title T)"
+            } else {
+                DataClassLibrarySource
+            },
+            "SemanticAggregateIdentity" + generic.ToString()
         )
         using let resolverA = ReferenceResolver.WithReferences([]string{libraryPath})
         resolverA.CurrentAssemblyName = "Consumer"
         using let resolverB = ReferenceResolver.WithReferences([]string{libraryPath})
         resolverB.CurrentAssemblyName = "Consumer"
-        Assert.True(resolverA.TryResolveType("A.B.Chapter", out var typeA))
-        Assert.True(resolverB.TryResolveType("A.B.Chapter", out var typeB))
+        let name = if generic {
+            "A.B.Chapter`1"
+        } else {
+            "A.B.Chapter"
+        }
+        Assert.True(resolverA.TryResolveType(name, out var typeA))
+        Assert.True(resolverB.TryResolveType(name, out var typeB))
+        if generic {
+            typeA = Assert.IsAssignableFrom[Type](typeA).MakeGenericType(
+                Assert.IsAssignableFrom[Type](resolverA.MapClrTypeToReferences(typeof(string)))
+            )
+            typeB = Assert.IsAssignableFrom[Type](typeB).MakeGenericType(
+                Assert.IsAssignableFrom[Type](resolverB.MapClrTypeToReferences(typeof(string)))
+            )
+        }
         Assert.False(object.ReferenceEquals(typeA, typeB))
         Assert.True(ImportedTypeSymbol.TryCreateSemanticAggregate(typeA, resolverA, out var aggregateA))
         Assert.True(ImportedTypeSymbol.TryCreateSemanticAggregate(typeB, resolverB, out var aggregateB))
         Assert.False(object.ReferenceEquals(aggregateA, aggregateB))
+        Assert.True(TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(aggregateA, aggregateB))
+        let imported = ImportedTypeSymbol.Get(typeB)
+        Assert.True(TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(aggregateA, imported))
+        Assert.True(TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(imported, aggregateA))
+        if generic {
+            let other = Assert
+                .IsAssignableFrom[Type](typeB)
+                .GetGenericTypeDefinition()
+                .MakeGenericType(Assert.IsAssignableFrom[Type](resolverB.MapClrTypeToReferences(typeof(int32))))
+            Assert.False(
+                TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(aggregateA, ImportedTypeSymbol.Get(other))
+            )
+            Assert.False(
+                TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(ImportedTypeSymbol.Get(other), aggregateA)
+            )
+        }
         let conversion = Conversion.Classify(aggregateA, aggregateB)
         Assert.True(conversion.Exists)
         Assert.True(conversion.IsIdentity)
