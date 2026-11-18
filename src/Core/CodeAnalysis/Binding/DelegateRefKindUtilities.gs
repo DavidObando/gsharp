@@ -19,10 +19,11 @@ internal shared class DelegateRefKindUtilities {
         branch BoundExpression,
         conversions ConversionClassifier
     ) BoundExpression {
-        if branch is BoundConversionExpression{Type: DelegateTypeSymbol{Declaration: nil}} conversion &&
-            conversion.Expression is BoundFunctionLiteralExpression or
-            BoundMethodGroupExpression {
-            return conversion.Expression
+        if branch is BoundConversionExpression{
+            Type: DelegateTypeSymbol{Declaration: nil},
+            Expression: BoundFunctionLiteralExpression innerLiteral
+        } {
+            return innerLiteral
         }
         if branch is BoundBlockExpression blockExpr {
             if blockExpr.Expression is BoundVariableExpression{Variable: LocalVariableSymbol resultLocal} &&

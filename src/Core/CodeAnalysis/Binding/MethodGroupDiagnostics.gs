@@ -128,6 +128,18 @@ internal shared class MethodGroupDiagnostics {
         }
     }
 
+    func ReportUnsupportedLocalRefReturn(
+        diagnostics DiagnosticBag,
+        function FunctionSymbol,
+        location TextLocation
+    ) bool {
+        if function.LocalDeclaration == nil || function.ReturnRefKind == RefKind.None {
+            return false
+        }
+        diagnostics.ReportRefReturningFunctionLiteralRequiresDirectLocalFunction(location)
+        return true
+    }
+
     func RequiresTarget(expression BoundExpression) bool -> expression is BoundMethodGroupExpression &&
         expression.FunctionType == nil ||
         expression is BoundClrMethodGroupExpression &&

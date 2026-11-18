@@ -5,6 +5,42 @@ package GSharp.Compiler.Tests
 import Xunit
 
 class Issue6105CapturingRecursiveDelegateTests {
+    @Theory
+    @InlineData("choose ? first : second")
+    @InlineData("(() -> first)()")
+    @InlineData("(choose ? first : nil) ?? second")
+    func InferredRefKindBranchesAndFactories_PreserveCallableContracts(selection string) {
+        const source = `func Run(choose bool) string {
+    var outer = 40
+    let first = func(ref value int32, out observed int32, in increment int32, n int32) int32 {
+        if n == 0 {
+            value += increment
+            outer++
+            observed = outer
+            return value + observed
+        }
+        return second(ref value, out observed, in increment, n - 1)
+    }
+    let second = func(ref value int32, out observed int32, in increment int32, n int32) int32 {
+        return first(ref value, out observed, in increment, n)
+    }
+    let selected = __SELECTION__
+    var value = 1
+    var observed = 0
+    let increment = 2
+    let a = selected(ref value, out observed, in increment, 1)
+    outer = 50
+    let b = selected(ref value, out observed, in increment, 0)
+    return "${a},${b};${value},${observed}"
+}
+System.Console.Write("${Run(true)}|${Run(false)}")`
+        Issue5392ConstructedInterfaceMethodDriverTests.CompileVerifyAndRun(
+            source.Replace("__SELECTION__", selection),
+            "44,56;5,51|44,56;5,51",
+            "6105"
+        )
+    }
+
     @Fact
     func OverloadSelection_DoesNotNarrowPersistentFunctionSignature() {
         const source = `func Run() string {

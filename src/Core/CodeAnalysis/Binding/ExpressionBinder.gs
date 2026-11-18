@@ -3039,8 +3039,11 @@ internal partial class ExpressionBinder {
         // untyped conversion for a NAMED ref-returning function is left to
         // whatever existing diagnostic that pre-existing machinery already
         // produces.
-        if function.ReturnRefKind != RefKind.None && function.LocalDeclaration != nil {
-            Diagnostics.ReportRefReturningFunctionLiteralRequiresDirectLocalFunction(syntax.IdentifierToken.Location)
+        if MethodGroupDiagnostics.ReportUnsupportedLocalRefReturn(
+            Diagnostics,
+            function,
+            syntax.IdentifierToken.Location
+        ) {
             return false
         }
         if function.IsGeneric {

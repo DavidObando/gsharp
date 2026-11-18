@@ -3387,6 +3387,9 @@ internal class ConversionClassifier {
             )
             return BoundErrorExpression(nil)
         }
+        if MethodGroupDiagnostics.ReportUnsupportedLocalRefReturn(Diagnostics, pick, diagnosticLocation) {
+            return BoundErrorExpression(group.Syntax)
+        }
         if pick.LocalDeclaration != nil && !pick.IsGeneric {
             binderCtx.RootScope.GetLocalFunctionValue(
                 pick,
