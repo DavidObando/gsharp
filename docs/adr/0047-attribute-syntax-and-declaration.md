@@ -163,6 +163,7 @@ Source and imported static, instance, extension, generic, and base calls use the
 Overrides inherit conditional symbols from source and imported base methods.
 Imported inheritance follows virtual slots, not unrelated hidden methods.
 An elided call evaluates neither its receiver nor its arguments, including through `?.`.
+Binding restores their incoming flow state, preserving prior narrowings without exporting operand assignments or member postconditions.
 It establishes no definite-assignment facts or suspension edges, and suspension lowering emits no completion wrapper.
 Elision precedes suspension completion; its call-site type stays `void` even when the emitted callee ABI returns `ValueTask`.
 Expression-tree conversion preserves an already-elided call as a `void` default node without validating or lowering its omitted operands.

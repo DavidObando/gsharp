@@ -508,7 +508,7 @@ internal partial class StatementBinder {
         if statement is BoundExpressionStatement exprStmt {
             callExpr = exprStmt.Expression
         }
-        if callExpr == nil {
+        if callExpr == nil || callExpr is BoundCallOperationExpression{IsElidedConditionalCall: true} {
             return
         }
         var memberNames ImmutableArray[string]
@@ -2746,7 +2746,9 @@ internal partial class StatementBinder {
         exitAliases Dictionary[BoundExpression, HashSet[VariableSymbol]],
         includeNullableNullCoalescing bool = false
     ) {
-        if node == nil || processed.Contains(node) {
+        if node == nil || node is BoundCallOperationExpression{IsElidedConditionalCall: true} || processed.Contains(
+            node
+        ) {
             return
         }
         switch node {

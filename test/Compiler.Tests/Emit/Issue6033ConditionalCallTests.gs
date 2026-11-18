@@ -36,6 +36,97 @@ Console.WriteLine(Demo.Run())`, "ConditionalDriver6033", executable: true)
     }
 
     @Theory
+    @InlineData("nil", "Keep(value ??= MakeReady())", true, "5:1:1")
+    @InlineData("\"ready\"", "Keep((value = nil))", false, "5:0:0")
+    @InlineData("\"ready\"", "(value = nil).KeepExtension()", false, "5:0:0")
+    func ElidedOperands_DoNotChangeNarrowing(initial string, call string, succeedsWhenEnabled bool, output string) {
+        let source = `import System
+import System.Diagnostics
+@Conditional("ACTIVE_6033")
+func (self string?) KeepExtension() { Consumer.Calls++ }
+shared class Consumer {
+    var Calls int32
+    var Effects int32
+    @Conditional("ACTIVE_6033")
+    func Keep(value string?) { Calls++ }
+    func MakeReady() string {
+        Effects++
+        return "ready"
+    }
+    func Run() string {
+        var value string? = nil
+        value = ` + initial + "\n" + call + `
+        return value.Length.ToString() + ":" + Calls.ToString() + ":" + Effects.ToString()
+    }
+}`
+        for enabled in[]bool{true, false} {
+            let compilation = Compilation(SyntaxTree.Parse(SourceText.From(source))){
+                IsLibrary = true,
+                PreprocessorSymbols = if enabled {
+                    ImmutableHashSet.Create("ACTIVE_6033")
+                } else {
+                    ImmutableHashSet[string].Empty
+                }
+            }
+            using let image = MemoryStream()
+            let result = compilation.Emit(image)
+            Assert.True(result.Success == (enabled == succeedsWhenEnabled), string.Join("\n", result.Diagnostics))
+            if result.Success {
+                Assert.Equal(Encoding.UTF8.GetBytes(output), Run(EmittedFixture.Load(image.ToArray())))
+            } else {
+                Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+            }
+        }
+    }
+
+    @Fact
+    func ElidedCalls_DoNotApplyMemberNotNullPostconditions() {
+        let source = `import System.Diagnostics
+import System.Diagnostics.CodeAnalysis
+class Holder {
+    private var value string?
+    @MemberNotNull("value")
+    CONDITIONAL private func Ensure() { value = "ready" }
+    func Read() string {
+        Ensure()
+        return value.Length.ToString()
+    }
+}
+shared class Consumer { func Run() string -> Holder().Read() }`
+        for mode in[]string{"absent", "enabled", "ordinary"} {
+            let compilation = Compilation(
+                SyntaxTree.Parse(
+                    SourceText.From(
+                        source.Replace(
+                            "CONDITIONAL",
+                            if mode == "ordinary" {
+                                ""
+                            } else {
+                                "@Conditional(\"ACTIVE_6033\")"
+                            }
+                        )
+                    )
+                )
+            ){
+                IsLibrary = true,
+                PreprocessorSymbols = if mode == "enabled" {
+                    ImmutableHashSet.Create("ACTIVE_6033")
+                } else {
+                    ImmutableHashSet[string].Empty
+                }
+            }
+            using let image = MemoryStream()
+            let result = compilation.Emit(image)
+            Assert.Equal(mode != "absent", result.Success)
+            if result.Success {
+                Assert.Equal(Encoding.UTF8.GetBytes("5"), Run(EmittedFixture.Load(image.ToArray())))
+            } else {
+                Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+            }
+        }
+    }
+
+    @Theory
     @InlineData("Probe.SharedKeep(Argument())", "Probe.SharedKeep(Argument())", "AS7O")
     @InlineData("Receiver().Keep(Argument())", "Receiver().Keep(Argument())", "RAK7O")
     func ExpressionTrees_PreserveConditionalEffects(gsharpCall string, csharpCall string, enabledOutput string) {

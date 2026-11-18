@@ -30,6 +30,97 @@ Console.WriteLine(Recorder.Trace)`, "ConditionalDriver6100", executable: true, "
     }
 
     @Theory
+    @InlineData("nil", "Probe.Keep(value ??= MakeReady())", true, "5:1:1", "-1:0:0")
+    @InlineData("\"ready\"", "Probe.Keep((value = nil))", false, "-1:1:0", "5:0:0")
+    @InlineData("\"ready\"", "(value = nil).KeepExtension()", false, "-1:1:0", "5:0:0")
+    func ElidedOperands_DoNotChangeNarrowing_WithFrozenNativeImport(
+        initial string,
+        call string,
+        succeedsWhenEnabled bool,
+        enabledOutput string,
+        absentOutput string
+    ) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let library = fixture.CompileCSharp(`#nullable enable
+using System.Diagnostics;
+namespace ConditionalNarrowing6100 {
+    public static class Probe {
+        public static int Calls;
+        [Conditional("ACTIVE_6100"), Conditional("OTHER_6100")]
+        public static void Keep(string? value) { Calls++; }
+    }
+    public static class Extensions {
+        [Conditional("ACTIVE_6100"), Conditional("OTHER_6100")]
+        public static void KeepExtension(this string? self) { Probe.Calls++; }
+    }
+}`, "ConditionalNarrowingLibrary6100")
+        let frozenBytes = File.ReadAllBytes(library)
+        for symbol in[]string{"ACTIVE_6100", "OTHER_6100", ""} {
+            let enabled = symbol.Length != 0
+            let nativeSource = "#nullable enable\n" +
+                (
+                if enabled {
+                    "#define " + symbol + "\n"
+                } else {
+                    ""
+                }
+            ) +
+                `using ConditionalNarrowing6100;
+public static class Consumer {
+    public static int Effects;
+    public static string MakeReady() { Effects++; return "ready"; }
+    public static string Run() {
+        string? value = ` +
+                initial.Replace("nil", "null") + ";\n" + call.Replace("nil", "null") + `;
+        return (value?.Length ?? -1).ToString() + ":" + Probe.Calls + ":" + Effects;
+    }
+}`
+            let nativePath = fixture.CompileCSharp(nativeSource, "NativeNarrowingConsumer6100", library)
+            let expected = Encoding.UTF8.GetBytes(
+                if enabled {
+                    enabledOutput
+                } else {
+                    absentOutput
+                }
+            )
+            Assert.Equal(expected, Run(EmittedFixture.Load(nativePath)))
+            let source = `import System
+import ConditionalNarrowing6100
+shared class Consumer {
+    private var effects int32
+    func MakeReady() string {
+        effects++
+        return "ready"
+    }
+    func Run() string {
+        var value string? = nil
+        value = ` + initial + "\n" + call + `
+        return value.Length.ToString() + ":" + Probe.Calls.ToString() + ":" + effects.ToString()
+    }
+}`
+            using let references = ReferenceResolver.WithReferences([]string{library})
+            let compilation = Compilation(references, SyntaxTree.Parse(SourceText.From(source))){
+                IsLibrary = true,
+                PreprocessorSymbols = if enabled {
+                    ImmutableHashSet.Create(symbol)
+                } else {
+                    ImmutableHashSet[string].Empty
+                }
+            }
+            using let image = MemoryStream()
+            let result = compilation.Emit(image)
+            Assert.True(result.Success == (enabled == succeedsWhenEnabled), string.Join("\n", result.Diagnostics))
+            if result.Success {
+                let assemblies = EmittedFixture.LoadTogether(fixture.Directory, frozenBytes, image.ToArray())
+                Assert.Equal(expected, Run(assemblies[1]))
+            } else {
+                Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+            }
+            Assert.Equal(frozenBytes, File.ReadAllBytes(library))
+        }
+    }
+
+    @Theory
     @InlineData("Probe.SharedKeep(Argument())", "Probe.SharedKeep(Argument())", "AS7O")
     @InlineData("Receiver().Keep(Argument())", "Receiver().Keep(Argument())", "RAK7O")
     func ExpressionTrees_PreserveFrozenConditionalEffects(gsharpCall string, csharpCall string, enabledOutput string) {
