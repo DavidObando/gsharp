@@ -131,7 +131,7 @@ Every premise is conditional on a prefix tree. A tree from `SyntaxTree.Parse` ha
 - A host gets the finality of each diagnostic from the binder, and a reason it can use for its own policy.
 - On the samples, cut at up to 30 statement boundaries each (3922 checks in both modes), no final diagnostic is missing from the complete file at the same ID and span. Before the premises, 370 were.
 - For each sample, `BindPrefix` at the end of the text with `KeepDeclarations` reports exactly `GetDiagnostics()`, all final. For the 194 programs in `samples/` and the Core test data, `GetDiagnostics()` gives the same ID, span, severity, message, property count and additional-location count before and after the change.
-- The cost of a check is the cost of a plain bind of the prefix text plus the scope query. On the samples (3922 checks, scope included), `BindPrefix` takes 2.8 ms at p50 and 9.9 ms at p95. A plain `Compilation(...).GetDiagnostics()` of the same prefix texts takes 2.6 ms and 9.1 ms on the same machine.
+- The cost of a check is the cost of a plain bind of the prefix text plus the scope query. On the samples (3922 checks, scope included), `BindPrefix` takes 2.5 ms at p50 and 9.8 ms at p95. A plain `Compilation(...).GetDiagnostics()` of the same prefix texts takes 2.3 ms and 8.8 ms on the same machine.
 - The `DiagnosticBag` failed-lookup reports read one `AsyncLocal` value. Other reports do not change.
 
 ## Alternatives considered
