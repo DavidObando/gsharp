@@ -78,9 +78,9 @@ namespace Repro
         Assert.IsAssignableFrom[IPropertySymbol](document.SemanticModel.GetSymbolInfo(accountProperty).Symbol)
         let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
         let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
-        Assert.Contains("AccountName!!.Checksum32}", printed, StringComparison.Ordinal)
+        Assert.Contains("AccountName.Checksum32}", printed, StringComparison.Ordinal)
         Assert.Contains("DeviceName?.Checksum32()}", printed, StringComparison.Ordinal)
-        Assert.DoesNotContain("AccountName!!.Checksum32()}", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("AccountName.Checksum32()}", printed, StringComparison.Ordinal)
     }
 
     @Fact

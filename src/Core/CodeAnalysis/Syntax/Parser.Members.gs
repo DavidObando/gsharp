@@ -284,7 +284,7 @@ open partial class Parser {
             baseCloseParen = MatchToken(SyntaxKind.CloseParenthesisToken)
         }
         let body = ParseBlockStatement()
-        return ConstructorDeclarationSyntax(
+        let declaration = ConstructorDeclarationSyntax(
             syntaxTree,
             accessibilityModifier,
             convenienceModifier,
@@ -299,6 +299,10 @@ open partial class Parser {
             baseCloseParen,
             body
         )
+        if baseKeyword is {} initializerTarget && !initializerTarget.IsMissing && !declaration.HasBaseInitializer {
+            Diagnostics.ReportInvalidConstructorInitializerTarget(initializerTarget.Location)
+        }
+        return declaration
     }
 
     private func ParseSharedBlock() SharedBlockSyntax {
@@ -807,6 +811,28 @@ open partial class Parser {
     }
 
     private func ParsePropertyDeclaration(
+        accessibilityModifier SyntaxToken?,
+        openModifier SyntaxToken?,
+        overrideModifier SyntaxToken?
+    ) PropertyDeclarationSyntax {
+        let property = ParsePropertyDeclarationCore(accessibilityModifier, openModifier, overrideModifier)
+        SkipUnsupportedPropertyInitializer(property)
+        return property
+    }
+
+    // The `PropertyDecl` grammar has no initializer. Report GS0640 once and
+    // consume `= expr`. Otherwise the `=` starts a field declaration and
+    // causes GS0113, GS0288, and GS0005 at the same token.
+    private func SkipUnsupportedPropertyInitializer(property PropertyDeclarationSyntax) {
+        if Current.Kind != SyntaxKind.EqualsToken {
+            return
+        }
+        let equalsToken = NextToken()
+        Diagnostics.ReportPropertyInitializerNotSupported(equalsToken.Location, property.Identifier.Text)
+        ParseExpression()
+    }
+
+    private func ParsePropertyDeclarationCore(
         accessibilityModifier SyntaxToken?,
         openModifier SyntaxToken?,
         overrideModifier SyntaxToken?

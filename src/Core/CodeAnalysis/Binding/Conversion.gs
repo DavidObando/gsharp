@@ -367,8 +367,8 @@ class Conversion {
                 return HaveCompatibleCallableContracts(
                     sourceShape,
                     targetShape,
-                    sourceSignature!!,
-                    targetSignature!!,
+                    sourceSignature,
+                    targetSignature,
                     invariant
                 )
             }
@@ -1211,12 +1211,13 @@ class Conversion {
             // same symbolic argument. Comparing the SYMBOLIC type arguments — rather
             // than the erased `ClrType` — lets `let ch Channel[BufferEntry] = ...`
             // bind even though `BufferEntry` has a null `ClrType` during binding.
+            // Read arguments from the annotated types; the peeled bases erase imported tuple leaf contracts (#5956).
             if from is ImportedTypeSymbol fromGeneric &&
                 to is ImportedTypeSymbol toGeneric &&
                 fromGeneric.OpenDefinition != nil &&
                 toGeneric.OpenDefinition != nil &&
                 (fromGeneric.HasSubstitutableTypeArgument || toGeneric.HasSubstitutableTypeArgument) &&
-                AreConstructedGenericsIdentical(fromGeneric, toGeneric) {
+                AreConstructedGenericsIdentical(annotatedFrom!!, annotatedTo!!) {
                 return Conversion.Identity
             }
             // Issue #1420: identity between a CLR-backed closed constructed generic
@@ -1254,7 +1255,7 @@ class Conversion {
             // method arguments, nested generic arguments, and cross-context CLR
             // identities.
             if (from is ImportedTypeSymbol || from is SequenceTypeSymbol || from is AsyncSequenceTypeSymbol) &&
-                TryClassifyConstructedImportedReferenceConversion(from, to) {
+                TryClassifyConstructedImportedReferenceConversion(annotatedFrom, annotatedTo) {
                 return Conversion.Implicit
             }
             // Phase 3.C.1 / ADR-0001: T → T? is an implicit widening; T? → T?
@@ -1624,7 +1625,7 @@ class Conversion {
             if to == TypeSymbol.String {
                 let fromCharArray = from?.ClrType
                 if fromCharArray?.IsArray == true {
-                    let fromCharElement = fromCharArray!!.GetElementType()
+                    let fromCharElement = fromCharArray.GetElementType()
                     if fromCharElement?.IsSameAs(typeof(char)) == true {
                         return Conversion.Explicit
                     }
@@ -1906,7 +1907,7 @@ class Conversion {
                 if targetArray?.IsSZArray == true &&
                     !(to is ImportedTypeSymbol{TypeArguments: {IsDefaultOrEmpty: false}}) &&
                     sourceElement != nil {
-                    let targetElement Type? = targetArray!!.GetElementType()
+                    let targetElement Type? = targetArray.GetElementType()
                     if targetElement != nil && string.Equals(
                         targetElement.FullName,
                         sourceElement.FullName,
@@ -2509,7 +2510,7 @@ class Conversion {
                 targetArguments.Length != 1 {
                 return false
             }
-            let openName string? = openDefinition!!.FullName
+            let openName string? = openDefinition.FullName
             if openName == nil {
                 return false
             }
@@ -2545,7 +2546,7 @@ class Conversion {
             if AreTypeArgumentsEquivalent(targetElement, sourceElement) {
                 return true
             }
-            let genericParameters = openDefinition!!.GetGenericArguments()
+            let genericParameters = openDefinition.GetGenericArguments()
             if genericParameters.Length != 1 ||
                 (
                 genericParameters[0].GenericParameterAttributes & GenericParameterAttributes.VarianceMask
@@ -2898,7 +2899,7 @@ class Conversion {
                     AreConstructedReferenceArgumentsCompatible(
                     sourceDelegateArguments,
                     targetDelegateArguments,
-                    targetDelegate!!,
+                    targetDelegate,
                     clrArgumentBoundary: false,
                     nominalOnly: true
                 )
@@ -3569,9 +3570,7 @@ class Conversion {
                 case nil: false
                 case _ is EnumSymbol: false
                 case s is StructSymbol: s.IsClass
-                case tp is TypeParameterSymbol: tp.HasReferenceTypeConstraint ||
-                    tp.ClassConstraint != nil ||
-                    tp.DependentBoundProvesReferenceType
+                case tp is TypeParameterSymbol: tp.ProvesNonUniversalReferenceConstraint
                 default: type.ClrType == nil || ClrTypeUtilities.IsReferenceTypeForVariance(type.ClrType)
             }
         }
@@ -4038,7 +4037,7 @@ class Conversion {
                 // Project their real hierarchy; symbolic sources must
                 // keep the owner-aware path and never fall back to erased probes.
                 if TryGetConstructedGenericShape(from, out var sourceOpen, out var sourceTypeArguments) &&
-                    (!sourceOpen!!.IsValueType || targetOpen.IsInterface) &&
+                    (!sourceOpen.IsValueType || targetOpen.IsInterface) &&
                     ClrTypeUtilities
                     .AreSame(sourceOpen, targetOpen) {
                     return AreConstructedReferenceArgumentsCompatible(
@@ -4049,7 +4048,7 @@ class Conversion {
                         nominalOnly
                     )
                 }
-                if from is not ImportedTypeSymbol importedSource {
+                if MemberLookup.GetProjectionReceiverImportedType(from) is not{} importedSource {
                     return false
                 }
                 for arguments in MemberLookup.EnumerateConstructedTypeArgumentsThroughHierarchy(
@@ -6492,7 +6491,7 @@ class Conversion {
         // It deliberately does NOT cover an argument that HAS a real, closed CLR
         // type which is simply not injective — see
         // <see cref="TypeSymbol.ContainsFixedLengthArray"/>.
-        private func RequiresSymbolicTypeArgumentIdentity(type TypeSymbol?) bool {
+        internal func RequiresSymbolicTypeArgumentIdentity(type TypeSymbol?) bool {
             var type = type
             type = type?.StripToBareShape()
             if (type is SequenceTypeSymbol or AsyncSequenceTypeSymbol) &&
@@ -6853,7 +6852,7 @@ class Conversion {
                 return false
             }
             if !IsCrossContextIdenticalElement(fromElement, toElement) &&
-                !AreSameRuntimeChannelElement(fromElement!!, toElement!!) {
+                !AreSameRuntimeChannelElement(fromElement, toElement) {
                 return false
             }
             // Nothing converts TO the runtime class except itself (it is a subtype).
@@ -7090,7 +7089,7 @@ class Conversion {
         /// behaves as a reference type for conversion and equality purposes in both
         /// its nullable (`T?`) and non-nullable (`T`) forms.
         private func IsReferenceConstrainedTypeParameter(type TypeSymbol?) bool -> type is TypeParameterSymbol tp &&
-            (tp.HasReferenceTypeConstraint || tp.ClassConstraint != nil || tp.DependentBoundProvesReferenceType)
+            tp.ProvesNonUniversalReferenceConstraint
 
         private func HasExplicitUnboxingConversion(from TypeSymbol?, to TypeSymbol?) bool {
             var from = from

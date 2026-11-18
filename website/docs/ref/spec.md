@@ -815,6 +815,26 @@ let x = Identity[int32](42)
 
 The implementation emits **reified CLR generic metadata** for user-declared and imported generic types and methods: `TypeDef` carries `GenericParam` rows, signatures over `T` encode `Var(idx)`/`MVar(idx)`, closed CLR generics that mention an in-scope type parameter (`List[T]`) emit as honest `GenericInstantiation` blobs, and open-bearing delegate shapes (`func(T) U`) dispatch through reified `Func`N` MemberRefs on constructed `TypeSpec`. Generic method inference is implemented for supported cases.
 
+#### Nullable type parameters
+
+An explicit source `T?` requires constraints proving a reference kind or a nonnullable value kind.
+Otherwise **GS0641** points to its `?` token.
+This applies in signatures, storage, bodies, constraint clauses, and nested type expressions.
+The same proof is required when a source operator creates `T?`, including conditional access, delegate invocation, and nil joins.
+Such a diagnostic points to the source operator instead of an annotation.
+`class` and `class?` prove reference kind; `struct` and `unmanaged` prove nonnullable value kind.
+A non-universal reference-class bound also proves reference kind, including through dependent bounds.
+Neither `notnull` nor an interface-only bound proves either kind.
+A dependent parameter does not inherit a bounding parameter's bare `class` flag: `[B class, T B]` still permits `B = object, T = int32`.
+
+Ordinary unconstrained `T` remains valid and accepts complete nullable arguments, such as `Identity[int32?](nil)`.
+Choose `class?`, rather than `class`, when nullable reference arguments are part of the API.
+An API that constructs nullable results for both reference and value arguments may need separate constrained contracts.
+For `T struct`, `default(T)` converted to `T?` is present zero, while `nil` and `default(T?)` are absent.
+Reference annotations retain the ordinary CLR reference representation.
+Imported CLR `[Nullable(2)]T` keeps its existing policy; it is not an explicit structural source annotation.
+See [ADR-0224](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0224-source-nullable-type-parameter-kind-constraints.md) for proof rules, compatibility, and migration.
+
 ### Type syntax
 
 ```ebnf
@@ -930,6 +950,8 @@ A `ref`, `out` or `in` argument (`&x`) passes the storage location itself, so th
 
 A function declared `func f(name ...T)` is **variadic**: the source-level element type is `T`, the parameter is seen inside the body as a slice `[]T`, and the call site may supply either *N* trailing positional arguments (packed into a freshly allocated `[]T`) or exactly one trailing `[]T` value (forwarded unwrapped — array identity is preserved). **Generalized carriers**: when the type written after `...` is itself a supported collection shape, it is the parameter's CARRIER — mirroring C#13 params collections — and its single type argument is the element type: `...[]T` ≡ C# `params T[]`, `...List[T]` ≡ `params List<T>`, the five `IEnumerable`-family interfaces likewise, and `...Span[T]`/`...ReadOnlySpan[T]` ≡ `params (ReadOnly)Span<T>`. The callee's body sees the carrier itself; expanded call-site arguments are element-coerced and packed into the carrier (array upcast for interfaces, `new List<T>(T[])`, the span's `T[]` constructor), and a single trailing argument implicitly convertible to the carrier passes through. Any non-carrier type after `...` keeps the element interpretation above. A List/span carrier over a same-compilation element that cannot be constructed at the call site reports `GS0544`. At most one variadic parameter is allowed per signature (`GS0364`) and it must be the last parameter (`GS0145`). Variadic declarations are accepted on top-level `func`, class instance / static methods, interface methods (including default-body methods), constructors, lambdas (function-literal and arrow form), named delegate declarations, and primary-constructor parameter lists on `class` / `struct` / `data class` / `data struct` / `inline struct`. On a primary-constructor parameter list the trailing variadic promotes to a `[]T` auto-field with the same name, exactly as the explicit `init(…)` lowering would. The emitter stamps `[System.ParamArrayAttribute]` on an array-carrier last parameter — and C#13's `[System.Runtime.CompilerServices.ParamCollectionAttribute]` on a collection-carrier one — so the method is consumable by C# / F# / VB callers using their native variadic syntax. The C# `params` keyword is not recognised in G# source; encountering it reports `GS0363` pointing at the canonical `...T` form.
 
+List/span variadic carriers support source-declared elements and in-scope generic type parameters. Their constructors retain symbolic type arguments until emission. Explicit nullable elements, such as `...List[Node?]`, keep their nullable contract.
+
 A `;` in place of the `Block` body marks the declaration as "no managed body". The body-less form is reserved for functions annotated with `@DllImport("libname", ...)` or `@LibraryImport("libname", ...)` (top-level or in a `shared` block) — see [Native interop (P/Invoke)](#native-interop-pinvoke). An unannotated `;` body is rejected with `GS0325`.
 
 An `-> Expression` in place of the `Block` body declares an **expression-bodied
@@ -965,7 +987,8 @@ This rule lets `Gsharp.Extensions.Optional.Map` carry two overloads — `where T
 
 ```ebnf
 TypeDecl          = TypeAliasDecl | DelegateDecl | AggregateDecl .
-TypeAliasDecl     = "type" identifier TypeParamList? "=" identifier .
+TypeAliasDecl     = "type" identifier TypeParamList? "=" NamedTypeTarget .
+NamedTypeTarget   = identifier TypeArgList? { "." identifier TypeArgList? } .
 DelegateDecl      = Visibility? "delegate" identifier TypeParamList? "(" Parameters? ")" TypeClause? ";" .
 AggregateDecl     = Visibility? OpenOrSealed? Data? Inline? Partial? Unsafe? AggregateKeyword identifier TypeParamList? PrimaryCtor? BaseClause? AggregateBody? .
 AggregateKeyword  = "class" | "struct" | "enum" | "interface" .
@@ -980,6 +1003,8 @@ AggregateBody     = "{" Member* "}" .
 
 The aggregate keyword IS the declaration keyword. Unsupported modifier combinations are rejected at parse time (diagnostics GS0306–GS0312). Discriminated-union enums (members that carry a payload parameter list) are desugared at parse time to a sealed base class plus one subclass per case. Contextual `type` introduces aliases; named delegates use the separate `delegate` declaration.
 
+An alias target can contain qualified nested segments with separate generic arguments, such as `Outer[int32].Base[string]`. Each segment binds against its actual containing type, preserving the constructed outer arguments. The alias does not introduce a CLR type. This syntax does not add parameterized aliases, composite target forms, or a trailing nullable target suffix.
+
 `partial` is a contextual modifier on `class`, `struct`, and `interface` declarations. Multiple partial declarations with the same package, containing type, and name merge into one emitted CLR type. Every declaration in a multi-part group must carry `partial` (`GS0475`); non-partial duplicates still report `GS0102`. Parts must agree on aggregate kind (`GS0476`), accessibility (`GS0477`), type parameters (`GS0480`), and base-class shape (`GS0481`); `open` and `sealed` cannot conflict (`GS0478`); `data` / `inline` / `ref` must be repeated on every part (`GS0479`); only one part may declare a primary constructor (`GS0482`) or `deinit` (`GS0483`). Interfaces implemented by different parts are unioned, members and annotations concatenate in deterministic source order, and `shared { init { ... } }` blocks from all parts concatenate into the single `.cctor`. `partial enum` is rejected (`GS0484`). A single partial declaration with no siblings is legal. Nested partial types merge recursively within their containing type.
 
 A `DelegateDecl` declares a real CLR `MulticastDelegate`-derived named delegate type, so C# consumers see a conventional handler type and G# events can carry first-class custom delegate types. Generic delegate declarations (`delegate Predicate[T any](value T) bool;`) are supported, emitting a generic delegate `TypeDef`. The trailing semicolon is required, including when the return type is omitted for a void delegate. The retired `type Name = delegate func(...)` spelling reports `GS0535`.
@@ -990,7 +1015,7 @@ A `DelegateDecl` declares a real CLR `MulticastDelegate`-derived named delegate 
 StructBody       = "{" StructMember* "}" .
 StructMember     = Annotation* Accessibility? ( OpenOrOverride* ( MethodDecl | PropertyDecl | EventDecl | ConstructorDecl ) | SharedBlock | FieldDecl ) .
 OpenOrOverride   = "open" | "override" .
-ConstructorDecl  = "init" "(" Parameters? ")" ( ":" identifier "(" Arguments? ")" )? Block .
+ConstructorDecl  = "init" "(" Parameters? ")" ( ":" "base" "(" Arguments? ")" )? Block .
 SharedBlock      = "shared" "{" SharedMember* "}" .
 SharedMember     = Accessibility? ( MethodDecl | PropertyDecl | EventDecl | FieldDecl ) | StaticInitializerBlock .
 StaticInitializerBlock = "init" Block .  (*  / : runs in the type's .cctor after static-field initializers *)
@@ -2648,7 +2673,8 @@ ConstraintFlag    ::= 'class' '?'? | 'notnull' | 'struct' | 'unmanaged' | 'init'
 Parameters        ::= Parameter (',' Parameter)*
 Parameter         ::= Annotation* 'scoped'? ('ref' | 'out' | 'in')? identifier '...'? TypeClause ('=' Expression)?
 
-TypeAliasDecl     ::= 'type' identifier TypeParamList? '=' identifier
+TypeAliasDecl     ::= 'type' identifier TypeParamList? '=' NamedTypeTarget
+NamedTypeTarget   ::= identifier TypeArgList? ('.' identifier TypeArgList?)*
 DelegateDecl      ::= 'delegate' identifier TypeParamList? '(' Parameters? ')' TypeClause? ';'   (* named CLR delegate; omit the return type for void *)
 AggregateDecl     ::= ClassDecl | StructDecl | EnumDecl | InterfaceDecl    (* leading modifiers may appear in any order; per-kind validity is enforced by the binder *)
 ClassDecl         ::= ('open' | 'sealed')? 'data'? 'class' identifier TypeParamList? PrimaryCtor? BaseClause? StructBody?
@@ -2669,7 +2695,7 @@ StructMember      ::= Annotation*
                       | SharedBlock
                       | FieldDecl )
 OpenOrOverride    ::= 'open' | 'override'
-ConstructorDecl   ::= 'convenience'? 'func'? 'init' '(' Parameters? ')' (':' identifier '(' Arguments? ')')? Block
+ConstructorDecl   ::= 'convenience'? 'func'? 'init' '(' Parameters? ')' (':' 'base' '(' Arguments? ')')? Block
 DeinitDecl        ::= 'deinit' Block                     (* class-only; no parameters or return type *)
 SharedBlock       ::= 'shared' '{' SharedMember* '}'
 SharedMember      ::= Annotation* Accessibility? (Async? MethodDecl | PropertyDecl | EventDecl | FieldDecl)
@@ -2693,7 +2719,7 @@ InterfaceSharedMember ::= 'private'? 'func' identifier TypeParamList? '(' Parame
                       | 'prop' identifier TypeClause ( '{' PropertyAccessor* '}' | ';' )   (* static-virtual interface property,  /  *)
 
 ArrayTypePrefix   ::= '[' Number? ']' | '[' ',' (',')* ']'
-TypeClause        ::= identifier ('.' identifier)* TypeArgList? '?'?
+TypeClause        ::= NamedTypeTarget '?'?
                     | ArrayTypePrefix '?'? identifier ('.' identifier)* '?'?
                     | '(' TypeClause ')' '?'?                                             (* parenthesized (grouping) type clause; the trailing '?' marks
                                                                                              the WHOLE inner type nullable, e.g. '([]int32)?',  *)

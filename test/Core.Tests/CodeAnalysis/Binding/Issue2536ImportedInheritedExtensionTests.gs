@@ -65,7 +65,7 @@ func Exercise(items IItems) {
             return if string.IsNullOrEmpty(trustedAssemblies) {
                 cast[IEnumerable[string]](Array.Empty[string]())
             } else {
-                trustedAssemblies!!.Split(Path.PathSeparator).Where(
+                trustedAssemblies.Split(Path.PathSeparator).Where(
                     (path string) -> !string.IsNullOrWhiteSpace(path) && File.Exists(path)
                 )
             }

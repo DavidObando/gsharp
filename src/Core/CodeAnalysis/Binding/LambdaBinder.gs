@@ -292,7 +292,7 @@ internal class LambdaBinder {
         let canCache = explicitName == nil && onSignatureBound == nil
         let key = RetriedFunctionLiteralKey(syntax, nil, false, false)
         if canCache && TryReuseRetriedFunctionLiteral(key, nil, nil, out var cached) {
-            return cached!!
+            return cached
         }
         let startMark = Diagnostics.Count
         // Issue #4219 (umbrella remainder): this general entry point is used
@@ -425,7 +425,7 @@ internal class LambdaBinder {
             TypeSymbol.Void
         )
         let isAsync = syntax.IsAsync ||
-            (isAsyncIteratorReturnType(returnType!!) && IteratorDetection.ContainsYield(syntax.Body))
+            (isAsyncIteratorReturnType(returnType) && IteratorDetection.ContainsYield(syntax.Body))
         // Issue #1918 / #3907: an `async func` may spell its return-type clause
         // as the explicit `Task` / `Task[T]` / `ValueTask` / `ValueTask[T]`
         // wrapper instead of the bare awaited result. DeclarationBinder has
@@ -439,14 +439,14 @@ internal class LambdaBinder {
         // was asked for so the observable type below rebuilds the same one.
         var asyncReturnsValueTask = false
         if syntax.IsAsync &&
-            !isAsyncIteratorReturnType(returnType!!) &&
+            !isAsyncIteratorReturnType(returnType) &&
             AsyncReturnTypeNormalizer
             .TryUnwrapTaskReturnType(returnType, out var awaitedReturnType, out var declaredValueTask) {
             returnType = awaitedReturnType
             asyncReturnsValueTask = declaredValueTask
         }
-        if isAsync && isAsyncIteratorReturnType(returnType!!) {
-            Diagnostics.ReportAsyncIteratorFunctionLiteralNotSupported(syntax.Location, returnType!!)
+        if isAsync && isAsyncIteratorReturnType(returnType) {
+            Diagnostics.ReportAsyncIteratorFunctionLiteralNotSupported(syntax.Location, returnType)
             return nil
         }
         // ADR-0058: a managed-pointer (*T) cannot be used as a lambda return type
@@ -463,8 +463,8 @@ internal class LambdaBinder {
         // with the iterator carve-out (ADR-0041): an async iterator lambda
         // returning IAsyncEnumerable[T] does not get a Task wrap.
         var observableReturnType = returnType
-        if isAsync && !isAsyncVoid && !isAsyncIteratorReturnType(returnType!!) {
-            observableReturnType = WrapAsTask(returnType!!, asyncReturnsValueTask)
+        if isAsync && !isAsyncVoid && !isAsyncIteratorReturnType(returnType) {
+            observableReturnType = WrapAsTask(returnType, asyncReturnsValueTask)
         }
         let synthetic = FunctionSymbol(
             explicitName ?? "<lambda${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>",
@@ -1088,7 +1088,7 @@ internal class LambdaBinder {
             isExpressionTreeTarget
         )
         if TryReuseRetriedFunctionLiteral(key, acceptsNaturalType, discardedTargetDiagnostics, out var cached) {
-            return cached!!
+            return cached
         }
         let startMark = Diagnostics.Count
         let discardedStart = discardedTargetDiagnostics?.Count ?? 0
@@ -1128,7 +1128,7 @@ internal class LambdaBinder {
                 "LambdaBinder was constructed without a bindLambdaBodyExpression callback; arrow-lambda binding is unavailable."
             )
         }
-        let bindLambdaBodyExpression = bindLambdaBodyExpression!!
+        let bindLambdaBodyExpression = bindLambdaBodyExpression
         let isAsync = syntax.IsAsync
         let arityMatchesTarget = targetFunctionType != nil && targetFunctionType.Arity == syntax.Parameters.Count
         // Issue #5569: a speculative literal whose parameter types are all written (a destructured parameter
@@ -1159,7 +1159,7 @@ internal class LambdaBinder {
                 out var natural
             ) {
                 keptNaturalType = true
-                return natural!!
+                return natural
             }
             Diagnostics.AddRange(arityDiagnostics)
             return BoundErrorExpression(nil)
@@ -1408,7 +1408,7 @@ internal class LambdaBinder {
                     out var targetDelegateFunctionType
                 ) &&
                     Conversion
-                    .ClassifyNonStructural(targetDelegateFunctionType!!, writtenFunctionType).IsImplicit
+                    .ClassifyNonStructural(targetDelegateFunctionType, writtenFunctionType).IsImplicit
                 let compatible = runtimeEquivalent ||
                     structurallyCompatibleDelegate ||
                     (
@@ -1490,7 +1490,7 @@ internal class LambdaBinder {
                     out var natural
                 ) {
                     keptNaturalType = true
-                    return natural!!
+                    return natural
                 }
                 Diagnostics.AddRange(held)
             }
@@ -1722,6 +1722,17 @@ internal class LambdaBinder {
             placeholderReturnType != TypeSymbol.Void &&
             !(boundBody is BoundErrorExpression) {
             returnType = placeholderReturnType
+        }
+        if TypeSymbol.ContainsTypeParameter(returnType) {
+            let sourceReturns = ReturnTypeCollector()
+            sourceReturns.Visit(boundBody)
+            let inputs = sourceReturns
+                .ReturnTypes
+                .Append(boundBody.Type)
+                .Append(targetFunctionType?.ReturnType ?? TypeSymbol.Error)
+            if !binderCtx.ValidateSourceNullableResult(returnType, syntax.ArrowToken.Location, inputs) {
+                return BoundErrorExpression(syntax)
+            }
         }
         if isAsync && isAsyncIteratorReturnType(returnType) {
             Diagnostics.ReportAsyncIteratorFunctionLiteralNotSupported(syntax.Location, returnType)
@@ -2470,7 +2481,7 @@ internal class LambdaBinder {
                 return false
             }
             visited ??= HashSet[TypeParameterSymbol](ReferenceEqualityComparer.Instance)
-            if !visited!!.Add(current) {
+            if !visited.Add(current) {
                 return false
             }
             current = next
@@ -2509,7 +2520,7 @@ internal class LambdaBinder {
         }
         if element == TypeSymbol.Void {
             if Scope.References!!.TryResolveType(wrapperName, out var taskType) {
-                return ImportedTypeSymbol.GetWithoutNullability(taskType!!, NullabilityFreeReason.TypeLiteral)
+                return ImportedTypeSymbol.GetWithoutNullability(taskType, NullabilityFreeReason.TypeLiteral)
             }
             return element
         }
@@ -2525,7 +2536,7 @@ internal class LambdaBinder {
             // Type yet, so close Task<T> over an object placeholder for
             // reflection/member lookup while preserving the symbolic result
             // type for emit-time metadata encoding.
-            let erasedTask = symbolicTaskOpen!!.MakeGenericType(
+            let erasedTask = symbolicTaskOpen.MakeGenericType(
                 Scope.References!!.MapClrTypeToReferences(typeof(object))!!
             )
             return ImportedTypeSymbol.GetConstructed(erasedTask, symbolicTaskOpen, ImmutableArray.Create(element))
@@ -2544,7 +2555,7 @@ internal class LambdaBinder {
             // value type (e.g. `int32?`) correctly wraps as
             // `Task<Nullable<int>>` rather than `Task<int>`.
             let elementClr = resolveClrTypeForGenericArg(element) ?? Scope.References!!.MapClrTypeToReferences(clr)
-            let closed = taskOpen!!.MakeGenericType(elementClr!!)
+            let closed = taskOpen.MakeGenericType(elementClr!!)
             // Issue #3746 / ADR-0172: tuple element names are metadata over the
             // positional shape, so `ImportedTypeSymbol.Get(closed)` — which
             // rebuilds its type arguments by reflecting over `closed` — erases
@@ -2570,8 +2581,12 @@ internal class LambdaBinder {
         if returnType != TypeSymbol.Void &&
             returnType != TypeSymbol.Error &&
             !isIteratorReturnType(returnType) &&
-            !ControlFlowGraph.AllPathsReturn(Lowerer.Lower(body)) {
+            !ControlFlowGraph
+            .AllPathsReturn(Lowerer.Lower(body)) {
+            // ADR-0225: a body that is open at the cut can still end in a return.
+            let pushed = Diagnostics.PushPremiseIf(PrefixBindingContext.IsOpen(body.Syntax), PrefixPremise.RestOfBody)
             Diagnostics.ReportAllPathsMustReturn(location)
+            Diagnostics.PopPremiseIf(pushed)
         }
     }
 
@@ -3729,7 +3744,7 @@ internal class LambdaBinder {
                 returnType,
                 out var declaredRead
             ) {
-                operand = declaredRead!!
+                operand = declaredRead
             }
             if operand.Type == returnType {
                 return if object.ReferenceEquals(operand, value) {

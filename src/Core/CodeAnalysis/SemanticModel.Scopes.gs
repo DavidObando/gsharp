@@ -192,7 +192,7 @@ partial class SemanticModel {
             } else {
                 Math.Max(region.Start, anchor.Span.End)
             }
-            if !RegionContains(start, region.End, position) {
+            if !RegionContains(start, region.End, position, region.Owner) {
                 continue
             }
             candidates.Add(ScopedLocal(local, Depth(region.Owner), anchor.Span.Start))
@@ -823,11 +823,15 @@ partial class SemanticModel {
         return depth
     }
 
-    private func RegionContains(start int32, end int32, position int32) bool {
+    private func RegionContains(start int32, end int32, position int32, owner SyntaxNode? = nil) bool {
         if position < start {
             return false
         }
         if position < end {
+            return true
+        }
+        // ADR-0225: a region that a sealed token closes at the cut of a prefix tree is still open there.
+        if position == end && PrefixBindingContext.IsOpen(owner) {
             return true
         }
         // A region that ends at a closing brace does not include the position after it.
@@ -979,7 +983,7 @@ partial class SemanticModel {
                 continue
             }
             let start = Math.Max(entry.Start, anchor.Span.End)
-            if !RegionContains(start, entry.End, position) {
+            if !RegionContains(start, entry.End, position, entry.Owner) {
                 continue
             }
             let depth = Depth(entry.Owner)
@@ -1283,7 +1287,7 @@ partial class SemanticModel {
 
         /// Whether a name is one a user wrote, as opposed to a synthesized one.
         private func IsListable(name string?) bool {
-            return !string.IsNullOrEmpty(name) && name!![0] != '<' && name!![0] != '$' && name != "_"
+            return !string.IsNullOrEmpty(name) && name[0] != '<' && name[0] != '$' && name != "_"
         }
 
         /// Whether [`symbol`](paramref) is a local function declared in a statement block.

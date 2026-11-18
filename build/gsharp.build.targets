@@ -5,6 +5,13 @@
    <!-- Disable test targets for non-test projects -->
   <Import Project="$(MSBuildThisFileDirectory)notest.targets" Condition="'$(IsTestProject)' != 'true'" />
 
+  <!-- Version-source opt-outs must not skip version initialization during ordinary builds (#5116). -->
+  <!-- Cold Restore;Publish evaluations can precede NuGet target imports. -->
+  <Target Name="_GsharpInitializeRepositoryVersion"
+          BeforeTargets="PrepareForBuild"
+          DependsOnTargets="GetBuildVersion"
+          Condition="'$(Language)' == 'Gsharp' and '$(_NBGV_Common_Targets_Imported)' == 'true'" />
+
   <!-- The pinned SDK does not track compiler contents as a compilation input.
        Track tool closures before reusing repository outputs for SDK publication. -->
   <Target Name="_GsharpTrackRepositoryBuildTools"

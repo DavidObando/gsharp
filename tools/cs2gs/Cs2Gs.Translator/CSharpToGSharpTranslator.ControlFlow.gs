@@ -4,6 +4,7 @@
 
 package Cs2Gs.Translator
 
+import CompilationMeasurements = GSharp.Core.CodeAnalysis.Compilation.CompilationMeasurements
 import Cs2Gs.CodeModel.Ast
 import Cs2Gs.CodeModel.Printing
 import Cs2Gs.Translator.Loading
@@ -319,7 +320,7 @@ partial class CSharpToGSharpTranslator {
                             mainBinder
                         )
                     )
-                    this.state.LocalHoldsPromotedValueAnswers.Clear()
+                    this.InvalidateLocalPromotedValue(mainBinder)
                     if hoistType != nil {
                         this.state.EmittedLocalTypeClauses.Add(mainBinder)
                         if hoistType.IsNullable {
@@ -405,7 +406,7 @@ partial class CSharpToGSharpTranslator {
                 ) {
                     binderType = MakeNullable(binderType)
                 }
-                this.state.LocalHoldsPromotedValueAnswers.Clear()
+                this.InvalidateLocalPromotedValue(mainBinder)
                 if binderType != nil {
                     this.state.EmittedLocalTypeClauses.Add(mainBinder)
                     if binderType.IsNullable {
@@ -493,7 +494,7 @@ partial class CSharpToGSharpTranslator {
                 ) {
                     nestedType = MakeNullable(nestedType)
                 }
-                this.state.LocalHoldsPromotedValueAnswers.Clear()
+                this.InvalidateLocalPromotedValue(nestedBinder)
                 if nestedType != nil {
                     this.state.EmittedLocalTypeClauses.Add(nestedBinder)
                     if nestedType.IsNullable {
@@ -990,6 +991,7 @@ partial class CSharpToGSharpTranslator {
                 this.MapTypeSyntax(typeSyntax)
             }
             if !isSharedNode && targetSymbol.IsValueType {
+                this.RecordEmittedLocalNullability(patternSymbol, targetType, nil, nil)
                 result = this.BuildPositiveValueGuardHoist(ifStatement, guards, localName, targetType, receiver)
                 return true
             }
@@ -1012,6 +1014,7 @@ partial class CSharpToGSharpTranslator {
                 cast[GExpression](BinaryExpression(receiver, "as", TypeExpression(targetType)))
             }
             let hoist = LocalDeclarationStatement(binding, localName, localType, initializer)
+            this.RecordEmittedLocalNullability(patternSymbol, localType, nil, nil)
             var guard_ GExpression = BinaryExpression(local, "!=", LiteralExpression.Null())
             if requiresNotNullConditional {
                 guard_ = BinaryExpression(
@@ -1325,6 +1328,7 @@ partial class CSharpToGSharpTranslator {
                 BindingKind.Let
             }
             let hoist = LocalDeclarationStatement(binding, localName, MakeNullable(targetType), hoistInitializer)
+            this.RecordEmittedLocalNullability(designationSymbol as ILocalSymbol, hoist.Type, nil, nil)
             // `if t == nil { <then> }` reproduces the negated guard: when the cast
             // fails the local is nil, so the original then-block runs.
             var guard_ GExpression = BinaryExpression(IdentifierExpression(localName), "==", LiteralExpression.Null())
@@ -1474,6 +1478,7 @@ partial class CSharpToGSharpTranslator {
                     this.context,
                     designation!!.GetLocation()
                 )
+                this.RecordEmittedLocalNullability(binder, mutableType, nil, nil)
                 statements.Add(
                     LocalDeclarationStatement(
                         BindingKind.Var,
@@ -1557,6 +1562,7 @@ partial class CSharpToGSharpTranslator {
                 this.state.StoredPatternCaptures.Add(localId)
             }
             statements.Add(IfStatement(Negate(positiveTest), then))
+            this.RecordEmittedLocalNullability(binder, localType, nil, nil)
             statements.Add(LocalDeclarationStatement(BindingKind.Var, localName, localType, replacement))
             this.state.PatternBindings[binder] = localId
             for var i = patternIndex + 1; i < terms.Count; i++ {
@@ -1660,7 +1666,9 @@ partial class CSharpToGSharpTranslator {
                 } else {
                     BindingKind.Let
                 }
-                statements.Add(LocalDeclarationStatement(binding, localName, MakeNullable(targetType), initializer))
+                let localType = MakeNullable(targetType)
+                this.RecordEmittedLocalNullability(designationSymbol as ILocalSymbol, localType, nil, nil)
+                statements.Add(LocalDeclarationStatement(binding, localName, localType, initializer))
                 var guard_ GExpression = BinaryExpression(
                     IdentifierExpression(localName),
                     "==",
@@ -1721,18 +1729,9 @@ partial class CSharpToGSharpTranslator {
             return conditionPrologue
         }
 
-        private func TranslateForStatement(forStatement ForStatementSyntax) GStatement {
+        private func ForRequiresWhileLowering(forStatement ForStatementSyntax) bool {
             let declaratorCount = forStatement.Declaration?.Variables.Count ?? 0
-            // G#'s `for` carries a SINGLE init clause and a SINGLE incrementor, so
-            // a C-style `for` with multiple declarators/initializers or multiple
-            // incrementors cannot be represented directly. Lower those to a block
-            // + `while` so every init runs once up front and every incrementor runs
-            // at the end of each iteration (issue #914). A condition needing clause
-            // hoisting (a value-position assignment, e.g. `for (…; (c = Next()) !=
-            // -1; …)`, or an is-pattern requiring a scrutinee local) has the same
-            // problem — G#'s single-expression `for` condition has nowhere to place
-            // the hoisted statement — so it takes the same lowering (issue #1723).
-            if declaratorCount > 1 ||
+            return declaratorCount > 1 ||
                 forStatement
                 .Initializers
                 .Count > 1 ||
@@ -1745,7 +1744,20 @@ partial class CSharpToGSharpTranslator {
                 .Any(
                 (expr ExpressionSyntax) -> ClauseContainsAssignment(expr) || this.ClauseRequiresOutPredeclaration(expr)
             ) ||
-                this.ForConditionRequiresHoist(forStatement.Condition) {
+                this.ForConditionRequiresHoist(forStatement.Condition)
+        }
+
+        private func TranslateForStatement(forStatement ForStatementSyntax) GStatement {
+            // G#'s `for` carries a SINGLE init clause and a SINGLE incrementor, so
+            // a C-style `for` with multiple declarators/initializers or multiple
+            // incrementors cannot be represented directly. Lower those to a block
+            // + `while` so every init runs once up front and every incrementor runs
+            // at the end of each iteration (issue #914). A condition needing clause
+            // hoisting (a value-position assignment, e.g. `for (…; (c = Next()) !=
+            // -1; …)`, or an is-pattern requiring a scrutinee local) has the same
+            // problem — G#'s single-expression `for` condition has nowhere to place
+            // the hoisted statement — so it takes the same lowering (issue #1723).
+            if this.ForRequiresWhileLowering(forStatement) {
                 return this.LowerForToWhile(forStatement)
             }
             var initializer GStatement? = nil
@@ -1836,18 +1848,7 @@ partial class CSharpToGSharpTranslator {
                 condition = this.TranslateExpression(forStatement.Condition)
                 conditionPrologue = List[GStatement]()
             }
-            let incrementorExpressions = forStatement.Incrementors.ToList()
-            let incrementorStatements = List[GStatement]()
-            this.state.PendingSpillPrologue = incrementorStatements
-            this.state.FunctionArgumentOutDeclarations = incrementorStatements
-            try {
-                for inc in incrementorExpressions {
-                    incrementorStatements.AddRange(this.TranslateExpressionStatements(inc)!!)
-                }
-            } finally {
-                this.state.PendingSpillPrologue = outerSpillPrologue
-                this.state.FunctionArgumentOutDeclarations = outerOutDeclarations
-            }
+            let incrementorStatements = this.TranslateForIncrementors(forStatement)
             var translatedBody BlockStatement? = this.TranslateStatementAsBlock(forStatement.Statement)
             let bodyStatements = List[GStatement](conditionPrologue!!)
             let hasOwnContinue = incrementorStatements.Count > 0 && BodyContainsOwnLoopContinue(forStatement.Statement)
@@ -1863,8 +1864,7 @@ partial class CSharpToGSharpTranslator {
                 )
                 bodyStatements.AddRange(translatedBody!!.Statements)
                 bodyStatements.AddRange(incrementorStatements)
-            } else if hasOwnContinue &&
-                (forHasPredeclaredOut || OwnLoopContinueCrossesTryOrUsing(forStatement.Statement)) {
+            } else if hasOwnContinue && this.ForUsesSharedContinueIncrementors(forStatement) {
                 let continueLabel = this.SyntheticLabelName("forContinue", forStatement)
                 translatedBody = cast[BlockStatement](
                     this.RewriteOwnLoopContinue(
@@ -1900,8 +1900,46 @@ partial class CSharpToGSharpTranslator {
             return BlockStatement(outer)
         }
 
-        /// Duplicates a `for` loop's already-translated incrementor
-        /// statements immediately ahead of every `continue` that targets
+        private let continueSources Dictionary[GStatement, ContinueStatementSyntax] =
+        Dictionary[GStatement, ContinueStatementSyntax](ReferenceEqualityComparer.Instance)
+        private var incrementorLoop ForStatementSyntax?
+        private var incrementorContinue ContinueStatementSyntax?
+
+        private func TranslateForIncrementors(
+            loop ForStatementSyntax,
+            continuation ContinueStatementSyntax? = nil
+        ) List[GStatement] {
+            let statements = List[GStatement]()
+            let oldSpills = this.state.PendingSpillPrologue
+            let oldDeclarations = this.state.FunctionArgumentOutDeclarations
+            let oldLoop = this.incrementorLoop
+            let oldContinue = this.incrementorContinue
+            this.state.PendingSpillPrologue = statements
+            this.state.FunctionArgumentOutDeclarations = statements
+            this.incrementorLoop = loop
+            this.incrementorContinue = continuation
+            try {
+                for incrementor in loop.Incrementors {
+                    statements.AddRange(this.TranslateExpressionStatements(incrementor)!!)
+                }
+            } finally {
+                this.state.PendingSpillPrologue = oldSpills
+                this.state.FunctionArgumentOutDeclarations = oldDeclarations
+                this.incrementorLoop = oldLoop
+                this.incrementorContinue = oldContinue
+            }
+            return statements
+        }
+
+        private func ForUsesSharedContinueIncrementors(loop ForStatementSyntax) bool ->
+        this.ClauseRequiresOutPredeclaration(loop.Condition) ||
+            loop
+            .Initializers
+            .Concat(loop.Incrementors)
+            .Any(this.ClauseRequiresOutPredeclaration) ||
+            OwnLoopContinueCrossesTryOrUsing(loop.Statement)
+
+        /// Emits a `for` loop's incrementor statements immediately ahead of every `continue` that targets
         /// THIS loop. G#'s while-lowering ((cref:LowerForToWhile)) appends
         /// the incrementors as trailing statements in the lowered `while`
         /// body, but a G# `continue` is a goto straight past the WHOLE body
@@ -1916,7 +1954,8 @@ partial class CSharpToGSharpTranslator {
         /// later `SemanticModel.GetSymbolInfo` call on them
         /// ((cref:ArgumentException) "Syntax node is not within syntax
         /// tree"). The G# AST has no such constraint, so the rewrite happens
-        /// here, after translation.
+        /// here, after translation. Incrementors retain their original Roslyn nodes and are translated for each
+        /// source continue site, whose assignment facts can differ from the normal body exit.
         ///
         /// Descent stops at a nested loop ((cref:WhileStatement),
         /// (cref:ForStatement), (cref:DoWhileStatement),
@@ -1941,12 +1980,20 @@ partial class CSharpToGSharpTranslator {
             replacement GStatement? = nil
         ) GStatement? {
             switch statement {
-                case ContinueStatement {
+                case continuation is ContinueStatement {
                     {
                         if replacement != nil {
                             return replacement
                         }
-                        let replaced = List[GStatement](incrementorStatements){statement}
+                        let incrementors IReadOnlyList[GStatement] = if forStatement is ForStatementSyntax loop &&
+                            this
+                            .continueSources
+                            .TryGetValue(continuation, out var source) {
+                            this.TranslateForIncrementors(loop, source)
+                        } else {
+                            incrementorStatements
+                        }
+                        let replaced = List[GStatement](incrementors){statement}
                         return BlockStatement(replaced)
                     }
                 }
@@ -2186,13 +2233,194 @@ partial class CSharpToGSharpTranslator {
             return result
         }
 
+        private let scopeWriteCandidates Dictionary[(SemanticModel, SyntaxNode), ScopeWriteIndex] = Dictionary[
+            (SemanticModel, SyntaxNode),
+            ScopeWriteIndex
+        ]()
+
+        private class ScopeWriteIndex {
+            public let Writes Dictionary[ISymbol, List[SyntaxNode]] = Dictionary[ISymbol, List[SyntaxNode]](
+                SymbolEqualityComparer.Default
+            )
+            public let Declarations Dictionary[string, List[ISymbol]] = Dictionary[string, List[ISymbol]](
+                StringComparer.Ordinal
+            )
+            public let AddressNames Dictionary[ISymbol, List[SyntaxNode]] = Dictionary[ISymbol, List[SyntaxNode]](
+                SymbolEqualityComparer.Default
+            )
+        }
+
+        private func GetScopeWriteIndex(scope_ SyntaxNode) ScopeWriteIndex {
+            if scope_.SyntaxTree != this.context.SemanticModel.SyntaxTree {
+                using let modelScope = this.context.UseSemanticModelFor(scope_.SyntaxTree)
+                return this.GetScopeWriteIndex(scope_)
+            }
+            let key = (this.context.SemanticModel, scope_)
+            if this.scopeWriteCandidates.TryGetValue(key, out var cached) {
+                return cached
+            }
+            let index = ScopeWriteIndex()
+            let bindings = Dictionary[ExpressionSyntax, ISymbol?](ReferenceEqualityComparer.Instance)
+            // Include nested executables, as the original reassignment walk does.
+            for node in scope_.DescendantNodesAndSelf() {
+                CompilationMeasurements.Count("translation.reassignment_node_visits")
+                let target ExpressionSyntax? = switch node {
+                    case assignment is AssignmentExpressionSyntax: assignment.Left
+                    case prefix is PrefixUnaryExpressionSyntax: prefix.Operand
+                    case postfix is PostfixUnaryExpressionSyntax: postfix.Operand
+                    case argument is ArgumentSyntax: argument.Expression
+                    case InvocationExpressionSyntax{Expression: MemberAccessExpressionSyntax member}: member.Expression
+                    case reference is RefExpressionSyntax: reference.Expression
+                    case member is MemberAccessExpressionSyntax: member.Expression
+                    case element is ElementAccessExpressionSyntax: element.Expression
+                    default: default(ExpressionSyntax?)
+                }
+                if target != nil {
+                    this.IndexScopeWriteTarget(index.Writes, bindings, node, target)
+                }
+                let declaredName string? = switch node {
+                    case declaration is VariableDeclaratorSyntax: declaration.Identifier.ValueText
+                    case designation is SingleVariableDesignationSyntax: designation.Identifier.ValueText
+                    case loop is ForEachStatementSyntax: loop.Identifier.ValueText
+                    case caught is CatchDeclarationSyntax: caught.Identifier.ValueText
+                    case parameter is ParameterSyntax: parameter.Identifier.ValueText
+                    default: default(string?)
+                }
+                if declaredName != nil {
+                    CompilationMeasurements.Count("translation.scope_declaration_symbol_queries")
+                    let declared = this.context.GetDeclaredSymbol(node)
+                    if declared is ILocalSymbol or IParameterSymbol {
+                        if !index.Declarations.TryGetValue(declaredName, out var declarations) {
+                            declarations = List[ISymbol]()
+                            index.Declarations.Add(declaredName, declarations)
+                        }
+                        declarations.Add(declared)
+                    }
+                }
+                let addressOperand ExpressionSyntax? = switch node {
+                    case reference is RefExpressionSyntax: reference.Expression
+                    case prefix is PrefixUnaryExpressionSyntax when prefix.IsKind(SyntaxKind.AddressOfExpression):
+                    prefix.Operand
+                    default: default(ExpressionSyntax?)
+                }
+                if addressOperand != nil {
+                    // Keep every operand name, including indices, as CollectAddressTakenNames does.
+                    for operandNode in addressOperand.DescendantNodesAndSelf() {
+                        CompilationMeasurements.Count("translation.scope_address_node_visits")
+                        if operandNode is IdentifierNameSyntax name && this.ScopeBoundSymbol(
+                            bindings,
+                            name
+                        ) is {} addressed {
+                            if !index.AddressNames.TryGetValue(addressed, out var addresses) {
+                                addresses = List[SyntaxNode]()
+                                index.AddressNames.Add(addressed, addresses)
+                            }
+                            addresses.Add(node)
+                        }
+                    }
+                }
+            }
+            this.scopeWriteCandidates.Add(key, index)
+            CompilationMeasurements.Count("translation.scope_write_indexes")
+            return index
+        }
+
+        private func ScopeBoundSymbol(
+            bindings Dictionary[ExpressionSyntax, ISymbol?],
+            expression ExpressionSyntax
+        ) ISymbol? {
+            if !bindings.TryGetValue(expression, out var symbol) {
+                CompilationMeasurements.Count("translation.reassignment_symbol_queries")
+                symbol = this.context.GetSymbolInfo(expression).Symbol
+                bindings.Add(expression, symbol)
+            }
+            return symbol
+        }
+
+        // Index possible storage roots. SyntaxNodeWritesSymbol retains every semantic and readonly decision.
+        private func IndexScopeWriteTarget(
+            candidates Dictionary[ISymbol, List[SyntaxNode]],
+            bindings Dictionary[ExpressionSyntax, ISymbol?],
+            write SyntaxNode,
+            target ExpressionSyntax
+        ) {
+            var current ExpressionSyntax? = target
+            while current != nil {
+                CompilationMeasurements.Count("translation.reassignment_storage_target_visits")
+                current = CSharpToGSharpTranslator.UnwrapParenthesesAndSuppressions(current)
+                let symbol = this.ScopeBoundSymbol(bindings, current!!)
+                if symbol != nil {
+                    if !candidates.TryGetValue(symbol, out var writes) {
+                        writes = List[SyntaxNode]()
+                        candidates.Add(symbol, writes)
+                    }
+                    if writes.Count == 0 || !object.ReferenceEquals(writes[writes.Count - 1], write) {
+                        writes.Add(write)
+                        CompilationMeasurements.Count("translation.scope_write_candidates")
+                    }
+                }
+                if current is TupleExpressionSyntax tuple {
+                    for argument in tuple.Arguments {
+                        this.IndexScopeWriteTarget(candidates, bindings, write, argument.Expression)
+                    }
+                }
+                let receiver ExpressionSyntax? = switch current {
+                    case member is MemberAccessExpressionSyntax: member.Expression
+                    case element is ElementAccessExpressionSyntax: element.Expression
+                    default: default(ExpressionSyntax?)
+                }
+                if receiver != nil {
+                    CompilationMeasurements.Count("translation.reassignment_receiver_type_queries")
+                    // Unknown receiver types stay conservative in this index.
+                    if CSharpToGSharpTranslator.IsReferenceStorageBoundary(this.context.GetTypeInfo(receiver).Type) {
+                        return
+                    }
+                }
+                current = receiver
+            }
+        }
+
         private func ComputeIsSymbolReassigned(symbol ISymbol?, $scope SyntaxNode) bool {
-            for node in $scope.DescendantNodes() {
+            for node in this.ScopeSymbolWriteCandidates($scope, symbol) {
                 if this.SyntaxNodeWritesSymbol(node, symbol) {
                     return true
                 }
             }
             return false
+        }
+
+        private func ScopeSymbolWriteCandidates(
+            scope_ SyntaxNode,
+            symbol ISymbol?,
+            excludeNested bool = false,
+            includeSelf bool = false
+        ) sequence[SyntaxNode] {
+            let index = this.GetScopeWriteIndex(scope_)
+            if symbol != nil && index.Writes.TryGetValue(symbol, out var candidates) {
+                for candidate in candidates {
+                    CompilationMeasurements.Count("translation.reassignment_node_visits")
+                    if !includeSelf && object.ReferenceEquals(candidate, scope_) {
+                        continue
+                    }
+                    if this.IsEmittedScopeCandidate(candidate, scope_, excludeNested) {
+                        yield candidate
+                    }
+                }
+            }
+        }
+
+        private func IsEmittedScopeCandidate(candidate SyntaxNode, scope_ SyntaxNode, excludeNested bool = false) bool {
+            for var ancestor SyntaxNode? = candidate; ancestor != nil; ancestor = ancestor!!.Parent {
+                CompilationMeasurements.Count("translation.scope_boundary_visits")
+                if this.IsDroppedStatementOrLoopClause(ancestor) ||
+                    (excludeNested && !object.ReferenceEquals(ancestor, scope_) && this.IsClosureBoundary(ancestor)) {
+                    return false
+                }
+                if object.ReferenceEquals(ancestor, scope_) {
+                    break
+                }
+            }
+            return true
         }
 
         // Issue #4709: whether an uninitialized struct local is written through
@@ -2667,54 +2895,58 @@ partial class CSharpToGSharpTranslator {
 
     shared {
         // Shared by declaration mutability, smart casts and taint guard proofs.
-        internal func SyntaxNodeWritesSymbol(
-            node SyntaxNode,
-            symbol ISymbol?,
-            model SemanticModel
-        ) bool -> switch node {
-            case assignment is AssignmentExpressionSyntax when WritesStorageOf(assignment.Left, symbol, model): true
-            case AssignmentExpressionSyntax{Left: TupleExpressionSyntax tuple} when TupleAssignmentTargetsInclude(
-                tuple,
-                symbol,
-                model
-            ): true
-            case postfix is PostfixUnaryExpressionSyntax when(
-                postfix.IsKind(SyntaxKind.PostIncrementExpression) || postfix.IsKind(SyntaxKind.PostDecrementExpression)
-            ) &&
-                WritesStorageOf(postfix.Operand, symbol, model): true
-            case prefix is PrefixUnaryExpressionSyntax when(
-                prefix.IsKind(SyntaxKind.PreIncrementExpression) || prefix.IsKind(SyntaxKind.PreDecrementExpression) ||
-                    prefix.IsKind(SyntaxKind.AddressOfExpression)
-            ) &&
-                WritesStorageOf(prefix.Operand, symbol, model): true
-            case argument is ArgumentSyntax when(
-                argument.RefOrOutKeyword.IsKind(SyntaxKind.RefKeyword) || argument.RefOrOutKeyword.IsKind(
-                    SyntaxKind.OutKeyword
-                )
-            ) &&
-                WritesStorageOf(argument.Expression, symbol, model): true
-            case InvocationExpressionSyntax{
-                Expression: MemberAccessExpressionSyntax member
-            } invocation when ExtensionReceiverWritesSymbol(invocation, member.Expression, symbol, model) ||
-                MutatingStructCallWritesSymbol(invocation, member, symbol, model): true
-            case refOf is RefExpressionSyntax when WritesStorageOf(refOf.Expression, symbol, model) &&
-                !(
-                refOf.Parent is EqualsValueClauseSyntax{Parent: VariableDeclaratorSyntax declarator} &&
-                    model.GetDeclaredSymbol(declarator) is ILocalSymbol local && local.RefKind == RefKind.RefReadOnly
-            ): true
-            case member is MemberAccessExpressionSyntax when MutatingStructAccessorWritesSymbol(
-                member,
-                member.Expression,
-                symbol,
-                model
-            ): true
-            case element is ElementAccessExpressionSyntax when MutatingStructAccessorWritesSymbol(
-                element,
-                element.Expression,
-                symbol,
-                model
-            ): true
-            default: false
+        internal func SyntaxNodeWritesSymbol(node SyntaxNode, symbol ISymbol?, model SemanticModel) bool {
+            CompilationMeasurements.Count("translation.reassignment_write_probes")
+            return switch node {
+                case assignment is AssignmentExpressionSyntax when WritesStorageOf(assignment.Left, symbol, model): true
+                case AssignmentExpressionSyntax{Left: TupleExpressionSyntax tuple} when TupleAssignmentTargetsInclude(
+                    tuple,
+                    symbol,
+                    model
+                ): true
+                case postfix is PostfixUnaryExpressionSyntax when(
+                    postfix.IsKind(SyntaxKind.PostIncrementExpression) || postfix.IsKind(
+                        SyntaxKind.PostDecrementExpression
+                    )
+                ) &&
+                    WritesStorageOf(postfix.Operand, symbol, model): true
+                case prefix is PrefixUnaryExpressionSyntax when(
+                    prefix.IsKind(SyntaxKind.PreIncrementExpression) || prefix.IsKind(
+                        SyntaxKind.PreDecrementExpression
+                    ) ||
+                        prefix.IsKind(SyntaxKind.AddressOfExpression)
+                ) &&
+                    WritesStorageOf(prefix.Operand, symbol, model): true
+                case argument is ArgumentSyntax when(
+                    argument.RefOrOutKeyword.IsKind(SyntaxKind.RefKeyword) || argument.RefOrOutKeyword.IsKind(
+                        SyntaxKind.OutKeyword
+                    )
+                ) &&
+                    WritesStorageOf(argument.Expression, symbol, model): true
+                case InvocationExpressionSyntax{
+                    Expression: MemberAccessExpressionSyntax member
+                } invocation when ExtensionReceiverWritesSymbol(invocation, member.Expression, symbol, model) ||
+                    MutatingStructCallWritesSymbol(invocation, member, symbol, model): true
+                case refOf is RefExpressionSyntax when WritesStorageOf(refOf.Expression, symbol, model) &&
+                    !(
+                    refOf.Parent is EqualsValueClauseSyntax{Parent: VariableDeclaratorSyntax declarator} &&
+                        model.GetDeclaredSymbol(declarator) is ILocalSymbol local &&
+                        local.RefKind == RefKind.RefReadOnly
+                ): true
+                case member is MemberAccessExpressionSyntax when MutatingStructAccessorWritesSymbol(
+                    member,
+                    member.Expression,
+                    symbol,
+                    model
+                ): true
+                case element is ElementAccessExpressionSyntax when MutatingStructAccessorWritesSymbol(
+                    element,
+                    element.Expression,
+                    symbol,
+                    model
+                ): true
+                default: false
+            }
         }
 
         private func BindsTo(expression ExpressionSyntax?, target ISymbol?, model SemanticModel) bool {
@@ -2748,6 +2980,7 @@ partial class CSharpToGSharpTranslator {
             model SemanticModel
         ) bool {
             for argument in tuple.Arguments {
+                CompilationMeasurements.Count("translation.storage_write_tuple_visits")
                 switch argument.Expression {
                     case nested is TupleExpressionSyntax when TupleAssignmentTargetsInclude(nested, symbol, model) {
                         return true
@@ -2763,9 +2996,12 @@ partial class CSharpToGSharpTranslator {
             return false
         }
 
+        private func IsReferenceStorageBoundary(type ITypeSymbol?) bool -> type?.IsReferenceType == true
+
         private func WritesStorageOf(target ExpressionSyntax?, symbol ISymbol?, model SemanticModel) bool {
             var target = target
             while true {
+                CompilationMeasurements.Count("translation.storage_write_target_probes")
                 target = UnwrapParenthesesAndSuppressions(target)
                 if BindsTo(target, symbol, model) {
                     return true
@@ -2777,7 +3013,11 @@ partial class CSharpToGSharpTranslator {
                     case element is ElementAccessExpressionSyntax: element.Expression
                     default: default(ExpressionSyntax?)
                 }
-                if receiver == nil || model.GetTypeInfo(receiver).Type is not{IsReferenceType: false} {
+                if receiver == nil {
+                    return false
+                }
+                let receiverType = model.GetTypeInfo(receiver).Type
+                if receiverType == nil || IsReferenceStorageBoundary(receiverType) {
                     return false
                 }
                 target = receiver

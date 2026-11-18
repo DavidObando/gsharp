@@ -139,6 +139,8 @@ open class Issue4072Stage4FixtureContractTests {
             Environment.SetEnvironmentVariable(GsharpTestProjectRunner.SourceRootEnvironmentVariable, sourceRoot)
             let compileEnvironment = SdkCompileRunner.IsolatedNugetEnvironment(artifactRoot)
             let testEnvironment = SdkCompileRunner.MirroredTestEnvironment(artifactRoot, sourceRoot)
+            Assert.False(compileEnvironment.ContainsKey("MALLOC_MMAP_THRESHOLD_"))
+            Assert.Equal("131072", testEnvironment["MALLOC_MMAP_THRESHOLD_"])
             Assert.Equal(string.Empty, compileEnvironment[GsharpTestProjectRunner.SourceRootEnvironmentVariable])
             Assert.Equal(
                 CanonicalRootPath.Resolve(sourceRoot),

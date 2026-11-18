@@ -415,7 +415,8 @@ internal partial class StatementBinder {
         externalFunctionValues,
         (first VariableSymbol, second VariableSymbol) -> MayShareStorage(first, second),
         (variable VariableSymbol) -> NamesClosureAssignedStorage(variable),
-        knownStatements
+        knownStatements,
+        (call BoundExpression, rootType TypeSymbol) -> CallEffectsMayOverwriteRoot(call, rootType)
     )
 
     /// ADR-0208 R12 (#5171): removes the callable aliases that [`collector`](paramref) assigns, and
@@ -671,7 +672,10 @@ internal partial class StatementBinder {
         }
         if !anyRootAssigned &&
             !dropAllMemberPaths &&
-            (statementCollector == nil || !statementCollector.MayMutateReferenceStorage) &&
+            (
+            statementCollector == nil ||
+                (!statementCollector.MayMutateReferenceStorage && !statementCollector.HasCallReferenceEffects)
+        ) &&
             !dropAllRoots &&
             !dropGlobalRoots &&
             !runsEscapedClosure &&
@@ -873,9 +877,9 @@ internal partial class StatementBinder {
             ) ||
                 (
                 (isValueType || IsExternalStorageAlias(variable) || IsByReferenceRoot(variable)) &&
-                    (dropAllMemberPaths || effects.MayMutateReferenceStorage || effects.MayMutateGlobalRoots)
+                    (dropAllMemberPaths || effects.MayWriteStorageOf(path) || effects.MayMutateGlobalRoots)
             ) ||
-                StatementKillsPath(effects, path, dropAllMemberPaths, effects.MayMutateReferenceStorage)
+                StatementKillsPath(effects, path, dropAllMemberPaths, effects.MayWriteStorageOf(path))
         }
     }
 
@@ -2663,7 +2667,11 @@ internal partial class StatementBinder {
         expression BoundExpression,
         callableAliases IReadOnlyCollection[VariableSymbol]? = nil
     ) Dictionary[AccessPath, TypeSymbol]? {
-        let anchor = expression.Syntax ?? FindSyntaxAnchor(expression)
+        var anchor = expression.Syntax ?? FindSyntaxAnchor(expression)
+        // A member's syntax excludes its receiver. Include the receiver when checking for assignment facts.
+        while anchor?.Parent is AccessorExpressionSyntax accessor {
+            anchor = accessor
+        }
         if anchor == nil || !ContainsNullCoalescingAssignmentSyntax(anchor) {
             return nil
         }
@@ -5195,7 +5203,7 @@ internal partial class StatementBinder {
                         (path AccessPath, currentExists bool, _ TypeSymbol?, otherExists bool, _ TypeSymbol?) -> {
                             if !currentExists && otherExists {
                                 removedOnRebind ??= HashSet[SpeculativeFrameKey]()
-                                removedOnRebind!!.Add(SpeculativeFrameKey(savedFrame, path))
+                                removedOnRebind.Add(SpeculativeFrameKey(savedFrame, path))
                             }
                         }
                     )
@@ -5749,6 +5757,8 @@ internal partial class StatementBinder {
         private let mayShareStorage((VariableSymbol, VariableSymbol) -> bool)?
         private let isClosureAssigned((VariableSymbol) -> bool)?
         private let knownStatements Dictionary[BoundStatement, StatementEffects]?
+        private let callEffectsMayOverwriteRoot((BoundExpression, TypeSymbol) -> bool)?
+        private let callExpressions List[BoundExpression] = List[BoundExpression]()
         private var hasAliasSensitiveOperations bool
         private var hasControlTransfer bool
 
@@ -5757,11 +5767,13 @@ internal partial class StatementBinder {
             externalFunctionValues IEnumerable[VariableSymbol]? = nil,
             mayShareStorage((VariableSymbol, VariableSymbol) -> bool)? = nil,
             isClosureAssigned((VariableSymbol) -> bool)? = nil,
-            knownStatements Dictionary[BoundStatement, StatementEffects]? = nil
+            knownStatements Dictionary[BoundStatement, StatementEffects]? = nil,
+            callEffectsMayOverwriteRoot((BoundExpression, TypeSymbol) -> bool)? = nil
         ) {
             this.knownStatements = knownStatements
             this.mayShareStorage = mayShareStorage
             this.isClosureAssigned = isClosureAssigned
+            this.callEffectsMayOverwriteRoot = callEffectsMayOverwriteRoot
             Roots = HashSet[VariableSymbol]()
             WritableReferenceRoots = HashSet[VariableSymbol]()
             VisitedCatchFilters = List[ExpressionSyntax]()
@@ -5822,26 +5834,50 @@ internal partial class StatementBinder {
         }
         private var untypedReferenceStorageWrite bool = false
 
-        /// ADR-0208 R12 and R20 (#5292, #5827): whether the statement can store into the storage that the root of
-        /// [`path`](paramref) names. A fact on the root itself dies on every reference-storage write. A fact on a member
-        /// path dies only on a write whose location can hold the root's storage
-        /// (cref:StatementBinder.StorageWriteMayOverwriteRoot), or on a write that the collector cannot type.
+        prop HasCallReferenceEffects bool -> callExpressions.Count > 0
+
+        /// ADR-0208 R12 and R20 (#5292, #5827, #5326): whether the statement can store into the storage that the root of
+        /// [`path`](paramref) names. A fact on the root itself dies on every reference-storage write or call whose effect
+        /// summary can overwrite the root's storage. Root replacement also removes descendant facts, including readonly links.
+        /// Typed member writes use (cref:StatementBinder.StorageWriteMayOverwriteRoot); an untyped write remains conservative.
         /// @param path The path of the fact.
         /// @returns `true` when the statement can overwrite the storage of the root.
         func MayWriteStorageOf(path AccessPath) bool {
-            if !MayMutateReferenceStorage {
-                return false
-            }
-            if !StatementBinder.HasMemberLinks(path) || untypedReferenceStorageWrite {
-                return true
-            }
-            let root = StatementBinder.EffectiveMemberRoot(path)
-            if root == nil {
-                return true
-            }
-            for write in referenceStorageWrites {
-                if StatementBinder.StorageWriteMayOverwriteRoot(write, root.Type) {
+            if MayMutateReferenceStorage {
+                if !StatementBinder.HasMemberLinks(path) || untypedReferenceStorageWrite {
                     return true
+                }
+                let root = StatementBinder.EffectiveMemberRoot(path)
+                if root == nil {
+                    return true
+                }
+                for write in referenceStorageWrites {
+                    if StatementBinder.StorageWriteMayOverwriteRoot(write, root.Type) {
+                        return true
+                    }
+                }
+            }
+            if callExpressions.Count > 0 && callEffectsMayOverwriteRoot != nil {
+                let root = StatementBinder.EffectiveMemberRoot(path)
+                if root == nil {
+                    return true
+                }
+                if !StatementBinder.IsExternalStorageAlias(root) {
+                    return false
+                }
+                if StatementBinder.CallsMayWriteAliasedStorage(root) {
+                    return true
+                }
+                let chain = StatementBinder.AliasChain(root)
+                let targetRoot = chain[chain.Count - 1]
+                for call in callExpressions {
+                    if callEffectsMayOverwriteRoot!!(call, root.Type) ||
+                        (
+                        !object.ReferenceEquals(targetRoot, root) &&
+                            callEffectsMayOverwriteRoot!!(call, targetRoot.Type)
+                    ) {
+                        return true
+                    }
                 }
             }
             return false
@@ -5878,6 +5914,7 @@ internal partial class StatementBinder {
             !ContainsTry &&
             !MayMutateMemberPaths &&
             !MayMutateReferenceStorage &&
+            !HasCallReferenceEffects &&
             !MayMutateAnyRoot &&
             !MayMutateGlobalRoots &&
             !MayRunEscapedClosure &&
@@ -6060,7 +6097,8 @@ internal partial class StatementBinder {
                 (
                 !isStableSystemIndexOp && StatementBinder.IsPotentiallyMutatingMemberPathExpression(node.Kind) &&
                     node is not BoundCallOperationExpression &&
-                    node is not BoundConstructorCallExpression
+                    node is not BoundConstructorCallExpression &&
+                    node is not BoundBaseClassCallExpression{IsPropertyAccessor: false}
             ) {
                 RecordReferenceStorageWrite(node)
             }
@@ -6087,23 +6125,9 @@ internal partial class StatementBinder {
                 MarkMayMutateGlobalRoots(invalidateCallableAliases: false)
                 runsEscapedClosureHere = true
             }
-            let sourceConstructionRunsUserCode = (
-                node is BoundConstructorCallExpression construction &&
-                    (
-                    construction.SelectedConstructor != nil || StatementBinder.ConstructionRunsUserCode(
-                        construction.StructType
-                    )
-                )
-            ) ||
-                (
-                node is BoundStructLiteralExpression literal &&
-                    (
-                    StatementBinder.ConstructionRunsUserCode(literal.StructType) || literal.Initializers.Any(
-                        (initializer BoundFieldInitializer) -> initializer.Property is {} property &&
-                            StatementBinder.SourcePropertyRunsUserCode(property, receiverType: nil, isWrite: true)
-                    )
-                )
-            )
+            let sourceConstructionRunsUserCode = node is BoundConstructorCallExpression or
+                BoundStructLiteralExpression &&
+                StatementBinder.HasDirectCalleeEffects(node)
             // ADR-0208 R11 (#5170): any call, property getter or constructor
             // with user code may assign a mutable global. A static member access runs the type initializer (#5504).
             if sourcePropertyRunsUserCode ||
@@ -6114,20 +6138,6 @@ internal partial class StatementBinder {
                     runsEscapedClosureHere = true
                 }
             }
-            // ADR-0208 R15 (#5237): a call of any kind can run a closure that escaped, except a call through a
-            // callable value, which keeps its own classification (AnalyzeCallableInvocation).
-            if !isStableSystemIndexOp &&
-                node is BoundClrConstructorCallExpression or
-                BoundClrConversionCallExpression or
-                BoundClrBinaryOperatorExpression or
-                BoundClrUnaryOperatorExpression or
-                BoundFunctionPointerInvocationExpression or
-                BoundEventSubscriptionExpression or
-                BoundClrEventSubscriptionExpression or
-                BoundTypeParameterConstructionExpression {
-                MarkRunsEscapedClosure(invalidateCallableAliases: false)
-                runsEscapedClosureHere = true
-            }
             // A custom interpolated-string handler constructs the handler and calls its AppendLiteral /
             // AppendFormatted methods; the default handler calls `ToString` on a hole of a type other than a
             // built-in value or a string.
@@ -6135,6 +6145,7 @@ internal partial class StatementBinder {
                 if interpolation.Handler != nil {
                     MarkMayMutateGlobalRoots(writesReferenceStorage: false, invalidateCallableAliases: false)
                     runsEscapedClosureHere = true
+                    callExpressions.Add(interpolation)
                 } else {
                     for part in interpolation.Parts {
                         if part.Value is {} hole && hole.Type != TypeSymbol.String && !TypeSymbol.IsLegalPointeeType(
@@ -6142,6 +6153,7 @@ internal partial class StatementBinder {
                         ) {
                             MarkMayMutateGlobalRoots(writesReferenceStorage: false, invalidateCallableAliases: false)
                             runsEscapedClosureHere = true
+                            callExpressions.Add(interpolation)
                             break
                         }
                     }
@@ -6158,9 +6170,19 @@ internal partial class StatementBinder {
                     allEntryCallableState.CapturedVariables.Add(captured)
                 }
             }
-            if !isStableSystemIndexOp && node is BoundCallOperationExpression && !IsCallableValueInvocation(node) {
-                MarkRunsEscapedClosure(invalidateCallableAliases: false)
-                runsEscapedClosureHere = true
+            if StatementBinder.HasDirectCalleeEffects(node) && !IsCallableValueInvocation(node) {
+                // Struct literals invalidate callable state at each execution phase in VisitStructLiteralExpression.
+                if node is not BoundStructLiteralExpression {
+                    MarkRunsEscapedClosure(invalidateCallableAliases: false)
+                    runsEscapedClosureHere = true
+                }
+                callExpressions.Add(node)
+            }
+            if node is BoundBaseClassCallExpression baseClassCall {
+                if !baseClassCall.IsPropertyAccessor && baseClassCall.Method != nil {
+                    MarkMayMutateGlobalRoots(writesReferenceStorage: false, invalidateCallableAliases: false)
+                    runsEscapedClosureHere = true
+                }
             }
             if node is BoundCallOperationExpression{CalledFunction: FunctionSymbol function} {
                 // ADR-0208 R12 (#5292, #5663, #5665, amendment A3): a plain function call does not write by-reference storage.
@@ -6232,7 +6254,7 @@ internal partial class StatementBinder {
                     continue
                 }
                 if mayShareStorage != nil {
-                    if mayShareStorage!!(assigned, root) {
+                    if mayShareStorage(assigned, root) {
                         return true
                     }
                 } else if StatementBinder.SharesStorage(assigned, root) {
@@ -6468,10 +6490,10 @@ internal partial class StatementBinder {
                 VisitExpression(node.Left)
                 VisitExpression(node.Right)
                 if StatementBinder.BinaryEqualityRunsUserCode(node) {
-                    // ADR-0208 R19 (#5710): structural equality calls `Equals`, which can be user code. It is a plain
-                    // method call, so it does not write by-reference storage (R12, amendment A3).
+                    // ADR-0208 R19 (#5710, #5326): structural equality calls `Equals`, which can be user code.
                     MarkMayMutateGlobalRoots(writesReferenceStorage: false)
                     InvalidateCallableStateForUnknownClosure()
+                    callExpressions.Add(node)
                 }
                 return
             }
@@ -6507,6 +6529,7 @@ internal partial class StatementBinder {
                 if StatementBinder.BinaryEqualityRunsUserCode(bin) {
                     MarkMayMutateGlobalRoots(writesReferenceStorage: false)
                     InvalidateCallableStateForUnknownClosure()
+                    callExpressions.Add(bin)
                 }
             }
         }
@@ -6578,11 +6601,25 @@ internal partial class StatementBinder {
 
         protected open override func VisitConstantPattern(node BoundConstantPattern) {
             base.VisitConstantPattern(node)
-            // ADR-0208 R19 (#5593): the test can call the input's `Equals`, which can be user code. It is a plain
-            // method call, so it does not write by-reference storage (R12, amendment A3).
+            // ADR-0208 R19 (#5593, #5326): the test can call the input's `Equals`, which can be user code.
             if StatementBinder.ConstantPatternRunsUserCode(node) {
                 MarkMayMutateGlobalRoots(writesReferenceStorage: false)
                 InvalidateCallableStateForUnknownClosure()
+                if BoundBinaryOperator.Bind(
+                    SyntaxKind.EqualsEqualsToken,
+                    TypeSymbol.Object,
+                    TypeSymbol.Object
+                ) is {} eqOp {
+                    callExpressions.Add(
+                        BoundBinaryExpression(
+                            node.Syntax,
+                            BoundDefaultExpression(node.Syntax, node.Type),
+                            eqOp,
+                            node.Value,
+                            isChecked: false
+                        )
+                    )
+                }
             }
         }
 
@@ -6602,7 +6639,7 @@ internal partial class StatementBinder {
         }
 
         protected open override func VisitImportedCallExpression(node BoundImportedCallExpression) {
-            VisitCallableArguments(node.Arguments)
+            VisitCallableArguments(node.Arguments, node.Function.Method)
         }
 
         protected open override func VisitConstrainedStaticCallExpression(node BoundConstrainedStaticCallExpression) {
@@ -6610,7 +6647,7 @@ internal partial class StatementBinder {
         }
 
         protected open override func VisitClrStaticCallExpression(node BoundClrStaticCallExpression) {
-            VisitCallableArguments(node.Arguments)
+            VisitCallableArguments(node.Arguments, node.Method)
         }
 
         protected open override func VisitUserInstanceCallExpression(node BoundUserInstanceCallExpression) {
@@ -6626,7 +6663,10 @@ internal partial class StatementBinder {
         protected open override func VisitBaseClassCallExpression(node BoundBaseClassCallExpression) {
             // ADR-0208 R11 (#5170): a base method or computed accessor runs user code.
             if node.Method != nil {
-                MarkMayMutateGlobalRoots(invalidateCallableAliases: false)
+                MarkMayMutateGlobalRoots(
+                    writesReferenceStorage: node.IsPropertyAccessor,
+                    invalidateCallableAliases: false
+                )
             }
             VisitExpression(node.Receiver)
             VisitCallableArguments(node.Arguments)
@@ -6655,7 +6695,7 @@ internal partial class StatementBinder {
                 AnalyzeCallableInvocation(node.Receiver, targetState, argumentSnapshots)
                 return
             }
-            VisitCallableArguments(node.Arguments)
+            VisitCallableArguments(node.Arguments, node.Method)
         }
 
         protected open override func VisitFunctionPointerInvocationExpression(
@@ -6895,13 +6935,19 @@ internal partial class StatementBinder {
             }
         }
 
-        private func VisitCallableArguments(arguments ImmutableArray[BoundExpression]) {
-            ApplyCallableArguments(VisitAndSnapshotCallableArguments(arguments))
+        private func VisitCallableArguments(
+            arguments ImmutableArray[BoundExpression],
+            method System.Reflection.MethodInfo? = nil
+        ) {
+            let snapshots = VisitAndSnapshotCallableArguments(arguments)
+            if method == nil || !StatementBinder.DefersImportedCallbackArguments(method) {
+                ApplyCallableArguments(snapshots)
+            }
         }
 
         protected open override func VisitVariableDeclaration(node BoundVariableDeclaration) {
             if node.Initializer != nil && TryGetWritableReferenceOperand(node.Initializer, out var operand) {
-                writableReferenceAliases[node.Variable] = operand!!
+                writableReferenceAliases[node.Variable] = operand
             }
             base.VisitVariableDeclaration(node)
             let inFunctionLiteral = visitedFunctionLiterals.Count > 0
@@ -7833,9 +7879,9 @@ internal partial class StatementBinder {
                 let unknownCallable = IsUnknownCallable(initializer)
                 if TryGetFunctionLiterals(initializer, out var literals) {
                     if preserveCaptured && Literals.TryGetValue(node.Variable, out var existing) {
-                        existing.UnionWith(literals!!)
+                        existing.UnionWith(literals)
                     } else {
-                        Literals[node.Variable] = HashSet[BoundFunctionLiteralExpression](literals!!)
+                        Literals[node.Variable] = HashSet[BoundFunctionLiteralExpression](literals)
                     }
                     if unknownCallable {
                         Unknown.Add(node.Variable)
@@ -7897,9 +7943,9 @@ internal partial class StatementBinder {
                         node.Variable,
                         out var existing
                     ) {
-                        existing.UnionWith(literals!!)
+                        existing.UnionWith(literals)
                     } else {
-                        Literals[node.Variable] = HashSet[BoundFunctionLiteralExpression](literals!!)
+                        Literals[node.Variable] = HashSet[BoundFunctionLiteralExpression](literals)
                     }
                     if unknownCallable {
                         Unknown.Add(node.Variable)
@@ -8289,7 +8335,7 @@ internal partial class StatementBinder {
         // delegate stored in a variable.
         if syntax.TypeParameterList != nil {
             return if prepareGenericLocalFunctionDeclaration != nil {
-                prepareGenericLocalFunctionDeclaration!!(syntax)()
+                prepareGenericLocalFunctionDeclaration(syntax)()
             } else {
                 throw InvalidOperationException(
                     "Generic local-function declarations require prepareGenericLocalFunctionDeclaration to be wired."
@@ -8441,7 +8487,7 @@ internal partial class StatementBinder {
                     // that declares the variable into the current scope before
                     // the body binds. The variable's type is the explicit type
                     // clause when present, else the literal's natural type.
-                    initializer = bindFunctionLiteralWithSelfDeclaration!!(
+                    initializer = bindFunctionLiteralWithSelfDeclaration(
                         literalInitializer,
                         (fn FunctionSymbol, fnType FunctionTypeSymbol) -> {
                             // Issue #3501 A2: a literal with `ref`/`out`/`in`
@@ -8550,7 +8596,7 @@ internal partial class StatementBinder {
                 // real generic method, not the erased-delegate adapter) are unaffected.
                 if initializer is BoundFunctionLiteralExpression functionLiteral &&
                     checkNonGenericLocalFunctionEnclosingTypeParameterReference != nil {
-                    checkNonGenericLocalFunctionEnclosingTypeParameterReference!!(
+                    checkNonGenericLocalFunctionEnclosingTypeParameterReference(
                         syntax.Identifier.Location,
                         syntax.Identifier.ValueText,
                         functionLiteral
@@ -8620,20 +8666,18 @@ internal partial class StatementBinder {
         }
         variable!!.HasDefinitelyNonNullValue = isReadOnly &&
             !(variableType is NullableTypeSymbol) &&
-            IsDefinitelyNonNullValue(convertedInitializer!!)
-        variable!!.CallableParameterNameTree = BuildCallableParameterNameTree(convertedInitializer!!)
+            IsDefinitelyNonNullValue(convertedInitializer)
+        variable!!.CallableParameterNameTree = BuildCallableParameterNameTree(convertedInitializer)
         // ADR-0058 / issue #376: propagate `scoped` modifier from syntax to the local symbol,
         // or infer function-local escape scope from the initializer (STE data-flow propagation).
         if variable is LocalVariableSymbol localVar {
-            localVar.HoldsScopedManagedReference |= ManagedReferenceOrigins.IsScopedHandle(convertedInitializer!!)
+            localVar.HoldsScopedManagedReference |= ManagedReferenceOrigins.IsScopedHandle(convertedInitializer)
             localVar.IsScoped |= localVar.HoldsScopedManagedReference
             if localVar.IsReadOnly && variableType is ByRefTypeSymbol {
                 localVar.ManagedReferenceOrigin = if convertedInitializer is BoundAddressOfExpression address {
                     address.Operand
                 } else {
-                    cast[BoundExpression](
-                        BoundDereferenceExpression(convertedInitializer!!.Syntax, convertedInitializer!!)
-                    )
+                    cast[BoundExpression](BoundDereferenceExpression(convertedInitializer.Syntax, convertedInitializer))
                 }
             }
             if syntax.IsScoped {
@@ -8806,7 +8850,7 @@ internal partial class StatementBinder {
             )
             return BoundVariableDeclaration(syntax, errorVar, BoundErrorExpression(nil))
         }
-        let initializer = bindExpression(syntax.Initializer!!, false)
+        let initializer = bindExpression(syntax.Initializer, false)
         if initializer is BoundErrorExpression {
             let errorVar = bindLocalVariableWithAccessibility(
                 syntax.Identifier,
@@ -9548,7 +9592,7 @@ internal partial class StatementBinder {
                 out var substitution,
                 out var receiverParamType
             ) {
-                extensionMatches.Add((candidate, substitution, receiverParamType!!))
+                extensionMatches.Add((candidate, substitution, receiverParamType))
             }
         }
         if extensionMatches.Count == 0 {
@@ -9881,11 +9925,11 @@ internal partial class StatementBinder {
                     continue
                 }
                 try {
-                    for var i = 0; i < typeArguments!!.Length; i++ {
-                        typeArguments!![i] = $scope.References!!.MapClrTypeToReferences(typeArguments!![i]) ??
-                            typeArguments!![i]
+                    for var i = 0; i < typeArguments.Length; i++ {
+                        typeArguments[i] = $scope.References!!.MapClrTypeToReferences(typeArguments[i]) ??
+                            typeArguments[i]
                     }
-                    closedCandidates.Add(candidate.MakeGenericMethod(typeArguments!!))
+                    closedCandidates.Add(candidate.MakeGenericMethod(typeArguments))
                 } catch (ArgumentException) { }
             }
             candidates = closedCandidates
@@ -11807,21 +11851,18 @@ internal partial class StatementBinder {
             if IsStableSystemIndexOperation(node) {
                 return false
             }
-            if node is BoundAssignmentExpression or
+            if HasDirectCalleeEffects(node) ||
+                node is BoundAssignmentExpression or
                 BoundCallOperationExpression or
-                BoundClrConversionCallExpression or
-                BoundClrBinaryOperatorExpression or
-                BoundClrUnaryOperatorExpression or
-                BoundFunctionPointerInvocationExpression or
                 BoundEventSubscriptionExpression or
                 BoundClrEventSubscriptionExpression or
-                BoundTypeParameterConstructionExpression or
                 BoundStructLiteralExpression or
                 BoundInterpolatedStringExpression or
                 BoundIsExpression or
                 BoundNullConditionalAccessExpression {
                 return true
             }
+
             if node is BoundAddressOfExpression{IsReadOnly: false} {
                 return true
             }
@@ -11833,6 +11874,38 @@ internal partial class StatementBinder {
                 SourcePropertyAccessRunsUserCode(node) ||
                 ClrAccessRunsUserCode(node) ||
                 StaticMemberAccessRunsUserCode(node)
+        }
+
+        /// Identifies expressions whose own operation executes a callee, separately from their operands.
+        internal func HasDirectCalleeEffects(node BoundExpression) bool {
+            if IsStableSystemIndexOperation(node) {
+                return false
+            }
+            return switch node {
+                case _ is BoundCallExpression{IsConditionalElided: true}: false
+                case _ is BoundCallOperationExpression or
+                    BoundClrConstructorCallExpression or
+                    BoundConstructorChainingExpression or
+                    BoundClrConversionCallExpression or
+                    BoundClrBinaryOperatorExpression or
+                    BoundClrUnaryOperatorExpression or
+                    BoundFunctionPointerInvocationExpression or
+                    BoundTypeParameterConstructionExpression or
+                    BoundClrEventSubscriptionExpression: true
+                case subscription is BoundEventSubscriptionExpression: !subscription.Event.IsFieldLike
+                case construction is BoundConstructorCallExpression: construction.SelectedConstructor != nil ||
+                    ConstructionRunsUserCode(construction.StructType)
+                case literal is BoundStructLiteralExpression: ConstructionRunsUserCode(literal.StructType) ||
+                    literal
+                    .Initializers
+                    .Any(
+                    (initializer BoundFieldInitializer) -> initializer.Property is {} property &&
+                        SourcePropertyRunsUserCode(property, receiverType: nil, isWrite: true)
+                )
+                case call is BoundBaseClassCallExpression: call.IsSetterAccessor ||
+                    (!call.IsPropertyAccessor && call.Method != nil)
+                default: false
+            }
         }
 
         /// Returns whether an expression kind can invoke user code or assign

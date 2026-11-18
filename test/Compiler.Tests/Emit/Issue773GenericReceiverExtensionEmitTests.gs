@@ -82,7 +82,8 @@ func (self T?) AlwaysFallback[T](fb T) T {
 
 var s string? = nil
 Console.WriteLine(s.AlwaysFallback("def"))`
-        let output = CompileAndRun(source)
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(source, []string{"T"}, 1)
+        let output = CompileAndRun(source.Replace("AlwaysFallback[T]", "AlwaysFallback[T class?]"))
         Assert.Equal("def${Environment.NewLine}", output)
     }
 

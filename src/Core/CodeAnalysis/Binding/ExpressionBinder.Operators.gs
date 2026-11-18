@@ -132,8 +132,8 @@ internal partial class ExpressionBinder {
                     nil,
                     syntax.OperatorToken.Kind,
                     boundOperand,
-                    clrMethod!!,
-                    ClrNullability.GetReturnTypeSymbol(clrMethod!!)
+                    clrMethod,
+                    ClrNullability.GetReturnTypeSymbol(clrMethod)
                 )
             } else if ambiguous {
                 Diagnostics.ReportAmbiguousOverload(
@@ -249,14 +249,14 @@ internal partial class ExpressionBinder {
                 return BoundErrorExpression(nil)
             }
             let target = methodGroup.Function
-            if methodGroup.Receiver != nil || target!!.IsInstanceMethod {
+            if methodGroup.Receiver != nil || target.IsInstanceMethod {
                 Diagnostics.ReportFunctionPointerAddressOfMismatch(
                     syntax.OperatorToken.Location,
                     "only a static or free function can be taken as a function pointer (instance methods are not supported)"
                 )
                 return BoundErrorExpression(nil)
             }
-            if target!!.IsGeneric {
+            if target.IsGeneric {
                 Diagnostics.ReportFunctionPointerAddressOfMismatch(
                     syntax.OperatorToken.Location,
                     "a generic method cannot be taken as a function pointer"
@@ -268,27 +268,27 @@ internal partial class ExpressionBinder {
             // struct's `protected`/`private` accessibility the same way
             // BindUserInstanceCall does for regular calls (issue #2058) —
             // this is a separate binder path (ldftn), so it needs its own gate.
-            if target!!.StaticOwnerType is StructSymbol methodDeclaringType && !AccessibilityChecker.IsAccessible(
-                target!!.Accessibility,
+            if target.StaticOwnerType is StructSymbol methodDeclaringType && !AccessibilityChecker.IsAccessible(
+                target.Accessibility,
                 methodDeclaringType,
                 getCurrentFunction()
             ) {
                 Diagnostics.ReportMemberInaccessible(
                     syntax.OperatorToken.Location,
-                    target!!.Name,
+                    target.Name,
                     methodDeclaringType.Name,
-                    target!!.Accessibility
+                    target.Accessibility
                 )
             }
-            let fpParamTypes = ImmutableArray.CreateBuilder[TypeSymbol](target!!.Parameters.Length)
-            for p in target!!.Parameters {
+            let fpParamTypes = ImmutableArray.CreateBuilder[TypeSymbol](target.Parameters.Length)
+            for p in target.Parameters {
                 fpParamTypes.Add(p.Type)
             }
             let fpType = FunctionPointerTypeSymbol.GetManaged(
                 fpParamTypes.MoveToImmutable(),
-                target!!.Type ?? TypeSymbol.Void
+                target.Type ?? TypeSymbol.Void
             )
-            return BoundFunctionPointerFromMethodExpression(nil, target!!, fpType)
+            return BoundFunctionPointerFromMethodExpression(nil, target, fpType)
         }
         // GS9005: cannot take address of a constant binding. General block
         // expressions preserve the trailing lvalue's mutability contract.
@@ -907,6 +907,18 @@ internal partial class ExpressionBinder {
             whenFalse = UnwrapSynthesizedRefDelegateBranch(whenFalse)
         }
         var resultType TypeSymbol? = ComputeConditionalResultType(whenTrue.Type, whenFalse.Type, targetType)
+        if !binderCtx.ValidateSourceNullableResult(
+            resultType,
+            syntax.QuestionToken.Location,
+            []TypeSymbol{whenTrue.Type, whenFalse.Type, targetType ?? TypeSymbol.Error}
+        ) {
+            if deferOnFailure {
+                Diagnostics.TruncateTo(diagMark)
+                Diagnostics.RestoreSuppressionsTo(suppressionMark)
+                return BoundErrorExpression(syntax)
+            }
+            return BoundErrorExpression(nil)
+        }
         if targetType == nil {
             resultType = MaterializeSynthesizedRefDelegateResultType(resultType, []BoundExpression{whenTrue, whenFalse})
         }
@@ -1107,6 +1119,18 @@ internal partial class ExpressionBinder {
             whenFalse = UnwrapSynthesizedRefDelegateBranch(whenFalse)
         }
         var resultType TypeSymbol? = ComputeConditionalResultType(whenTrue.Type, whenFalse.Type, targetType)
+        if !binderCtx.ValidateSourceNullableResult(
+            resultType,
+            syntax.IfKeyword.Location,
+            []TypeSymbol{whenTrue.Type, whenFalse.Type, targetType ?? TypeSymbol.Error}
+        ) {
+            if deferOnFailure {
+                Diagnostics.TruncateTo(diagMark)
+                Diagnostics.RestoreSuppressionsTo(suppressionMark)
+                return BoundErrorExpression(syntax)
+            }
+            return BoundErrorExpression(nil)
+        }
         if targetType == nil {
             resultType = MaterializeSynthesizedRefDelegateResultType(resultType, []BoundExpression{whenTrue, whenFalse})
         }
@@ -2194,6 +2218,16 @@ internal partial class ExpressionBinder {
             boundRight.Type is TupleTypeSymbol {
             return BindTupleEquality(syntax, operatorKind, operatorLocation, operatorText, boundLeft, boundRight)
         }
+        if operatorKind == SyntaxKind.QuestionQuestionToken &&
+            boundRight.Type == TypeSymbol.Null &&
+            !binderCtx
+            .ValidateSourceNullableResult(
+            boundLeft.Type,
+            operatorLocation,
+            []TypeSymbol{boundLeft.Type, boundRight.Type}
+        ) {
+            return BoundErrorExpression(nil)
+        }
         var boundOperator BoundBinaryOperator? = BindBinaryOperatorWithNumericAdaptation(
             operatorKind,
             &boundLeft,
@@ -2499,7 +2533,7 @@ internal partial class ExpressionBinder {
         // Issue #1881: Sum/Difference/Product bound inside a `checked`
         // context trap on overflow; every other operator kind ignores the
         // flag (comparisons, bitwise ops, etc. never overflow-check).
-        return BoundBinaryExpression(nil, boundLeft, boundOperator!!, boundRight, binderCtx.IsCheckedContext)
+        return BoundBinaryExpression(nil, boundLeft, boundOperator, boundRight, binderCtx.IsCheckedContext)
     }
 
     /// Issue #2388: when a Stream C/D binary operator resolves against a
@@ -2798,11 +2832,11 @@ internal partial class ExpressionBinder {
             out var clrMethod,
             out ambiguous
         ) {
-            let clrParameters = clrMethod!!.GetParameters()
+            let clrParameters = clrMethod.GetParameters()
             let leftParameterType = ClrNullability.GetParameterTypeSymbol(clrParameters[0])
             let rightParameterType = ClrNullability.GetParameterTypeSymbol(clrParameters[1])
             let hasByRefSignature = clrParameters.Any((p ParameterInfo) -> p.ParameterType.IsByRef) ||
-                clrMethod!!
+                clrMethod
                 .ReturnType
                 .IsByRef
             // Issue #2388: `ClrOperatorResolution` matches on
@@ -2829,7 +2863,7 @@ internal partial class ExpressionBinder {
                 rightLocation,
                 leftParameterType,
                 rightParameterType,
-                ClrNullability.GetReturnTypeSymbol(clrMethod!!),
+                ClrNullability.GetReturnTypeSymbol(clrMethod),
                 hasByRefSignature,
                 out var liftedClrResultType
             ) {
@@ -2867,7 +2901,7 @@ internal partial class ExpressionBinder {
                 left,
                 right,
                 clrMethod,
-                ClrNullability.GetReturnTypeSymbol(clrMethod!!)
+                ClrNullability.GetReturnTypeSymbol(clrMethod)
             )
         }
         return nil
@@ -3739,6 +3773,9 @@ internal partial class ExpressionBinder {
             if type is TupleTypeSymbol tuple {
                 return NullableTypeSymbol.Get(TupleTypeSymbol.ResolveNilElements(tuple))
             }
+            if type is TypeParameterSymbol {
+                return NullableTypeSymbol.Get(type)
+            }
             if !TypeSymbol.IsByRefLike(type) &&
                 (
                 type.IsValueType ||
@@ -4491,12 +4528,26 @@ internal partial class ExpressionBinder {
                             parameter.Position
                         )
                     }
-                } else if parameter.Member is ConstructorInfo targetCtor && receiverType != nil {
-                    nativeTarget = MemberLookup.GetClrMethodParameterTypeSymbol(
-                        receiverType,
-                        targetCtor,
-                        parameter.Position
+                } else if parameter.Member is ConstructorInfo targetCtor {
+                    let constructorReceiver = receiverType ??
+                        (
+                        if openGenericDefinition != nil && !symbolicTypeArguments.IsDefaultOrEmpty {
+                            ImportedTypeSymbol.GetConstructed(
+                                targetCtor.DeclaringType,
+                                openGenericDefinition,
+                                symbolicTypeArguments
+                            )
+                        } else {
+                            default(TypeSymbol?)
+                        }
                     )
+                    if constructorReceiver != nil {
+                        nativeTarget = MemberLookup.GetClrMethodParameterTypeSymbol(
+                            constructorReceiver,
+                            targetCtor,
+                            parameter.Position
+                        )
+                    }
                 }
                 if clrParameterType.IsByRef && nativeTarget is ByRefTypeSymbol byRefTarget {
                     nativeTarget = byRefTarget.PointeeType
@@ -4552,6 +4603,42 @@ internal partial class ExpressionBinder {
                 ) {
                     return ClrOverloadResolution.ImplicitConversionKind.Reference
                 }
+                // A CLR erasure can invent identity just as it can hide a valid conversion.
+                // Function arguments retain the contextual delegate classifier's return-conversion rank.
+                if !clrParameterType.IsByRef &&
+                    sourceType is not FunctionTypeSymbol &&
+                    TypeSymbol
+                    .ContainsSameCompilationUserType(sourceType) {
+                    let symbolicConversion = Conversion.ClassifyNonStructural(sourceType, nativeTarget)
+                    if TypeSymbol.ContainsSameCompilationUserType(nativeTarget) {
+                        if symbolicConversion.IsIdentity ||
+                            (
+                            symbolicConversion.IsImplicit &&
+                                TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(sourceType, nativeTarget)
+                        ) {
+                            return ClrOverloadResolution.ImplicitConversionKind.Identity
+                        }
+                        if symbolicConversion.IsImplicit {
+                            return if Conversion.IsReferenceLikeTarget(sourceType.StripToBareShape()) {
+                                ClrOverloadResolution.ImplicitConversionKind.Reference
+                            } else {
+                                ClrOverloadResolution.ImplicitConversionKind.Boxing
+                            }
+                        }
+                    }
+                    if Conversion.RequiresSymbolicTypeArgumentIdentity(sourceType) &&
+                        !nativeTarget
+                        .StripToBareShape()
+                        .ConstructedTypeArguments
+                        .IsDefaultOrEmpty &&
+                        !TypeSymbol.ContainsTypeParameter(nativeTarget) &&
+                        !symbolicConversion.IsImplicit &&
+                        !Conversion.HasClrArgumentRuntimeRelation(sourceType, nativeTarget) &&
+                        !ConversionClassifier
+                        .HasUserDefinedImplicitConversionForTypes(sourceType, nativeTarget) {
+                        return ClrOverloadResolution.ImplicitConversionKind.None
+                    }
+                }
                 if sourceType.ClrType != nil || !TypeSymbol.ContainsSameCompilationUserType(sourceType) ||
                     !DeclaresImplicitOperator(sourceType) {
                     return nil
@@ -4587,7 +4674,7 @@ internal partial class ExpressionBinder {
                         if hasUserDefined {
                             ClrOverloadResolution.ImplicitConversionKind.UserDefinedImplicit
                         } else {
-                            ClrOverloadResolution.ImplicitConversionKind.None
+                            nil
                         }
                     )
                 }
@@ -5167,7 +5254,7 @@ internal partial class ExpressionBinder {
                     erased,
                     typeof(object)
                 ) {
-                    surrogates.Add(erased!!)
+                    surrogates.Add(erased)
                     return
                 }
                 for inner in TypeSymbol.GetWrappedTypes(type) {

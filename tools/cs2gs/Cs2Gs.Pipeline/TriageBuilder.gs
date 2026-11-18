@@ -300,7 +300,7 @@ class TriageBuilder {
         let detail = if string.IsNullOrWhiteSpace(output) {
             "dotnet-ilverify is not installed in a local tool manifest or on PATH."
         } else {
-            output!!.Trim()
+            output.Trim()
         }
         let message = "Prerequisite tool 'ilverify' (dotnet-ilverify) is not installed or could not be restored. " +
             "Install it with 'dotnet tool install --global dotnet-ilverify' or add it to a local tool manifest " +

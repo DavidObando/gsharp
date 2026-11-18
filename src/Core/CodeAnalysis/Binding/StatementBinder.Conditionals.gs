@@ -578,6 +578,7 @@ internal partial class StatementBinder {
             default(((IfLetBindingClauseSyntax, BoundExpression) -> void)?)
         }
         let bound = IfLetBindingSupport.BindBindingClause(
+            binderCtx,
             binding,
             Diagnostics,
             conversions,
@@ -697,7 +698,13 @@ internal partial class StatementBinder {
             } else {
                 hasBoundElseOnce = true
                 if !EndsInUnconditionalExit(armElse) {
+                    // ADR-0225: the else block can still end in an exit when it is open at the cut.
+                    let pushed = Diagnostics.PushPremiseIf(
+                        PrefixBindingContext.IsOpen(syntax.ElseStatement),
+                        PrefixPremise.RestOfBody
+                    )
                     Diagnostics.ReportGuardLetElseMustExit(syntax.ElseStatement.Location)
+                    Diagnostics.PopPremiseIf(pushed)
                 }
             }
             lastElse = armElse
@@ -748,7 +755,13 @@ internal partial class StatementBinder {
             } else {
                 hasBoundElseOnce = true
                 if !EndsInUnconditionalExit(guardElse) {
+                    // ADR-0225: the else block can still end in an exit when it is open at the cut.
+                    let pushed = Diagnostics.PushPremiseIf(
+                        PrefixBindingContext.IsOpen(syntax.ElseStatement),
+                        PrefixPremise.RestOfBody
+                    )
                     Diagnostics.ReportGuardLetElseMustExit(syntax.ElseStatement.Location)
+                    Diagnostics.PopPremiseIf(pushed)
                 }
             }
             RestoreExternalCallableAliases(callableWhenTrue)
@@ -779,7 +792,13 @@ internal partial class StatementBinder {
         if !hasBoundElseOnce {
             let armElse = BindStatement(syntax.ElseStatement)
             if !EndsInUnconditionalExit(armElse) {
+                // ADR-0225: the else block can still end in an exit when it is open at the cut.
+                let pushed = Diagnostics.PushPremiseIf(
+                    PrefixBindingContext.IsOpen(syntax.ElseStatement),
+                    PrefixPremise.RestOfBody
+                )
                 Diagnostics.ReportGuardLetElseMustExit(syntax.ElseStatement.Location)
+                Diagnostics.PopPremiseIf(pushed)
             }
             allExits = false
         }
@@ -1104,8 +1123,8 @@ internal partial class StatementBinder {
         }
         if SmartCastStability.TryGetStableMemberPath(operand, out var path, out var currentType) &&
             removedFacts
-            .TryGetValue(path!!, out var removedMemberType) {
-            let declared = MemberLookup.GetDeclaredAccessPathType(path!!, currentType!!)
+            .TryGetValue(path, out var removedMemberType) {
+            let declared = MemberLookup.GetDeclaredAccessPathType(path, currentType)
             if IsNullabilityOnlyFact(declared, removedMemberType) &&
                 (currentType == removedMemberType || currentType == declared) {
                 return declared
@@ -2394,7 +2413,7 @@ internal partial class StatementBinder {
             for kv in a {
                 if b.TryGetValue(kv.Key, out var other) && other == kv.Value {
                     result ??= Dictionary[AccessPath, TypeSymbol]()
-                    result!![kv.Key] = kv.Value
+                    result[kv.Key] = kv.Value
                 }
             }
             return result
@@ -2418,7 +2437,7 @@ internal partial class StatementBinder {
                 for kv in leftElse {
                     if IsNullableWidening(kv.Key, kv.Value) {
                         combinedElse ??= Dictionary[AccessPath, TypeSymbol]()
-                        combinedElse!![kv.Key] = kv.Value
+                        combinedElse[kv.Key] = kv.Value
                     }
                 }
             }
@@ -2426,7 +2445,7 @@ internal partial class StatementBinder {
                 for kv in leftThenRaw {
                     if IsNullableWidening(kv.Key, kv.Value) && !HasNonWideningRefinement(rightElse, kv.Key) {
                         combinedElse ??= Dictionary[AccessPath, TypeSymbol]()
-                        combinedElse!![kv.Key] = kv.Value
+                        combinedElse[kv.Key] = kv.Value
                     }
                 }
             }
@@ -2434,7 +2453,7 @@ internal partial class StatementBinder {
                 for kv in rightElse {
                     if IsNullableWidening(kv.Key, kv.Value) {
                         combinedElse ??= Dictionary[AccessPath, TypeSymbol]()
-                        combinedElse!![kv.Key] = kv.Value
+                        combinedElse[kv.Key] = kv.Value
                     }
                 }
             }
@@ -2456,7 +2475,7 @@ internal partial class StatementBinder {
                 for kv in leftThen {
                     if IsNullableWidening(kv.Key, kv.Value) {
                         combinedThen ??= Dictionary[AccessPath, TypeSymbol]()
-                        combinedThen!![kv.Key] = kv.Value
+                        combinedThen[kv.Key] = kv.Value
                     }
                 }
             }
@@ -2464,7 +2483,7 @@ internal partial class StatementBinder {
                 for kv in leftElseRaw {
                     if IsNullableWidening(kv.Key, kv.Value) && !HasNonWideningRefinement(rightThen, kv.Key) {
                         combinedThen ??= Dictionary[AccessPath, TypeSymbol]()
-                        combinedThen!![kv.Key] = kv.Value
+                        combinedThen[kv.Key] = kv.Value
                     }
                 }
             }
@@ -2472,7 +2491,7 @@ internal partial class StatementBinder {
                 for kv in rightThen {
                     if IsNullableWidening(kv.Key, kv.Value) {
                         combinedThen ??= Dictionary[AccessPath, TypeSymbol]()
-                        combinedThen!![kv.Key] = kv.Value
+                        combinedThen[kv.Key] = kv.Value
                     }
                 }
             }
@@ -2495,7 +2514,7 @@ internal partial class StatementBinder {
             for kv in frame {
                 if IsNullableWidening(kv.Key, kv.Value) {
                     result ??= Dictionary[AccessPath, TypeSymbol]()
-                    result!![kv.Key] = kv.Value
+                    result[kv.Key] = kv.Value
                 }
             }
             return result
@@ -3135,17 +3154,17 @@ internal partial class StatementBinder {
                         let widenThen = maybeNullWhenReturnValue != negate
                         if widenThen || !preserved {
                             thenFrame ??= Dictionary[AccessPath, TypeSymbol]()
-                            thenFrame!![widenVarExpr.Variable] = widenedType
+                            thenFrame[widenVarExpr.Variable] = widenedType
                         } else {
                             thenFrame ??= Dictionary[AccessPath, TypeSymbol]()
-                            thenFrame!![widenVarExpr.Variable] = widenVarExpr.Variable.Type
+                            thenFrame[widenVarExpr.Variable] = widenVarExpr.Variable.Type
                         }
                         if !widenThen || !preserved {
                             elseFrame ??= Dictionary[AccessPath, TypeSymbol]()
-                            elseFrame!![widenVarExpr.Variable] = widenedType
+                            elseFrame[widenVarExpr.Variable] = widenedType
                         } else {
                             elseFrame ??= Dictionary[AccessPath, TypeSymbol]()
-                            elseFrame!![widenVarExpr.Variable] = widenVarExpr.Variable.Type
+                            elseFrame[widenVarExpr.Variable] = widenVarExpr.Variable.Type
                         }
                     }
                     continue
@@ -3162,8 +3181,8 @@ internal partial class StatementBinder {
                     arguments,
                     i,
                     isByRef,
-                    target!!,
-                    underlying!!,
+                    target,
+                    underlying,
                     callableAliases,
                     clearAssignedRoots,
                     evolveAliases
@@ -3192,7 +3211,7 @@ internal partial class StatementBinder {
                         )!!
                     )
                 }
-                frame[target!!] = underlying!!
+                frame[target] = underlying
             }
             return (thenFrame, elseFrame)
         }
@@ -3291,8 +3310,8 @@ internal partial class StatementBinder {
                     arguments,
                     i,
                     isByRef,
-                    target!!,
-                    underlying!!,
+                    target,
+                    underlying,
                     callableAliases,
                     clearAssignedRoots,
                     evolveAliases
@@ -3319,7 +3338,7 @@ internal partial class StatementBinder {
                             )!!
                         )
                     }
-                    frame[target!!] = underlying!!
+                    frame[target] = underlying
                 }
                 // [MaybeNullWhen(rv)]: widen a non-nullable argument to its nullable
                 // counterpart on the arm where the call returns rv.
@@ -3357,17 +3376,17 @@ internal partial class StatementBinder {
                     let widenThen = maybeNullWhenReturnValue != negate
                     if widenThen || !preserved {
                         thenFrame ??= Dictionary[AccessPath, TypeSymbol]()
-                        thenFrame!![widenVarExpr.Variable] = widenedType
+                        thenFrame[widenVarExpr.Variable] = widenedType
                     } else {
                         thenFrame ??= Dictionary[AccessPath, TypeSymbol]()
-                        thenFrame!![widenVarExpr.Variable] = widenVarExpr.Variable.Type
+                        thenFrame[widenVarExpr.Variable] = widenVarExpr.Variable.Type
                     }
                     if !widenThen || !preserved {
                         elseFrame ??= Dictionary[AccessPath, TypeSymbol]()
-                        elseFrame!![widenVarExpr.Variable] = widenedType
+                        elseFrame[widenVarExpr.Variable] = widenedType
                     } else {
                         elseFrame ??= Dictionary[AccessPath, TypeSymbol]()
-                        elseFrame!![widenVarExpr.Variable] = widenVarExpr.Variable.Type
+                        elseFrame[widenVarExpr.Variable] = widenVarExpr.Variable.Type
                     }
                 }
             }
@@ -3601,12 +3620,14 @@ internal partial class StatementBinder {
                             default(BoundExpression?)
                         }
                     }
-                    return BoundImportedInstanceCallExpression(
-                        importedInstanceCall.Syntax,
-                        BoundLiteralExpression(nil, 0, importedInstanceCall.Receiver.Type),
-                        importedInstanceCall.Method,
-                        importedInstanceCall.Type,
-                        filtered
+                    return importedInstanceCall.CopySignatureReturnTypeTo(
+                        BoundImportedInstanceCallExpression(
+                            importedInstanceCall.Syntax,
+                            BoundLiteralExpression(nil, 0, importedInstanceCall.Receiver.Type),
+                            importedInstanceCall.Method,
+                            importedInstanceCall.Type,
+                            filtered
+                        )
                     )
                 }
                 default {

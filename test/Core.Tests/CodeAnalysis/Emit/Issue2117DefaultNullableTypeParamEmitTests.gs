@@ -17,35 +17,11 @@ import System.Reflection.PortableExecutable
 import System.Runtime.Loader
 import Xunit
 
-/// Regression tests for issue #2117: `default(T?)` where `T` is an
-/// UNCONSTRAINED generic type parameter must emit IDENTICALLY to
-/// `default(T)` in a value position. For an unconstrained `T` the
-/// `?` annotation is a static-only nullability marker — at the CLR level
-/// `T? == T` (there is no `Nullable<T>` box because `T` may
-/// close to a reference type), so a `default(T?)` flowing into a reified
-/// generic slot (e.g. the argument of `Task.FromResult[T?](...)`) must load
-/// the zero VALUE (`ldloca; initobj; ldloc`), never a boxed reference.
-///
-/// The binder previously recovered the erased-`object` generic parameter
-/// slot only for a bare `TypeParameterSymbol` argument, so
-/// `default(T)` passed as identity (no box) while `default(T?)` fell
-/// through to the `T? -> object` boxing rule and emitted a spurious
-/// `box !T` ahead of a call whose symbolically re-closed signature
-/// (`FromResult<!T>(!!0)`) expects the raw value — producing the
-/// ilverify `StackUnexpected [found ref 'T'][expected value 'T']` reported
-/// in #2117 and an `InvalidProgramException` at JIT time. The recovery now
-/// also fires for `T?` over an unconstrained type parameter, making the
-/// argument `T? -> T?` identity (no box), byte-identical to the working
-/// `default(T)` control.
+/// Nullable generic defaults require a known kind (ADR-0224).
+/// Reified generic slots must not box nullable values; genuine object slots must box them.
 open class Issue2117DefaultNullableTypeParamEmitTests {
-    /// End-to-end proof: a generic function returning
-    /// `Task.FromResult[T?](default(T?))` JITs and runs correctly for BOTH
-    /// a reference-type instantiation (`string` — default is `nil`) and
-    /// a value-type instantiation (`int32` — default is `0`). Before
-    /// the fix the spurious `box` made both instantiations throw
-    /// `InvalidProgramException` at JIT time.
     @Fact
-    func DefaultNullableTypeParameter_Unconstrained_RefAndValue_JitsAndRuns() {
+    func DefaultNullableTypeParameter_RequiresKindAndPreservesAbsence() {
         const Source = `package Issue2117Run
 import System
 import System.Threading.Tasks
@@ -57,31 +33,36 @@ Console.WriteLine(a.Result == nil)
 var c = Make[int32]()
 Console.WriteLine(c.Result)
 `
+        SourceNullableKindAssertions.Reject(Source, "T", 3)
+        let migrated = Source
+            .Replace(
+            "func Make[T]() Task[T?] -> Task.FromResult[T?](default(T?))",
+            "func Make[T class?]() Task[T?] -> Task.FromResult[T?](default(T?))\n" +
+                "func MakeValue[T struct]() Task[T?] -> Task.FromResult[T?](default(T?))"
+        )
+            .Replace("Make[int32]()", "MakeValue[int32]()")
+            .Replace("Console.WriteLine(c.Result)", "Console.WriteLine(c.Result == nil)")
         let stdout = CompileLoadInvokeCaptureStdout(
-            Source,
-            "DefaultNullableTypeParameter_Unconstrained_RefAndValue_JitsAndRuns"
+            migrated,
+            "DefaultNullableTypeParameter_RequiresKindAndPreservesAbsence"
         )
         let lines = stdout.ReplaceLineEndings(Environment.NewLine).Trim().Split(Environment.NewLine)
         Assert.Equal("True", lines[0].Trim())
-        Assert.Equal("0", lines[1].Trim())
+        Assert.Equal("True", lines[1].Trim())
     }
 
-    /// The emitted body of the generic `Make` must load the default VALUE
-    /// (`ldloca; initobj; ldloc`) and contain NO `box` opcode — the
-    /// argument flows into the reified `FromResult<!T>(!!0)` slot as a
-    /// value, exactly like the `default(T)` control.
     @Fact
-    func DefaultNullableTypeParameter_Unconstrained_EmitsValueLoadNotBox() {
+    func DefaultNullableTypeParameter_RequiresKindAndEmitsNullableValueLoadNotBox() {
         const Source = `package Issue2117Il
 import System.Threading.Tasks
 
 func Make[T]() Task[T?] -> Task.FromResult[T?](default(T?))
 `
-        let il = EmitAndGetMethodIl(Source, "Make")
+        SourceNullableKindAssertions.Reject(Source, "T", 3)
+        let il = EmitAndGetMethodIl(Source.Replace("[T]", "[T struct]"), "Make")
         // 0xFE 0x15 == initobj; the default value must be materialised in a slot.
         Assert.True(ContainsSequence(il, []uint8{0xFE, 0x15}), "Make must zero-init the default into a slot (initobj)")
-        // 0x8C == box. An unconstrained `default(T?)` argument to a reified
-        // generic slot must NOT be boxed (that is the #2117 bug).
+        // 0x8C == box. The reified nullable slot requires its value, not a boxed reference.
         Assert.DoesNotContain(uint8(0x8C), il)
     }
 
@@ -98,9 +79,9 @@ open class OB[T] {
     func W() -> Console.WriteLine(default(T?))
 }
 `
-        let il = EmitAndGetMethodIl(Source, "W")
-        Assert.Contains(uint8(0x8C), il) // box !T is required for the object slot
-
+        SourceNullableKindAssertions.Reject(Source, "T", 1)
+        let il = EmitAndGetMethodIl(Source.Replace("OB[T]", "OB[T struct]"), "W")
+        Assert.Contains(uint8(0x8C), il)
     }
 
     /// Control (no regression): a value-type-constrained `[T struct]` —

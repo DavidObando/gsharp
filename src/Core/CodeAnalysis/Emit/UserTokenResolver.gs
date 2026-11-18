@@ -2360,7 +2360,7 @@ internal class UserTokenResolver {
             if formalReturn != nil &&
                 substitutedReturn != nil &&
                 TryUnify(formalReturn, substitutedReturn, tp, out var fromReturn) {
-                return fromReturn!!
+                return fromReturn
             }
             // Issue #1431 (secondary): reaching here means no parameter, return,
             // or function-type shape mentioned `tp` after the structural unifier

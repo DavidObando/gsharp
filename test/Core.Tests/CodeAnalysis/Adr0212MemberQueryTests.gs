@@ -711,6 +711,18 @@ class UnfinishedDog : Animal {
         )
     }
 
+    @Fact
+    func OriginalUnconstrainedNullableIterator_RequiresKnownKind() {
+        let compilation = Compilation(SyntaxTree.Parse(FileA), SyntaxTree.Parse(FileB))
+        let errors = compilation.GetDiagnostics().Where((d Diagnostic) -> d.IsError).ToArray()
+        Assert.Equal(2, errors.Length)
+        Assert.Single(errors.Where((d Diagnostic) -> d.Id == "GS0368"))
+        let diagnostic = Assert.Single(errors.Where((d Diagnostic) -> d.Id == "GS0641"))
+        Assert.Equal("GS0641", diagnostic.Id)
+        Assert.Equal(FileA.IndexOf("T?", StringComparison.Ordinal) + 1, diagnostic.Location.Span.Start)
+        Assert.Equal(1, diagnostic.Location.Span.Length)
+    }
+
     // ---- Support ----
 
     shared {
@@ -929,8 +941,10 @@ partial class Parts {
 }
 `
 
+        private let ReferenceFileA string = FileA.Replace("Repeat[T]", "Repeat[T class?]")
+
         private let Trees[]SyntaxTree = []SyntaxTree{
-            SyntaxTree.Parse(SourceText.From(FileA, "a.gs")),
+            SyntaxTree.Parse(SourceText.From(ReferenceFileA, "a.gs")),
             SyntaxTree.Parse(SourceText.From(FileB, "b.gs"))
         }
 
@@ -950,14 +964,14 @@ partial class Parts {
         }
 
         private func Position(marker string) int32 {
-            let at = FileA.IndexOf("// " + marker + "\n", StringComparison.Ordinal)
+            let at = ReferenceFileA.IndexOf("// " + marker + "\n", StringComparison.Ordinal)
             Assert.True(at >= 0, "marker ${marker} is in the source")
             return at
         }
 
         private func CallAt(marker string) CallExpressionSyntax {
             let position = Position(marker)
-            let lineStart = FileA.LastIndexOf('\n', position - 1) + 1
+            let lineStart = ReferenceFileA.LastIndexOf('\n', position - 1) + 1
             var best CallExpressionSyntax? = nil
             for call in Calls(Trees[0].Root) {
                 if call

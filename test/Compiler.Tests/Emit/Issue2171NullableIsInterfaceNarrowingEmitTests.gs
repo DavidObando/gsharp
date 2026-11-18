@@ -37,7 +37,8 @@ func Probe[T](x T?) int32 {
 func Main() {
     System.Console.WriteLine(Probe[Circle](Circle()))
 }`
-        let output = CompileAndRun(source)
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(source, []string{"T"}, 1)
+        let output = CompileAndRun(source.Replace("Probe[T]", "Probe[T class?]"))
         Assert.Equal("13${Environment.NewLine}", output)
     }
 

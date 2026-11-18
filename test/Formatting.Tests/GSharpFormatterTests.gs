@@ -15,6 +15,19 @@ import Xunit
 
 class GSharpFormatterTests {
     @Fact
+    func Issue5983_FormatPreservesSegmentedAliasTarget() {
+        let once = GSharpFormatter.Format(
+            SourceText.From("type Parent=Outer[ int32 ].Middle[ string ].Base[ int64 ]\n")
+        )
+        Assert.Empty(once.Diagnostics)
+        Assert.Equal("type Parent = Outer[int32].Middle[string].Base[int64]\n", once.Text!!.ToString())
+        let twice = GSharpFormatter.Format(once.Text!!)
+        Assert.Empty(twice.Diagnostics)
+        Assert.Equal(once.Text!!.ToString(), twice.Text!!.ToString())
+        Assert.False(twice.Changed)
+    }
+
+    @Fact
     func Format_UsesCanonicalLayout() {
         const input = `package Z
 import Zed

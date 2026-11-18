@@ -34,6 +34,7 @@ partial class BoundScope {
         ImmutableDictionary[string, TypeSymbol]
     ] =
     ImmutableDictionary[(Owner TypeSymbol, Name string), ImmutableDictionary[string, TypeSymbol]].Empty
+    private var nestedAliasCandidateNames ImmutableHashSet[string] = ImmutableHashSet[string].Empty
     private var sourcePackagePrefixes ImmutableDictionary[string, bool].Builder?
 
     private var typeAliasKeys ImmutableArray[string].Builder?
@@ -95,7 +96,10 @@ partial class BoundScope {
     /// Creates a worker boundary over canonical declarations. Synthesis remains coordinator-owned.
     internal func CreateIndependentBodyScope() BoundScope -> BoundScope(this){
         independentBodyRoot = true,
-        bindingServices = BindingServices(){BodyBindingOptions = GetBindingServices().BodyBindingOptions}
+        bindingServices = BindingServices(){
+            BodyBindingOptions = GetBindingServices().BodyBindingOptions,
+            SourceNullableAnnotationErrors = GetBindingServices().SourceNullableAnnotationErrors
+        }
     }
 
     private prop SynthesisParent BoundScope? {
@@ -719,7 +723,7 @@ partial class BoundScope {
         ambiguity = nil
         if preferredArity > 0 {
             if TryLookupImportedGenericClass(name, preferredArity, out var importedGeneric, out ambiguity) {
-                importedClass = ImportedClassSymbol(importedGeneric!!, declaration, references: References)
+                importedClass = ImportedClassSymbol(importedGeneric, declaration, references: References)
                 return true
             }
             importedClass = nil
@@ -731,11 +735,11 @@ partial class BoundScope {
             return true
         }
         if TryResolveImportedTypeAlias(name, preferredArity, out var aliasedType) {
-            importedClass = ImportedClassSymbol(aliasedType!!, declaration, references: References)
+            importedClass = ImportedClassSymbol(aliasedType, declaration, references: References)
             return true
         }
         if TryScanImportsForClrType(name, requireNonGenericDefinition: true, out var scanned, out ambiguity) {
-            importedClass = ImportedClassSymbol(scanned!!, declaration, references: References)
+            importedClass = ImportedClassSymbol(scanned, declaration, references: References)
             return true
         }
         // Issue #3595 (#3501): same self-package fallback as
@@ -746,9 +750,9 @@ partial class BoundScope {
             declaringPackage + "." + name,
             out var selfPackageType
         ) &&
-            !selfPackageType!!
+            !selfPackageType
             .IsGenericTypeDefinition {
-            importedClass = ImportedClassSymbol(selfPackageType!!, declaration, references: References)
+            importedClass = ImportedClassSymbol(selfPackageType, declaration, references: References)
             return true
         }
         importedClass = nil
@@ -803,7 +807,7 @@ partial class BoundScope {
             }
             if type != nil {
                 seen ??= HashSet[Type]()
-                if seen!!.Add(type) {
+                if seen.Add(type) {
                     yield type
                 }
             }
@@ -866,7 +870,7 @@ partial class BoundScope {
     /// @returns The complete name after import expansion.
     internal func ExpandQualifiedTypeName(segmentTexts[]string, length int32) string {
         if TryLookupImport(segmentTexts[0], out var import_) {
-            return import_!!.Target + "." + string.Join(".", segmentTexts, 1, length - 1)
+            return import_.Target + "." + string.Join(".", segmentTexts, 1, length - 1)
         }
         return string.Join(".", segmentTexts, 0, length)
     }
@@ -916,7 +920,7 @@ partial class BoundScope {
                 }
                 if TryLookupNestedTypeAlias(current, segments[i], arity, out var nested) {
                     current = if current is StructSymbol owner {
-                        ApplyEnclosingConstruction(nested!!, owner)
+                        ApplyEnclosingConstruction(nested, owner)
                     } else {
                         nested
                     }
@@ -928,7 +932,7 @@ partial class BoundScope {
                     out nested,
                     out var declaringContainer
                 ) {
-                    current = ApplyEnclosingConstruction(nested!!, declaringContainer!!)
+                    current = ApplyEnclosingConstruction(nested, declaringContainer)
                 } else {
                     return false
                 }
@@ -1072,7 +1076,7 @@ partial class BoundScope {
         @NotNullWhen(true) out type TypeSymbol?
     ) bool {
         type = nil
-        if !TryLookupImport(name, out var import_) || !import_!!.IsAlias {
+        if !TryLookupImport(name, out var import_) || !import_.IsAlias {
             return false
         }
         let requestedArity = if preferredArity > 0 {
@@ -1080,7 +1084,7 @@ partial class BoundScope {
         } else {
             0
         }
-        if TryLookupSourceTypeAliasTarget(import_!!, requestedArity, out type) {
+        if TryLookupSourceTypeAliasTarget(import_, requestedArity, out type) {
             return true
         }
         var match TypeSymbol? = nil
@@ -1109,7 +1113,7 @@ partial class BoundScope {
             } else {
                 package_ + "." + qualifiedName
             }
-            if !string.Equals(fullName, import_!!.Target, StringComparison.Ordinal) {
+            if !string.Equals(fullName, import_.Target, StringComparison.Ordinal) {
                 continue
             }
             if match != nil && !object.ReferenceEquals(match, candidate) {
@@ -1121,7 +1125,7 @@ partial class BoundScope {
             type = match
             return true
         }
-        return TryLookupHoistedNamespaceSourceTypeAliasTarget(import_!!, requestedArity, out type)
+        return TryLookupHoistedNamespaceSourceTypeAliasTarget(import_, requestedArity, out type)
     }
 
     /// Gets an immutable array of all the declared variables.
@@ -1593,19 +1597,27 @@ partial class BoundScope {
     /// @param currentContainingType The source type containing the reference.
     /// @param simpleName The nested type's simple name.
     /// @param preferredArity The exact requested arity, or -1 when unspecified.
-    /// @param type The resolved nested type, including enclosing generic substitutions.
+    /// @param type The resolved nested type.
     /// @returns Whether a lexically visible nested type was found.
     func TryLookupLexicalNestedTypeAlias(
         currentContainingType TypeSymbol,
         simpleName string,
         preferredArity int32,
         @NotNullWhen(true) out type TypeSymbol?
+    ) bool -> TryLookupLexicalNestedTypeAlias(currentContainingType, simpleName, preferredArity, out type, false)
+
+    internal func TryLookupLexicalNestedTypeAlias(
+        currentContainingType TypeSymbol,
+        simpleName string,
+        preferredArity int32,
+        @NotNullWhen(true) out type TypeSymbol?,
+        definitionOnly bool
     ) bool {
         for var current TypeSymbol? = currentContainingType; current != nil; current = TypeContainingType(current) {
             let currentDefinition = TypeDefinition(current)
             if TryLookupNestedTypeAlias(currentDefinition, simpleName, preferredArity, out var direct) {
-                type = if current is StructSymbol directOwner {
-                    ApplyEnclosingConstruction(direct!!, directOwner)
+                type = if !definitionOnly && current is StructSymbol directOwner {
+                    ApplyEnclosingConstruction(direct, directOwner)
                 } else {
                     direct
                 }
@@ -1619,11 +1631,29 @@ partial class BoundScope {
                 out var inherited,
                 out var declaringContainer
             ) {
-                type = ApplyEnclosingConstruction(inherited!!, declaringContainer!!)
+                type = if definitionOnly {
+                    inherited
+                } else {
+                    ApplyEnclosingConstruction(inherited, declaringContainer)
+                }
                 return true
             }
         }
         type = nil
+        return false
+    }
+
+    /// Gets whether any visible scope indexes a nested alias with this name.
+    /// @param name The nested alias name.
+    /// @returns Whether a candidate name exists.
+    internal func HasNestedTypeAliasCandidates(name string) bool {
+        var declaringScope BoundScope? = this
+        while declaringScope != nil {
+            if declaringScope.nestedAliasCandidateNames.Contains(name) {
+                return true
+            }
+            declaringScope = declaringScope.Parent
+        }
         return false
     }
 
@@ -1642,6 +1672,12 @@ partial class BoundScope {
         @NotNullWhen(true) out type TypeSymbol?,
         @NotNullWhen(true) out declaringContainer StructSymbol?
     ) bool {
+        // Without candidates for this name, ancestry cannot contribute a matching source type.
+        if !HasNestedTypeAliasCandidates(simpleName) {
+            type = nil
+            declaringContainer = nil
+            return false
+        }
         // Issue #4164: a genuine base-class cycle (e.g. `class B : C` / `class
         // C : B`) is normally caught by the post-bind cycle detector (#973),
         // but this walk runs earlier — during declaration binding, while
@@ -1658,6 +1694,7 @@ partial class BoundScope {
         // by #4162, and the one every other #4164 call site now goes
         // through too); skip the first entry (`container` itself) to match
         // this loop's original `container.BaseClass` starting point.
+        CompilationMeasurements.Count("alias.inherited-hierarchy-walks")
         let baseChain = container.GetHierarchy()
         for var level = 1; level < baseChain.Count; level++ {
             let c = baseChain[level]
@@ -1695,7 +1732,7 @@ partial class BoundScope {
     /// @returns The structs in declaration order.
     func GetDeclaredStructs() ImmutableArray[StructSymbol] {
         if typeAliases == nil && Parent != nil {
-            return Parent!!.GetDeclaredStructs()
+            return Parent.GetDeclaredStructs()
         }
         let aliases = GetOrderedTypeAliases()
         if AliasDerivedSnapshot[ImmutableArray[StructSymbol]].TryGet(&structSnapshot, nil, aliases, out var published) {
@@ -1765,7 +1802,7 @@ partial class BoundScope {
     /// coordinator's (ADR-0203 section 4).
     /// @returns The (cref:BindingServices) for this scope's chain.
     internal func GetBindingServices() BindingServices -> if Parent != nil && !independentBodyRoot {
-        Parent!!.GetBindingServices()
+        Parent.GetBindingServices()
     } else {
         (
             if bindingServices == nil {
@@ -1857,7 +1894,7 @@ partial class BoundScope {
     /// ref-kind delegates in the package whose declaration is being bound.
     /// @returns The ambient package name, or `null`.
     internal func GetCurrentDeclaringPackageName() string? -> if Parent != nil {
-        Parent!!.GetCurrentDeclaringPackageName()
+        Parent.GetCurrentDeclaringPackageName()
     } else {
         currentDeclaringPackageName.Value
     }
@@ -1878,7 +1915,7 @@ partial class BoundScope {
     /// @returns The previous ambient package name.
     internal func SetCurrentDeclaringPackage(packageName string?) string? {
         if Parent != nil {
-            return Parent!!.SetCurrentDeclaringPackage(packageName)
+            return Parent.SetCurrentDeclaringPackage(packageName)
         }
         let previous = currentDeclaringPackageName.Value
         this.currentDeclaringPackageName.Value = packageName
@@ -1902,7 +1939,7 @@ partial class BoundScope {
     /// @returns The previous ambient referencing syntax tree.
     internal func SetCurrentReferencingSyntaxTree(tree SyntaxTree?) SyntaxTree? {
         if Parent != nil {
-            return Parent!!.SetCurrentReferencingSyntaxTree(tree)
+            return Parent.SetCurrentReferencingSyntaxTree(tree)
         }
         let previous = currentReferencingSyntaxTree.Value
         this.currentReferencingSyntaxTree.Value = tree
@@ -1995,10 +2032,7 @@ partial class BoundScope {
         )!!
     }
 
-    /// Issues #4089/#4090: whether a G#-declared generic type-clause constraint
-    /// check must be QUEUED rather than answered where it is written, because
-    /// same-compilation declarations may not have their type-parameter
-    /// constraints resolved yet.
+    /// Gets whether declaration type contracts must wait for complete source signatures, members, and layouts.
     /// @remarks Defaults to `false` — answer in place — and is set only
     /// for the DECLARATION phase's own scope chain, by `BindGlobalScope`.
     /// The default direction is load-bearing: `BindProgram` derives a
@@ -2008,7 +2042,7 @@ partial class BoundScope {
     /// binders did before, and by then every constraint is resolved anyway.
     /// @returns `true` while the declaration phase is queuing.
     internal func IsDeferringUserGenericConstraintChecks() bool -> if Parent != nil {
-        Parent!!.IsDeferringUserGenericConstraintChecks()
+        Parent.IsDeferringUserGenericConstraintChecks()
     } else {
         deferUserGenericConstraintChecks
     }
@@ -2038,7 +2072,7 @@ partial class BoundScope {
     /// @returns The previous ambient qualified-construction package hint.
     internal func SetQualifiedConstructionPackageHint(packageName string?) string? {
         if Parent != nil {
-            return Parent!!.SetQualifiedConstructionPackageHint(packageName)
+            return Parent.SetQualifiedConstructionPackageHint(packageName)
         }
         let previous = qualifiedConstructionPackageHint.Value
         this.qualifiedConstructionPackageHint.Value = packageName
@@ -2076,7 +2110,7 @@ partial class BoundScope {
     /// (cref:SetCurrentDeclaringPackage), or `null` when
     /// none is set.
     private func GetCurrentDeclaringPackage() string? -> if Parent != nil {
-        Parent!!.GetCurrentDeclaringPackage()
+        Parent.GetCurrentDeclaringPackage()
     } else {
         currentDeclaringPackageName.Value
     }
@@ -2086,7 +2120,7 @@ partial class BoundScope {
     /// when none is set (no per-file import restriction available; the
     /// import-based disambiguation this fix adds simply does not fire).
     private func GetCurrentReferencingSyntaxTree() SyntaxTree? -> if Parent != nil {
-        Parent!!.GetCurrentReferencingSyntaxTree()
+        Parent.GetCurrentReferencingSyntaxTree()
     } else {
         currentReferencingSyntaxTree.Value
     }
@@ -2095,7 +2129,7 @@ partial class BoundScope {
     /// by (cref:SetQualifiedConstructionPackageHint), or
     /// `null` when none is set.
     private func GetQualifiedConstructionPackageHint() string? -> if Parent != nil {
-        Parent!!.GetQualifiedConstructionPackageHint()
+        Parent.GetQualifiedConstructionPackageHint()
     } else {
         qualifiedConstructionPackageHint.Value
     }
@@ -2112,15 +2146,15 @@ partial class BoundScope {
         @NotNullWhen(true) out type Type?
     ) bool {
         type = nil
-        if !TryLookupImport(name, out var import_) || !import_!!.IsAlias {
+        if !TryLookupImport(name, out var import_) || !import_.IsAlias {
             return false
         }
         let target = if preferredArity > 0 {
-            import_!!.Target + "`" + preferredArity.ToString()
+            import_.Target + "`" + preferredArity.ToString()
         } else {
-            import_!!.Target
+            import_.Target
         }
-        return References!!.TryResolveType(target, out type) && (preferredArity > 0 || !type!!.IsGenericTypeDefinition)
+        return References!!.TryResolveType(target, out type) && (preferredArity > 0 || !type.IsGenericTypeDefinition)
     }
 
     /// Issue #2455: tries to resolve ([`name`](paramref), [`arity`](paramref))
@@ -2151,7 +2185,7 @@ partial class BoundScope {
         let plainKey = MangleArity(name, arity)
         if TryGetTypeAliasInChain(plainKey, out var plainValue) {
             let plainPackage = if TryGetAliasDeclaringPackageInChain(plainKey, out var overridePackage) {
-                overridePackage!!
+                overridePackage
             } else {
                 TypePackageName(plainValue)
             }
@@ -2209,13 +2243,15 @@ partial class BoundScope {
         }
         aliasCandidatesByArity = aliasCandidatesByArity.SetItem(nameWithArity, byArity.SetItem(key, target))
         if !TryGetAliasDeclaringPackageInChain(key, out _) && TypeContainingType(target) is {} owner {
-            let nestedKey = (TypeDefinition(owner), name.Substring(name.LastIndexOf('.') + 1))
+            let nestedName = name.Substring(name.LastIndexOf('.') + 1)
+            let nestedKey = (TypeDefinition(owner), nestedName)
             let nested = if nestedAliasCandidates.TryGetValue(nestedKey, out var existing) {
                 existing
             } else {
                 ImmutableDictionary[string, TypeSymbol].Empty
             }
             nestedAliasCandidates = nestedAliasCandidates.SetItem(nestedKey, nested.SetItem(key, target))
+            nestedAliasCandidateNames = nestedAliasCandidateNames.Add(nestedName)
         }
     }
 
@@ -2300,7 +2336,7 @@ partial class BoundScope {
                 seen ??= HashSet[string](StringComparer.Ordinal)
                 for pair in bucket {
                     CompilationMeasurements.Count("alias.candidate-visits")
-                    if seen!!.Add(pair.Key) {
+                    if seen.Add(pair.Key) {
                         yield pair
                     }
                 }
@@ -2317,7 +2353,7 @@ partial class BoundScope {
     /// (the caller is declaring a real symbol, not a plain alias).
     private func RegisterAliasDeclaringPackage(key string, declaringPackageName string?) {
         if declaringPackageName == nil {
-            if Parent != nil && Parent!!.TryGetAliasDeclaringPackageInChain(key, out _) {
+            if Parent != nil && Parent.TryGetAliasDeclaringPackageInChain(key, out _) {
                 aliasDeclaringPackages ??= ImmutableDictionary.CreateBuilder[string, string?]()
                 aliasDeclaringPackages!![key] = nil
             } else {
@@ -2456,7 +2492,7 @@ partial class BoundScope {
             }
             let package_ = key.Substring(0, key.Length - suffix.Length)
             byPackage ??= Dictionary[string, TypeSymbol](StringComparer.Ordinal)
-            byPackage!![package_] = pair.Value
+            byPackage[package_] = pair.Value
         }
         if byPackage == nil {
             return false
@@ -2473,7 +2509,7 @@ partial class BoundScope {
                 TypePackageName(plainValue)
             }
             if plainPackage != nil {
-                byPackage[plainPackage] = plainValue!!
+                byPackage[plainPackage] = plainValue
             }
         }
         if byPackage == nil || byPackage.Count < 2 {
@@ -2533,7 +2569,7 @@ partial class BoundScope {
         while scope_ != nil {
             if scope_.functions != nil && scope_.functions!!.TryGetValue(key, out var bucket) && bucket.Count > 0 {
                 builder ??= ImmutableArray.CreateBuilder[FunctionSymbol]()
-                builder!!.AddRange(bucket)
+                builder.AddRange(bucket)
             }
             scope_ = scope_.Parent
         }
@@ -2697,7 +2733,7 @@ partial class BoundScope {
                     }
                     if matches {
                         builder ??= ImmutableArray.CreateBuilder[FunctionSymbol]()
-                        builder!!.Add(ext)
+                        builder.Add(ext)
                     }
                 }
             }
@@ -2749,7 +2785,7 @@ partial class BoundScope {
                         continue
                     }
                     otherKeys ??= HashSet[string](StringComparer.Ordinal)
-                    otherKeys!!.Add(key)
+                    otherKeys.Add(key)
                 }
             }
             scope_ = scope_.Parent
@@ -2764,7 +2800,7 @@ partial class BoundScope {
                 continue
             }
             combined ??= ImmutableArray.CreateBuilder[FunctionSymbol]()
-            combined!!.AddRange(matches)
+            combined.AddRange(matches)
         }
         return combined?.ToImmutable() ?? ImmutableArray[FunctionSymbol].Empty
     }
@@ -2883,7 +2919,7 @@ partial class BoundScope {
         }
         if existingEnclosing == nil && targetEnclosing == nil {
             let existingPackage = if TryGetAliasDeclaringPackageInChain(key, out var existingOverride) {
-                existingOverride!!
+                existingOverride
             } else {
                 TypePackageName(existing)
             }
@@ -2938,7 +2974,7 @@ partial class BoundScope {
             if !References!!.TryResolveType(import_.Target + "." + lookupName, out var candidate) {
                 continue
             }
-            if requireNonGenericDefinition && candidate!!.IsGenericTypeDefinition {
+            if requireNonGenericDefinition && candidate.IsGenericTypeDefinition {
                 continue
             }
             // An implicit import is a fallback, never a competitor: it is held
@@ -2963,7 +2999,7 @@ partial class BoundScope {
             } else if firstExplicit != candidate {
                 // Both facts are settled — the winner and the collision — so
                 // the remaining imports cannot change the answer.
-                ambiguity = ImportedTypeAmbiguity(firstExplicit, candidate!!, type!!)
+                ambiguity = ImportedTypeAmbiguity(firstExplicit, candidate, type!!)
                 break
             }
         }

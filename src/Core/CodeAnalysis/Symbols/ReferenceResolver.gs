@@ -23,6 +23,8 @@ import System.Runtime.InteropServices
 import System.Runtime.Loader
 import System.Security.Cryptography
 import System.Threading
+import System.Xml.Linq
+import System.Text.Json
 import SystemObject = System.Object
 
 /// Resolves imported types by name across a configurable set of referenced
@@ -53,6 +55,7 @@ class ReferenceResolver : IDisposable {
     private let runtimeContext AssemblyLoadContext?
     private let missingTransitiveReferences ImmutableArray[string]
     private let hostFallbackAssemblyNames ImmutableHashSet[string]
+    private let explicitReferenceAssemblies ImmutableHashSet[Assembly]
     private let resolveCache ConcurrentDictionary[string, Type] = ConcurrentDictionary[string, Type](
         StringComparer.Ordinal
     )
@@ -163,7 +166,8 @@ class ReferenceResolver : IDisposable {
         missingTransitiveReferences ImmutableArray[string],
         runtimeContext AssemblyLoadContext? = nil,
         typeNameIndex Lazy[ReferenceTypeNameIndex]? = nil,
-        hostFallbackAssemblyNames ImmutableHashSet[string]? = nil
+        hostFallbackAssemblyNames ImmutableHashSet[string]? = nil,
+        explicitReferenceAssemblies ImmutableHashSet[Assembly]? = nil
     ) {
         this.assemblies = assemblies
         this.metadataContext = metadataContext
@@ -171,6 +175,9 @@ class ReferenceResolver : IDisposable {
         this.missingTransitiveReferences = missingTransitiveReferences
         this.hostFallbackAssemblyNames = hostFallbackAssemblyNames ?? ImmutableHashSet.Create[string](
             StringComparer.OrdinalIgnoreCase
+        )
+        this.explicitReferenceAssemblies = explicitReferenceAssemblies ?? ImmutableHashSet.Create[Assembly](
+            ReferenceEqualityComparer.Instance
         )
         this.typeNameIndex = typeNameIndex ?? CreateTypeNameIndex(assemblies)
         this.namespaceIndex = Lazy[ImmutableHashSet[string]](
@@ -257,6 +264,10 @@ class ReferenceResolver : IDisposable {
             let assembly = LoadFromStream(MemoryStream(bytes, writable: false))
             ReferenceResolver.RegisterAssemblyOriginalPath(assembly, fullPath)
             ReferenceResolver.AssemblyImages.AddOrUpdate(assembly, bytes)
+            ReferenceResolver.RuntimeEffectFingerprints.GetValue(
+                assembly,
+                (key Assembly) -> Lazy[string](() -> Convert.ToHexString(SHA256.HashData(bytes)))
+            )
             return assembly
         }
     }
@@ -465,7 +476,7 @@ class ReferenceResolver : IDisposable {
             // mapped through `emittedTypeNameIndex` to reach `resolved`;
             // `Assembly.GetType(fullName)` on that canonical spelling finds no
             // duplicate at all, silently skipping this whole preference.
-            let scanName = resolved!!.FullName ?? fullName
+            let scanName = resolved.FullName ?? fullName
             for assembly in this.assemblies {
                 let candidate Type? = SafeGetType(assembly, scanName)
                 if candidate != nil && IsExternallyResolvable(candidate) {
@@ -508,7 +519,7 @@ class ReferenceResolver : IDisposable {
         if !TryResolveType("System.Object", out var objectType) {
             return false
         }
-        let name string? = objectType!!.Assembly.GetName().Name
+        let name string? = objectType.Assembly.GetName().Name
         return string.Equals(name, "netstandard", StringComparison.OrdinalIgnoreCase) || string.Equals(
             name,
             "mscorlib",
@@ -655,7 +666,7 @@ class ReferenceResolver : IDisposable {
         }
         if type.GetType() == typeof(object).GetType() {
             if TryMapClrTypeToReferences(type, out var projected) {
-                lookupType = projected!!
+                lookupType = projected
                 return true
             }
         } else if !IsHostFallback(
@@ -811,7 +822,7 @@ class ReferenceResolver : IDisposable {
         }
         let fullName = hostType.FullName
         if !string.IsNullOrEmpty(fullName) &&
-            TryResolveType(fullName!!, requireExternalVisibility: false, out var mapped) &&
+            TryResolveType(fullName, requireExternalVisibility: false, out var mapped) &&
             mapped != nil {
             return mapped
         }
@@ -838,7 +849,7 @@ class ReferenceResolver : IDisposable {
     /// @exception InvalidOperationException Thrown when no referenced assembly defines the requested type.
     func GetCoreType(fullName string) Type {
         if TryResolveType(fullName, out var t) {
-            return t!!
+            return t
         }
         throw InvalidOperationException("Core type '$fullName' could not be resolved from the supplied references.")
     }
@@ -849,6 +860,12 @@ class ReferenceResolver : IDisposable {
     /// Tells whether an assembly simple name is a host fallback assembly: a framework assembly that the resolver adds
     /// behind the supplied references.
     internal func IsHostFallbackName(simpleName string) bool -> hostFallbackAssemblyNames.Contains(simpleName)
+
+    /// Tells whether [`assembly`](paramref) was explicitly supplied to (cref:WithReferences) or
+    /// (cref:WithRuntimeReferences) rather than inherited from the ambient host runtime.
+    internal func IsExplicitReference(assembly Assembly) bool {
+        return explicitReferenceAssemblies.Contains(assembly)
+    }
 
     /// Discards the memoized results of (cref:TryResolveType).
     /// The comparison mode calls it, so that its lookups leave no state behind.
@@ -1010,13 +1027,13 @@ class ReferenceResolver : IDisposable {
         let nameIndex = CurrentNameIndex()
         if nameIndex.TryGetValue(fullName, out var assemblyIndex) &&
             TryMaterializeIndexedType(fullName, assemblyIndex, out var indexed) {
-            resolveCache.TryAdd(fullName, indexed!!)
+            resolveCache.TryAdd(fullName, indexed)
             type = indexed
             return true
         }
-        if TryFindRawTypeName(fullName, out var rawName) && nameIndex.TryGetValue(rawName!!, out assemblyIndex) &&
-            TryMaterializeIndexedType(rawName!!, assemblyIndex, out indexed) {
-            resolveCache.TryAdd(fullName, indexed!!)
+        if TryFindRawTypeName(fullName, out var rawName) && nameIndex.TryGetValue(rawName, out assemblyIndex) &&
+            TryMaterializeIndexedType(rawName, assemblyIndex, out indexed) {
+            resolveCache.TryAdd(fullName, indexed)
             type = indexed
             return true
         }
@@ -1230,11 +1247,11 @@ class ReferenceResolver : IDisposable {
 
         override func Resolve(context MetadataLoadContext, assemblyName AssemblyName) Assembly? {
             let simpleName = assemblyName?.Name
-            if !string.IsNullOrEmpty(simpleName) && assemblyBytes.TryGetValue(simpleName!!, out var bytes) {
+            if !string.IsNullOrEmpty(simpleName) && assemblyBytes.TryGetValue(simpleName, out var bytes) {
                 try {
                     let asm = context.LoadFromByteArray(bytes)
                     ReferenceResolver.RegisterAssemblyContentFingerprint(asm, bytes, GetImage)
-                    if assemblyPaths.TryGetValue(simpleName!!, out var originalPath) {
+                    if assemblyPaths.TryGetValue(simpleName, out var originalPath) {
                         ReferenceResolver.RegisterAssemblyOriginalPath(asm, originalPath)
                     }
                     return asm
@@ -1287,10 +1304,6 @@ class ReferenceResolver : IDisposable {
         }
         private let DefaultTypeNameIndexGate object = SystemObject()
 
-        /// The folder with the portable runtime files of the SDK package (`channels/`, `values/`,
-        /// `extensions/`). The driver sets it from /sdktoolsdir:. The variable GSHARP_SDK_TOOLS_DIR
-        /// is the fallback (ADR-0207).
-        internal var SdkToolsDirectory string? = nil
         private var defaultTypeNameIndexAssemblies ImmutableArray[Assembly] = ImmutableArray[Assembly].Empty
         private var defaultTypeNameIndex Lazy[ReferenceTypeNameIndex]?
 
@@ -1310,6 +1323,8 @@ class ReferenceResolver : IDisposable {
         // They give the type names from the metadata tables.
         // The fingerprint above already keeps the same array alive.
         private let AssemblyImages ConditionalWeakTable[Assembly, []uint8] = ConditionalWeakTable[Assembly, []uint8]()
+        private let RuntimeEffectFingerprints ConditionalWeakTable[Assembly, Lazy[string]] =
+        ConditionalWeakTable[Assembly, Lazy[string]]()
 
         // Gives the image of an assembly by simple name, from the load context
         // that produced the assembly. Present for each assembly in AssemblyImages.
@@ -1427,9 +1442,44 @@ class ReferenceResolver : IDisposable {
 
         /// Gets a resolver that searches the runtime's currently loaded
         /// assemblies plus the well-known BCL assemblies.
+        /// @remarks The result depends on the host process (ADR-0223 D3). It contains the assemblies that
+        /// the process has loaded when the call runs, so a test host, a benchmark host, and `gsc` can see
+        /// different types. Use (cref:ForReferencePack) for a reference set that does not depend on the host.
         /// @returns A default resolver.
-        func Default() ReferenceResolver {
-            for path in ResolveDriverReferencePaths(Array.Empty[string]()) {
+        func Default() ReferenceResolver -> DefaultInHost(nil)
+
+        /// Gets a resolver that searches the runtime's currently loaded assemblies plus the well-known BCL
+        /// assemblies, with the bundled G# runtimes from a runtime directory.
+        /// @remarks The result depends on the host process (ADR-0223 D3). See
+        /// (cref:ResolveDriverReferencePaths) for the search order of the bundled runtimes (ADR-0223 D4).
+        /// The bundled runtimes load into a context that the resolver owns, and they replace host assemblies
+        /// with the same simple name. So the resolver uses the files that it found, also when the process has
+        /// loaded another copy. A `null` directory gives the same result as (cref:Default).
+        /// @param runtimeDirectory The folder with the bundled G# runtime assemblies, or `null`.
+        /// @returns A default resolver.
+        func Default(runtimeDirectory string?) ReferenceResolver {
+            if string.IsNullOrEmpty(runtimeDirectory) {
+                return DefaultInHost(nil)
+            }
+            let runtimes = ResolveDriverReferencePaths(Array.Empty[string](), runtimeDirectory)
+            let runtimeNames = HashSet[string](StringComparer.OrdinalIgnoreCase)
+            for path in runtimes {
+                let name = AssemblyName.GetAssemblyName(path).Name
+                if name != nil {
+                    runtimeNames.Add(name)
+                }
+            }
+            let host = BuildHostAssemblies().RemoveAll((a Assembly) -> runtimeNames.Contains(a.GetName().Name ?? ""))
+            return WithRuntimeReferences(runtimes, host)
+        }
+
+        /// The resolver of (cref:Default): it loads the bundled runtimes into the default load context.
+        /// A runtime that the process has already loaded, from any file, stays the one that it loaded.
+        /// `gsi` uses it with GSHARP_SDK_TOOLS_DIR to keep the search order of ADR-0207.
+        /// @param runtimeDirectory The folder with the bundled G# runtime assemblies, or `null`.
+        /// @returns A default resolver.
+        internal func DefaultInHost(runtimeDirectory string?) ReferenceResolver {
+            for path in ResolveDriverReferencePaths(Array.Empty[string](), runtimeDirectory) {
                 try {
                     // Deliberately load here: BuildHostAssemblies excludes DriverReferenceLoadContext assemblies.
                     let _ = AssemblyLoadContext.Default.LoadFromAssemblyPath(path)
@@ -1452,7 +1502,38 @@ class ReferenceResolver : IDisposable {
         /// available.
         /// @param referencePaths Explicit reference paths.
         /// @returns The effective reference paths.
-        func ResolveDriverReferencePaths(referencePaths IEnumerable[string]?) IReadOnlyList[string] {
+        func ResolveDriverReferencePaths(referencePaths IEnumerable[string]?) IReadOnlyList[string] ->
+        ResolveDriverReferencePaths(referencePaths, nil)
+
+        /// Resolves the references supplied to a driver and appends the bundled
+        /// Gsharp.Extensions, Gsharp.Runtime.Channels, and Gsharp.Runtime.Values assemblies when they are
+        /// available.
+        /// @remarks ADR-0223 D4: the bundled runtime search order is the runtime directory, then the folder
+        /// beside the application, then the `GSHARP_SDK_TOOLS_DIR` variable. In the runtime directory, the
+        /// search uses the SDK layout (`extensions/`, `channels/`, and `values/`) first, then the folder
+        /// itself. The variable names an SDK `tools/` folder. A file that is not portable IL is skipped. The
+        /// compiler keeps no process-wide runtime directory, so two hosts in one process can use different
+        /// SDK versions.
+        /// @param referencePaths Explicit reference paths.
+        /// @param runtimeDirectory The folder with the bundled G# runtime assemblies, or `null`. It can be
+        /// the `tools/` folder of the SDK package or the `runtimes/gsharp/` folder of the Gsharp.Compiler
+        /// package.
+        /// @returns The effective reference paths.
+        func ResolveDriverReferencePaths(referencePaths IEnumerable[string]?, runtimeDirectory string?) IReadOnlyList[
+            string
+        ] -> ResolveDriverReferencePaths(referencePaths, runtimeDirectory, useSdkToolsVariable: true)
+
+        /// Resolves driver references with a choice about the `GSHARP_SDK_TOOLS_DIR` fallback.
+        /// @param referencePaths Explicit reference paths.
+        /// @param runtimeDirectory The folder with the bundled G# runtime assemblies, or `null`.
+        /// @param useSdkToolsVariable `false` when the caller already chose between its own switch and the
+        /// variable, as `gsc` does with /sdktoolsdir:.
+        /// @returns The effective reference paths.
+        internal func ResolveDriverReferencePaths(
+            referencePaths IEnumerable[string]?,
+            runtimeDirectory string?,
+            useSdkToolsVariable bool
+        ) IReadOnlyList[string] {
             let paths = List[string]()
             if referencePaths != nil {
                 for path in referencePaths {
@@ -1461,9 +1542,13 @@ class ReferenceResolver : IDisposable {
                     }
                 }
             }
-            AppendBundledPath(paths, FindBundledExtensionPath(AppContext.BaseDirectory))
-            AppendBundledPath(paths, FindBundledChannelsRuntimePath(AppContext.BaseDirectory))
-            AppendBundledPath(paths, FindBundledValuesRuntimePath(AppContext.BaseDirectory))
+            let baseDirectory = AppContext.BaseDirectory
+            AppendBundledPath(paths, FindBundledExtensionPath(baseDirectory, runtimeDirectory, useSdkToolsVariable))
+            AppendBundledPath(
+                paths,
+                FindBundledChannelsRuntimePath(baseDirectory, runtimeDirectory, useSdkToolsVariable)
+            )
+            AppendBundledPath(paths, FindBundledValuesRuntimePath(baseDirectory, runtimeDirectory, useSdkToolsVariable))
             return paths
         }
 
@@ -1502,6 +1587,8 @@ class ReferenceResolver : IDisposable {
 
         /// Gets a resolver for evaluated code by loading explicit references into
         /// the runtime context rather than a metadata-only context.
+        /// @remarks The result depends on the host process (ADR-0223 D3). It contains the assemblies that
+        /// the process has loaded when the call runs, in addition to the supplied references.
         /// @param referencePaths Paths to runtime assemblies.
         /// @returns A resolver over the loaded assemblies and host BCL.
         func WithRuntimeReferences(referencePaths IEnumerable[string]?) ReferenceResolver -> WithRuntimeReferences(
@@ -1509,10 +1596,21 @@ class ReferenceResolver : IDisposable {
             default(ImmutableArray[Assembly])
         )
 
-        /// Freezes host candidates before compiler workers can load additional implementation dependencies.
-        internal func CaptureHostAssemblies() ImmutableArray[Assembly] -> BuildHostAssemblies()
+        /// Captures the assemblies that the host process has loaded (ADR-0223 D3).
+        /// @remarks Call it once before work starts, as `gsc` does. Compiler work can load more
+        /// implementation assemblies into the process. Give the snapshot to
+        /// (cref:WithRuntimeReferences) so that each resolver sees the same host assemblies.
+        /// @returns The host assemblies that a runtime resolver can use.
+        func CaptureHostAssemblies() ImmutableArray[Assembly] -> BuildHostAssemblies()
 
-        internal func WithRuntimeReferences(
+        /// Gets a resolver for evaluated code over the supplied references and a host snapshot.
+        /// @remarks The result depends on the host process (ADR-0223 D3). The snapshot fixes which host
+        /// assemblies the resolver contains. A default snapshot captures the host assemblies when the call runs.
+        /// A supplied reference replaces a snapshot assembly that has the same full name.
+        /// @param referencePaths Paths to runtime assemblies.
+        /// @param hostSnapshot The result of (cref:CaptureHostAssemblies), or a default array.
+        /// @returns A resolver over the snapshot and the loaded references.
+        func WithRuntimeReferences(
             referencePaths IEnumerable[string]?,
             hostSnapshot ImmutableArray[Assembly]
         ) ReferenceResolver {
@@ -1565,7 +1663,11 @@ class ReferenceResolver : IDisposable {
                 assemblies.ToImmutable(),
                 metadataContext: nil,
                 missingTransitiveReferences: ImmutableArray[string].Empty,
-                runtimeContext: runtimeContext
+                runtimeContext: runtimeContext,
+                explicitReferenceAssemblies: ImmutableHashSet.CreateRange[Assembly](
+                    ReferenceEqualityComparer.Instance,
+                    runtimeAssemblies
+                )
             )
         }
 
@@ -1577,6 +1679,185 @@ class ReferenceResolver : IDisposable {
         /// @returns The host's trusted-platform assembly paths.
         func HostTrustedPlatformAssemblyPaths() IReadOnlyList[string] -> GetHostTrustedPlatformAssemblies()
 
+        internal func IsTrustedEffectImage(name AssemblyName, fingerprint string) bool ->
+        TrustedEffectImages.Value.TryGetValue(name.FullName, out var hashes) && hashes.Contains(fingerprint)
+
+        internal func IsTrustedEffectAssembly(assembly Assembly) bool {
+            if CanonicalRuntimeEffectAnchors.Contains(assembly) {
+                return true
+            }
+            let name = assembly.GetName()
+            if !TrustedEffectImages.Value.TryGetValue(name.FullName, out var hashes) {
+                return false
+            }
+            if AssemblyContentFingerprints.TryGetValue(assembly, out var fingerprint) {
+                return hashes.Contains(fingerprint.Value)
+            }
+            if RuntimeEffectFingerprints.TryGetValue(assembly, out var runtimeFingerprint) {
+                return hashes.Contains(runtimeFingerprint.Value)
+            }
+            return false
+        }
+
+        // These exact CLR bindings belong to the compiler's runtime, not an assembly found by name or path.
+        private let CanonicalRuntimeEffectAnchors ImmutableHashSet[Assembly] = ImmutableHashSet.Create[Assembly](
+            ReferenceEqualityComparer.Instance,
+            typeof(object).Assembly,
+            typeof(Enumerable).Assembly,
+            typeof(Console).Assembly,
+            typeof(ImmutableArray[int32]).Assembly,
+            typeof(System.Collections.Concurrent.ConcurrentDictionary[string, object]).Assembly,
+            typeof(System.Collections.ObjectModel.Collection[object]).Assembly,
+            typeof(System.Collections.Specialized.NameValueCollection).Assembly,
+            typeof(System.Text.RegularExpressions.Regex).Assembly,
+            typeof(System.Numerics.BigInteger).Assembly,
+            typeof(Uri).Assembly
+        )
+
+        private let TrustedEffectImages Lazy[Dictionary[string, HashSet[string]]] =
+        Lazy[Dictionary[string, HashSet[string]]](BuildTrustedEffectImages)
+
+        internal func AddTrustedEffectReferencePack(
+            version string,
+            supported HashSet[string],
+            directories List[string]
+        ) {
+            try {
+                let manifest = XDocument.Load(Path.Combine(version, "data", "FrameworkList.xml"))
+                let names = manifest
+                    .Descendants("File")
+                    .Select((file XElement) -> file.Attribute("AssemblyName")?.Value)
+                    .Where((name string?) -> !string.IsNullOrEmpty(name))
+                    .ToArray()
+                let refs = Path.Combine(version, "ref")
+                let paths = if Directory.Exists(refs) {
+                    Directory
+                        .EnumerateDirectories(refs)
+                        .OrderBy((path string) -> path, StringComparer.Ordinal)
+                        .ToArray()
+                } else {
+                    Array.Empty[string]()
+                }
+                for name in names {
+                    if name != nil {
+                        supported.Add(name)
+                    }
+                }
+                directories.AddRange(paths)
+            } catch (error System.Xml.XmlException) { } catch (error IOException) { } catch (
+                error UnauthorizedAccessException
+            ) { }
+        }
+
+        private func BuildTrustedEffectImages() Dictionary[string, HashSet[string]] {
+            let result = Dictionary[string, HashSet[string]](StringComparer.Ordinal)
+            let runtimeDirectory = Path.GetDirectoryName(typeof(object).Assembly.Location)
+            if runtimeDirectory == nil {
+                return result
+            }
+            let directories = List[string]{runtimeDirectory}
+            let supported = HashSet[string](StringComparer.Ordinal){typeof(object).Assembly.GetName().Name ?? ""}
+            let runtimeManifest = Path.Combine(runtimeDirectory, "Microsoft.NETCore.App.deps.json")
+            TryAddRuntimeEffectManifest(runtimeManifest, supported)
+            let dotnetRoot = Directory.GetParent(runtimeDirectory)?.Parent?.Parent?.FullName
+            if dotnetRoot != nil {
+                let pack = Path.Combine(dotnetRoot, "packs", "Microsoft.NETCore.App.Ref")
+                DiscoverTrustedEffectReferencePacks(pack, supported, directories)
+            }
+            for directory in directories {
+                var paths[]string
+                try {
+                    paths = Directory
+                        .EnumerateFiles(directory, "*.dll")
+                        .OrderBy((path string) -> path, StringComparer.Ordinal)
+                        .ToArray()
+                } catch (error IOException) {
+                    continue
+                } catch (error UnauthorizedAccessException) {
+                    continue
+                }
+                for path in paths {
+                    if !supported.Contains(Path.GetFileNameWithoutExtension(path)) {
+                        continue
+                    }
+                    try {
+                        let identity = AssemblyName.GetAssemblyName(path).FullName
+                        using let image = File.OpenRead(path)
+                        let hash = Convert.ToHexString(SHA256.HashData(image))
+                        if !result.TryGetValue(identity, out var hashes) {
+                            hashes = HashSet[string](StringComparer.Ordinal)
+                            result[identity] = hashes
+                        }
+                        hashes.Add(hash)
+                    } catch (error IOException) { } catch (error BadImageFormatException) { } catch (
+                        error UnauthorizedAccessException
+                    ) { }
+                }
+            }
+            return result
+        }
+
+        internal func DiscoverTrustedEffectReferencePacks(
+            root string,
+            supported HashSet[string],
+            directories List[string],
+            enumerate Func[string, IEnumerable[string]]? = nil
+        ) {
+            try {
+                let versions = if enumerate != nil {
+                    enumerate(root)
+                } else {
+                    Directory.EnumerateDirectories(root)
+                }
+
+                for version in versions {
+                    AddTrustedEffectReferencePack(version, supported, directories)
+                }
+            } catch (error IOException) { } catch (error UnauthorizedAccessException) { }
+        }
+
+        internal func TryAddRuntimeEffectManifest(path string, supported HashSet[string]) bool {
+            try {
+                using let document = JsonDocument.Parse(File.ReadAllText(path))
+                let root = document.RootElement
+                if root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("targets", out var targets) ||
+                    targets.ValueKind != JsonValueKind.Object {
+                    return false
+                }
+                let names = HashSet[string](StringComparer.Ordinal)
+                for target in targets.EnumerateObject() {
+                    if target.Value.ValueKind != JsonValueKind.Object {
+                        return false
+                    }
+                    for library in target.Value.EnumerateObject() {
+                        if library.Value.ValueKind != JsonValueKind.Object {
+                            return false
+                        }
+                        if !library.Value.TryGetProperty("runtime", out var assets) {
+                            continue
+                        }
+                        if assets.ValueKind != JsonValueKind.Object {
+                            return false
+                        }
+                        for asset in assets.EnumerateObject() {
+                            if asset.Value.ValueKind != JsonValueKind.Object {
+                                return false
+                            }
+                            names.Add(Path.GetFileNameWithoutExtension(asset.Name))
+                        }
+                    }
+                }
+                supported.UnionWith(names)
+                return true
+            } catch (error JsonException) {
+                return false
+            } catch (error IOException) {
+                return false
+            } catch (error UnauthorizedAccessException) {
+                return false
+            }
+        }
+
         /// Gets a resolver that searches only the assemblies referenced by file
         /// path. The supplied paths are loaded into an isolated
         /// (cref:MetadataLoadContext) so callers see types whose
@@ -1584,7 +1865,250 @@ class ReferenceResolver : IDisposable {
         /// the gsc host's runtime.
         /// @param referencePaths Paths to additional assemblies to load.
         /// @returns A resolver including the supplied references.
-        func WithReferences(referencePaths IEnumerable[string]?) ReferenceResolver {
+        func WithReferences(referencePaths IEnumerable[string]?) ReferenceResolver ->
+        WithReferences(referencePaths, GetHostTrustedPlatformAssemblies())
+
+        /// Gets a resolver over a .NET reference pack and the bundled G# runtime assemblies (ADR-0223 D3).
+        /// @remarks The result does not depend on the assemblies that the host process has loaded. The
+        /// factory uses `Microsoft.NETCore.App.Ref/<version>/ref/<tfm>`, the reference closure that the
+        /// .NET SDK gives `gsc`. It selects the newest version of the framework that has the target folder.
+        /// A release version comes before a prerelease version of the same number. The resolver uses no host
+        /// assembly as a fallback.
+        /// @param targetFramework The target framework moniker, for example `net10.0`.
+        /// @param packRoot The folder that contains the versions of `Microsoft.NETCore.App.Ref`. When it is
+        /// `null`, the factory uses `packs/Microsoft.NETCore.App.Ref` under the .NET root. The .NET root is
+        /// `DOTNET_ROOT`, or else the folder of the `dotnet` executable on the `PATH`.
+        /// @param runtimeDirectory The folder with the bundled G# runtime assemblies, or `null`. See
+        /// (cref:ResolveDriverReferencePaths) for the search order (ADR-0223 D4).
+        /// @returns A resolver over the reference pack and the bundled G# runtime assemblies.
+        /// @exception ArgumentException The target framework is not a .NET moniker such as `net10.0`.
+        /// @exception DirectoryNotFoundException No reference pack for the target framework was found, or its
+        /// folder contains no assemblies.
+        func ForReferencePack(
+            targetFramework string,
+            packRoot string? = nil,
+            runtimeDirectory string? = nil
+        ) ReferenceResolver {
+            let directory = FindReferencePackDirectory(targetFramework, packRoot)
+            let packPaths = Directory
+                .EnumerateFiles(directory, "*.dll")
+                .OrderBy((path string) -> path, StringComparer.Ordinal)
+                .ToList()
+            if packPaths.Count == 0 {
+                // An empty reference set makes WithReferences use the host assemblies.
+                throw DirectoryNotFoundException("The reference pack folder '$directory' contains no assemblies.")
+            }
+            return WithReferences(ResolveDriverReferencePaths(packPaths, runtimeDirectory), Array.Empty[string]())
+        }
+
+        /// Finds the `ref/<tfm>` folder that (cref:ForReferencePack) uses.
+        /// @param targetFramework The target framework moniker, for example `net10.0`.
+        /// @param packRoot The folder that contains the versions of `Microsoft.NETCore.App.Ref`, or `null`.
+        /// @returns The full path of the reference assembly folder.
+        internal func FindReferencePackDirectory(targetFramework string, packRoot string?) string {
+            let frameworkVersion = ParseTargetFrameworkVersion(targetFramework)
+            let packFolders = List[string]()
+            if !string.IsNullOrEmpty(packRoot) {
+                packFolders.Add(Path.GetFullPath(packRoot))
+            } else {
+                let roots = EnumerateDotnetRoots(
+                    Environment.GetEnvironmentVariable("DOTNET_ROOT"),
+                    Environment.GetEnvironmentVariable("PATH")
+                )
+                for dotnetRoot in roots {
+                    packFolders.Add(Path.Combine(dotnetRoot, "packs", "Microsoft.NETCore.App.Ref"))
+                }
+            }
+            // Reference pack folders use lowercase monikers; the moniker check above ignores case.
+            let tfm = targetFramework.Trim().ToLowerInvariant()
+            for packFolder in packFolders {
+                if !Directory.Exists(packFolder) {
+                    continue
+                }
+                let versions = Directory
+                    .EnumerateDirectories(packFolder)
+                    .Select((directory string) -> Path.GetFileName(directory))
+                    .Where((name string) -> MatchesFrameworkVersion(name, frameworkVersion))
+                    .ToList()
+                // The newest version first.
+                versions.Sort((left string, right string) -> ComparePackVersions(right, left))
+                let candidate string? = versions.Select((name string) -> Path.Combine(packFolder, name, "ref", tfm))
+                    .FirstOrDefault(Directory.Exists)
+                if candidate != nil {
+                    return Path.GetFullPath(candidate)
+                }
+            }
+            let searched = if packFolders.Count == 0 {
+                "no .NET root (set DOTNET_ROOT or put dotnet on the PATH)"
+            } else {
+                string.Join(", ", packFolders.Select((folder string) -> "'$folder'"))
+            }
+            throw DirectoryNotFoundException(
+                "The Microsoft.NETCore.App.Ref pack for $tfm was not found under $searched."
+            )
+        }
+
+        /// Gives the .NET roots in search order: `DOTNET_ROOT`, then the folder of each `dotnet` executable
+        /// on the `PATH`. A symbolic link to the executable resolves to the installation folder.
+        /// @param dotnetRootVariable The value of `DOTNET_ROOT`, or `null`.
+        /// @param searchPath The value of `PATH`, or `null`.
+        /// @returns The full paths of the .NET roots, without duplicates.
+        internal func EnumerateDotnetRoots(dotnetRootVariable string?, searchPath string?) List[string] {
+            let roots = List[string]()
+            let AddRoot = func (root string?) {
+                if string.IsNullOrEmpty(root) {
+                    return
+                }
+                let fullRoot = Path.GetFullPath(root)
+                if !roots.Contains(fullRoot, StringComparer.Ordinal) {
+                    roots.Add(fullRoot)
+                }
+            }
+            AddRoot(dotnetRootVariable)
+            let executable = if OperatingSystem.IsWindows() {
+                "dotnet.exe"
+            } else {
+                "dotnet"
+            }
+            let entries = (searchPath ?? string.Empty).Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            for directory in entries {
+                try {
+                    let candidate = Path.Combine(directory.Trim(), executable)
+                    if !File.Exists(candidate) {
+                        continue
+                    }
+                    let target = File.ResolveLinkTarget(candidate, returnFinalTarget: true)
+                    AddRoot(Path.GetDirectoryName(target?.FullName ?? Path.GetFullPath(candidate)))
+                } catch (ex Exception) when ex is ArgumentException ||
+                    ex is IOException ||
+                    ex is NotSupportedException ||
+                    ex is UnauthorizedAccessException {
+                    // A PATH entry that cannot be read does not name a .NET root.
+
+                }
+            }
+            return roots
+        }
+
+        // `net10.0` gives 10.0. Other monikers (netstandard2.0, net48) have no Microsoft.NETCore.App.Ref pack.
+        private func ParseTargetFrameworkVersion(targetFramework string) Version {
+            let tfm = targetFramework.Trim()
+            let isNetMoniker = tfm.StartsWith("net", StringComparison.OrdinalIgnoreCase) && tfm.Contains('.')
+            if isNetMoniker && Version.TryParse(tfm.Substring(3), out var version) && version.Major >= 5 {
+                return version
+            }
+            throw ArgumentException(
+                "The target framework '$targetFramework' is not a .NET moniker such as net10.0.",
+                nameof(targetFramework)
+            )
+        }
+
+        private func MatchesFrameworkVersion(packVersion string, frameworkVersion Version) bool {
+            let version = ParsePackVersion(packVersion)
+            return version.Major == frameworkVersion.Major && version.Minor == frameworkVersion.Minor
+        }
+
+        // Semantic order: 10.0.10 is newer than 10.0.9. A name that does not parse sorts last.
+        private func ParsePackVersion(name string) Version {
+            let end = name.IndexOfAny([]char{'-', '+'})
+            let core = if end < 0 {
+                name
+            } else {
+                name.Substring(0, end)
+            }
+            return if Version.TryParse(core, out var version) {
+                version
+            } else {
+                Version(0, 0)
+            }
+        }
+
+        /// Compares two pack version folder names in SemVer 2.0 precedence order.
+        /// @remarks The numeric version comes first. A release has higher precedence than a prerelease of the
+        /// same version. Prerelease identifiers compare one by one: numeric identifiers as numbers, other
+        /// identifiers in ordinal order, and a numeric identifier before another identifier. More identifiers
+        /// win when all others are equal. Build metadata is ignored. Equal precedence falls back to ordinal
+        /// order, so the result is deterministic.
+        /// @param left A version folder name.
+        /// @param right A version folder name.
+        /// @returns A negative number when `left` is older, zero when the names are equal, else a positive number.
+        internal func ComparePackVersions(left string, right string) int32 {
+            let byNumbers = ParsePackVersion(left).CompareTo(ParsePackVersion(right))
+            if byNumbers != 0 {
+                return byNumbers
+            }
+            let leftLabel = PrereleaseLabel(left)
+            let rightLabel = PrereleaseLabel(right)
+            if leftLabel.Length == 0 || rightLabel.Length == 0 {
+                // No label is a release, which has higher precedence than a prerelease.
+                let byRelease = rightLabel.Length.CompareTo(leftLabel.Length)
+                if byRelease != 0 {
+                    return Math.Sign(byRelease)
+                }
+                return string.CompareOrdinal(left, right)
+            }
+            let leftParts = leftLabel.Split('.')
+            let rightParts = rightLabel.Split('.')
+            let count = Math.Min(leftParts.Length, rightParts.Length)
+            for var i = 0; i < count; i++ {
+                let order = ComparePrereleaseIdentifiers(leftParts[i], rightParts[i])
+                if order != 0 {
+                    return order
+                }
+            }
+            let byCount = leftParts.Length.CompareTo(rightParts.Length)
+            if byCount != 0 {
+                return byCount
+            }
+            return string.CompareOrdinal(left, right)
+        }
+
+        // The prerelease label: the text after the first '-', without build metadata ('+...').
+        private func PrereleaseLabel(name string) string {
+            let plus = name.IndexOf('+')
+            let withoutBuild = if plus < 0 {
+                name
+            } else {
+                name.Substring(0, plus)
+            }
+            let dash = withoutBuild.IndexOf('-')
+            return if dash < 0 {
+                string.Empty
+            } else {
+                withoutBuild.Substring(dash + 1)
+            }
+        }
+
+        private func ComparePrereleaseIdentifiers(left string, right string) int32 {
+            let leftNumeric = IsNumericIdentifier(left)
+            let rightNumeric = IsNumericIdentifier(right)
+            if leftNumeric && rightNumeric {
+                // Compare as numbers without parsing, so a long identifier cannot overflow.
+                let leftDigits = left.TrimStart('0')
+                let rightDigits = right.TrimStart('0')
+                let byLength = leftDigits.Length.CompareTo(rightDigits.Length)
+                if byLength != 0 {
+                    return byLength
+                }
+                return Math.Sign(string.CompareOrdinal(leftDigits, rightDigits))
+            }
+            if leftNumeric {
+                return -1
+            }
+            if rightNumeric {
+                return 1
+            }
+            return Math.Sign(string.CompareOrdinal(left, right))
+        }
+
+        private func IsNumericIdentifier(identifier string) bool -> identifier.Length > 0 && identifier.All(
+            (c char) -> c >= '0' && c <= '9'
+        )
+
+        internal func WithReferences(
+            referencePaths IEnumerable[string]?,
+            hostPaths IReadOnlyList[string]
+        ) ReferenceResolver {
             if referencePaths == nil {
                 return Default()
             }
@@ -1604,7 +2128,6 @@ class ReferenceResolver : IDisposable {
             // copy. The host fallback only kicks in for dependencies the user did
             // not enumerate (typical when a user DLL pulls in extra BCL pieces).
             let resolverPaths = List[string](paths)
-            let hostPaths = GetHostTrustedPlatformAssemblies()
             resolverPaths.AddRange(hostPaths)
             let resolver = FallbackMetadataAssemblyResolver(resolverPaths, hostPaths)
             let userAssemblyNames = paths
@@ -1626,6 +2149,7 @@ class ReferenceResolver : IDisposable {
                     }
                 } catch (FileNotFoundException) { } catch (BadImageFormatException) { }
             }
+            let explicitAssemblies = ImmutableHashSet.CreateRange[Assembly](ReferenceEqualityComparer.Instance, builder)
             // ADR-0084 follow-on (issue #724). The user-supplied references
             // frequently sit on top of the BCL — Gsharp.Extensions.dll, for
             // example, surfaces helpers that take System.String / IEnumerable[T]
@@ -1678,6 +2202,7 @@ class ReferenceResolver : IDisposable {
                 loaded,
                 mlc,
                 missing,
+                explicitReferenceAssemblies: explicitAssemblies,
                 hostFallbackAssemblyNames: fallbackHostPaths
                     .Select(resolver.GetAssemblyNameFromPath)
                     .OfType[string]()
@@ -1757,13 +2282,28 @@ class ReferenceResolver : IDisposable {
             }
         }
 
-        internal func FindBundledExtensionPath(baseDirectory string) string? {
+        internal func FindBundledExtensionPath(
+            baseDirectory string,
+            runtimeDirectory string? = nil,
+            useSdkToolsVariable bool = true
+        ) string? {
             // Compiler cannot ProjectReference Gsharp.Extensions because its bootstrap
             // build already references Compiler; solution and SDK layouts provide it.
-            return FindBundledRuntimePath(baseDirectory, "Gsharp.Extensions.dll", "Gsharp.Extensions", "extensions")
+            return FindBundledRuntimePath(
+                baseDirectory,
+                runtimeDirectory,
+                useSdkToolsVariable,
+                "Gsharp.Extensions.dll",
+                "Gsharp.Extensions",
+                "extensions"
+            )
         }
 
-        internal func FindBundledChannelsRuntimePath(baseDirectory string) string? {
+        internal func FindBundledChannelsRuntimePath(
+            baseDirectory string,
+            runtimeDirectory string? = nil,
+            useSdkToolsVariable bool = true
+        ) string? {
             // ADR-0174 D1. The compiler core deliberately takes no ProjectReference
             // on the channel runtime (emitted programs bind whichever runtime is in
             // the reference set); gsc/gsi ship it beside themselves, the solution
@@ -1771,14 +2311,22 @@ class ReferenceResolver : IDisposable {
             // the SDK NuGet under tools/channels/.
             return FindBundledRuntimePath(
                 baseDirectory,
+                runtimeDirectory,
+                useSdkToolsVariable,
                 "Gsharp.Runtime.Channels.dll",
                 "Gsharp.Runtime.Channels",
                 "channels"
             )
         }
 
-        internal func FindBundledValuesRuntimePath(baseDirectory string) string? -> FindBundledRuntimePath(
+        internal func FindBundledValuesRuntimePath(
+            baseDirectory string,
+            runtimeDirectory string? = nil,
+            useSdkToolsVariable bool = true
+        ) string? -> FindBundledRuntimePath(
             baseDirectory,
+            runtimeDirectory,
+            useSdkToolsVariable,
             "Gsharp.Runtime.Values.dll",
             "Gsharp.Runtime.Values",
             "values"
@@ -1803,21 +2351,34 @@ class ReferenceResolver : IDisposable {
 
         private func FindBundledRuntimePath(
             baseDirectory string,
+            runtimeDirectory string?,
+            useSdkToolsVariable bool,
             fileName string,
             projectFolder string,
             sdkFolder string
         ) string? {
-            // ADR-0207: the SDK tools directory comes first. Its files are the portable
-            // copies. A candidate that is not portable IL is skipped, so an R2R image of a
-            // runtime assembly never reaches user output.
+            // ADR-0223 D4: the runtime directory of the caller comes first, then the folder beside the
+            // application, then GSHARP_SDK_TOOLS_DIR. No process-wide directory exists, because two hosts
+            // in one process can need different SDK versions. A candidate that is not portable IL is
+            // skipped, so an R2R image of a runtime assembly never reaches user output (ADR-0207).
             let candidates = List[string]()
-            let sdkToolsDirectory = SdkToolsDirectory ?? Environment.GetEnvironmentVariable("GSHARP_SDK_TOOLS_DIR")
-            if !string.IsNullOrEmpty(sdkToolsDirectory) {
-                candidates.Add(Path.Combine(sdkToolsDirectory, sdkFolder, fileName))
+            if !string.IsNullOrEmpty(runtimeDirectory) {
+                candidates.Add(Path.Combine(runtimeDirectory, sdkFolder, fileName))
+                candidates.Add(Path.Combine(runtimeDirectory, fileName))
             }
             candidates.Add(Path.Combine(baseDirectory, fileName))
             candidates.Add(Path.Combine(baseDirectory, "..", projectFolder, fileName))
             candidates.Add(Path.Combine(baseDirectory, "..", sdkFolder, fileName))
+            // A driver that already chose between its switch and the variable passes `false`, so the
+            // variable never overrides the switch (ADR-0207).
+            let sdkToolsDirectory = if useSdkToolsVariable {
+                Environment.GetEnvironmentVariable("GSHARP_SDK_TOOLS_DIR")
+            } else {
+                nil
+            }
+            if !string.IsNullOrEmpty(sdkToolsDirectory) {
+                candidates.Add(Path.Combine(sdkToolsDirectory, sdkFolder, fileName))
+            }
             return candidates.Select(Path.GetFullPath).FirstOrDefault(IsPortableBundledFile)
         }
 
@@ -2039,7 +2600,7 @@ class ReferenceResolver : IDisposable {
 
         private func GetOrBuildTypeNameIndex(assemblies ImmutableArray[Assembly]) ReferenceTypeNameIndex {
             if TryGetAssemblySetFingerprintKey(assemblies, out var key) && ImageTypeNameIndexes.TryGetValue(
-                key!!,
+                key,
                 out var cached
             ) {
                 return cached

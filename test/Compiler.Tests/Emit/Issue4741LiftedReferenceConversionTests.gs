@@ -630,14 +630,15 @@ public static class Oracle {
             Assert.Equal("100,17", oracle.GetMethod("Run")?.Invoke(nil, nil))
             let sourcePath = Path.Combine(directory, "Unknown.gs")
             let assemblyPath = Path.Combine(directory, "Unknown.dll")
-            File.WriteAllText(sourcePath, (`package Unknown4741
+            let source = `package Unknown4741
 struct Wrapper[T] {
     var Value T
     shared {
         func operator explicit(value Wrapper[T]) T -> value.Value
     }
 }
-func Convert[T](value Wrapper[T]?) ` + "$result" + ` -> ` + "$result" + `(value)`))
+func Convert[T](value Wrapper[T]?) ` + "$result" + ` -> ` + "$result" + `(value)`
+            File.WriteAllText(sourcePath, source)
             let compilation = CompileGSharp(sourcePath, assemblyPath, fixturePath)
             Assert.NotEqual(0, compilation.Exit)
             let errors = compilation
@@ -646,7 +647,17 @@ func Convert[T](value Wrapper[T]?) ` + "$result" + ` -> ` + "$result" + `(value)
                 .Where((line string) -> line.Contains(": error ", StringComparison.Ordinal))
                 .ToArray()
             Assert.NotEmpty(errors)
-            Assert.All(errors, (error string) -> Assert.Contains("GS0155", error, StringComparison.Ordinal))
+            Assert.Equal(3, errors.Length)
+            Assert.Equal(2, errors.Count((error string) -> error.Contains("GS0641", StringComparison.Ordinal)))
+            Assert.Single(errors.Where((error string) -> error.Contains("GS0155", StringComparison.Ordinal)))
+            Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(
+                source,
+                []string{"T"},
+                2,
+                []string{"GS0155"},
+                isLibrary: true,
+                references: []string{fixturePath}
+            )
         } finally {
             Directory.Delete(directory, recursive: true)
         }

@@ -916,11 +916,10 @@ internal class FunctionEmitter {
         // nullability plan (issue #4988).
         let firstParamHandle = this.outer.customAttrEncoder.NextParameterHandle()
         let nullability = MethodNullabilityPlan.ForParameters(function.Type, function.Parameters)
-        let returnRow ParameterHandle? = if nullability.ReturnNeedsAttribute {
-            ParameterMetadataEmitter.AddReturnParameter(this.emitCtx)
-        } else {
-            nil
-        }
+        let returnRow = EmitPInvokeReturnParameter(
+            function,
+            ParameterMetadataEmitter.NeedsReturnParameter(nullability, function.Type, function.ReturnRefKind, function)
+        )
         let paramHandles = List[(Symbol ParameterSymbol, Handle ParameterHandle)]()
         let parameterRows = ImmutableArray.CreateBuilder[ParameterHandle](function.Parameters.Length)
         var sequenceNumber = 1
@@ -987,10 +986,31 @@ internal class FunctionEmitter {
             .outer
             .customAttrEncoder
             .EmitUserAttributesExcept(methodHandle, function, AttributeTargetKind.Method, KnownAttributes.IsDllImport)
+        if returnRow is {} returnHandle {
+            this.outer.customAttrEncoder.EmitUserAttributes(returnHandle, function, AttributeTargetKind.Return)
+            this.outer.customAttrEncoder.EmitTupleElementNamesAttribute(returnHandle, function.Type)
+        }
         for (paramSym, paramHandle) in paramHandles {
             this.outer.customAttrEncoder.EmitUserAttributes(paramHandle, paramSym, AttributeTargetKind.Param)
         }
         return methodHandle
+    }
+
+    private func EmitPInvokeReturnParameter(function FunctionSymbol, needsRow bool) ParameterHandle? {
+        let metadata = function.ReturnMarshalAsMetadata
+        if !needsRow && metadata == nil {
+            return nil
+        }
+        let attributes = if metadata == nil {
+            ParameterAttributes.None
+        } else {
+            ParameterAttributes.HasFieldMarshal
+        }
+        let handle = ParameterMetadataEmitter.AddReturnParameter(this.emitCtx, attributes)
+        if metadata != nil {
+            EmitFieldMarshalRow(handle, metadata)
+        }
+        return handle
     }
 
     /// ADR-0096 / issue #762: writes a CLR `FieldMarshal` table
@@ -1066,11 +1086,15 @@ internal class FunctionEmitter {
         // Issue #4988: the user-visible stub carries the declared signature's
         // nullability; the hidden blittable inner P/Invoke below is private.
         let outerNullability = MethodNullabilityPlan.ForParameters(function.Type, function.Parameters)
-        let outerReturnRow ParameterHandle? = if outerNullability.ReturnNeedsAttribute {
-            ParameterMetadataEmitter.AddReturnParameter(this.emitCtx)
-        } else {
-            nil
-        }
+        let outerReturnRow = EmitPInvokeReturnParameter(
+            function,
+            ParameterMetadataEmitter.NeedsReturnParameter(
+                outerNullability,
+                function.Type,
+                function.ReturnRefKind,
+                function
+            )
+        )
         let outerParamHandles = List[(Symbol ParameterSymbol, Handle ParameterHandle)]()
         let outerParameterRows = ImmutableArray.CreateBuilder[ParameterHandle](function.Parameters.Length)
         var outerSeq = 1
@@ -1132,6 +1156,10 @@ internal class FunctionEmitter {
             AttributeTargetKind.Method,
             KnownAttributes.IsLibraryImportInnerMethodAttribute
         )
+        if outerReturnRow is {} returnHandle {
+            this.outer.customAttrEncoder.EmitUserAttributes(returnHandle, function, AttributeTargetKind.Return)
+            this.outer.customAttrEncoder.EmitTupleElementNamesAttribute(returnHandle, function.Type)
+        }
         for (paramSym, paramHandle) in outerParamHandles {
             this.outer.customAttrEncoder.EmitUserAttributes(paramHandle, paramSym, AttributeTargetKind.Param)
         }
@@ -1170,6 +1198,7 @@ internal class FunctionEmitter {
         let innerMethodAttrs = MethodAttributes.Private | MethodAttributes.HideBySig | MethodAttributes.Static | MethodAttributes.PinvokeImpl
         let innerImplAttrs = MethodImplAttributes.IL | MethodImplAttributes.Managed | MethodImplAttributes.PreserveSig
         let innerFirstParam = this.outer.customAttrEncoder.NextParameterHandle()
+        EmitPInvokeReturnParameter(function, false)
         var innerSeq = 1
         for p in function.Parameters {
             let innerParamAttrs = if p.MarshalAsMetadata == nil {

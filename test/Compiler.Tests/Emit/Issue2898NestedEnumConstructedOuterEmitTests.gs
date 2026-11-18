@@ -381,7 +381,9 @@ func Read[T IGet[string]](witness T) Outer[string].Color {
 }
 
 func Run() int32 { return int32(Read(TextImplicit{})) }`
-        let assembly = CompileAndLoad(source, IlVerifier.KnownIssues.StaticVirtualInterface)
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(source, []string{"T"}, 1, isLibrary: true)
+        let constrained = source.Replace("interface IGet[T]", "interface IGet[T class?]")
+        let assembly = CompileAndLoad(constrained, IlVerifier.KnownIssues.StaticVirtualInterface)
         let program = assembly.GetTypes().Single((t Type) -> t.Name == "<Program>")
         Assert.Equal(1, GetMethod(program, "Run").Invoke(nil, nil))
     }

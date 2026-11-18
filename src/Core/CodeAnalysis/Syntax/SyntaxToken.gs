@@ -104,6 +104,13 @@ open partial class SyntaxToken : SyntaxNode {
         get;
     }
 
+    /// Gets a value that tells whether the token closes a construct that is open at the cut of a prefix tree.
+    /// The token is missing and has zero width at the cut (ADR-0225).
+    internal prop IsSealedAtCut bool {
+        get;
+        private set;
+    }
+
     shared {
         /// Creates a token the parser inserted during error recovery, which does not
         /// appear in source.
@@ -126,6 +133,17 @@ open partial class SyntaxToken : SyntaxNode {
             isMissing: true,
             isSynthesized: false
         )
+
+        /// Creates a missing token that closes a construct that is open at the cut of a prefix tree (ADR-0225).
+        /// @param syntaxTree The prefix tree.
+        /// @param kind The closing token kind.
+        /// @param position The cut position.
+        /// @returns A zero-width missing token.
+        internal func SealedAtCut(syntaxTree SyntaxTree, kind SyntaxKind, position int32) SyntaxToken {
+            let token = Missing(syntaxTree, kind, position)
+            token.IsSealedAtCut = true
+            return token
+        }
 
         /// Creates a token that completes a desugared form. It has text, a zero-width span and
         /// is not missing (issue #5277).

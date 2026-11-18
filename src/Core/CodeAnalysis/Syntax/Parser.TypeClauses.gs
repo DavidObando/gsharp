@@ -234,6 +234,10 @@ open partial class Parser {
                 rankCommas.ToImmutable()
             )
         }
+        return ParseNamedTypeClause(parseNullableSuffix: true)
+    }
+
+    private func ParseNamedTypeClause(parseNullableSuffix bool) TypeClauseSyntax {
         let identifier = MatchToken(SyntaxKind.IdentifierToken)
         // Issue #526 / #1506: a dotted-qualifier chain `Outer.Inner` (or `A.B.C`)
         // names a nested type. Each segment may carry its own type-argument list
@@ -241,7 +245,11 @@ open partial class Parser {
         // (`List[int32].Enumerator`, `A[T].B[U].C`); the list on the LAST segment
         // continues to be tracked by `TypeArguments` for backwards compatibility.
         let tail = ParseDottedTypeNameTail()
-        let question = ParseOptionalTrailingTypeQuestionToken()
+        let question = if parseNullableSuffix {
+            ParseOptionalTrailingTypeQuestionToken()
+        } else {
+            default(SyntaxToken?)
+        }
         return TypeClauseSyntax(
             syntaxTree,
             openBracketToken: nil,

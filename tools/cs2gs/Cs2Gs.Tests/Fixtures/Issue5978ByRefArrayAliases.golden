@@ -1,0 +1,25 @@
+import System
+import System.Threading
+
+shared class P {
+    private var cache string?
+    private var replacement []?string? = []string?{nil}
+    private func MakeArray[T](value T) []T -> []T{value}
+
+    private func Consume(values []string) {
+    }
+
+    func Main() {
+        let consumedRow = []string?{"ok"}
+        Consume(cast[[]string](consumedRow))
+        var row []string? = []string?{"ok"}
+        let alias = row
+        let rows = [][]string?{consumedRow, alias, []string?{Volatile.Read(&cache)}}
+        row = []string?{"next"}
+        row = cast[[]string?](MakeArray("final"))
+        let snapshots = [][]string?{row, alias}
+        row = Volatile.Read(&replacement)!!
+        Console.Write(
+            rows[0][0]!!.Length.ToString() + "|" + rows[1][0] + "|" + (rows[2][0] == nil).ToString() + "|" + snapshots[0][0] + "|" + snapshots[1][0] + "|" + (row[0] == nil).ToString())
+    }
+}

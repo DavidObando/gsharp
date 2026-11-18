@@ -151,6 +151,8 @@ Writes and calls in an exiting branch do not reach the join.
 Switch arms contribute their normal exit states, including assignments to variables other than the discriminator.
 The join includes reachable switch `break` edges and the dispatch state when no arm need match.
 Calls and writes on a surviving path still remove facts (`h4`, `h6`, and `k2` remain rejected).
+The current corpus rejects `g3` and `k2` with GS0158.
+Their nullable storage matches the writable parameter, so these rows do not report GS0612 ([#5949](https://github.com/DavidObando/gsharp/issues/5949)).
 The shadow-join tests expect no R1–R6 disagreements for these probes.
 Rows `n2_5130` and `n3_5130` reject a sibling-only type refinement and an unbraced call that leaves an out value nullable.
 Refinements stay in the branch's own frame; they do not replace weaker enclosing facts.

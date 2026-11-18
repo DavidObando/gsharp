@@ -249,10 +249,7 @@ Console.WriteLine(OrElse(absent, "fallback"))`
     }
 
     @Fact
-    func NegativeControl_UnconstrainedTypeParameterAsCast_Coalesce_StillUsesIssue1516Path() {
-        // Negative control: a bare reference-typed type parameter (from
-        // `x as T`, not wrapped in NullableTypeSymbol at all) must keep
-        // using the existing #1516 box-probe arm, unaffected by this change.
+    func UnconstrainedAsCast_RequiresKnownKindBeforeCoalescing() {
         let source = `package i2333gcoalesceneg2
 import System
 
@@ -264,7 +261,11 @@ var s object = "hi"
 var n object = 5
 Console.WriteLine(Get[string](s, "fb"))
 Console.WriteLine(Get[string](n, "fb"))`
-        Assert.Equal("hi${Environment.NewLine}fb${Environment.NewLine}", CompileAndRun(source))
+        Issue6040GenericNullableReturnDriverTests.CheckRejected(source, []string{"GS0641@5,16,5,18"})
+        Assert.Equal(
+            "hi${Environment.NewLine}fb${Environment.NewLine}",
+            CompileAndRun(source.Replace("func Get[T]", "func Get[T class?]"))
+        )
     }
 
     @Fact
@@ -374,7 +375,7 @@ stderr:
                     return Array.Empty[string]()
                 }
                 return Directory
-                    .EnumerateFiles(runtimeDir!!, "*.dll", SearchOption.TopDirectoryOnly)
+                    .EnumerateFiles(runtimeDir, "*.dll", SearchOption.TopDirectoryOnly)
                     .Where(
                     (p string) -> {
                         let name = Path.GetFileName(p)

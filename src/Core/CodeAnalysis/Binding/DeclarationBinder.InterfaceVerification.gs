@@ -19,7 +19,10 @@ import System.Text
 
 internal partial class DeclarationBinder {
     internal func VerifyAbstractMethodImplementations() {
+        // ADR-0225: a type that is open at the cut can still declare the missing members, and with
+        // nothing after the cut, a later part of a partial type can too.
         for (syntax, structSymbol) in pendingAbstractImplementationChecks {
+            Diagnostics.MissingMembersCanFollow = PrefixBindingContext.IsIncompleteType(syntax)
             if !structSymbol.IsDeclaredAbstract {
                 for requirement in structSymbol.GetUnimplementedAbstractPropertyAccessors() {
                     // Keep the established open/get-only requirement syntax; explicit
@@ -55,7 +58,7 @@ internal partial class DeclarationBinder {
                 Diagnostics.ReportAbstractMemberNotImplemented(
                     syntax.Identifier.Location,
                     structSymbol.Name,
-                    dataCloneAncestor!!.Name,
+                    dataCloneAncestor.Name,
                     "<Clone>$$"
                 )
             }
@@ -86,6 +89,7 @@ internal partial class DeclarationBinder {
                 )
             }
         }
+        Diagnostics.MissingMembersCanFollow = false
     }
 
     /// Issue #1006: once interface base clauses have been bound, expand each
@@ -146,7 +150,10 @@ internal partial class DeclarationBinder {
     }
 
     internal func VerifyInterfaceImplementations() {
+        // ADR-0225: a type that is open at the cut can still declare the missing members, and with
+        // nothing after the cut, a later part of a partial type can too.
         for (syntax, structSymbol) in pendingInterfaceImplementationChecks {
+            Diagnostics.MissingMembersCanFollow = PrefixBindingContext.IsIncompleteType(syntax)
             let ResolveExplicitClrInterfaceImplementations = func (structSymbol StructSymbol) {
                 for method in structSymbol.Methods {
                     let target = method.ExplicitInterfaceClauseTarget
@@ -157,7 +164,7 @@ internal partial class DeclarationBinder {
                         ?.IsInterface != true {
                         continue
                     }
-                    for slot in target!!.ClrType!!.GetMethods(BindingFlags.Public | BindingFlags.Instance) {
+                    for slot in target.ClrType!!.GetMethods(BindingFlags.Public | BindingFlags.Instance) {
                         if !slot.IsSpecialName && slot.Name == method.Name && MemberLookup.MethodMatchesClrSignature(
                             method,
                             slot
@@ -183,7 +190,7 @@ internal partial class DeclarationBinder {
                     // MemberRef is built from (its containing type carries the
                     // symbolic arguments).
                     if !MemberLookup.TryGetSymbolicClrGenericInterface(
-                        target!!,
+                        target,
                         out var openInterface,
                         out var symbolicArgs
                     ) {
@@ -195,7 +202,7 @@ internal partial class DeclarationBinder {
                             !MemberLookup.MethodMatchesSymbolicClrInterfaceSignature(method, openSlot, symbolicArgs) {
                             continue
                         }
-                        let erasedSlot MethodInfo? = FindErasedSlotForOpenMethod(target!!.ClrType!!, openSlot)
+                        let erasedSlot MethodInfo? = FindErasedSlotForOpenMethod(target.ClrType!!, openSlot)
                         if erasedSlot == nil {
                             continue
                         }
@@ -213,8 +220,8 @@ internal partial class DeclarationBinder {
                         ?.IsInterface != true {
                         continue
                     }
-                    for slot in target!!.ClrType!!.GetProperties(BindingFlags.Public | BindingFlags.Instance) {
-                        if !ExplicitClrPropertyMatches(property, target!!, slot) {
+                    for slot in target.ClrType!!.GetProperties(BindingFlags.Public | BindingFlags.Instance) {
+                        if !ExplicitClrPropertyMatches(property, target, slot) {
                             continue
                         }
                         property.ExplicitInterfaceGetterSlot = slot.GetMethod
@@ -225,13 +232,13 @@ internal partial class DeclarationBinder {
                     if property.ExplicitInterfaceGetterSlot != nil ||
                         property.ExplicitInterfaceSetterSlot != nil ||
                         !MemberLookup.TryGetSymbolicClrGenericInterface(
-                        target!!,
+                        target,
                         out var openInterface,
                         out var symbolicArgs
                     ) {
                         continue
                     }
-                    for openSlot in openInterface!!.GetProperties(BindingFlags.Public | BindingFlags.Instance) {
+                    for openSlot in openInterface.GetProperties(BindingFlags.Public | BindingFlags.Instance) {
                         if (openSlot.GetMethod != nil) != property.HasGetter ||
                             (openSlot.SetMethod != nil) != property.HasSetter ||
                             !MemberLookup.PropertyMatchesSymbolicClrInterfaceSignature(
@@ -244,12 +251,12 @@ internal partial class DeclarationBinder {
                         let erasedGetter MethodInfo? = if openSlot.GetMethod == nil {
                             default(MethodInfo?)
                         } else {
-                            FindErasedSlotForOpenMethod(target!!.ClrType!!, openSlot.GetMethod!!)
+                            FindErasedSlotForOpenMethod(target.ClrType!!, openSlot.GetMethod!!)
                         }
                         let erasedSetter MethodInfo? = if openSlot.SetMethod == nil {
                             default(MethodInfo?)
                         } else {
-                            FindErasedSlotForOpenMethod(target!!.ClrType!!, openSlot.SetMethod!!)
+                            FindErasedSlotForOpenMethod(target.ClrType!!, openSlot.SetMethod!!)
                         }
                         if (openSlot.GetMethod != nil && erasedGetter == nil) ||
                             (openSlot.SetMethod != nil && erasedSetter == nil) {
@@ -270,11 +277,11 @@ internal partial class DeclarationBinder {
                         ?.IsInterface != true {
                         continue
                     }
-                    for slot in target!!.ClrType!!.GetEvents(BindingFlags.Public | BindingFlags.Instance) {
+                    for slot in target.ClrType!!.GetEvents(BindingFlags.Public | BindingFlags.Instance) {
                         if slot.Name != eventSymbol.Name ||
                             !ConformanceSignaturesEquivalent(
                             eventSymbol.Type,
-                            MemberLookup.GetClrEventHandlerTypeSymbol(target!!, slot)
+                            MemberLookup.GetClrEventHandlerTypeSymbol(target, slot)
                         ) {
                             continue
                         }
@@ -294,11 +301,11 @@ internal partial class DeclarationBinder {
                         ?.IsInterface != true {
                         continue
                     }
-                    let targetClr = target!!.ClrType!!
+                    let targetClr = target.ClrType!!
                     var openInterface Type? = nil
                     var symbolicArgs = default(ImmutableArray[TypeSymbol])
                     let isSymbolic = MemberLookup.TryGetSymbolicClrGenericInterface(
-                        target!!,
+                        target,
                         out openInterface,
                         out symbolicArgs
                     )
@@ -337,13 +344,13 @@ internal partial class DeclarationBinder {
                         continue
                     }
                     for slot in ClrTypeUtilities.SafeGetProperties(
-                        target!!.ClrType!!,
+                        target.ClrType!!,
                         BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly
                     ) {
                         if (!property.HasGetter && !property.HasSetter) ||
                             (property.HasGetter && slot.GetMethod?.IsVirtual != true) ||
                             (property.HasSetter && slot.SetMethod?.IsVirtual != true) ||
-                            !MemberLookup.PropertyMatchesClrInterfaceSignature(property, target!!, slot) {
+                            !MemberLookup.PropertyMatchesClrInterfaceSignature(property, target, slot) {
                             continue
                         }
                         property.ExplicitInterfaceGetterSlot = if slot.GetMethod?.IsVirtual == true {
@@ -370,14 +377,14 @@ internal partial class DeclarationBinder {
                         continue
                     }
                     for slot in ClrTypeUtilities.SafeGetEvents(
-                        target!!.ClrType!!,
+                        target.ClrType!!,
                         BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly
                     ) {
                         if (slot.AddMethod?.IsVirtual != true && slot.RemoveMethod?.IsVirtual != true) ||
                             slot.Name != eventSymbol.Name ||
                             !ConformanceSignaturesEquivalent(
                             eventSymbol.Type,
-                            MemberLookup.GetClrEventHandlerTypeSymbol(target!!, slot)
+                            MemberLookup.GetClrEventHandlerTypeSymbol(target, slot)
                         ) {
                             continue
                         }
@@ -434,6 +441,7 @@ internal partial class DeclarationBinder {
             VerifyPrivateInterfaceHelpersNotOverridden(syntax, structSymbol)
             VerifyExplicitInterfaceClauseResolution(syntax, structSymbol)
         }
+        Diagnostics.MissingMembersCanFollow = false
     }
 
     private func VerifyInterfaceMethodImplementationsAndDefaultConflicts(
@@ -655,19 +663,19 @@ internal partial class DeclarationBinder {
                 found = true
                 if iprop.HasGetter {
                     let getter = Invariant.Required(
-                        importedProperty!!.GetGetMethod(),
+                        importedProperty.GetGetMethod(),
                         "a matching property has its required getter",
                         expression: "importedProperty.GetGetMethod()"
                     )
-                    structSymbol.ImportedInterfaceAccessors.Add((iface, iprop, getter, importedOwner!!, false))
+                    structSymbol.ImportedInterfaceAccessors.Add((iface, iprop, getter, importedOwner, false))
                 }
                 if iprop.HasSetter {
                     let setter = Invariant.Required(
-                        importedProperty!!.GetSetMethod(),
+                        importedProperty.GetSetMethod(),
                         "a matching property has its required setter",
                         expression: "importedProperty.GetSetMethod()"
                     )
-                    structSymbol.ImportedInterfaceAccessors.Add((iface, iprop, setter, importedOwner!!, true))
+                    structSymbol.ImportedInterfaceAccessors.Add((iface, iprop, setter, importedOwner, true))
                 }
             }
             if found && implProp != nil {
@@ -729,7 +737,7 @@ internal partial class DeclarationBinder {
                 // Nullable<T> over a value type has a distinct CLR signature.
                 // Settable properties remain invariant.
                 if !IsInterfacePropertyTypeCompatible(
-                    positionalParam!!.Type,
+                    positionalParam.Type,
                     iprop.Type,
                     iprop.HasSetter,
                     typeParameterMap
@@ -749,7 +757,7 @@ internal partial class DeclarationBinder {
                             iface.Name,
                             iprop.Name,
                             "positional member",
-                            positionalParam!!.Name,
+                            positionalParam.Name,
                             interfaceIsInitOnly: false,
                             implementationIsInitOnly: true
                         )
@@ -763,7 +771,7 @@ internal partial class DeclarationBinder {
                     if positionalInterfaceProps.TryGetValue(iprop.Name, out var existing) {
                         positionalInterfaceProps[iprop.Name] = (existing.Param, existing.NeedsSetter || needsSetter)
                     } else {
-                        positionalInterfaceProps[iprop.Name] = (positionalParam!!, needsSetter)
+                        positionalInterfaceProps[iprop.Name] = (positionalParam, needsSetter)
                     }
                 }
             }
@@ -2602,7 +2610,7 @@ internal partial class DeclarationBinder {
                     // Skip if the declaring type already exposes a property of
                     // this name (a real one that already satisfies the slot, or
                     // one synthesized by an earlier derived-class check).
-                    if TypeMemberModel.TryGetProperty(declaringType!!, param.Name, out _) {
+                    if TypeMemberModel.TryGetProperty(declaringType, param.Name, out _) {
                         continue
                     }
                     let synthProp = PropertySymbol(
@@ -2615,7 +2623,7 @@ internal partial class DeclarationBinder {
                         isVirtual: false,
                         isOverride: false
                     ){BackingField = backingField}
-                    declaringType!!.SetProperties(declaringType!!.Properties.Add(synthProp))
+                    declaringType.SetProperties(declaringType.Properties.Add(synthProp))
                 }
             }
         }

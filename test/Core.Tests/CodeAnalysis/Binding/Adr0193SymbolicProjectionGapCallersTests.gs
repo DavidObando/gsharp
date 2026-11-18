@@ -73,7 +73,7 @@ class Adr0193SymbolicProjectionGapCallersTests {
             "Binding/ExpressionBinder.Calls.Invocation: ExpressionBinder.TryMapDeferredLambdaTargetsSymbolic -> MapOpenSignatureWithoutDeclarationMerge x3",
             "Binding/ExpressionBinder.Literals: ExpressionBinder.RefineSymbolicArgsForMethodGroups -> MapOpenSignatureWithoutDeclarationMerge x1",
             "Binding/MemberLookup: MemberLookup.ResolveByRefParameterPointeeFromSymbolicTypeArgs -> MapOpenSignatureWithoutDeclarationMerge x1",
-            "Binding/MemberLookup: MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs -> MapOpenSignatureWithoutDeclarationMerge x2",
+            "Binding/MemberLookup: MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs -> MapOpenSignatureWithoutDeclarationMerge x1",
             "Binding/OverloadResolution/OverloadResolver.Arguments: OverloadResolver.ExpandParamsArguments -> MapOpenSignatureWithoutDeclarationMerge x1",
             "Symbols/ImportedClassSymbol: ImportedClassSymbol.TryLookupNativeFunction -> ResolveCallReturnTypeFromSymbolicTypeArgs x1"
         }

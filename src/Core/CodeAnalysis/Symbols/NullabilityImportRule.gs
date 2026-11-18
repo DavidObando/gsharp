@@ -321,9 +321,7 @@ internal shared class NullabilityImportRule {
                 if parameter.HasValueTypeConstraint || parameter.HasUnmanagedConstraint {
                     return TypeArgumentKind.Value
                 }
-                return if parameter.HasReferenceTypeConstraint ||
-                    parameter.ClassConstraint != nil ||
-                    parameter.DependentBoundProvesReferenceType {
+                return if parameter.ProvesNonUniversalReferenceConstraint {
                     TypeArgumentKind.Reference
                 } else {
                     TypeArgumentKind.Unknown
@@ -384,13 +382,8 @@ internal shared class NullabilityImportRule {
         }
     }
 
-    /// Classifies a reflected generic parameter from its constraints, following
-    /// a dependent bound (`where T : U`) transitively. C# propagates a
-    /// bounding parameter's `class`/`struct` constraint to the
-    /// bounded one, which is exactly what
-    /// (cref:TypeParameterSymbol.DependentBoundProvesReferenceType)
-    /// answers for the (cref:TypeSymbol) overload; the two must agree.
-    /// A cycle is broken by visited-set, answering `Unknown`.
+    /// Classifies the parameter's own flags and concrete class bounds.
+    /// A dependent bound does not inherit another parameter's bare class flag.
     private func ClassifyGenericParameter(parameter Type, visited HashSet[Type]?) TypeArgumentKind {
         var visited = visited
         let attributes = parameter.GenericParameterAttributes
@@ -400,18 +393,17 @@ internal shared class NullabilityImportRule {
         if (attributes & GenericParameterAttributes.ReferenceTypeConstraint) != 0 {
             return TypeArgumentKind.Reference
         }
-        for constraint in parameter.GetGenericParameterConstraints() {
-            if constraint.IsGenericParameter {
-                visited ??= HashSet[Type](ReferenceEqualityComparer.Instance){parameter}
-                if visited!!.Add(constraint) &&
-                    ClassifyGenericParameter(constraint, visited) == TypeArgumentKind.Reference {
+        let chain = List[Type]{parameter}
+        visited ??= HashSet[Type](ReferenceEqualityComparer.Instance){parameter}
+        for var i = 0; i < chain.Count; i++ {
+            for constraint in chain[i].GetGenericParameterConstraints() {
+                if constraint.IsGenericParameter {
+                    if visited.Add(constraint) {
+                        chain.Add(constraint)
+                    }
+                } else if TypeParameterSymbol.IsNonUniversalReferenceClassConstraint(constraint) {
                     return TypeArgumentKind.Reference
                 }
-                continue
-            }
-            if constraint.IsClass &&
-                constraint.FullName is not("System.Object" or "System.ValueType" or "System.Enum") {
-                return TypeArgumentKind.Reference
             }
         }
         return TypeArgumentKind.Unknown

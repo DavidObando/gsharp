@@ -35,6 +35,9 @@ open class Issue5960GenericLocalStorageTests {
     @InlineData("fixed-loop")
     @InlineData("iterator-result")
     @InlineData("repeated-arguments")
+    @InlineData("assignment-result")
+    @InlineData("inferred-call-result")
+    @InlineData("out-parameter")
     async func ExplicitGenericStorage_PreservesNativeRuntimeBytes(shape string) {
         let effectful = shape == "effectful"
         let fixedConsumers = shape == "fixed-consumers"
@@ -65,18 +68,36 @@ open class Issue5960GenericLocalStorageTests {
                 IteratorResultSource
             } else if shape == "repeated-arguments" {
                 RepeatedArgumentsSource
+            } else if shape == "assignment-result" {
+                AssignmentResultSource
+            } else if shape == "inferred-call-result" {
+                InferredCallResultSource
+            } else if shape == "out-parameter" {
+                OutParameterSource
             } else if shape == "fixed-loop" {
-                Source.Replace("T seed = replacement;", "T seed = replacement; _ = IsNull<T>(seed);")
+                ConstrainedSource
+                    .Replace(
+                    "RunRef<T>(T replacement, bool flag, bool clear) where T : class?",
+                    "RunRef<T>(T replacement, bool flag, bool clear)"
+                )
+                    .Replace(
+                    "RunVal<T>(T replacement, bool flag, bool clear) where T : struct",
+                    "RunVal<T>(T replacement, bool flag, bool clear)"
+                )
+                    .Replace("T seed = replacement;", "T seed = replacement; _ = IsNull<T>(seed);")
             } else if shape == "captured" {
-                Source.Replace("string result = \"\";", "System.Func<string> loop = () => { string result = \"\";")
+                ConstrainedSource.Replace(
+                    "string result = \"\";",
+                    "System.Func<string> loop = () => { string result = \"\";"
+                )
                     .Replace("return result;", "return result; }; return loop();")
             } else if effectful {
-                Source.Replace("T seed = replacement;", "T seed = Read(replacement);").Replace(
+                ConstrainedSource.Replace("T seed = replacement;", "T seed = Read(replacement);").Replace(
                     "seed = clear ? default(T) : flag ? a : b;",
                     "seed = clear ? default(T) : Read(flag ? a : b);"
                 )
             } else {
-                Source
+                ConstrainedSource
             }
             File.WriteAllText(Path.Combine(projectRoot, "Probe.cs"), source)
             let project = CSharpProjectLoader.LoadInMemory([](string, string){("Probe.cs", source)})
@@ -107,6 +128,20 @@ open class Issue5960GenericLocalStorageTests {
                     "False:False" + Environment.NewLine + string.Concat(
                         Enumerable.Repeat("True:True" + Environment.NewLine, 3)
                     ),
+                    expected
+                )
+            } else if shape == "assignment-result" {
+                Assert.Equal(string.Concat(Enumerable.Repeat("True:0" + Environment.NewLine, 3)), expected)
+            } else if shape == "inferred-call-result" {
+                Assert.Equal(
+                    string.Concat(Enumerable.Repeat("True:0" + Environment.NewLine, 4)) +
+                        "True:True:True" +
+                        Environment.NewLine,
+                    expected
+                )
+            } else if shape == "out-parameter" {
+                Assert.Equal(
+                    string.Concat(Enumerable.Repeat("True:0" + Environment.NewLine, 2)) + "done" + Environment.NewLine,
                     expected
                 )
             } else {
@@ -171,6 +206,17 @@ open class Issue5960GenericLocalStorageTests {
             if fixedConsumers {
                 Assert.DoesNotContain("value T?", printed)
                 Assert.DoesNotContain("!!", printed)
+            } else if shape == "assignment-result" {
+                Assert.DoesNotContain("left T?", printed)
+                Assert.DoesNotContain("right T?", printed)
+                Assert.DoesNotContain("!!", printed)
+            } else if shape == "inferred-call-result" {
+                Assert.Contains("let kept T? = default(T)", printed)
+                Assert.DoesNotContain("value T?", printed)
+                Assert.DoesNotContain("!!", printed)
+            } else if shape == "out-parameter" {
+                Assert.DoesNotContain("value T?", printed)
+                Assert.DoesNotContain("!!", printed)
             } else if loopCase && shape != "fixed-loop" {
                 Assert.Contains("var seed T?", printed)
                 Assert.DoesNotContain("seed!!", printed)
@@ -180,6 +226,24 @@ open class Issue5960GenericLocalStorageTests {
         } finally {
             Directory.Delete(directory, recursive: true)
         }
+    }
+
+    @Fact
+    func UnrestrictedGenericLocalStorage_PreservesContractAndReceivesGS0641() {
+        let project = CSharpProjectLoader.LoadInMemory([](string, string){("Probe.cs", Source)})
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        let document = Assert.Single(project.Documents)
+        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+        let translator = CSharpToGSharpTranslator()
+        let printed = GSharpPrinter.Print(translator.TranslateDocument(document, context))
+        Assert.Contains("var seed T? = replacement", printed)
+        Assert.Contains("let a T? = seed", printed)
+        Assert.Contains("let b T? = seed", printed)
+        Assert.Contains("let joined T? = if flag { a } else { b }", printed)
+        Assert.Contains("var storage T? = default(T)", printed)
+        Assert.Contains("let empty T? = if flag { storage } else { storage }", printed)
+        Assert.DoesNotContain("!!", printed)
+        TranslationTestValidation.AssertSourceNullableKindRejection(printed, "T")
     }
 
     @Theory
@@ -202,7 +266,7 @@ open class Issue5960GenericLocalStorageTests {
             }
             let source = "#nullable enable\npublic static class P {\n" +
                 "static string IsNull<T>(T value) => (value is null).ToString();\n" +
-                "public static string Run<T>(T replacement) {\n" +
+                "public static string Run<T>(T replacement) where T : class {\n" +
                 declarations.ToString() + "System.Func<string> observe = () => " + observations.ToString() +
                 ";\nreturn observe();\n} }"
             let project = CSharpProjectLoader.LoadInMemory([](string, string){("Scale.cs", source)})
@@ -319,6 +383,139 @@ public static class P
             Assert.Empty(result.Stderr)
             return result.Stdout
         }
+
+        private const AssignmentResultSource string = `
+#nullable enable
+public static class P
+{
+    static T Identity<T>(T value) => value;
+    static T Make<T>() { T left = default(T); T right = default(T); return (left = right); }
+    static T MakeChained<T>() { T a = default(T); T b = default(T); T c = default(T); return (a = (b = c)); }
+    static T MakeViaPass<T>() { T left = default(T); T right = default(T); return Identity<T>(left = right); }
+    public static void Main()
+    {
+        System.Console.WriteLine((Make<string>() is null) + ":" + Make<int>());
+        System.Console.WriteLine((MakeChained<string>() is null) + ":" + MakeChained<int>());
+        System.Console.WriteLine((MakeViaPass<string>() is null) + ":" + MakeViaPass<int>());
+    }
+}`
+
+        private const InferredCallResultSource string = `
+#nullable enable
+public static class P
+{
+    static U Id<U>(U x) => x;
+    static bool IsNull<U>(U x) => x is null;
+    static System.Collections.Generic.IEnumerable<U> SeqId<U>(U x) { yield return x; }
+    static T Make<T>() { T value = default(T); return Id(value); }
+    static T MakeNested<T>() { T value = default(T); return Id(Id(value)); }
+    static T MakeAlias<T>() { T value = default(T); T copy = Id(value); return copy; }
+    static System.Collections.Generic.IEnumerable<T> MakeSeq<T>() { T value = default(T); return SeqId(value); }
+    static bool PreservesNull<T>() where T : class { T kept = default(T); return Id(kept) is null; }
+    static T? PreservesNullableReturn<T>() where T : class { T kept = default(T); return Id(kept); }
+    static bool PreservesChainedNull<T>() where T : class { T kept = default(T); return IsNull(Id(kept)); }
+    public static void Main()
+    {
+        System.Console.WriteLine((Make<string>() is null) + ":" + Make<int>());
+        System.Console.WriteLine((MakeNested<string>() is null) + ":" + MakeNested<int>());
+        System.Console.WriteLine((MakeAlias<string>() is null) + ":" + MakeAlias<int>());
+        bool? seqRef = null;
+        foreach (var item in MakeSeq<string>()) seqRef = item is null;
+        int seqVal = -1;
+        foreach (var item in MakeSeq<int>()) seqVal = item;
+        System.Console.WriteLine(seqRef + ":" + seqVal);
+        System.Console.WriteLine(PreservesNull<string>() + ":" + (PreservesNullableReturn<string>() is null) + ":" + PreservesChainedNull<string>());
+    }
+}`
+
+        private const OutParameterSource string = `
+#nullable enable
+public static class P
+{
+    static void MakeOut<T>(out T result) { T value = default(T); result = value; }
+    static void MakeRef<T>(ref T result) { T value = default(T); result = value; }
+    static string TouchByVal<T>(T target) { T value = default(T); target = value; return "done"; }
+    public static void Main()
+    {
+        MakeOut<string>(out var outRef);
+        MakeOut<int>(out var outVal);
+        System.Console.WriteLine((outRef is null) + ":" + outVal);
+        string refText = "keep";
+        int refNum = 7;
+        MakeRef(ref refText);
+        MakeRef(ref refNum);
+        System.Console.WriteLine((refText is null) + ":" + refNum);
+        System.Console.WriteLine(TouchByVal("ok"));
+    }
+}`
+
+        private const ConstrainedSource string = `
+#nullable enable
+public static class P
+{
+    static int reads;
+    static T Read<T>(T value) { reads++; return value; }
+    static string IsNull<T>(T value) => (value is null).ToString();
+    public static string RunRef<T>(T replacement, bool flag, bool clear) where T : class?
+    {
+        T seed = replacement;
+        string result = "";
+        int count = 0;
+        do
+        {
+            var a = seed;
+            var b = seed;
+            var joined = flag ? a : b;
+            result += IsNull(joined) + ":";
+            seed = clear ? default(T) : flag ? a : b;
+        } while (++count < 2);
+        return result;
+    }
+    public static string RunVal<T>(T replacement, bool flag, bool clear) where T : struct
+    {
+        T seed = replacement;
+        string result = "";
+        int count = 0;
+        do
+        {
+            var a = seed;
+            var b = seed;
+            var joined = flag ? a : b;
+            result += IsNull(joined) + ":";
+            seed = clear ? default(T) : flag ? a : b;
+        } while (++count < 2);
+        return result;
+    }
+    public static string ValueRef<T>(T replacement, bool flag) where T : class
+    {
+        T storage = default(T);
+        var empty = flag ? storage : storage;
+        storage = empty;
+        return "zero=" + (storage is null ? "null" : storage.ToString());
+    }
+    public static string ValueVal<T>(T replacement, bool flag) where T : struct
+    {
+        T storage = default(T);
+        var empty = flag ? storage : storage;
+        storage = empty;
+        return "zero=" + ((object?)storage is null ? "null" : storage.ToString());
+    }
+    public static void Main()
+    {
+        foreach (bool flag in new[] { true, false })
+        foreach (bool clear in new[] { true, false })
+        {
+            System.Console.WriteLine(RunRef("value", flag, clear));
+            System.Console.WriteLine(RunRef<string?>(null, flag, clear));
+            System.Console.WriteLine(RunVal(7, flag, clear));
+        }
+        System.Console.WriteLine(ValueVal(7, true));
+        System.Console.WriteLine(ValueVal(7, false));
+        System.Console.WriteLine(ValueRef("value", true));
+        System.Console.WriteLine(ValueRef("value", false));
+        System.Console.WriteLine("reads=" + reads);
+    }
+}`
 
         private const Source string = `
 #nullable enable

@@ -566,7 +566,7 @@ internal shared class NullableFlagsBuilder {
             let clr Type? = imported.ClrType
             if clr?.IsGenericParameter == true {
                 builder.Add(
-                    if ClrNullability.IsNotNullableValueTypeParameter(clr!!) {
+                    if ClrNullability.IsNotNullableValueTypeParameter(clr) {
                         Oblivious
                     } else {
                         NotAnnotated

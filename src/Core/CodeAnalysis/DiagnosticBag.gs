@@ -140,6 +140,23 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// #1238 target-typed conditional arguments).
     prop Count int32 -> diagnostics.Count
 
+    /// Gets the diagnostic added last, or `null` when the bag is empty.
+    /// (cref:TruncateTo) removes rolled-back entries, so this is never a speculative diagnostic.
+    internal prop LastAdded Diagnostic? -> if diagnostics.Count == 0 {
+        default(Diagnostic?)
+    } else {
+        diagnostics[diagnostics.Count - 1]
+    }
+
+    /// Gets a value that tells whether [`diagnostic`](paramref) is still at [`index`](paramref).
+    /// It is `false` after (cref:TruncateTo) or a duplicate suppression removes that entry.
+    /// @param index The index where the diagnostic was added.
+    /// @param diagnostic The diagnostic that was added.
+    /// @returns `true` when the same diagnostic object is at the index.
+    internal func ContainsAt(index int32, diagnostic Diagnostic) bool -> index >= 0 &&
+        index < diagnostics.Count &&
+        object.ReferenceEquals(diagnostics[index], diagnostic)
+
     /// Creates an immutable snapshot of the diagnostics currently held in the bag.
     /// @returns An immutable array of diagnostics in insertion order.
     func ToImmutableArray() ImmutableArray[Diagnostic] -> Visible().ToImmutableArray()
@@ -513,8 +530,98 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         messageArguments[]object
     ) {
         let message = string.Format(descriptor.MessageFormat, messageArguments)
-        let diagnostic = Diagnostic(location, descriptor.Id, severity, message)
-        Add(diagnostic)
+        let created = Diagnostic(location, descriptor.Id, severity, message)
+        // ADR-0225: the binder states the premise when it reports, so the finality is fixed at
+        // creation. A copy after Add would break the reference identity that the bag tracks.
+        let stack List[PrefixPremise]? = premises
+        if stack != nil && stack.Count > 0 {
+            let premise PrefixPremise = stack[stack.Count - 1]
+            Add(created.WithPrefixFinality(premise.Finality, premise.Reason))
+        } else {
+            Add(created)
+        }
+    }
+
+    // ADR-0225: the premises of the reports in progress, innermost last. It is null outside a prefix bind.
+    private var premises List[PrefixPremise]?
+
+    /// Starts a premise for the diagnostics that this bag reports until (cref:PopPremise) (ADR-0225).
+    /// A binder calls it only when the premise holds at the cut of a prefix bind.
+    /// @param premise The finality and the reason of the diagnostics.
+    internal func PushPremise(premise PrefixPremise) {
+        if premises == nil {
+            premises = List[PrefixPremise]()
+        }
+        premises!!.Add(premise)
+    }
+
+    /// Gets or sets a value that tells whether the type that the binder verifies can still get members
+    /// after the cut of a prefix bind (ADR-0225). A missing-member report is then future-dependent.
+    internal prop MissingMembersCanFollow bool {
+        get;
+        set;
+    }
+
+    // ADR-0225: a report that a type misses a member. Another member that a later declaration adds can
+    // remove it; a mismatch or a duplicate cannot, so those reports do not use this funnel.
+    private func ReportMissingMember(
+        location TextLocation,
+        descriptor DiagnosticDescriptor,
+        messageArguments ...object
+    ) {
+        let pushed = PushPremiseIf(MissingMembersCanFollow, PrefixPremise.RestOfType)
+        Report(location, descriptor, descriptor.Severity, messageArguments)
+        PopPremiseIf(pushed)
+    }
+
+    /// Starts [`premise`](paramref) when [`holds`](paramref) is true (ADR-0225).
+    /// @param holds Whether the premise holds at the cut.
+    /// @param premise The premise.
+    /// @returns [`holds`](paramref), for (cref:PopPremiseIf).
+    internal func PushPremiseIf(holds bool, premise PrefixPremise) bool {
+        if holds {
+            PushPremise(premise)
+        }
+        return holds
+    }
+
+    /// Stops the premise that (cref:PushPremiseIf) started when it returned `true`.
+    /// @param pushed The value that (cref:PushPremiseIf) returned.
+    internal func PopPremiseIf(pushed bool) {
+        if pushed {
+            PopPremise()
+        }
+    }
+
+    /// Stops the premise that the last (cref:PushPremise) started.
+    internal func PopPremise() {
+        premises!!.RemoveAt(premises!!.Count - 1)
+    }
+
+    // ADR-0225: a report for a failed lookup. A premise of the binder wins. Otherwise the open
+    // declarations at the cut decide whether a later declaration can declare the name.
+    private func ReportFailedLookup(
+        location TextLocation,
+        descriptor DiagnosticDescriptor,
+        kind PrefixLookupKind,
+        messageArguments ...object
+    ) {
+        let stack List[PrefixPremise]? = premises
+        let premise PrefixPremise? = if stack == nil || stack.Count == 0 {
+            PrefixBindingContext.ClassifyFailedLookup(location, kind)
+        } else {
+            default(PrefixPremise?)
+        }
+        if premise != nil {
+            PushPremise(premise)
+            try {
+                Report(location, descriptor, descriptor.Severity, messageArguments)
+            } finally {
+                PopPremise()
+            }
+        } else {
+            Report(location, descriptor, descriptor.Severity, messageArguments)
+        }
     }
 
     internal class Transaction : IDisposable {

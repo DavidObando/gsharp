@@ -2288,7 +2288,7 @@ Console.WriteLine(MakeField[string]()().Compile()())
     @Fact
     func ImportedGenericDataClassLiteral_ExpressionTreeDefersArgumentsAndConstruction() {
         using let fixture = NativeSliceLanguageTests.Fixture()
-        let contract = fixture.Compile(`package TreeLiteral5419
+        const contractSource = `package TreeLiteral5419
 public class Trace {
     shared {
         public var Count int32
@@ -2309,7 +2309,14 @@ public data class Box[T](Value T) {
 public data class Pair[T](First T, Second T) {
     public var Extra T?
     public let Stamp int32 = Trace.Construct()
-}`, "TreeLiteral5419", false)
+}`
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(
+            contractSource,
+            []string{"T"},
+            1,
+            isLibrary: true
+        )
+        let contract = fixture.Compile(contractSource.Replace("Pair[T]", "Pair[T class?]"), "TreeLiteral5419", false)
         IlVerifier.Verify(contract)
         let dll = fixture.Compile(`import System
 import System.Linq.Expressions

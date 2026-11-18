@@ -9,6 +9,7 @@ import Cs2Gs.CodeModel.Printing
 import Cs2Gs.CodeModel.RoundTrip
 import Cs2Gs.Translator
 import Cs2Gs.Translator.Loading
+import GSharp.Tests
 import System
 import System.Linq
 import Xunit
@@ -118,7 +119,7 @@ namespace Demo
     }
 
     @Fact
-    func FlowNarrowedNullableValue_UsesGSharpSmartCastsAtNonNullSinks() {
+    func OperatorNullCheck_RetainsBridgesAtNonNullSinks() {
         let printed = TranslateUnit(`
 #nullable enable
 using System;
@@ -141,11 +142,47 @@ namespace Demo
         }
     }
 }`)
-        Assert.Contains("Use(next)", printed)
-        Assert.Contains("current = next", printed)
+        // System.Type equality is an operator call. It does not establish a native G# nil-check proof.
+        Assert.Contains("cast[Type?](nil)", printed)
+        Assert.Contains("Use(next!!)", printed)
+        Assert.Contains("current = next!!", printed)
         Assert.Contains("values[0] = next!!", printed)
-        Assert.DoesNotContain("Use(next!!)", printed)
-        Assert.DoesNotContain("current = next!!", printed)
+        Assert.DoesNotContain("Use(next)", printed)
+        Assert.DoesNotContain("current = next\n", printed.Replace("\r\n", "\n"))
+    }
+
+    @Fact
+    func SystemTypeOperatorGuards_PreserveSinkAndIteratorRuntimeContracts() {
+        let printed = Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System;
+using System.Collections.Generic;
+using System.Linq;
+namespace Demo
+{
+    public static class P
+    {
+        static string Use(Type value) => value.Name;
+        static string Read(Type? next)
+        {
+            if (next == null) return "nil";
+            Type current = next;
+            Type[] values = new Type[1];
+            values[0] = next;
+            return Use(next) + ":" + current.Name + ":" + values[0].Name;
+        }
+        static IEnumerable<Type> Hierarchy(Type? current)
+        {
+            while (current != null) { yield return current; current = current.BaseType; }
+        }
+        public static string Run() =>
+            Read(null) + "|" + Read(typeof(string)) + "|" +
+            string.Join(",", Hierarchy(typeof(List<int>)).Select(type => type.Name));
+    }
+}`, "nil|String:String:String|List`1,Object")
+        Assert.Contains("Use(next!!)", printed)
+        Assert.Contains("yield current!!", printed)
+        Assert.Contains("cast[Type?](nil)", printed)
     }
 
     @Fact
@@ -208,12 +245,7 @@ namespace Demo
 
     @Fact
     func NullableTypeParameterReturn_RendersNullableType() {
-        // A `T?` return on a method whose type parameter is interface-constrained
-        // (`where T : IBox`) reports `IsReferenceType == false` in Roslyn, so the
-        // `?` must be honoured via the type-parameter path or it is silently
-        // dropped and `let x = GetChild<T>()` infers a non-nullable `T`, breaking
-        // the subsequent `x == nil` guard at the call site (issue #1072 cascade).
-        let printed = TranslateUnit(`
+        const source = `
 namespace Demo
 {
     public interface IBox { }
@@ -221,8 +253,16 @@ namespace Demo
     {
         public T? GetChild<T>() where T : IBox => default;
     }
-}`)
+}`
+        let printed = TranslateUnitSource(source)
         Assert.Contains("GetChild[T IBox]() T?", printed)
+        let rejected = EmittedOracle.Evaluate(printed)
+        let error = Assert.Single(rejected.Diagnostics.Where((d GSharp.Core.CodeAnalysis.Diagnostic) -> d.IsError))
+        Assert.Equal("GS0641", error.Id)
+        Assert.Equal(printed.IndexOf("T?", StringComparison.Ordinal) + 1, error.Location.Span.Start)
+        Assert.Equal(1, error.Location.Span.Length)
+        let supported = TranslateUnit(source.Replace("where T : IBox", "where T : class, IBox"))
+        Assert.Contains("() T?", supported, StringComparison.Ordinal)
     }
 
     @Fact
@@ -308,15 +348,7 @@ namespace Demo
 
     shared {
         private func TranslateUnit(source string) string {
-            let project = CSharpProjectLoader.LoadInMemory([](string, source string){("Snippet.cs", source)})
-            Assert.True(
-                project.BoundWithoutErrors,
-                "Snippet should bind with no C# errors: " + string.Join(Environment.NewLine, project.ErrorDiagnostics)
-            )
-            let document = Assert.Single(project.Documents)
-            let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
-            let unit = CSharpToGSharpTranslator().TranslateDocument(document, context)
-            let printed = GSharpPrinter.Print(unit)
+            let printed = TranslateUnitSource(source)
             let result RoundTripResult? = TranslationTestValidation.AssertBinds(printed)
             Assert.True(
                 result!!.Success,
@@ -326,6 +358,18 @@ Printed:
 ` + printed
             )
             return printed
+        }
+
+        private func TranslateUnitSource(source string) string {
+            let project = CSharpProjectLoader.LoadInMemory([](string, source string){("Snippet.cs", source)})
+            Assert.True(
+                project.BoundWithoutErrors,
+                "Snippet should bind with no C# errors: " + string.Join(Environment.NewLine, project.ErrorDiagnostics)
+            )
+            let document = Assert.Single(project.Documents)
+            let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+            let unit = CSharpToGSharpTranslator().TranslateDocument(document, context)
+            return GSharpPrinter.Print(unit)
         }
     }
 }

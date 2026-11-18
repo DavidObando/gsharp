@@ -42,7 +42,8 @@ class C { func A() Task[int32] -> Task.FromResult[int32](default) }`
 import System.Threading.Tasks
 
 class Box[T] { func Make() Task[T?] -> Task.FromResult[T](default) }`
-        Assert.Empty(Bind(source))
+        SourceNullableKindAssertions.Reject(source, "T", 1)
+        Assert.Empty(Bind(source.Replace("Box[T]", "Box[T class?]")))
     }
 
     @Fact

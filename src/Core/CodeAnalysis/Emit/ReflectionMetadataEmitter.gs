@@ -492,7 +492,7 @@ internal class ReflectionMetadataEmitter {
             // within `kickoff.TypeParameters` (== methodTPs above), so the
             // same `classTPs.Length` base the methodTPs loop just used
             // relocates it onto the matching SM class slot.
-            for pair in lambdaRemap!! {
+            for pair in lambdaRemap {
                 remap[pair.Key] = classTPs.Length + pair.Value
             }
         }
@@ -1389,8 +1389,8 @@ internal class ReflectionMetadataEmitter {
             if this.remaps.TryGetLambdaMethodRemap(kvp.Value.Plan.Function, out var lambdaRemap) {
                 remap ??= Dictionary[TypeParameterSymbol, int32]()
                 let offset = kvp.Value.SourceTypeParameters.Length - kvp.Value.Plan.Function.TypeParameters.Length
-                for pair in lambdaRemap!! {
-                    remap!![pair.Key] = offset + pair.Value
+                for pair in lambdaRemap {
+                    remap[pair.Key] = offset + pair.Value
                 }
             }
             if remap != nil {
@@ -3909,7 +3909,7 @@ internal class ReflectionMetadataEmitter {
                 .methodBodyPlanner
                 .TryGetUserKickoffReceiverSymbol(s, out var receiverSym) {
                 this.emitCtx.Metadata.AddNestedType(nestedHandle, receiverEnclosing)
-                enclosingTypeName = CustomAttributeEncoder.GetMetadataTypeName(receiverSym!!)
+                enclosingTypeName = CustomAttributeEncoder.GetMetadataTypeName(receiverSym)
             } else {
                 let smPkg PackageSymbol? = this.methodBodyPlanner.GetSmPackage(s, packages, entryPointPackage)
                 let enclosingHandle = if smPkg != nil && programTypeDefHandles.TryGetValue(smPkg, out var ph) {
@@ -5035,7 +5035,7 @@ internal class ReflectionMetadataEmitter {
 
     private func ResolveCoreType(fullName string, fallback Type) Type {
         if this.emitCtx.References.TryResolveType(fullName, requireExternalVisibility: false, out var t) {
-            return t!!
+            return t
         }
         return fallback
     }
@@ -5196,7 +5196,7 @@ internal class ReflectionMetadataEmitter {
                 if !tps.IsDefaultOrEmpty {
                     levels ??= List[ImmutableArray[TypeParameterSymbol]]()
                     // Prepend so the outermost enclosing type's parameters come first.
-                    levels!!.Insert(0, tps)
+                    levels.Insert(0, tps)
                 }
             }
             if levels == nil {
@@ -5434,8 +5434,8 @@ internal class ReflectionMetadataEmitter {
                 return true
             }
             if TypeMemberModel.TryGetProperty(type, name, out var property, out var declaringType) &&
-                object.ReferenceEquals(declaringType, type) && property!!.BackingField != nil {
-                field = property!!.BackingField
+                object.ReferenceEquals(declaringType, type) && property.BackingField != nil {
+                field = property.BackingField
                 return true
             }
             field = nil

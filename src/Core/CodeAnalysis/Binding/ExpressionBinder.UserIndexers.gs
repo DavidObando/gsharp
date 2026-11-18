@@ -676,10 +676,10 @@ internal partial class ExpressionBinder {
             Diagnostics.ReportCannotAssign(location, "this[]")
             return BoundErrorExpression(nil)
         }
-        var setter FunctionSymbol? = indexer!!.SetterSymbol
+        var setter FunctionSymbol? = indexer.SetterSymbol
         var refGetter = if setter == nil &&
             target.Type is StructSymbol &&
-            indexer!!.GetterSymbol is {ReturnRefKind: RefKind.Ref} getter {
+            indexer.GetterSymbol is {ReturnRefKind: RefKind.Ref} getter {
             getter
         } else {
             default(FunctionSymbol?)
@@ -689,9 +689,9 @@ internal partial class ExpressionBinder {
             Diagnostics.ReportTypeNotIndexable(location, target.Type)
             return BoundErrorExpression(nil)
         }
-        let rawConvertedArguments = ImmutableArray.CreateBuilder[BoundExpression](indexer!!.Parameters.Length)
-        for var i = 0; i < indexer!!.Parameters.Length; i++ {
-            let parameter = indexer!!.Parameters[i]
+        let rawConvertedArguments = ImmutableArray.CreateBuilder[BoundExpression](indexer.Parameters.Length)
+        for var i = 0; i < indexer.Parameters.Length; i++ {
+            let parameter = indexer.Parameters[i]
             let parameterType = SubstituteIndexerType(parameter.Type, substitution)
             let converted = if i >= indexSyntaxes.Count {
                 BindUserIndexerDefaultArgument(parameter, parameterType)
@@ -826,13 +826,13 @@ internal partial class ExpressionBinder {
             arguments.Add(CaptureUserIndexerArgument(converted, statements))
         }
         let capturedArguments = arguments.MoveToImmutable()
-        if requiresRead && indexer!!.GetterSymbol == nil {
+        if requiresRead && indexer.GetterSymbol == nil {
             bindValueForRecovery(elementType)
             Diagnostics.ReportTypeNotIndexable(location, target.Type)
             return BoundErrorExpression(nil)
         }
         if !CheckUserIndexerAccessibility(
-            indexer!!,
+            indexer,
             requireGetter: setter == nil || requiresRead,
             requireSetter: setter != nil,
             location
@@ -864,7 +864,7 @@ internal partial class ExpressionBinder {
             }
             let read = BindUserIndexerRead(
                 receiver,
-                indexer!!,
+                indexer,
                 substitution,
                 (i int32, _ TypeSymbol) -> capturedArguments[i],
                 location
@@ -1132,7 +1132,7 @@ internal partial class ExpressionBinder {
         if verifyCallArgumentsAfterConversions != nil {
             var reselectedClrIndexer PropertyInfo? = nil
             var reselectedClrArgs = default(ImmutableArray[BoundExpression])
-            let verifiedClrProbe = verifyCallArgumentsAfterConversions!!(
+            let verifiedClrProbe = verifyCallArgumentsAfterConversions(
                 indexSyntaxes,
                 BoundClrIndexExpression(nil, receiver, finalClrIndexer, converted, elementType),
                 () -> {

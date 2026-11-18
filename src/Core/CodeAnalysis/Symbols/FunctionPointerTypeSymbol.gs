@@ -258,8 +258,8 @@ class FunctionPointerTypeSymbol : TypeSymbol {
         ) FunctionPointerTypeSymbol {
             var returnType = returnType
             returnType ??= TypeSymbol.Void
-            let displayName = BuildDisplayName(callingConvention, parameterTypes, returnType!!)
-            let key = BuildIdentityKey("u", callingConvention.ToString(), parameterTypes, returnType!!)
+            let displayName = BuildDisplayName(callingConvention, parameterTypes, returnType)
+            let key = BuildIdentityKey("u", callingConvention.ToString(), parameterTypes, returnType)
             return Cache.GetOrAdd(
                 key,
                 (_ string) -> FunctionPointerTypeSymbol(
@@ -304,10 +304,10 @@ class FunctionPointerTypeSymbol : TypeSymbol {
             } else {
                 conventionClrTypes
             }
-            let displayName = BuildExtendedDisplayName(conventions, parameterTypes, returnType!!)
+            let displayName = BuildExtendedDisplayName(conventions, parameterTypes, returnType)
             // Source order is identity (ADR-0095 v2 §Binding): the modopt blob
             // is order-sensitive, so the key joins the names unsorted.
-            let key = BuildIdentityKey("ux", string.Join(",", conventions), parameterTypes, returnType!!)
+            let key = BuildIdentityKey("ux", string.Join(",", conventions), parameterTypes, returnType)
             return Cache.GetOrAdd(
                 key,
                 (_ string) -> FunctionPointerTypeSymbol(
@@ -333,8 +333,8 @@ class FunctionPointerTypeSymbol : TypeSymbol {
         func GetManaged(parameterTypes ImmutableArray[TypeSymbol], returnType TypeSymbol?) FunctionPointerTypeSymbol {
             var returnType = returnType
             returnType ??= TypeSymbol.Void
-            let displayName = BuildManagedDisplayName(parameterTypes, returnType!!)
-            let key = BuildIdentityKey("m", nil, parameterTypes, returnType!!)
+            let displayName = BuildManagedDisplayName(parameterTypes, returnType)
+            let key = BuildIdentityKey("m", nil, parameterTypes, returnType)
             return Cache.GetOrAdd(
                 key,
                 (_ string) -> FunctionPointerTypeSymbol(

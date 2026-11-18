@@ -17,6 +17,7 @@ description: "Index of the G# design decisions."
 | ADR | Title | Summary |
 | --- | --- | --- |
 | [0001](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0001-null-model.md) | Absence / null model — Kotlin-style nullable types | Uses explicit nullable `T?`, `nil`, safe access, and assertion instead of a universal null. |
+| [0224](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0224-source-nullable-type-parameter-kind-constraints.md) | Source nullable type parameters require a proven representation kind | Restricts source annotations and nullable-producing operators to proven reference or nonnullable value kinds. Preserves ordinary `T`, imported CLR annotations, and the existing ABI; replaces the unimplemented companion proposal. |
 | [0073](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0073-null-conditional-indexing.md) | Null-conditional indexing `a?[i]` | Adds the `?[` token; result lifts to the nullable form of the indexer's return type; receiver evaluated exactly once; rejected as assignment LHS. |
 | [0008](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0008-variable-bindings.md) | Variable bindings — keep Go's `var`/`const`/`:=`, add `let` | Original decision; the `:=` short-declaration leg was superseded by ADR-0077. |
 | [0077](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0077-drop-colon-equals-short-variable-declaration.md) | Drop `:=` short variable declaration | Removes `:=` from the language; the parser hard-rejects it with `GS0305` and a context-sensitive `let`/`var`/`for … in …` migration suggestion. |
@@ -66,6 +67,7 @@ description: "Index of the G# design decisions."
 | --- | --- | --- |
 | [0004](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0004-generics-scope.md) | Generics — consumption and definition in a single phase, with constraints | Defines initial generic types/functions, constraints, and reified-CLR-generics commitment (now fully delivered; the original implementation-status addendum was superseded by ADR-0087 R1–R7). |
 | [0020](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0020-generic-brackets.md) | Generic type-parameter brackets — Go-style `[T]` | Chooses square brackets for type parameters and type arguments. |
+| [0222](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0222-segmented-named-type-alias-targets.md) | Segmented named type alias targets | Shares named type parsing and binding for qualified aliases, preserving each segment's generic arguments. |
 | [0021](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0021-generic-variance.md) | Generic variance modifiers — `in` / `out` on interface type parameters | Adds variance markers for interface type parameters. |
 | [0038](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0038-generic-method-inference.md) | Type-argument inference for imported open generic methods | Defines inference for imported generic method calls and associated emit fixes. |
 | [0050](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0050-trailing-arrow-lambda.md) | `->` arrow trailing-lambda syntax | Superseded by ADR-0074. The proposed `->`-connector trailing-lambda was never implemented and never will be — `->` is now the lambda operator, so the connector spelling collides with `(params) -> …` lambdas. Full arrow lambdas plus the live Phase 4.9 `func(...)` trailing-call form cover the need. |
@@ -131,6 +133,7 @@ description: "Index of the G# design decisions."
 | [0027](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0027-roslyn-fork-decision.md) | Roslyn-fork decision for v1.0 — stay on the bespoke emitter | Keeps the direct metadata emitter instead of adopting a Roslyn fork for v1.0. |
 | [0028](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0028-multi-package-emit.md) | Multi-package emit model — Option B, C#-faithful | Defines how multiple packages map to emitted CLR namespaces/types. |
 | [0048](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0048-portable-pdb-emit.md) | Portable PDB emit | Adds portable PDB, source mapping, and debug-symbol policy to the emitter. |
+| [0223](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0223-compiler-as-library-surface.md) | Compiler-as-library surface | Makes entry-point and internal-error diagnostics public, adds hermetic reference sets, and defines packaging, runtime discovery, and a thread-safety contract for `GSharp.Core` hosts. |
 
 ## 0.3 ADRs (0105-0146)
 

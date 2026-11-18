@@ -29,7 +29,7 @@ internal shared class AsyncReturnTypeNormalizer {
         callSiteReturnType TypeSymbol
     ) TypeSymbol -> if function?.IsAsync == true &&
         TryUnwrapTaskReturnType(callSiteReturnType, out var declaredResult) {
-        declaredResult!!
+        declaredResult
     } else {
         callSiteReturnType
     }

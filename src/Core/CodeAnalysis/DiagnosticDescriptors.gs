@@ -2618,6 +2618,26 @@ internal shared class DiagnosticDescriptors {
         DiagnosticSeverity.Error,
         "Cannot take the pointer value of fixed-size buffer '{0}' because its containing storage is movable and not pinned; pin it with a 'fixed' statement or index an element directly ('{0}[i]') (C# spells the same rule CS1666)."
     )
+    internal let DeclarationDependencyTooDeep DiagnosticDescriptor = DiagnosticDescriptor(
+        "GS0639",
+        DiagnosticSeverity.Error,
+        "Not enough execution stack to bind declaration dependencies; reduce the attribute dependency chain."
+    )
+    internal let PropertyInitializerNotSupported DiagnosticDescriptor = DiagnosticDescriptor(
+        "GS0640",
+        DiagnosticSeverity.Error,
+        "Property initializers are not supported. Declare a field ('var {0} T = value') or assign the property in 'init'."
+    )
+    internal let NullableTypeParameterRequiresKind DiagnosticDescriptor = DiagnosticDescriptor(
+        "GS0641",
+        DiagnosticSeverity.Error,
+        "Cannot use '{0}?' because '{0}' has no proven reference-type or non-nullable value-type kind. Add a class, class?, struct, or unmanaged constraint, or a sufficient reference-class bound. To accept an already nullable type argument, use bare '{0}'."
+    )
+    internal let InvalidConstructorInitializerTarget DiagnosticDescriptor = DiagnosticDescriptor(
+        "GS0642",
+        DiagnosticSeverity.Error,
+        "Only 'base' is valid after ':' in a constructor initializer. For same-class chaining, use 'convenience init() {{ init(args) }}'."
+    )
     internal let FatalCompilerIOError DiagnosticDescriptor = DiagnosticDescriptor(
         "GS9997",
         DiagnosticSeverity.Error,

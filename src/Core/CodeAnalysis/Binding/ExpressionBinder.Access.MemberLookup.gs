@@ -402,7 +402,7 @@ internal partial class ExpressionBinder {
         )
         let unwrappedResult = UnwrapTransparentMemberResult(result)
         if receiver != nil && binderCtx.TryGetNarrowedAccessPath(receiver, out var receiverPath, out _) &&
-            TryGetDeclaredReceiver(receiverPath!!, receiver) is {} declaredCallReceiver &&
+            TryGetDeclaredReceiver(receiverPath, receiver) is {} declaredCallReceiver &&
             rightPart is CallExpressionSyntax callSyntax &&
             unwrappedResult is BoundUserInstanceCallExpression call &&
             FindDeclaredMethod(
@@ -425,7 +425,7 @@ internal partial class ExpressionBinder {
                 ){MethodTypeArguments = call.MethodTypeArguments}
             )
         } else if receiver != nil && binderCtx.TryGetNarrowedAccessPath(receiver, out receiverPath, out _) &&
-            TryGetDeclaredReceiver(receiverPath!!, receiver) is {} declaredClrReceiver &&
+            TryGetDeclaredReceiver(receiverPath, receiver) is {} declaredClrReceiver &&
             rightPart is CallExpressionSyntax &&
             unwrappedResult is BoundImportedInstanceCallExpression importedCall &&
             FindDeclaredClrMethod(
@@ -437,21 +437,23 @@ internal partial class ExpressionBinder {
             receiver = declaredClrReceiver
             result = RewrapTransparentMemberResult(
                 result,
-                BoundImportedInstanceCallExpression(
-                    importedCall.Syntax,
-                    declaredClrReceiver,
-                    declaredClrMethod,
-                    importedCall.Type,
-                    importedCall.Arguments,
-                    importedCall.ArgumentRefKinds,
-                    importedCall.TypeArgumentSymbols,
-                    importedCall.ConstrainedReceiverTypeParameter,
-                    importedCall.ConstrainedInterfaceType,
-                    importedCall.IsNonVirtualBaseCall
+                importedCall.CopySignatureReturnTypeTo(
+                    BoundImportedInstanceCallExpression(
+                        importedCall.Syntax,
+                        declaredClrReceiver,
+                        declaredClrMethod,
+                        importedCall.Type,
+                        importedCall.Arguments,
+                        importedCall.ArgumentRefKinds,
+                        importedCall.TypeArgumentSymbols,
+                        importedCall.ConstrainedReceiverTypeParameter,
+                        importedCall.ConstrainedInterfaceType,
+                        importedCall.IsNonVirtualBaseCall
+                    )
                 )
             )
         } else if receiver != nil && binderCtx.TryGetNarrowedAccessPath(receiver, out receiverPath, out _) &&
-            TryGetDeclaredReceiver(receiverPath!!, receiver) is {} declaredMemberReceiver &&
+            TryGetDeclaredReceiver(receiverPath, receiver) is {} declaredMemberReceiver &&
             rightPart is NameExpressionSyntax {
             let diagnosticCount = Diagnostics.Count
             let declaredResult = BindAccessorStepAfterPlatformReceiverCheck(
@@ -714,14 +716,22 @@ internal partial class ExpressionBinder {
                 // create a new ImportedClassSymbol for the nested type and bind
                 // the right segment against it, enabling chained static/enum
                 // member access on nested types.
-                if classSymbol != nil &&
-                    TryResolveNestedTypeFromAccessorLeft(classSymbol, nested.LeftPart, out var nestedClassSymbol) {
-                    if nested.IsNullConditional {
-                        // Null-conditional on a type is semantically meaningless
-                        // but fall through to avoid a crash.
+                if classSymbol != nil {
+                    if TryResolveNestedTypeFromAccessorLeft(
+                        classSymbol,
+                        nested.LeftPart,
+                        out var nestedClassSymbol,
+                        out var nestedFailureHandled
+                    ) {
+                        if nested.IsNullConditional {
+                            // Null-conditional on a type is semantically meaningless.
+                            return BoundErrorExpression(nil)
+                        }
+                        return BindAccessorStep(nil, nestedClassSymbol, nested.RightPart)
+                    }
+                    if nestedFailureHandled {
                         return BoundErrorExpression(nil)
                     }
-                    return BindAccessorStep(nil, nestedClassSymbol, nested.RightPart)
                 }
                 let head = BindAccessorStep(receiver, classSymbol, nested.LeftPart, receiverSyntax, receiverStart)
                 if head is BoundErrorExpression {
@@ -734,7 +744,7 @@ internal partial class ExpressionBinder {
                 // read/write degenerates into a plain `.c` against `b`'s nullable
                 // type and reports "Cannot find member c".
                 if nested.IsNullConditional {
-                    return BindNullConditionalAccessExpressionCore(head, nested.RightPart)
+                    return BindNullConditionalAccessExpressionCore(head, nested.RightPart, nested.DotToken.Location)
                 }
                 let fullReceiverStart = receiverStart ?? receiverSyntax?.Span.Start ?? nested.LeftPart.Span.Start
                 return BindAccessorStep(head, nil, nested.RightPart, nested.LeftPart, fullReceiverStart)
@@ -819,10 +829,10 @@ internal partial class ExpressionBinder {
                 }
                 return BindImportedTypeLiteralExpression(
                     structLiteral,
-                    nestedLiteralClrType!!,
+                    nestedLiteralClrType,
                     if nestedLiteralOpenDef != nil && !nestedLiteralSymbolicArgs.IsDefaultOrEmpty {
                         ImportedTypeSymbol.GetConstructed(
-                            nestedLiteralClrType!!,
+                            nestedLiteralClrType,
                             nestedLiteralOpenDef,
                             nestedLiteralSymbolicArgs
                         )
@@ -960,13 +970,13 @@ internal partial class ExpressionBinder {
                     // the canonical member-resolution layer, surfacing the
                     // declaring struct so the emitted field token names the right owner.
                     let hasProperty = TypeMemberModel.TryGetProperty(
-                        structSym!!,
+                        structSym,
                         ne.IdentifierToken.ValueText,
                         out var nearestProperty,
                         out var nearestPropertyDeclaringType
                     )
                     let hasField = TypeMemberModel.TryGetFieldIncludingInherited(
-                        structSym!!,
+                        structSym,
                         ne.IdentifierToken.ValueText,
                         MemberQuery.Instance(MemberKinds.Field),
                         out var field,
@@ -976,7 +986,7 @@ internal partial class ExpressionBinder {
                         (
                         !hasProperty ||
                             IsFieldAtLeastAsNearAsProperty(
-                            structSym!!,
+                            structSym,
                             Invariant.Required(
                                 declaringType,
                                 "a resolved field has a declaring type",
@@ -1078,7 +1088,7 @@ internal partial class ExpressionBinder {
                     // diagnostics so the `+=`/`-=` subscription path is
                     // unaffected.
                     if IsWithinType(structSym) {
-                        for evtDeclType in structSym!!.GetHierarchy() {
+                        for evtDeclType in structSym.GetHierarchy() {
                             let evt EventSymbol? = evtDeclType.Events.FirstOrDefault(
                                 (e EventSymbol) -> e.Name == ne
                                     .IdentifierToken
@@ -1099,7 +1109,7 @@ internal partial class ExpressionBinder {
                     // `protected` / `protected internal` members. Resolve the
                     // inherited CLR base type by walking the user base chain,
                     // then reflect the member (reflection walks the CLR chain).
-                    if GetInheritedClrBaseType(structSym!!) is Type inheritedBaseClr {
+                    if GetInheritedClrBaseType(structSym) is Type inheritedBaseClr {
                         let memberName = ne.IdentifierToken.ValueText
                         let clrProp PropertyInfo? = ClrTypeUtilities.SafeGetInheritedInstanceProperty(
                             inheritedBaseClr,
@@ -1158,19 +1168,19 @@ internal partial class ExpressionBinder {
                     // target delegate signature; the emitter binds the delegate's
                     // Target to this receiver (boxing value-type receivers).
                     let instanceMethods = TypeMemberModel.GetMethods(
-                        structSym!!,
+                        structSym,
                         ne.IdentifierToken.ValueText,
                         MemberQuery.Instance(MemberKinds.Method)
                     )
                     if TryBuildUserMethodGroup(receiver, instanceMethods, out var instanceUserGroup) {
-                        return instanceUserGroup!!
+                        return instanceUserGroup
                     }
                     // Issue #1136: an inherited System.Object instance member
                     // (GetType/ToString/GetHashCode/Equals) named in method-group
                     // position. When the user type declares no explicit imported
                     // base, fall back to typeof(object) so the member is captured
                     // as a CLR method group resolvable against a target delegate.
-                    let inheritedMgClr = GetInheritedClrBaseType(structSym!!) ?? typeof(object)
+                    let inheritedMgClr = GetInheritedClrBaseType(structSym) ?? typeof(object)
                     if TryBindClrMethodGroup(
                         receiver,
                         inheritedMgClr,
@@ -1178,7 +1188,7 @@ internal partial class ExpressionBinder {
                         ne.IdentifierToken.ValueText,
                         out var inheritedClrGroup
                     ) {
-                        return inheritedClrGroup!!
+                        return inheritedClrGroup
                     }
                     return BindExtensionMethodGroupOrError(receiver, ne, receiverSyntax, receiverStart)
                 } else if receiver != nil && receiver.Type is EnumSymbol {
@@ -1195,7 +1205,7 @@ internal partial class ExpressionBinder {
                         ne.IdentifierToken.ValueText,
                         out var enumClrGroup
                     ) {
-                        return enumClrGroup!!
+                        return enumClrGroup
                     }
                     return BindExtensionMethodGroupOrError(receiver, ne, receiverSyntax, receiverStart)
                 } else if receiver != nil && receiver.Type is InterfaceSymbol ifaceSym {
@@ -1225,7 +1235,7 @@ internal partial class ExpressionBinder {
                         MemberQuery.Instance(MemberKinds.Method)
                     )
                     if TryBuildUserMethodGroup(receiver, ifaceInstanceMethods, out var ifaceUserGroup) {
-                        return ifaceUserGroup!!
+                        return ifaceUserGroup
                     }
                     // Issue #1181: a user interface that extends an imported/BCL
                     // interface (e.g. `interface IBox : ICollection`) inherits
@@ -1288,7 +1298,7 @@ internal partial class ExpressionBinder {
                             ifaceMemberName,
                             out var ifaceClrGroup
                         ) {
-                            return ifaceClrGroup!!
+                            return ifaceClrGroup
                         }
                     }
                     return BindExtensionMethodGroupOrError(receiver, ne, receiverSyntax, receiverStart)
@@ -1308,7 +1318,7 @@ internal partial class ExpressionBinder {
                     return BindExtensionMethodGroupOrError(receiver, ne, receiverSyntax, receiverStart)
                 } else if receiver != nil &&
                     TryBindNullableInstanceMember(receiver, ne, out var nullableMember, receiverSyntax, receiverStart) {
-                    return nullableMember!!
+                    return nullableMember
                 } else if TryGetClrInstanceMemberReceiverType(receiver, out var clrInstanceReceiverType) {
                     // Phase 4 exit: read a public instance property or field on
                     // a CLR receiver (e.g. `lst.Count`, `sb.Length`,
@@ -1413,7 +1423,7 @@ internal partial class ExpressionBinder {
                         memberName,
                         out var instanceGroup
                     ) {
-                        return instanceGroup!!
+                        return instanceGroup
                     }
                     if TryReportProtectedClrInstanceDataMemberRead(
                         clrReceiverType,
@@ -1461,7 +1471,7 @@ internal partial class ExpressionBinder {
                         arrayMemberName,
                         out var arrayMethodGroup
                     ) {
-                        return arrayMethodGroup!!
+                        return arrayMethodGroup
                     }
                     return BindExtensionMethodGroupOrError(receiver, ne, receiverSyntax, receiverStart)
                 } else if receiver != nil && receiver.Type is TypeParameterSymbol tpRecv {
@@ -1502,11 +1512,11 @@ internal partial class ExpressionBinder {
         let memberName = name.IdentifierToken.ValueText
         let nullableInnerClr = nullableType.UnderlyingType?.ClrType
         if nullableInnerClr?.IsValueType == true && this.memberLookup.TryGetNullableConstructedType(
-            nullableInnerClr!!,
+            nullableInnerClr,
             out var nullableClr
         ) {
             let nullableProperty PropertyInfo? = ClrTypeUtilities.SafeGetProperty(
-                nullableClr!!,
+                nullableClr,
                 memberName,
                 BindingFlags.Public | BindingFlags.Instance
             )
@@ -1903,7 +1913,7 @@ internal partial class ExpressionBinder {
                 !SourceValueMemberPrecedesInheritedEvent(structSym, memberName) &&
                 TypeMemberModel
                 .TryGetEvent(structSym, memberName, out var ev, out var evOwner) {
-                return IsSourceInstanceMemberAccessible(ev!!.Accessibility, evOwner!!, underlyingType)
+                return IsSourceInstanceMemberAccessible(ev.Accessibility, evOwner, underlyingType)
             }
             let hasProperty = TypeMemberModel.TryGetProperty(
                 structSym,
@@ -1964,12 +1974,12 @@ internal partial class ExpressionBinder {
         }
         if underlyingType is InterfaceSymbol ifaceSym {
             if allowEvents && TypeMemberModel.TryGetEvent(ifaceSym, memberName, out var ifaceEv) {
-                return AccessibilityChecker.IsAccessible(ifaceEv!!.Accessibility, ifaceSym, this.function)
+                return AccessibilityChecker.IsAccessible(ifaceEv.Accessibility, ifaceSym, this.function)
             }
             if TypeMemberModel.TryGetPropertyWithOwner(ifaceSym, memberName, out var ifaceProp, out var ifaceOwner) &&
                 ifaceOwner is InterfaceSymbol effIface {
                 return SatisfiesSourcePropertyAccess(
-                    ifaceProp!!,
+                    ifaceProp,
                     effIface,
                     underlyingType,
                     narrowedReceiver,
@@ -2074,9 +2084,11 @@ internal partial class ExpressionBinder {
     private func TryResolveNestedTypeFromAccessorLeft(
         classSymbol ImportedClassSymbol,
         leftPart ExpressionSyntax,
-        @NotNullWhen(true) out nestedClassSymbol ImportedClassSymbol?
+        @NotNullWhen(true) out nestedClassSymbol ImportedClassSymbol?,
+        out failureHandled bool
     ) bool {
         nestedClassSymbol = nil
+        failureHandled = false
         if leftPart is NameExpressionSyntax nameExpr {
             let name = nameExpr.IdentifierToken.ValueText
             // Only resolve as a nested type when the name is NOT a static
@@ -2088,7 +2100,7 @@ internal partial class ExpressionBinder {
                 return false
             }
             if $scope.References!!.TryResolveNestedType(classSymbol.ClassType, name, out var nestedType) {
-                let nested = ImportedClassSymbol(nestedType!!, nameExpr, references: $scope.References)
+                let nested = ImportedClassSymbol(nestedType, nameExpr, references: $scope.References)
                 nestedClassSymbol = CloseImportedNestedType(
                     classSymbol.ClassType,
                     nested,
@@ -2102,7 +2114,7 @@ internal partial class ExpressionBinder {
         }
         if leftPart is (GenericNameExpressionSyntax or IndexExpressionSyntax) &&
             TryGetGenericSegmentNameAndArity(leftPart, out var genericIdentifier, out var genericArity) {
-            let genericName = genericIdentifier!!.ValueText
+            let genericName = genericIdentifier.ValueText
             if classSymbol.TryLookupMember(genericName, nil, out _) || !classSymbol.GetStaticMethodGroup(genericName)
                 .IsEmpty ||
                 !$scope.References!!
@@ -2123,7 +2135,7 @@ internal partial class ExpressionBinder {
             } else {
                 Array.Empty[Type]()
             }
-            if nestedGenericType!!.GetGenericArguments().Length != outerClrArgs.Length + segmentTypeArgs.Length {
+            if nestedGenericType.GetGenericArguments().Length != outerClrArgs.Length + segmentTypeArgs.Length {
                 return false
             }
             let outerReceiver = classSymbol.ConstructedReceiver ?? classSymbol.SymbolicReceiver
@@ -2145,19 +2157,30 @@ internal partial class ExpressionBinder {
             }
             combinedArgs.AddRange(segmentTypeArgs)
             return TryCloseImportedGenericTypeReceiver(
-                nestedGenericType!!,
+                nestedGenericType,
                 combinedArgs.MoveToImmutable(),
                 leftPart,
-                out nestedClassSymbol
+                out nestedClassSymbol,
+                out failureHandled
             )
         }
         if leftPart is AccessorExpressionSyntax accessor {
             // Multi-level nesting: recursively resolve the left side first,
             // then resolve the right side as a nested type of that.
-            if !TryResolveNestedTypeFromAccessorLeft(classSymbol, accessor.LeftPart, out var intermediateSymbol) {
+            if !TryResolveNestedTypeFromAccessorLeft(
+                classSymbol,
+                accessor.LeftPart,
+                out var intermediateSymbol,
+                out failureHandled
+            ) {
                 return false
             }
-            return TryResolveNestedTypeFromAccessorLeft(intermediateSymbol!!, accessor.RightPart, out nestedClassSymbol)
+            return TryResolveNestedTypeFromAccessorLeft(
+                intermediateSymbol,
+                accessor.RightPart,
+                out nestedClassSymbol,
+                out failureHandled
+            )
         }
         return false
     }
@@ -2229,7 +2252,7 @@ internal partial class ExpressionBinder {
             ) {
                 var read = BindUserIndexerRead(
                     ViewIndexerReceiver(target, multiView, targetLocation),
-                    multiIndexer!!,
+                    multiIndexer,
                     multiSubstitution,
                     (i int32, parameterType TypeSymbol) -> BindUserIndexerArgument(
                         indexSyntaxes[i],
@@ -2243,7 +2266,7 @@ internal partial class ExpressionBinder {
                     indexSyntaxes.Count
                 )
                 if verifyCallArgumentsAfterConversions != nil {
-                    read = verifyCallArgumentsAfterConversions!!(
+                    read = verifyCallArgumentsAfterConversions(
                         indexSyntaxes,
                         read,
                         () -> BindRectangularIndexAgainstTarget(target, indexSyntaxes, targetLocation)
@@ -2315,7 +2338,7 @@ internal partial class ExpressionBinder {
                     elementType
                 )
                 if verifyCallArgumentsAfterConversions != nil {
-                    clrIndex = verifyCallArgumentsAfterConversions!!(
+                    clrIndex = verifyCallArgumentsAfterConversions(
                         indexSyntaxes,
                         clrIndex,
                         () -> BindRectangularIndexAgainstTarget(target, indexSyntaxes, targetLocation)
@@ -2441,10 +2464,13 @@ internal partial class ExpressionBinder {
                 if whenNotNull is BoundErrorExpression || whenNotNull.Type == TypeSymbol.Error {
                     return BoundErrorExpression(nil)
                 }
-                let resultType = if whenNotNull.Type is NullableTypeSymbol {
-                    whenNotNull.Type
-                } else {
-                    cast[TypeSymbol](NullableTypeSymbol.Get(whenNotNull.Type))
+                let resultType = binderCtx.BindSourceNullable(
+                    whenNotNull.Type,
+                    syntax.OpenBracketToken.Location,
+                    isOperator: true
+                )
+                if resultType == TypeSymbol.Error {
+                    return BoundErrorExpression(syntax)
                 }
                 // Issue #1475: allocate the result slot for ANY value-type underlying
                 // recognised by symbol (user enum/struct, value-constrained type
@@ -2708,23 +2734,23 @@ internal partial class ExpressionBinder {
                 out var readView
             ) {
                 if binderCtx.TryGetNarrowedAccessPath(target, out var targetPath, out _) &&
-                    !targetPath!!.HasMembers &&
-                    !(targetPath!!.Root.Type is NullableTypeSymbol) &&
+                    !targetPath.HasMembers &&
+                    !(targetPath.Root.Type is NullableTypeSymbol) &&
                     FindDeclaredIndexer(
-                    targetPath!!.Root.Type,
-                    readIndexer!!,
+                    targetPath.Root.Type,
+                    readIndexer,
                     MemberOperation.Read,
                     target.Type,
                     readSubstitution
                 ) is {} declaredIndexer {
-                    target = DeclaredReceiver(targetPath!!.Root, target.Syntax)
+                    target = DeclaredReceiver(targetPath.Root, target.Syntax)
                     readIndexer = declaredIndexer.Indexer
                     readSubstitution = declaredIndexer.Substitution
                     readView = declaredIndexer.View ?? target.Type
                 }
                 return BindUserIndexerRead(
                     ViewIndexerReceiver(target, readView, targetLocation),
-                    readIndexer!!,
+                    readIndexer,
                     readSubstitution,
                     (i int32, parameterType TypeSymbol) -> BindUserIndexerArgument(
                         indexSyntax,
@@ -2928,14 +2954,14 @@ internal partial class ExpressionBinder {
     ) BoundExpression {
         if TrySplitAtLeftmostNullConditional(remainingChain, out var leftSyntax, out var rightSyntax) {
             let boundLeft = if chainBase == nil {
-                BindExpression(leftSyntax!!)
+                BindExpression(leftSyntax)
             } else {
-                BindAccessorStep(chainBase, nil, leftSyntax!!)
+                BindAccessorStep(chainBase, nil, leftSyntax)
             }
             if boundLeft is BoundErrorExpression || boundLeft.Type == TypeSymbol.Error {
                 return BoundErrorExpression(nil)
             }
-            ApplySubExpressionNarrowingEffects(leftSyntax!!, boundLeft)
+            ApplySubExpressionNarrowingEffects(leftSyntax, boundLeft)
             let postLeftNarrowing = CaptureNarrowingBindSnapshot()
             var underlying TypeSymbol
             if boundLeft.Type is NullableTypeSymbol nullable {
@@ -2977,10 +3003,13 @@ internal partial class ExpressionBinder {
                     if whenNotNull is BoundErrorExpression {
                         return whenNotNull
                     }
-                    let resultType = if whenNotNull.Type is NullableTypeSymbol {
-                        whenNotNull.Type
-                    } else {
-                        cast[TypeSymbol](NullableTypeSymbol.Get(whenNotNull.Type))
+                    let resultType = binderCtx.BindSourceNullable(
+                        whenNotNull.Type,
+                        diagnosticLocation,
+                        isOperator: true
+                    )
+                    if resultType == TypeSymbol.Error {
+                        return BoundErrorExpression(outerSyntax)
                     }
                     var resultSlot LocalVariableSymbol? = nil
                     if resultType is NullableTypeSymbol nullableResult &&
@@ -3073,7 +3102,7 @@ internal partial class ExpressionBinder {
                 if !TryBindSystemIndexValue(unwrappedIndexSyntax, out var boundSystemIndex) {
                     return BoundErrorExpression(nil)
                 }
-                let indexLocal = DeclareRangeTemp("index", boundSystemIndex!!.Type, boundSystemIndex!!, statements)
+                let indexLocal = DeclareRangeTemp("index", boundSystemIndex.Type, boundSystemIndex, statements)
                 sharedIndex = BoundVariableExpression(nil, indexLocal)
             }
             let tempRef = BoundVariableExpression(nil, tempVar)
@@ -3451,7 +3480,7 @@ internal partial class ExpressionBinder {
                 return true
             }
             if TrySplitAtLeftmostNullConditional(acc.RightPart, out var innerLeft, out var innerRight) {
-                left = AccessorExpressionSyntax(acc.SyntaxTree, acc.LeftPart, acc.DotToken, innerLeft!!)
+                left = AccessorExpressionSyntax(acc.SyntaxTree, acc.LeftPart, acc.DotToken, innerLeft)
                 right = innerRight
                 return true
             }
@@ -3662,7 +3691,7 @@ internal partial class ExpressionBinder {
                 targetType,
                 hasNarrowedTarget,
                 indexSyntax,
-                systemIndex!!,
+                systemIndex,
                 BindValue,
                 diagnosticLocation,
                 isReadOnlyReceiver,
@@ -3840,26 +3869,26 @@ internal partial class ExpressionBinder {
                 out var writeView
             ) {
                 if binderCtx.TryGetNarrowedAccessPath(target, out var targetPath, out _) &&
-                    !targetPath!!.HasMembers &&
-                    !(targetPath!!.Root.Type is NullableTypeSymbol) &&
+                    !targetPath.HasMembers &&
+                    !(targetPath.Root.Type is NullableTypeSymbol) &&
                     FindDeclaredIndexer(
-                    targetPath!!.Root.Type,
-                    writeIndexer!!,
+                    targetPath.Root.Type,
+                    writeIndexer,
                     MemberOperation.Write,
                     target.Type,
                     writeSubstitution
                 ) is {} declaredIndexer {
-                    target = DeclaredReceiver(targetPath!!.Root, target.Syntax)
+                    target = DeclaredReceiver(targetPath.Root, target.Syntax)
                     writeIndexer = declaredIndexer.Indexer
                     writeSubstitution = declaredIndexer.Substitution
                     writeView = declaredIndexer.View ?? target.Type
                 }
                 target = ViewIndexerReceiver(target, writeView, diagnosticLocation)
                 let selectedIndexer = writeIndexer
-                let paramType = SubstituteIndexerType(selectedIndexer!!.Parameters[0].Type, writeSubstitution)
+                let paramType = SubstituteIndexerType(selectedIndexer.Parameters[0].Type, writeSubstitution)
                 let ConvertWriteIndex = func () BoundExpression {
                     if boundIndexOverride != nil &&
-                        selectedIndexer!!
+                        selectedIndexer
                         .Parameters[0]
                         .RefKind == RefKind.In &&
                         (boundIndexOverride is BoundAddressOfExpression || boundIndexOverride.Type is ByRefTypeSymbol) {
@@ -3869,12 +3898,12 @@ internal partial class ExpressionBinder {
                         indexSyntax,
                         writeArguments,
                         boundIndexOverride,
-                        selectedIndexer!!.Parameters[0],
+                        selectedIndexer.Parameters[0],
                         paramType,
                         argumentIndex: 0
                     )
                 }
-                if selectedIndexer!!.SetterSymbol == nil {
+                if selectedIndexer.SetterSymbol == nil {
                     // Issue #4224: a writable-ref-returning indexer getter (no
                     // setter, but `ReturnRefKind == Ref`) stores through the
                     // getter instead of failing outright, mirroring the
@@ -3882,7 +3911,7 @@ internal partial class ExpressionBinder {
                     // and the existing imported/CLR ref-indexer write-through
                     // above. A `ref readonly` getter stays protected.
                     if targetType is StructSymbol &&
-                        selectedIndexer!!.GetterSymbol is {ReturnRefKind: RefKind.Ref} refIndexerGetter {
+                        selectedIndexer.GetterSymbol is {ReturnRefKind: RefKind.Ref} refIndexerGetter {
                         if isReadOnlyReceiver {
                             Diagnostics.ReportCannotAssign(diagnosticLocation, "this[]")
                             return BoundErrorExpression(indexSyntax)
@@ -3891,7 +3920,7 @@ internal partial class ExpressionBinder {
                         let refIndexArg = ConvertWriteIndex()
                         let refValue = BindValue(refElementType)
                         if !CheckUserIndexerAccessibility(
-                            selectedIndexer!!,
+                            selectedIndexer,
                             requireGetter: true,
                             requireSetter: false,
                             diagnosticLocation
@@ -3902,7 +3931,7 @@ internal partial class ExpressionBinder {
                             nil,
                             target,
                             refIndexerGetter,
-                            TrailingIndexerDefaults(selectedIndexer!!, 1, writeSubstitution).Insert(0, refIndexArg),
+                            TrailingIndexerDefaults(selectedIndexer, 1, writeSubstitution).Insert(0, refIndexArg),
                             refElementType
                         )
                         return BoundIndirectAssignmentExpression(
@@ -3915,13 +3944,13 @@ internal partial class ExpressionBinder {
                     return BoundErrorExpression(nil)
                 }
                 let elementType = SubstituteIndexerType(
-                    selectedIndexer!!.SetterSymbol!!.Parameters[^1].Type,
+                    selectedIndexer.SetterSymbol!!.Parameters[^1].Type,
                     writeSubstitution
                 )
                 let indexArg = ConvertWriteIndex()
                 let value = BindValue(elementType)
                 if !CheckUserIndexerAccessibility(
-                    selectedIndexer!!,
+                    selectedIndexer,
                     requireGetter: false,
                     requireSetter: true,
                     diagnosticLocation
@@ -3929,11 +3958,11 @@ internal partial class ExpressionBinder {
                     return BoundErrorExpression(nil)
                 }
                 return MakeUserIndexAssignment(
-                    selectedIndexer!!.SetterSymbol!!,
+                    selectedIndexer.SetterSymbol!!,
                     indexArg,
                     value,
                     elementType,
-                    TrailingIndexerDefaults(selectedIndexer!!, 1, writeSubstitution)
+                    TrailingIndexerDefaults(selectedIndexer, 1, writeSubstitution)
                 )
             }
             if writeReported {
@@ -4250,7 +4279,7 @@ internal partial class ExpressionBinder {
         if !TryBindSystemIndexValue(fromEnd, out var indexValue) {
             return BoundErrorExpression(nil)
         }
-        return BindSystemIndexAccess(target, indexValue!!, targetLocation, fromEnd)
+        return BindSystemIndexAccess(target, indexValue, targetLocation, fromEnd)
     }
 
     private func TryBindSystemIndexValue(
@@ -4327,7 +4356,7 @@ internal partial class ExpressionBinder {
         ) {
             return BindUserIndexerRead(
                 ViewIndexerReceiver(target, indexView, targetLocation),
-                userIndexer!!,
+                userIndexer,
                 substitution,
                 (i int32, parameterType TypeSymbol) -> conversions.BindCallArgumentWithRefKind(
                     targetLocation,
@@ -4369,7 +4398,7 @@ internal partial class ExpressionBinder {
                 ) {
                     return BoundErrorExpression(nil)
                 }
-                let idx = BuildSystemIndexOffset(indexValue, lengthExpr!!, statements)
+                let idx = BuildSystemIndexOffset(indexValue, lengthExpr, statements)
                 if (target.Type is StructSymbol or InterfaceSymbol) &&
                     TryGetUserIndexerTaking(
                     target.Type,
@@ -4380,7 +4409,7 @@ internal partial class ExpressionBinder {
                 ) {
                     let userRead = BindUserIndexerRead(
                         ViewIndexerReceiver(srcRef, intView, targetLocation),
-                        userIntIndexer!!,
+                        userIntIndexer,
                         intSubstitution,
                         (i int32, parameterType TypeSymbol) -> conversions.BindCallArgumentWithRefKind(
                             targetLocation,
@@ -4449,23 +4478,23 @@ internal partial class ExpressionBinder {
             out var indexView
         ) {
             target = ViewIndexerReceiver(target, indexView, diagnosticLocation)
-            let parameterType = SubstituteIndexerType(userIndexer!!.Parameters[0].Type, substitution)
-            if userIndexer!!.SetterSymbol != nil {
+            let parameterType = SubstituteIndexerType(userIndexer.Parameters[0].Type, substitution)
+            if userIndexer.SetterSymbol != nil {
                 if isReadOnlyReceiver {
                     Diagnostics.ReportCannotAssign(diagnosticLocation, "this[]")
                     return BoundErrorExpression(nil)
                 }
-                let valueType = SubstituteIndexerType(userIndexer!!.Type, substitution)
+                let valueType = SubstituteIndexerType(userIndexer.Type, substitution)
                 let convertedIndex = conversions.BindCallArgumentWithRefKind(
                     diagnosticLocation,
                     indexValue,
                     parameterType,
-                    userIndexer!!.Parameters[0],
+                    userIndexer.Parameters[0],
                     1
                 )
                 let value = bindValue(valueType)
                 if !CheckUserIndexerAccessibility(
-                    userIndexer!!,
+                    userIndexer,
                     requireGetter: false,
                     requireSetter: true,
                     diagnosticLocation
@@ -4475,11 +4504,11 @@ internal partial class ExpressionBinder {
                 return BoundUserInstanceCallExpression(
                     nil,
                     target,
-                    userIndexer!!.SetterSymbol!!,
+                    userIndexer.SetterSymbol!!,
                     ImmutableArray.Create(convertedIndex, value)
                 )
             }
-            if targetType is StructSymbol && userIndexer!!.GetterSymbol is {ReturnRefKind: RefKind.Ref} refGetter {
+            if targetType is StructSymbol && userIndexer.GetterSymbol is {ReturnRefKind: RefKind.Ref} refGetter {
                 if isReadOnlyReceiver {
                     Diagnostics.ReportCannotAssign(diagnosticLocation, "this[]")
                     return BoundErrorExpression(nil)
@@ -4489,12 +4518,12 @@ internal partial class ExpressionBinder {
                     diagnosticLocation,
                     indexValue,
                     parameterType,
-                    userIndexer!!.Parameters[0],
+                    userIndexer.Parameters[0],
                     1
                 )
                 let value = bindValue(refElementType)
                 if !CheckUserIndexerAccessibility(
-                    userIndexer!!,
+                    userIndexer,
                     requireGetter: true,
                     requireSetter: false,
                     diagnosticLocation
@@ -4554,7 +4583,7 @@ internal partial class ExpressionBinder {
                     ) {
                         return BoundErrorExpression(nil)
                     }
-                    offsetExpr = BuildSystemIndexOffset(indexValue, lengthExpr!!, statements)
+                    offsetExpr = BuildSystemIndexOffset(indexValue, lengthExpr, statements)
                 }
                 if (targetType is StructSymbol || targetType is InterfaceSymbol) &&
                     TryGetUserIndexerTaking(
@@ -4566,26 +4595,26 @@ internal partial class ExpressionBinder {
                 ) {
                     let offsetLocal = DeclareRangeTemp("offset", TypeSymbol.Int32, offsetExpr, statements)
                     let userTarget = ViewIndexerReceiver(target, intView, diagnosticLocation)
-                    let intParameterType = SubstituteIndexerType(userIntIndexer!!.Parameters[0].Type, intSubstitution)
+                    let intParameterType = SubstituteIndexerType(userIntIndexer.Parameters[0].Type, intSubstitution)
                     let convertedOffset = conversions.BindCallArgumentWithRefKind(
                         diagnosticLocation,
                         BoundVariableExpression(nil, offsetLocal),
                         intParameterType,
-                        userIntIndexer!!.Parameters[0],
+                        userIntIndexer.Parameters[0],
                         1
                     )
-                    if userIntIndexer!!.SetterSymbol != nil {
+                    if userIntIndexer.SetterSymbol != nil {
                         if isReadOnlyReceiver {
                             Diagnostics.ReportCannotAssign(diagnosticLocation, "this[]")
                             return BoundErrorExpression(nil)
                         }
                         let intValueType = SubstituteIndexerType(
-                            userIntIndexer!!.SetterSymbol!!.Parameters[^1].Type,
+                            userIntIndexer.SetterSymbol!!.Parameters[^1].Type,
                             intSubstitution
                         )
                         let value = bindValue(intValueType)
                         if !CheckUserIndexerAccessibility(
-                            userIntIndexer!!,
+                            userIntIndexer,
                             requireGetter: false,
                             requireSetter: true,
                             diagnosticLocation
@@ -4607,7 +4636,7 @@ internal partial class ExpressionBinder {
                         return BoundBlockExpression(nil, statements.ToImmutable(), resultRead)
                     }
                     if targetType is StructSymbol &&
-                        userIntIndexer!!.GetterSymbol is {ReturnRefKind: RefKind.Ref} refIntGetter {
+                        userIntIndexer.GetterSymbol is {ReturnRefKind: RefKind.Ref} refIntGetter {
                         if isReadOnlyReceiver {
                             Diagnostics.ReportCannotAssign(diagnosticLocation, "this[]")
                             return BoundErrorExpression(nil)
@@ -4615,7 +4644,7 @@ internal partial class ExpressionBinder {
                         let refElementType = SubstituteIndexerType(refIntGetter.Type, intSubstitution)
                         let value = bindValue(refElementType)
                         if !CheckUserIndexerAccessibility(
-                            userIntIndexer!!,
+                            userIntIndexer,
                             requireGetter: true,
                             requireSetter: false,
                             diagnosticLocation
@@ -4733,19 +4762,19 @@ internal partial class ExpressionBinder {
             }
             for name in names {
                 if TryFindInstanceCountProperty(structReceiver, name, out var prop, out var propOwner) &&
-                    SubstituteIndexerType(prop!!.Type, LevelSubstitution(propOwner!!, outer: nil)) == TypeSymbol
+                    SubstituteIndexerType(prop.Type, LevelSubstitution(propOwner, outer: nil)) == TypeSymbol
                     .Int32 {
-                    if !prop!!.HasGetter {
+                    if !prop.HasGetter {
                         Diagnostics.ReportCannotAssign(location, name)
                         lengthExpr = nil
                         return false
                     }
-                    if !AccessibilityChecker.IsAccessible(prop!!.GetterAccessibility, propOwner!!, this.function) {
+                    if !AccessibilityChecker.IsAccessible(prop.GetterAccessibility, propOwner, this.function) {
                         Diagnostics.ReportMemberInaccessible(
                             location,
-                            prop!!.Name,
-                            propOwner!!.Name,
-                            prop!!.GetterAccessibility
+                            prop.Name,
+                            propOwner.Name,
+                            prop.GetterAccessibility
                         )
                         lengthExpr = nil
                         return false
@@ -4754,7 +4783,7 @@ internal partial class ExpressionBinder {
                         syntax,
                         receiver,
                         structReceiver,
-                        prop!!,
+                        prop,
                         TypeSymbol.Int32
                     )
                     if applyLengthEffects {
@@ -4832,7 +4861,7 @@ internal partial class ExpressionBinder {
             let rangeValue = BuildSystemRangeValue($range)
             return BindUserIndexerRead(
                 ViewIndexerReceiver(target, rangeView, targetLocation),
-                userRangeIndexer!!,
+                userRangeIndexer,
                 rangeSubstitution,
                 (i int32, parameterType TypeSymbol) -> conversions.BindCallArgumentWithRefKind(
                     $range.Location,
@@ -5040,7 +5069,7 @@ internal partial class ExpressionBinder {
         var lengthReported = false
         let lengthOf(BoundExpression) -> BoundExpression = (src BoundExpression) -> {
             if TryBuildCountedReceiverLength(src, lengthMember, $range.Location, $range, out var lengthExpr) {
-                return lengthExpr!!
+                return lengthExpr
             }
             lengthReported = true
             return BoundLiteralExpression(nil, 0)
@@ -5170,7 +5199,7 @@ internal partial class ExpressionBinder {
         ) {
             return BindUserIndexerRead(
                 ViewIndexerReceiver(target, rangeView, targetLocation),
-                userRangeIndexer!!,
+                userRangeIndexer,
                 rangeSubstitution,
                 (i int32, parameterType TypeSymbol) -> conversions.BindCallArgumentWithRefKind(
                     targetLocation,
@@ -5209,7 +5238,7 @@ internal partial class ExpressionBinder {
                         sliceSyntax,
                         out var lengthExpr
                     ) {
-                        return lengthExpr!!
+                        return lengthExpr
                     }
                     lengthReported = true
                     return BoundLiteralExpression(nil, 0)
@@ -5652,7 +5681,7 @@ internal partial class ExpressionBinder {
                     return head
                 }
                 if nested.IsNullConditional {
-                    return BindNullConditionalAccessExpressionCore(head, nested.RightPart)
+                    return BindNullConditionalAccessExpressionCore(head, nested.RightPart, nested.DotToken.Location)
                 }
                 return BindAccessorStep(head, nil, nested.RightPart, nested.LeftPart, leftName.Span.Start)
             }
@@ -5727,7 +5756,7 @@ internal partial class ExpressionBinder {
                         callSyntax,
                         out var clrCall
                     ) {
-                        return clrCall!!
+                        return clrCall
                     }
                     Diagnostics.ReportStaticVirtualMemberNotFoundOnTypeParameter(
                         leftName.Location,
@@ -7542,7 +7571,9 @@ internal partial class ExpressionBinder {
                 case imp is ImportedTypeSymbol when imp
                     .ClrType
                     ?.IsArray == true &&
-                    imp.ClrType!!.GetArrayRank() == 1: if imp.TypeArguments.Length == 1 {
+                    imp
+                    .ClrType
+                    .GetArrayRank() == 1: if imp.TypeArguments.Length == 1 {
                     imp.TypeArguments[0]
                 } else {
                     ByRefStorageMatching.PreserveReferenceTupleIdentity(
@@ -7556,7 +7587,9 @@ internal partial class ExpressionBinder {
                 case annot is NullabilityAnnotatedTypeSymbol when annot
                     .ClrType
                     ?.IsArray == true &&
-                    annot.ClrType!!.GetArrayRank() == 1: ByRefStorageMatching.PreserveReferenceTupleIdentity(
+                    annot
+                    .ClrType
+                    .GetArrayRank() == 1: ByRefStorageMatching.PreserveReferenceTupleIdentity(
                     annot.ClrType!!.GetElementType(),
                     annot.GetTypeArgumentSymbolForClrType(annot.ClrType!!.GetElementType())
                 )

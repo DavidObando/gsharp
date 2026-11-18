@@ -64,6 +64,7 @@ Annotations may precede any declaration that the CLR allows a custom attribute o
 | ----------------------------------- | ----------------------- |
 | Before a top-level `func`           | `method`                |
 | Before a top-level `class`/`struct`/`interface`/`type` alias | `type`                  |
+| Before a named `delegate` declaration | `type` |
 | Before a `var`/`const`/`let` at type or namespace scope      | `field`                 |
 | Before a member `func`              | `method`                |
 | Before a member field declaration   | `field`                 |
@@ -74,6 +75,8 @@ Annotations may precede any declaration that the CLR allows a custom attribute o
 | Before an `event` declaration (see #140) | `event` |
 
 A use-site target qualifier overrides the default. The grammar `@field:Foo` on a property declaration directs the attribute to the synthesised backing field, not to the property; `@return:NotNull` on a function directs the attribute to the return-value metadata row.
+
+On a named delegate, `@return:Foo` directs the attribute to the sequence-0 return parameter of `Invoke` (issue #5967). Type-target annotations remain on the delegate type. Parameter annotations remain on `Invoke` parameters. Delegate return `MarshalAs` requires dedicated marshalling metadata and is rejected with `GS0360` until implemented.
 
 `@assembly:` and `@module:` are only valid at the top of a compilation unit (after `package`/`import`, before any declaration) and are routed to the assembly / module metadata respectively.
 
@@ -88,6 +91,12 @@ When the binder sees `@Foo(args)`:
 3. Otherwise, report `ERR_AttributeTypeNotFound` (Foo is not an attribute type / no such attribute).
 
 If both `Foo` and `FooAttribute` exist and both derive from `System.Attribute`, that is an `ERR_AmbiguousAttributeName` — the user must qualify (`@FooAttribute(…)` to force the suffixed spelling, or use a fully-qualified path to force the bare one). This matches C#'s rule.
+
+Source attribute identity uses completed declaration headers.
+The iterative scheduler completes source bases without recursively binding annotation dependencies.
+Usage checks wait for complete bound definition contracts, including self and mutual applications.
+Derived member binding separately waits for complete base members.
+See [ADR-0221](0221-iterative-source-declaration-dependencies.md).
 
 Constructor and named-argument resolution follows C# attribute syntax: `name: value`
 binds a constructor parameter and is reordered into that parameter's fixed-argument

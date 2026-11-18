@@ -39,6 +39,11 @@ the seed for a longer-running stdlib track, not a hard freeze.
 
 ## Decision
 
+Source nullable helpers also follow [ADR-0224](0224-source-nullable-type-parameter-kind-constraints.md).
+An open `T?` requires a proven reference or nonnullable value kind.
+This supersedes historical acceptance of unrestricted nullable parameters described below.
+It does not introduce a public `Option` carrier.
+
 ### Packaging convention
 
 - **One physical assembly**, `Gsharp.Extensions.dll`, shipped by

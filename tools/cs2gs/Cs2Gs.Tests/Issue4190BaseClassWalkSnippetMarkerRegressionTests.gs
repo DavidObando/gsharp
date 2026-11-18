@@ -219,7 +219,7 @@ class Walker
             [|current = current.BaseClass|];
         }
     }
-}`)
+}`, false)
     @InlineData(`class StructSymbol
 {
     public StructSymbol? BaseClass;
@@ -236,11 +236,22 @@ class Walker
         }
         while (current != null);
     }
-}`)
-    func LoopWalk_TranslatesWithBangBangBridge_OnTheReassignedReceiver(markedSnippet string) {
+}`, true)
+    func LoopWalk_TranslatesWithTheRequiredReceiverBridge(markedSnippet string, requiresAssertion bool) {
         let result = SnippetTranslator.Translate(markedSnippet)
         Assert.NotNull(result.GsWithMarkers)
-        Assert.Contains("current!!.BaseClass", result.GsWithMarkers, StringComparison.Ordinal)
+        Assert.Contains(
+            if requiresAssertion {
+                "current!!.BaseClass"
+            } else {
+                "current.BaseClass"
+            },
+            result.GsWithMarkers,
+            StringComparison.Ordinal
+        )
+        if !requiresAssertion {
+            Assert.DoesNotContain("current!!.BaseClass", result.GsWithMarkers, StringComparison.Ordinal)
+        }
     }
 
     /// End to end, the whole reason the marker must survive: the real

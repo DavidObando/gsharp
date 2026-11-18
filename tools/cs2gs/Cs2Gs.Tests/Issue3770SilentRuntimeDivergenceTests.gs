@@ -145,7 +145,8 @@ public static class Paths
     /// the accepted exception-type compatibility limit recorded in ADR-0115.
     @Fact
     func NullForgivingOperator_FollowsTheContextualSinkPolicy() {
-        let printed = Translate(NullForgivingSource)
+        let printed = TranslateSource(NullForgivingSource)
+        TranslationTestValidation.AssertSourceNullableKindRejection(printed, "T")
         Assert.Contains("func NullableSink() object? -> Pick(false)", printed, StringComparison.Ordinal)
         Assert.DoesNotContain("func NullableSink() object? -> Pick(false)!!", printed, StringComparison.Ordinal)
         Assert.Contains("prop NullableProperty object?", printed, StringComparison.Ordinal)
@@ -155,13 +156,14 @@ public static class Paths
         Assert.Contains("return value!!", printed, StringComparison.Ordinal)
         Assert.Contains("func NullableValue(value int32?) int32 -> value!!", printed, StringComparison.Ordinal)
         Assert.Contains("func Generic[T](value T?) T -> value!!", printed, StringComparison.Ordinal)
+        let _ = Translate(KnownReferenceNullForgivingSource)
     }
 
     /// A genuinely nil value reaches a nullable sink unchanged. This is the
     /// run-time behavior that a text-only assertion cannot prove.
     @Fact
     func NullForgivingOperator_AtNullableSink_RemainsNilAtRuntime() {
-        let printed = Translate(NullForgivingSource)
+        let printed = Translate(KnownReferenceNullForgivingSource)
         let stdout = CompileAndRun(
             printed,
             "Console.WriteLine(if NullForgivingProbe.NullableProperty == nil && NullForgivingProbe.NullableSink() == nil && NullForgivingProbe.NullableLocal() && NullForgivingProbe.NullableConditional(true) { \"nil\" } else { \"value\" })"
@@ -174,7 +176,7 @@ public static class Paths
     /// (cref:InvalidOperationException) contract.
     @Fact
     func RetainedAssertions_KeepTheirDocumentedRuntimeBehavior() {
-        let printed = Translate(NullForgivingSource)
+        let printed = Translate(KnownReferenceNullForgivingSource)
         let stdout = CompileAndRun(printed, `try {
     NullForgivingProbe.NonNullSink()
 } catch (NullReferenceException) {
@@ -288,7 +290,25 @@ try {
     }
 `
 
+        private prop KnownReferenceNullForgivingSource string -> NullForgivingSource.Replace(
+            "Generic<T>(T? value) =>",
+            "Generic<T>(T? value) where T : class =>"
+        )
+
         private func Translate(source string, nullableEnabled bool = true) string {
+            let printed = TranslateSource(source, nullableEnabled)
+            let result RoundTripResult? = TranslationTestValidation.AssertBinds(printed)
+            Assert.True(
+                result!!.Success,
+                "Translated G# must round-trip. Errors:\n" + string.Join("\n", result!!.Errors) + `
+
+Printed:
+` + printed
+            )
+            return printed
+        }
+
+        private func TranslateSource(source string, nullableEnabled bool = true) string {
             let project = CSharpProjectLoader.LoadInMemory(
                 [](string, string){
                     (
@@ -323,16 +343,7 @@ namespace Demo
                 context.Diagnostics,
                 (d TranslationDiagnostic) -> d.Severity == TranslationSeverity.Unsupported
             )
-            let printed = GSharpPrinter.Print(unit)
-            let result RoundTripResult? = TranslationTestValidation.AssertBinds(printed)
-            Assert.True(
-                result!!.Success,
-                "Translated G# must round-trip. Errors:\n" + string.Join("\n", result!!.Errors) + `
-
-Printed:
-` + printed
-            )
-            return printed
+            return GSharpPrinter.Print(unit)
         }
 
         private func CompileAndRun(printed string, entryStatements string) string {
