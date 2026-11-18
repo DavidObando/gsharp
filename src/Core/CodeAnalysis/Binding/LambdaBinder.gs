@@ -2570,8 +2570,12 @@ internal class LambdaBinder {
         if returnType != TypeSymbol.Void &&
             returnType != TypeSymbol.Error &&
             !isIteratorReturnType(returnType) &&
-            !ControlFlowGraph.AllPathsReturn(Lowerer.Lower(body)) {
+            !ControlFlowGraph
+            .AllPathsReturn(Lowerer.Lower(body)) {
+            // ADR-0225: a body that is open at the cut can still end in a return.
+            let pushed = Diagnostics.PushPremiseIf(PrefixBindingContext.IsOpen(body.Syntax), PrefixPremise.RestOfBody)
             Diagnostics.ReportAllPathsMustReturn(location)
+            Diagnostics.PopPremiseIf(pushed)
         }
     }
 

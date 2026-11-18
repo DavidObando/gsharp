@@ -228,7 +228,10 @@ internal shared class DefiniteAssignmentAnalyzer {
                                 literal.CapturedVariables.Where(
                                     (variable VariableSymbol) -> assigned.Contains(variable)
                                 ),
-                                literal.CapturedVariables.Where((variable VariableSymbol) -> tracked.Contains(variable))
+                                literal.CapturedVariables.Where(
+                                    (variable VariableSymbol) -> tracked.Contains(variable)
+                                ),
+                                literal.Body.Syntax
                             )
                             return
                         }
@@ -348,7 +351,8 @@ internal shared class DefiniteAssignmentAnalyzer {
         function FunctionSymbol?,
         diagnostics DiagnosticBag?,
         capturedAssigned IEnumerable[VariableSymbol]?,
-        capturedTracked IEnumerable[VariableSymbol]?
+        capturedTracked IEnumerable[VariableSymbol]?,
+        bodySyntax SyntaxNode? = nil
     ) {
         if body == nil || function == nil {
             return
@@ -423,7 +427,8 @@ internal shared class DefiniteAssignmentAnalyzer {
                 pointerAliases,
                 tracked,
                 FindMethodExitLabel(body),
-                isFunctionBody: true
+                isFunctionBody: true,
+                bodySyntax: bodySyntax
             )
         } catch {
             reportUnanalyzable()
@@ -451,7 +456,8 @@ internal shared class DefiniteAssignmentAnalyzer {
         tracked HashSet[VariableSymbol],
         methodExitLabel BoundLabel?,
         isFunctionBody bool = false,
-        cacheKey object? = nil
+        cacheKey object? = nil,
+        bodySyntax SyntaxNode? = nil
     ) HashSet[VariableSymbol]? {
         // Issue #5284: only a diagnostics-free probe of a nested region is cached. Its result is a pure
         // function of the region, the input set, and the tracked-local set: the outer parameters are fixed
@@ -476,7 +482,8 @@ internal shared class DefiniteAssignmentAnalyzer {
                 pointerAliases,
                 tracked,
                 methodExitLabel,
-                isFunctionBody
+                isFunctionBody,
+                bodySyntax: bodySyntax
             )
         }
         if pointerAliases.Count != 0 {
@@ -548,7 +555,8 @@ internal shared class DefiniteAssignmentAnalyzer {
         methodExitLabel BoundLabel?,
         isFunctionBody bool = false,
         fallthroughLabel BoundLabel? = nil,
-        fallthroughExits List[HashSet[VariableSymbol]]? = nil
+        fallthroughExits List[HashSet[VariableSymbol]]? = nil,
+        bodySyntax SyntaxNode? = nil
     ) HashSet[VariableSymbol]? {
         CompilationMeasurements.Count("definite-assignment.region-analyses")
         let graph = ControlFlowGraph.Create(AsBlock(regionBody))
@@ -694,12 +702,20 @@ internal shared class DefiniteAssignmentAnalyzer {
                         continue
                     }
                     let exit = EdgeExit(endBranch, exitAssigned, conditionalExits) ?? initialAssigned
+                    // ADR-0225: a later statement of an open body can assign the parameter before the
+                    // body falls through its end. An explicit return before the cut is complete.
+                    let fallsThrough = endBranch.From.Statements.LastOrDefault()?.Kind != BoundNodeKind.ReturnStatement
+                    let exitIsOpen = fallsThrough && PrefixBindingContext.IsOpen(
+                        function.Declaration?.Body ?? bodySyntax
+                    )
                     for op in outParams {
                         if !exit.Contains(op) {
+                            let pushed = diagnostics.PushPremiseIf(exitIsOpen, PrefixPremise.RestOfBody)
                             diagnostics.ReportOutParameterNotAssigned(
                                 GetReportLocation(endBranch.From, function),
                                 op.Name
                             )
+                            diagnostics.PopPremiseIf(pushed)
                         }
                     }
                 }
@@ -728,7 +744,14 @@ internal shared class DefiniteAssignmentAnalyzer {
                 if diagnostics != nil && !outParams.IsDefaultOrEmpty {
                     for op in outParams {
                         if !exit.Contains(op) {
+                            // ADR-0225: a return in a region is complete, but a finally block that is
+                            // open at the cut can still assign the parameter.
+                            let pushed = diagnostics.PushPremiseIf(
+                                PrefixBindingContext.IsInOpen(lastStatement?.Syntax, SyntaxKind.TryStatement),
+                                PrefixPremise.RestOfBody
+                            )
                             diagnostics.ReportOutParameterNotAssigned(GetReportLocation(fromBlock, function), op.Name)
+                            diagnostics.PopPremiseIf(pushed)
                         }
                     }
                 }
