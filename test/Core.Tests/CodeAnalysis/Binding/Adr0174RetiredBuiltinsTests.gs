@@ -9,8 +9,10 @@ import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 import GSharp.Tests
+import System
 import System.Collections.Immutable
 import System.Linq
+import System.Text
 import Xunit
 
 /// ADR-0174 D12/D13: the Go-style built-ins `len`, `cap`,
@@ -137,6 +139,73 @@ close("front")`)
         Assert.Equal("front closed", result.Value)
     }
 
+    @Theory
+    @InlineData("close")
+    @InlineData("len")
+    @InlineData("cap")
+    @InlineData("append")
+    @InlineData("delete")
+    func CallableParameter_Wins(name string) {
+        AssertCalledOnce(`import System
+func Call(CALLABLE Action) { CALLABLE() }
+func Main() {
+    var called = 0
+    Call(() -> {
+        called += 1
+        Console.WriteLine("called")
+    })
+    Console.WriteLine(called)
+}`.Replace("CALLABLE", name))
+    }
+
+    @Theory
+    @InlineData("() -> close()")
+    @InlineData("() -> { close() }")
+    func CapturedCloseParameter_InNestedCallback_Wins(callback string) {
+        AssertCalledOnce(`import System
+func Run(callback Action) { callback() }
+func Call(close Action) { Run(CALLBACK) }
+func Main() {
+    var called = 0
+    Call(() -> {
+        called += 1
+        Console.WriteLine("called")
+    })
+    Console.WriteLine(called)
+}`.Replace("CALLBACK", callback))
+    }
+
+    @Theory
+    @InlineData("Action")
+    @InlineData("() -> void")
+    @InlineData("Callback")
+    func CapturedCallableLocal_Wins(typeName string) {
+        AssertCalledOnce(`import System
+delegate Callback();
+func Main() {
+    var called = 0
+    let close CALLABLE_TYPE = () -> {
+        called += 1
+        Console.WriteLine("called")
+    }
+    let callback Action = () -> close()
+    callback()
+    Console.WriteLine(called)
+}`.Replace("CALLABLE_TYPE", typeName))
+    }
+
+    @Theory
+    @InlineData("() -> void", "close(1)", "GS0144")
+    @InlineData("int32", "close()", "GS0131")
+    func ShadowingVariable_InvalidCall_ReportsOrdinaryDiagnostic(typeName string, call string, diagnosticId string) {
+        let source = `func Call(close CALLABLE_TYPE) { CALL }`.Replace("CALLABLE_TYPE", typeName).Replace("CALL", call)
+        let (diagnostics, _) = Bind(source)
+        let diagnostic = Assert.Single(diagnostics)
+        Assert.Equal(diagnosticId, diagnostic.Id)
+        Assert.Equal(source.LastIndexOf("close", StringComparison.Ordinal), diagnostic.Location.Span.Start)
+        Assert.Equal("close".Length, diagnostic.Location.Span.Length)
+    }
+
     @Fact
     func ChannelProgram_NeedsNoImport() {
         let result = EmittedOracle.Evaluate(`package P0174NoImport
@@ -174,6 +243,17 @@ func main() {
     }
 
     shared {
+        private func AssertCalledOnce(source string) {
+            let result = EmittedOracle.Evaluate(source)
+            Assert.Empty(result.Diagnostics)
+            Assert.Equal(0, result.ExitCode)
+            Assert.Empty(result.ErrorOutput)
+            Assert.Equal(
+                Encoding.UTF8.GetBytes("called${Environment.NewLine}1${Environment.NewLine}"),
+                Encoding.UTF8.GetBytes(result.Output)
+            )
+        }
+
         private func Bind(source string)(Diagnostics ImmutableArray[Diagnostic], Compilation Compilation) {
             let compilation = Compilation(SyntaxTree.Parse(source))
             return (EmittedOracle.CompileDiagnostics(compilation), compilation)
