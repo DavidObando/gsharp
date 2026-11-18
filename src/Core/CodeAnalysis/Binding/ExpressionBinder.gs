@@ -3055,14 +3055,14 @@ internal partial class ExpressionBinder {
             parameterTypes.MoveToImmutable(),
             this.MethodGroupObservableReturnType(function)
         )
+        let group = BoundMethodGroupExpression(syntax, function, fnType)
+        methodGroup = group
         if function.LocalDeclaration != nil {
-            function.LocalFunctionValue ??= LocalVariableSymbol(
-                "<function_value_" + function.Name + ">",
-                isReadOnly: true,
-                type: fnType
-            )
+            let value = $scope.GetLocalFunctionValue(function, fnType)
+            if value.Type is DelegateTypeSymbol {
+                methodGroup = BoundConversionExpression(nil, value.Type, group)
+            }
         }
-        methodGroup = BoundMethodGroupExpression(syntax, function, fnType)
         return true
     }
 

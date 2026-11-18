@@ -3355,13 +3355,25 @@ internal partial class ExpressionBinder {
         var leftDelegate TypeSymbol? = GetConcreteDelegateType(left.Type)
         var rightDelegate TypeSymbol? = GetConcreteDelegateType(right.Type)
         var target TypeSymbol? = nil
-        if leftDelegate != nil && IsUnresolvedMethodGroup(right) {
+        if leftDelegate != nil &&
+            (
+            IsUnresolvedMethodGroup(right) || ConversionClassifier.CanAdaptSynthesizedRefDelegateValue(
+                right,
+                leftDelegate
+            )
+        ) {
             right = conversions.BindConversion(rightLocation, right, leftDelegate)
             if right is BoundErrorExpression {
                 return false
             }
             rightDelegate = GetConcreteDelegateType(right.Type)
-        } else if rightDelegate != nil && IsUnresolvedMethodGroup(left) {
+        } else if rightDelegate != nil &&
+            (
+            IsUnresolvedMethodGroup(left) || ConversionClassifier.CanAdaptSynthesizedRefDelegateValue(
+                left,
+                rightDelegate
+            )
+        ) {
             left = conversions.BindConversion(leftLocation, left, rightDelegate)
             if left is BoundErrorExpression {
                 return false

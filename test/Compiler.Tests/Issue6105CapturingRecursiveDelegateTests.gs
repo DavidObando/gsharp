@@ -6,6 +6,166 @@ import Xunit
 
 class Issue6105CapturingRecursiveDelegateTests {
     @Fact
+    func OverloadSelection_DoesNotNarrowPersistentFunctionSignature() {
+        const source = `func Run() string {
+    var outer = 41
+    let first = func(value object, n int32) string {
+        return n == 0 ? "${value}:${outer}" : second(value, n - 1)
+    }
+    let first = func(value object) string { return first(value, 0) }
+    let second = func(value object, n int32) string { return first(value, n) }
+    let narrow (string, int32) -> object = first
+    let broad (object, int32) -> string = first
+    outer = 50
+    return "${narrow("a", 1)},${broad(7, 1)},${System.Object.ReferenceEquals(narrow, broad)}"
+}
+System.Console.Write(Run())`
+        Issue5392ConstructedInterfaceMethodDriverTests.CompileVerifyAndRun(source, "a:50,7:50,True", "6105")
+    }
+
+    @Fact
+    func BlockExpressions_InitializeEscapingRecursiveDelegateCells() {
+        const source = `func Make(seed int32) (int32) -> int32 {
+    let callback (int32) -> int32 = {
+        var outer = seed
+        let first = func(n int32) int32 {
+            if n == 0 {
+                outer++
+                return outer
+            }
+            return second(n - 1)
+        }
+        let second = func(n int32) int32 { return first(n) }
+        outer++
+        first
+    }
+    return callback
+}
+let left = Make(10)
+let right = Make(100)
+System.GC.Collect()
+System.Console.Write("${left(1)},${right(2)},${left(0)}")`
+        Issue5392ConstructedInterfaceMethodDriverTests.CompileVerifyAndRun(source, "12,102,13", "6105")
+    }
+
+    @Fact
+    func OverloadedCapturingMembers_PreserveSelectedSignaturesAndIdentity() {
+        const source = `delegate Step(n int32) int32;
+func Run() string {
+    var outer = 41
+    let first = func(n int32) int32 {
+        return n == 0 ? outer : second(n - 1)
+    }
+    let first = func(n int32, amount int32) int32 {
+        outer += amount
+        return second(n)
+    }
+    let second = func(n int32) int32 { return first(n) }
+    let a (int32) -> int32 = first
+    let alias (int32) -> int32 = first
+    let b (int32, int32) -> int32 = first
+    var handlers Step? = nil
+    handlers += first
+    handlers -= first
+    outer = 50
+    let x = a(1)
+    let y = b(1, 2)
+    return "${x},${y},${second(1)},${System.Object.ReferenceEquals(a, alias)},${handlers == nil}"
+}
+System.Console.Write(Run())`
+        Issue5392ConstructedInterfaceMethodDriverTests.CompileVerifyAndRun(source, "50,52,52,True,True", "6105")
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ByReferenceParameters_KeepNamedAndInferredDelegateContractsAndSharedState(infer bool) {
+        const source = `delegate Step(ref value int32, out observed int32, in increment int32, n int32) int32;
+func Run() string {
+    var outer = 41
+    let first = func(ref value int32, out observed int32, in increment int32, n int32) int32 {
+        if n == 0 {
+            value += increment
+            outer++
+            observed = outer
+            return value + observed
+        }
+        return second(ref value, out observed, in increment, n - 1)
+    }
+    let second = func(ref value int32, out observed int32, in increment int32, n int32) int32 {
+        return first(ref value, out observed, in increment, n)
+    }
+    let callback Step = first
+    let inferred Step = first
+    var handlers Step? = nil
+    handlers += first
+    handlers -= first
+    outer = 50
+    var value = 1
+    var observed = 0
+    let increment = 2
+    let a = callback(ref value, out observed, in increment, 1)
+    let b = inferred(ref value, out observed, in increment, 1)
+    let c = first(ref value, out observed, in increment, 1)
+    return "${a},${b},${c};${value},${observed},${handlers == nil}"
+}
+System.Console.Write(Run())`
+        Issue5392ConstructedInterfaceMethodDriverTests.CompileVerifyAndRun(
+            if infer {
+                source.Replace("let inferred Step = first", "let inferred = first")
+            } else {
+                source
+            },
+            "54,57,60;7,53,True",
+            "6105"
+        )
+    }
+
+    @Fact
+    func ConstructorInitializers_InitializeEscapingRecursiveFunctionValues() {
+        const source = `open class Base {
+    let callback (int32) -> int32
+    init(value (int32) -> int32) { callback = value }
+    func Read(n int32) int32 -> callback(n)
+}
+class Derived : Base {
+    init(seed int32) : base((() -> {
+        var outer = seed
+        let first = func(n int32) int32 {
+            if n == 0 {
+                outer++
+                return outer
+            }
+            return second(n - 1)
+        }
+        let second = func(n int32) int32 { return first(n) }
+        let callback (int32) -> int32 = first
+        outer++
+        return callback
+    })()) {}
+}
+class Primary(seed int32) : Base((() -> {
+    var outer = seed
+    let first = func(n int32) int32 {
+        if n == 0 {
+            outer++
+            return outer
+        }
+        return second(n - 1)
+    }
+    let second = func(n int32) int32 { return first(n) }
+    let callback (int32) -> int32 = first
+    outer++
+    return callback
+})()) {}
+let left = Derived(10)
+let right = Primary(100)
+System.GC.Collect()
+System.Console.Write("${left.Read(1)},${right.Read(2)},${left.Read(0)},${right.Read(0)}")`
+        Issue5392ConstructedInterfaceMethodDriverTests.CompileVerifyAndRun(source, "12,102,13,103", "6105")
+    }
+
+    @Fact
     func RecursiveBodies_ConvertForwardAndBackwardMembersThroughSharedDelegateCells() {
         const source = `delegate Step(n int32) int32;
 func Make(seed int32) (int32) -> int32 {

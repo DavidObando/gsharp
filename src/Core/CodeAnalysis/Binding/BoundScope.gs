@@ -1867,6 +1867,23 @@ partial class BoundScope {
         synthesizedRefDelegateCache = cache
     }
 
+    internal func GetLocalFunctionValue(function FunctionSymbol, functionType FunctionTypeSymbol) LocalVariableSymbol {
+        if function.LocalFunctionValue is {} value {
+            return value
+        }
+        let valueType TypeSymbol = if this.TryGetSynthesizedRefDelegateForLiteral(
+            function,
+            functionType.ReturnType
+        ) is {} refDelegate {
+            refDelegate
+        } else {
+            functionType
+        }
+        let value = LocalVariableSymbol("<function_value_" + function.Name + ">", isReadOnly: true, type: valueType)
+        function.LocalFunctionValue = value
+        return value
+    }
+
     internal func TryGetSynthesizedRefDelegateForLiteral(
         function FunctionSymbol,
         returnType TypeSymbol
