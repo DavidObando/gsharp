@@ -4191,7 +4191,10 @@ internal class ConversionClassifier {
         )
         let resourceType = variableType.StripToBareShape()
         var receiver BoundExpression = BoundVariableExpression(nil, variable)
-        if !object.ReferenceEquals(resourceType, variableType) {
+        if resourceType.ReferenceNullability != ReferenceNullabilityKind.NotApplicable && !object.ReferenceEquals(
+            resourceType,
+            variableType
+        ) {
             receiver = BoundConversionExpression(nil, resourceType, receiver)
         }
         // #568 primary path: if the variable's type is a user-defined class
@@ -4259,7 +4262,10 @@ internal class ConversionClassifier {
         )
         let resourceType = variableType.StripToBareShape()
         var receiver BoundExpression = BoundVariableExpression(nil, variable)
-        if !object.ReferenceEquals(resourceType, variableType) {
+        if resourceType.ReferenceNullability != ReferenceNullabilityKind.NotApplicable && !object.ReferenceEquals(
+            resourceType,
+            variableType
+        ) {
             receiver = BoundConversionExpression(nil, resourceType, receiver)
         }
         let valueTaskType = TypeSymbol.FromClrTypeWithoutNullability(

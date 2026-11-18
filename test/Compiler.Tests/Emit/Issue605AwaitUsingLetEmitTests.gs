@@ -25,6 +25,77 @@ import Xunit.Sdk
 /// and negative diagnostics (outside async, async-only with sync using).
 open class Issue605AwaitUsingLetEmitTests {
     @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Issue6087_AnnotatedImportedStruct_DisposesOriginalStorage(asyncDispose bool) {
+        let helper = `#nullable enable
+using System;
+using System.Threading.Tasks;
+
+namespace StructHelpers
+{
+    public struct Resource<T> : IDisposable, IAsyncDisposable
+    {
+        public T? Item;
+        public int Count;
+        public void Dispose()
+        {
+            Count++;
+            Console.Write("disposed;");
+        }
+        public ValueTask DisposeAsync()
+        {
+            Count++;
+            Console.Write("disposed-async;");
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    public static class Factory
+    {
+        public static Resource<string?> New() => new();
+    }
+}`
+        let source = `import System
+import StructHelpers
+ASYNCfunc Observe() Func[int32] {
+    AWAITusing let resource = Factory.New()
+    return () -> resource.Count
+}
+let read = AWAITObserve()
+Console.Write(read().ToString())`
+        let expected = if asyncDispose {
+            "disposed-async;1"
+        } else {
+            "disposed;1"
+        }
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(expected),
+            Encoding.UTF8.GetBytes(
+                CompileAndRunWithSiblingCs(
+                    source.Replace(
+                        "ASYNC",
+                        if asyncDispose {
+                            "async "
+                        } else {
+                            ""
+                        }
+                    )
+                        .Replace(
+                        "AWAIT",
+                        if asyncDispose {
+                            "await "
+                        } else {
+                            ""
+                        }
+                    ),
+                    helper
+                )
+            )
+        )
+    }
+
+    @Theory
     @InlineData("Watcher", false)
     @InlineData("Watcher", true)
     @InlineData("Child", false)
