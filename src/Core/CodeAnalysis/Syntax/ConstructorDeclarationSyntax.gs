@@ -125,7 +125,7 @@ partial class ConstructorDeclarationSyntax : MemberSyntax {
     }
 
     /// Gets a value indicating whether this constructor declares an explicit `: base(args)` initializer.
-    prop HasBaseInitializer bool -> BaseKeyword != nil
+    prop HasBaseInitializer bool -> BaseKeyword?.Text == "base"
 
     /// @remarks The span starts at the ACCESSIBILITY MODIFIER when there is one. It used to
     /// start at `convenience`/`init`, which left `private` outside the

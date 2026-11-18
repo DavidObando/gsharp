@@ -2628,6 +2628,11 @@ internal shared class DiagnosticDescriptors {
         DiagnosticSeverity.Error,
         "Property initializers are not supported. Declare a field ('var {0} T = value') or assign the property in 'init'."
     )
+    internal let InvalidConstructorInitializerTarget DiagnosticDescriptor = DiagnosticDescriptor(
+        "GS0642",
+        DiagnosticSeverity.Error,
+        "Only 'base' is valid after ':' in a constructor initializer. For same-class chaining, use 'convenience init() {{ init(args) }}'."
+    )
     internal let FatalCompilerIOError DiagnosticDescriptor = DiagnosticDescriptor(
         "GS9997",
         DiagnosticSeverity.Error,
