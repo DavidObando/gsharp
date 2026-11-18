@@ -221,16 +221,7 @@ Run()`)
     }
 
     @Fact
-    func CapturingGroupMember_MethodGroupConversion_KnownDeferredLimitation() {
-        // Documented, deliberately deferred limitation: a CAPTURING member
-        // of a 2+ non-generic local-function group has no single stable
-        // closure instance to bind a bare-name delegate conversion to (each
-        // direct call it makes materializes its own instance). This matches
-        // the PRE-EXISTING behavior of a capturing GENERIC local function —
-        // not a new restriction introduced for the non-generic case — but IS
-        // a narrowing relative to the old non-generic delegate-variable
-        // baseline, where this converted trivially. Reported here so the
-        // gap is pinned, not silently regressed without a test.
+    func BackwardOnlyCapturingLocals_KeepFunctionValueConversion() {
         let result = EmittedOracle.Evaluate(`func Run() int32 {
     var outer = 41
     let first = func(x int32) int32 { return outer + x }
@@ -239,7 +230,8 @@ Run()`)
     return callback(1)
 }
 Run()`)
-        Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0126")
+        Assert.Empty(result.Diagnostics.Where((d Diagnostic) -> d.IsError))
+        Assert.Equal(42, result.Value)
     }
 
     @Fact

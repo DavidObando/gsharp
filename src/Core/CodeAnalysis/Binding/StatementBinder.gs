@@ -433,6 +433,7 @@ internal partial class StatementBinder {
     /// @param statements The bound-statement builder to append to.
     /// @param beforeBind Optional per-statement hook, invoked for each member.
     /// @param isMember Which of the two local-function-literal shapes this run is made of.
+    /// @param endExclusive The end of the required forward-reference region, when supplied.
     /// @returns The index of the run's last member (the caller sets its loop variable to this and
     /// continues).
     private func BindLocalFunctionLiteralGroup(
@@ -440,7 +441,8 @@ internal partial class StatementBinder {
         start int32,
         statements ImmutableArray[BoundStatement].Builder,
         beforeBind((StatementSyntax) -> void)?,
-        isMember(StatementSyntax) -> bool
+        isMember(StatementSyntax) -> bool,
+        endExclusive int32 = int32.MaxValue
     ) int32 {
         let statementSyntax = statementSyntaxes[start]
         // Only consecutive declarations of the same shape share forward
@@ -450,6 +452,7 @@ internal partial class StatementBinder {
         let bodies = List[() -> BoundStatement]()
         var end = start
         while end < statementSyntaxes.Length &&
+            end < endExclusive &&
             statementSyntaxes[end].SyntaxTree == statementSyntax.SyntaxTree &&
             isMember(statementSyntaxes[end]) {
             beforeBind?(statementSyntaxes[end])
@@ -539,26 +542,7 @@ internal partial class StatementBinder {
                     )
                     continue
                 }
-                // Issue #4219 (umbrella remainder): a run of TWO OR MORE
-                // consecutive non-generic local-function-literal `let`
-                // declarations gets the same forward-visibility/mutual-
-                // recursion treatment as a generic group — see
-                // IsNonGenericLocalFunctionLiteralDeclaration for why a lone
-                // member does not qualify. A run mixing generic and
-                // non-generic members never reaches here (the branch above
-                // already claimed the generic member and stopped at the
-                // first non-generic one), so a generic member calling a
-                // non-generic sibling declared AFTER it remains GS0130 —
-                // that broader-parity combination is deliberately out of
-                // scope here (see #4219's "mixed groups" note).
-                //
-                // Issue #4219 (umbrella remainder) correctness fix: also require an
-                // actual cross-reference between
-                // members of the run (see
-                // NonGenericLocalFunctionLiteralGroupHasCrossReference) —
-                // mere adjacency of two unrelated non-generic locals must
-                // not opt them into the direct-call representation; see that
-                // method's doc comment for the regression this prevents.
+                // Only forward references require direct-call groups. Keep ordinary closure values outside the required region (#6082).
                 if IsNonGenericLocalFunctionLiteralDeclaration(statementSyntax) &&
                     prepareGenericLocalFunctionDeclaration != nil &&
                     i +
@@ -571,13 +555,15 @@ internal partial class StatementBinder {
                         IsNonGenericLocalFunctionLiteralDeclaration(statementSyntaxes[runEnd]) {
                         runEnd++
                     }
-                    if NonGenericLocalFunctionLiteralGroupHasCrossReference(statementSyntaxes, i, runEnd) {
+                    let groupEnd = GetNonGenericLocalFunctionLiteralGroupEnd(statementSyntaxes, i, runEnd)
+                    if groupEnd > i + 1 {
                         i = BindLocalFunctionLiteralGroup(
                             statementSyntaxes,
                             i,
                             statements,
                             beforeBind,
-                            IsNonGenericLocalFunctionLiteralDeclaration
+                            IsNonGenericLocalFunctionLiteralDeclaration,
+                            endExclusive: groupEnd
                         )
                         continue
                     }
@@ -1002,11 +988,9 @@ internal partial class StatementBinder {
         /// (see `StatementBinder.Narrowing.cs`'s
         /// `bindFunctionLiteralWithSelfDeclaration` self-recursion path) to
         /// avoid silently changing every ordinary `let f = func ...` in the
-        /// language. Only a run of TWO OR MORE consecutive non-generic members
-        /// (see the minimum-run-length gate in (cref:BindBlockStatements))
-        /// opts into forward visibility — that plural shape is unambiguously a
-        /// deliberate group of named local functions, not an ordinary single
-        /// closure-valued local. An explicit outer type clause
+        /// language. Only forward references require a group of consecutive non-generic members.
+        /// (cref:GetNonGenericLocalFunctionLiteralGroupEnd) keeps other members on the delegate-valued-variable path.
+        /// An explicit outer type clause
         /// (`let f (int32) -> int32 = func ...`) is also excluded: the
         /// direct-call path's signature comes entirely from the LITERAL (its own
         /// parameters/return type), so a declared outer type would be silently
@@ -1050,43 +1034,22 @@ internal partial class StatementBinder {
             }
         )
 
-        /// Issue #4219 (umbrella remainder) correctness fix: a syntactic pre-check
-        /// gating whether a consecutive run of (cref:IsNonGenericLocalFunctionLiteralDeclaration)
-        /// members actually needs the forward-visible/direct-call group
-        /// representation. Without this gate, mere source-adjacency of two
-        /// non-generic `let name = func ...` locals opted them in
-        /// regardless of whether either body ever names the other — so two
-        /// unrelated, ordinary capturing callbacks declared back-to-back (a
-        /// common shape: `let onClick = func() {...}; let onLog = func()
-        /// {...}; Register(onClick)`) lost the ability to convert a
-        /// capturing member's bare name to a delegate value, a previously-legal
-        /// pattern with nothing to do with recursion. Only a run where at least
-        /// one member's body actually references another member's name needs
-        /// forward visibility; an unrelated run keeps each member's original
-        /// delegate-valued-variable representation (self-recursion is
-        /// unaffected either way — it already works via the existing
-        /// single-declaration self-reference path, so a member naming only
-        /// itself does not count as a cross-reference here).
-        private func NonGenericLocalFunctionLiteralGroupHasCrossReference(
+        /// Finds the smallest consecutive region required by this declaration's forward references.
+        /// Backward references and self-recursion retain delegate-valued variables (#6082).
+        /// Extend the region when an included member references another later sibling.
+        private func GetNonGenericLocalFunctionLiteralGroupEnd(
             statementSyntaxes ImmutableArray[StatementSyntax],
             start int32,
             end int32
-        ) bool {
-            let siblingNames = HashSet[string]()
+        ) int32 {
+            let siblingIndices = Dictionary[string, int32]()
             for var idx = start; idx < end; idx++ {
-                siblingNames.Add((cast[VariableDeclarationSyntax](statementSyntaxes[idx])).Identifier.Text)
+                siblingIndices[(cast[VariableDeclarationSyntax](statementSyntaxes[idx])).Identifier.Text] = idx
             }
-            for var idx = start; idx < end; idx++ {
+            var groupEnd = start + 1
+            for var idx = start; idx < groupEnd; idx++ {
                 let decl = cast[VariableDeclarationSyntax](statementSyntaxes[idx])
                 let selfName = decl.Identifier.Text
-                // `[start, end)` is only ever the `[i, runEnd)` range built by
-                // BindBlockStatements's `runEnd` loop, which advances only while
-                // `IsNonGenericLocalFunctionLiteralDeclaration` holds for the
-                // member at that index -- and that predicate pattern-matches
-                // `Initializer: FunctionLiteralExpressionSyntax { IsRefReturn:
-                // false }`. So every declaration in this range already has a
-                // non-null `FunctionLiteralExpressionSyntax` initializer by
-                // construction; the `!` merely restates what the caller verified.
                 let literal = cast[FunctionLiteralExpressionSyntax](decl.Initializer!!)
                 for node in literal.Body.DescendantNodesAndSelf() {
                     // A direct call (`second(x)`) is its own syntax node with an
@@ -1098,12 +1061,16 @@ internal partial class StatementBinder {
                         case call is CallExpressionSyntax: call.Identifier.Text
                         default: default(string?)
                     }
-                    if referencedName != nil && referencedName != selfName && siblingNames.Contains(referencedName) {
-                        return true
+                    if referencedName != nil && referencedName != selfName && siblingIndices.TryGetValue(
+                        referencedName,
+                        out var siblingIndex
+                    ) &&
+                        siblingIndex > idx {
+                        groupEnd = Math.Max(groupEnd, siblingIndex + 1)
                     }
                 }
             }
-            return false
+            return groupEnd
         }
 
         private func IsSyntacticallyInfiniteLoop(statement BoundForInfiniteStatement) bool {
