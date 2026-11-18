@@ -428,16 +428,7 @@ partial class CSharpToGSharpTranslator {
                 task
                 .ContainingNamespace
                 ?.ToDisplayString() == "System.Threading.Tasks" {
-                if !task.IsGenericType {
-                    return nil
-                }
-                // Issue #2421: same declaration-sink promotion the sync path
-                // below applies, keyed off the AWAITED type (see
-                // CSharpToGSharpTranslator.MapReturnType /
-                // PromoteAwaitedReturnIfTainted for the full rationale).
-                let awaitedType = task.TypeArguments[0]
-                let awaitedMapped GTypeReference? = this.typeMapper.Map(awaitedType, this.context, location)
-                return this.PromoteAwaitedReturnIfTainted(awaitedMapped, awaitedType, symbol)
+                return this.MapUnwrappedAsyncReturnType(symbol!!, task, location)
             }
             // Issue #914 (oblivious sink): local-function/lambda return
             // promotion uses the same shared symbol-position decision as a

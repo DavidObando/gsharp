@@ -9307,32 +9307,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         if sources.Count == 0 {
             if !isOutput && targetType?.IsReferenceType == true {
                 for scalar in ResolveSources(storage, model) {
-                    let sourceType = if position == ScalarFlowPosition.Value {
-                        SymbolDeclaredType(scalar)
-                    } else {
-                        SymbolValueType(scalar)
-                    }
-                    if sourceType?.IsReferenceType != true {
-                        continue
-                    }
-                    if IsCrossMemberSubstitutablePosition(
-                        target,
-                        string.Empty,
-                        scalar,
-                        position == ScalarFlowPosition.Value
-                    ) ||
-                        IsCrossMemberSubstitutablePosition(
-                        scalar,
-                        string.Empty,
-                        target,
-                        position == ScalarFlowPosition.Value
-                    ) {
-                        continue
-                    }
-                    let first = TupleElementKey(target, string.Empty)
-                    let second = TupleElementKey(Canonical(scalar), string.Empty)
-                    tupleContractEdges.Add((first, second))
-                    tupleContractEdges.Add((second, first))
+                    AddRefRootContractEdges(target, targetType, scalar, position, tupleContractEdges)
                 }
             }
             return
@@ -9359,7 +9334,13 @@ internal shared class ObliviousNullabilityAnalyzer {
                     continue
                 }
             }
-            if sourcePath.Length == 0 || targetType?.IsReferenceType != true {
+            if targetType?.IsReferenceType != true {
+                continue
+            }
+            if sourcePath.Length == 0 {
+                if !isOutput {
+                    AddRefRootContractEdges(target, targetType, sourceSymbol, position, tupleContractEdges)
+                }
                 continue
             }
             if IsCrossMemberSubstitutablePosition(
@@ -9389,6 +9370,36 @@ internal shared class ObliviousNullabilityAnalyzer {
                 tupleTainted.Add(source)
             }
         }
+    }
+
+    private func AddRefRootContractEdges(
+        target ISymbol,
+        targetType ITypeSymbol?,
+        source ISymbol?,
+        position ScalarFlowPosition,
+        tupleContractEdges List[(Target TupleElementKey, Source TupleElementKey)]
+    ) {
+        let canonicalSource = Canonical(source)
+        if canonicalSource == nil || targetType?.IsReferenceType != true {
+            return
+        }
+        let valuePosition = position == ScalarFlowPosition.Value
+        let sourceType = if valuePosition {
+            SymbolDeclaredType(canonicalSource)
+        } else {
+            SymbolValueType(canonicalSource)
+        }
+        if sourceType?.IsReferenceType != true {
+            return
+        }
+        if IsCrossMemberSubstitutablePosition(target, string.Empty, canonicalSource, valuePosition) ||
+            IsCrossMemberSubstitutablePosition(canonicalSource, string.Empty, target, valuePosition) {
+            return
+        }
+        let first = TupleElementKey(target, string.Empty)
+        let second = TupleElementKey(canonicalSource, string.Empty)
+        tupleContractEdges.Add((first, second))
+        tupleContractEdges.Add((second, first))
     }
 
     private func TryResolveTupleStorageSource(

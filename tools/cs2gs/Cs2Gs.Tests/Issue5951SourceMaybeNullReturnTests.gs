@@ -66,6 +66,46 @@ public static class P
     }
 
     @Theory
+    @InlineData(
+        "Task<(string, int)> value = Task.FromResult((\"ok\", 1)); ref Task<(string, int)> alias = ref value; alias = Empty();",
+        "value"
+    )
+    @InlineData(
+        "Task<(string, int)> value = Task.FromResult((\"ok\", 1)); ref Task<(string, int)> alias = ref Slot(ref value); alias = Empty();",
+        "value"
+    )
+    func RefAliasWrites_PreserveNullableTupleTaskStorage(write string, read string) {
+        let source = `
+#nullable disable
+using System;
+using System.Diagnostics.CodeAnalysis;
+using System.Threading.Tasks;
+public static class P
+{
+    static int calls;
+    [return: MaybeNull] static Task<(string, int)> Empty() { calls++; return null; }
+    static ref Task<(string, int)> Slot(ref Task<(string, int)> value) => ref value;
+    static Task<(string, int)> Read()
+    {
+        ` + write + `
+        return ` + read + `;
+    }
+    public static void Main() { Console.WriteLine(Read() == null); Console.WriteLine(calls); }
+}`
+        LiteralConstructionRuntimeParity.AssertMatches(
+            source,
+            verifyTranslation: (printed string) -> {
+                Assert.Contains("func Read() Task[(string, int32)]?", printed)
+                Assert.DoesNotContain("Empty()!!", printed)
+                Assert.DoesNotContain("Task[(string?, int32)]", printed)
+            },
+            verifyIL: true,
+            nullableContextOptions: NullableContextOptions.Disable,
+            expectedOutput: string.Join(Environment.NewLine, []string{"True", "1", ""})
+        )
+    }
+
+    @Theory
     @InlineData(false)
     @InlineData(true)
     func TransitiveSourceOwners_IsolateReturnContractCatalogs(throughInterface bool) {
@@ -822,6 +862,76 @@ public static class P
             nullableContextOptions: NullableContextOptions.Disable,
             expectedOutput: string.Join(Environment.NewLine, []string{"True", "True", "1", ""})
         )
+    }
+
+    @Fact
+    func LocalAsyncNestedTask_PreservesOuterEnvelope() {
+        const source = `
+#nullable disable
+using System;
+using System.Threading.Tasks;
+public static class P
+{
+    static int calls;
+    static Task<string> Id(Task<string> value) => value;
+    static async Task Read()
+    {
+        async Task<Task<string>> Missing() { calls++; await Task.Yield(); return null; }
+        var saved = await Missing();
+        Task<string> copy = saved;
+        Console.WriteLine(copy == null);
+        Console.WriteLine(Id(saved) == null);
+        Console.WriteLine(calls);
+    }
+    public static void Main() => Read().GetAwaiter().GetResult();
+}`
+        LiteralConstructionRuntimeParity.AssertMatches(
+            source,
+            verifyTranslation: (printed string) -> {
+                Assert.Contains("let Missing = async func () Task[Task[string]?]", printed)
+                Assert.DoesNotContain("Task[string?]", printed)
+                Assert.DoesNotContain("Missing()!!", printed)
+            },
+            // The compiler emits `Func<Task<object>>` for async function literals with symbolic nullable returns.
+            verifyIL: false,
+            nullableContextOptions: NullableContextOptions.Disable,
+            expectedOutput: string.Join(Environment.NewLine, []string{"True", "True", "1", ""})
+        )
+    }
+
+    @Fact
+    func SuspendNestedTask_KeepsLogicalTaskResult() {
+        const source = `
+using System.Threading.Tasks;
+using Gsharp.Concurrency;
+public static class P
+{
+    [Suspending]
+    public static async ValueTask<Task<int>> Read()
+    {
+        await Task.Yield();
+        return Task.FromResult(7);
+    }
+#nullable disable
+    [Suspending]
+    public static async ValueTask<Task<string>> Missing()
+    {
+        await Task.Yield();
+        return null;
+    }
+}`
+        let references = List[MetadataReference](
+            CSharpProjectLoader.RuntimeReferences()
+        ){MetadataReference.CreateFromFile(typeof(Gsharp.Concurrency.Chan[_]).Assembly.Location)}
+        let project = CSharpProjectLoader.LoadInMemory([](string, string){("Probe.cs", source)}, references)
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        let document = Assert.Single(project.Documents)
+        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+        let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+        Assert.Contains("suspend func Read() Task[int32] {", printed, StringComparison.Ordinal)
+        Assert.Contains("suspend func Missing() Task[string]? {", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("ValueTask[", printed, StringComparison.Ordinal)
+        TranslationTestValidation.AssertBinds(printed)
     }
 
     @Fact

@@ -1207,31 +1207,12 @@ partial class CSharpToGSharpTranslator {
                     task
                     .ContainingNamespace
                     ?.ToDisplayString() == "System.Threading.Tasks" {
-                    if !task.IsGenericType {
-                        return nil
-                    }
-                    // Issue #2421: an `async Task<T>` return is still a
-                    // declaration sink for T like any other method return —
-                    // the unwrap above must not skip the SAME tuple/scalar
-                    // promotion the synchronous path below applies, keyed off
-                    // the AWAITED type T (see PromoteAwaitedReturnIfTainted).
-                    let awaitedType = task.TypeArguments[0]
-                    var awaitedMapped GTypeReference? = this.typeMapper.Map(
-                        awaitedType,
-                        this.context,
-                        node.ReturnType.GetLocation()
-                    )
-                    awaitedMapped = this.PromoteTupleDeclarationIfTainted(awaitedMapped, awaitedType, symbol)
-                    awaitedMapped = this.PromoteAwaitedReturnIfTainted(awaitedMapped, awaitedType, symbol)
-                    // Task-like logical results require the explicit async envelope spelling (#1918).
-                    if IsTaskLikeEnvelope(awaitedType) && this.typeMapper.Map(
+                    return this.MapUnwrappedAsyncReturnType(
+                        symbol,
                         task,
-                        this.context,
-                        node.ReturnType.GetLocation()
-                    ) is NamedTypeReference envelope {
-                        return NamedTypeReference(envelope.Name, []GTypeReference{awaitedMapped!!})
-                    }
-                    return awaitedMapped
+                        node.ReturnType.GetLocation(),
+                        preserveNestedTaskEnvelope: !unwrapValueTask
+                    )
                 }
                 // Issue #1900: `symbol.ReturnType` is already the pointee type T
                 // for a `ref`-returning method (Roslyn strips the `ref`); the
@@ -1280,6 +1261,34 @@ partial class CSharpToGSharpTranslator {
             } else {
                 NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType)
             }
+        }
+
+        private func MapUnwrappedAsyncReturnType(
+            symbol IMethodSymbol,
+            task INamedTypeSymbol,
+            location Location,
+            preserveNestedTaskEnvelope bool = true
+        ) GTypeReference? {
+            if !task.IsGenericType {
+                return nil
+            }
+            // Issue #2421: an `async Task<T>` return is still a declaration sink
+            // for T, keyed off the awaited type T.
+            let awaitedType = task.TypeArguments[0]
+            var awaitedMapped GTypeReference? = this.typeMapper.Map(awaitedType, this.context, location)
+            awaitedMapped = this.PromoteTupleDeclarationIfTainted(awaitedMapped, awaitedType, symbol)
+            awaitedMapped = this.PromoteAwaitedReturnIfTainted(awaitedMapped, awaitedType, symbol)
+            // Ordinary async declarations unwrap one task envelope, so nested
+            // task results keep an explicit envelope (#1918).
+            // Suspend declarations do not unwrap explicit envelopes.
+            if preserveNestedTaskEnvelope && IsTaskLikeEnvelope(awaitedType) && this.typeMapper.Map(
+                task,
+                this.context,
+                location
+            ) is NamedTypeReference envelope {
+                return NamedTypeReference(envelope.Name, []GTypeReference{awaitedMapped!!})
+            }
+            return awaitedMapped
         }
 
         private func MapAttributes(
