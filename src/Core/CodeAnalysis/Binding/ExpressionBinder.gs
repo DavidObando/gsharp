@@ -3055,6 +3055,13 @@ internal partial class ExpressionBinder {
             parameterTypes.MoveToImmutable(),
             this.MethodGroupObservableReturnType(function)
         )
+        if function.LocalDeclaration != nil {
+            function.LocalFunctionValue ??= LocalVariableSymbol(
+                "<function_value_" + function.Name + ">",
+                isReadOnly: true,
+                type: fnType
+            )
+        }
         methodGroup = BoundMethodGroupExpression(syntax, function, fnType)
         return true
     }
@@ -6265,20 +6272,8 @@ internal partial class ExpressionBinder {
         }
 
         private func IsMethodGroupCandidateUsable(function FunctionSymbol) bool {
-            // Issue #4219 (umbrella remainder): a non-generic, non-capturing
-            // direct-call local function (a member of a 2+ non-generic local-
-            // function-literal group, see StatementBinder's
-            // IsNonGenericLocalFunctionLiteralDeclaration) has no Package —
-            // it is a local, not a package-level function — but converts to a
-            // delegate exactly like one: a plain static-shaped MethodDef, no
-            // capture instance to bind. A GENERIC or CAPTURING local function
-            // keeps falling through to "not a variable" below, matching the
-            // pre-existing behavior for a capturing generic local function
-            // (no single stable closure instance to bind a bare-name delegate
-            // conversion to — each direct call it makes materializes its own).
-            let isConvertibleLocalFunction = function.LocalDeclaration != nil &&
-                !function.IsGeneric &&
-                !function.HasCaptures
+            // Value-used local functions reuse ordinary delegate storage and capture boxing.
+            let isConvertibleLocalFunction = function.LocalDeclaration != nil && !function.IsGeneric
             if function.IsInstanceMethod ||
                 function.IsExtension ||
                 function.IsStatic ||

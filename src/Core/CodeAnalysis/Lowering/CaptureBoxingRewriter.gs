@@ -45,6 +45,64 @@ import System.Linq
 /// This preserves foreach-style fresh-variable semantics when closures
 /// escape while still sharing one cell among closures from the same iteration.
 internal shared class CaptureBoxingRewriter {
+    private class LocalFunctionValueRewriter : NestedFunctionBodyRewriter {
+        protected override func RewriteMethodGroupExpression(node BoundMethodGroupExpression) BoundExpression ->
+        if node.Function is {HasCaptures: true, LocalFunctionValue: {} value} {
+            BoundVariableExpression(node.Syntax, value)
+        } else {
+            base.RewriteMethodGroupExpression(node)
+        }
+
+        protected override func RewriteBlockStatement(node BoundBlockStatement) BoundStatement {
+            let rewritten = cast[BoundBlockStatement](base.RewriteBlockStatement(node))
+            var statements ImmutableArray[BoundStatement].Builder? = nil
+            for var index = 0; index < rewritten.Statements.Length; index++ {
+                if rewritten.Statements[index] is not BoundLocalFunctionDeclaration {
+                    statements?.Add(rewritten.Statements[index])
+                    continue
+                }
+                var end = index
+                while end < rewritten.Statements.Length && rewritten.Statements[end] is BoundLocalFunctionDeclaration {
+                    end++
+                }
+                for var member = index; member < end; member++ {
+                    let declaration = cast[BoundLocalFunctionDeclaration](rewritten.Statements[member])
+                    if declaration.Literal.Function is {HasCaptures: true, LocalFunctionValue: {} value} {
+                        if statements == nil {
+                            statements = ImmutableArray.CreateBuilder[BoundStatement]()
+                            statements.AddRange(rewritten.Statements.Take(index))
+                        }
+                        // Allocate every forward-referenced delegate cell before initializing any closure.
+                        statements.Add(BoundVariableDeclaration(nil, value, BoundDefaultExpression(nil, value.Type)))
+                    }
+                }
+                if statements != nil {
+                    for var member = index; member < end; member++ {
+                        let declaration = cast[BoundLocalFunctionDeclaration](rewritten.Statements[member])
+                        statements.Add(
+                            if declaration.Literal.Function is {HasCaptures: true, LocalFunctionValue: {} value} {
+                                cast[BoundStatement](
+                                    BoundExpressionStatement(
+                                        declaration.Syntax,
+                                        BoundAssignmentExpression(nil, value, declaration.Literal)
+                                    )
+                                )
+                            } else {
+                                cast[BoundStatement](declaration)
+                            }
+                        )
+                    }
+                }
+                index = end - 1
+            }
+            return if statements == nil {
+                rewritten
+            } else {
+                BoundBlockStatement(rewritten.Syntax, statements.ToImmutable())
+            }
+        }
+    }
+
     private class BoxedVariable {
         init(
             original VariableSymbol,
@@ -1024,6 +1082,7 @@ internal shared class CaptureBoxingRewriter {
         out rewrittenArguments ImmutableArray[BoundExpression],
         out parameterPrologue ImmutableArray[BoundStatement]
     )(Body BoundBlockStatement, LambdaUpdates Dictionary[FunctionSymbol, BoundBlockStatement]) {
+        let body = cast[BoundBlockStatement](LocalFunctionValueRewriter().RewriteStatement(body))
         rewrittenArguments = arguments
         parameterPrologue = ImmutableArray[BoundStatement].Empty
         let emptyUpdates = Dictionary[FunctionSymbol, BoundBlockStatement]()

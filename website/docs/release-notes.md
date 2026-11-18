@@ -18,6 +18,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Convert capturing forward-recursive local functions to function values and compatible delegates. Preserve callback identity and shared capture cells across direct calls, escaped callbacks, and loop iterations. (Fixes #6105)
+
 - Preserve non-null assignment facts from ordinary extension-call receivers, including imported extensions. Receiver-side `??=` no longer causes a false GS0158 after the call. Keep later assignments and by-reference writes invalidating those facts. (Fixes #6107)
 
 - Reject constructor initializer targets other than `base` with GS0642 instead of silently calling a base constructor. Use `convenience init() { init(args) }` for same-class chaining. (Fixes #6074)

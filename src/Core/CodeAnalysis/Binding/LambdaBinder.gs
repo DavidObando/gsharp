@@ -958,6 +958,7 @@ internal class LambdaBinder {
         // combination that path does not support). Re-evaluate the
         // exclusion now that every member's final capture set is known.
         for literal in literals {
+            literal.Function.HasCaptures = !literal.CapturedVariables.IsEmpty
             if literal.EnclosingTypeParameterOffender is {} offender &&
                 !literal.EnclosingTypeParameterDiagnosticReported &&
                 literal
@@ -3569,6 +3570,9 @@ internal class LambdaBinder {
 
         protected override func RewriteLocalFunctionDeclaration(node BoundLocalFunctionDeclaration) BoundStatement {
             this.DeclaredFunctions.Add(node.Literal.Function)
+            if node.Literal.Function.LocalFunctionValue is {} value {
+                this.Declared.Add(value)
+            }
             return node
         }
 
@@ -4364,6 +4368,13 @@ internal class LambdaBinder {
         protected override func RewriteMethodGroupExpression(node BoundMethodGroupExpression) BoundExpression {
             for candidate in node.Candidates {
                 this.RecordDirectFunctionReference(candidate)
+                if candidate.LocalFunctionValue is {} value &&
+                    this.calleeCapturedVariables != nil &&
+                    this
+                    .calleeCapturedVariables
+                    .TryGetValue(candidate, out var captures) && !captures.IsEmpty {
+                    this.RecordReference(value)
+                }
             }
             return base.RewriteMethodGroupExpression(node)
         }

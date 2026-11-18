@@ -278,19 +278,19 @@ class FunctionSymbol : Symbol {
         internal set;
     }
 
+    /// Gets the delegate storage for a local function used as a value.
+    internal prop LocalFunctionValue LocalVariableSymbol? {
+        get;
+        set;
+    }
+
     /// Gets a value indicating whether this direct-call local function
     /// ((cref:LocalDeclaration) non-null; issue #4219 umbrella
     /// remainder) captures outer state. Stamped from
     /// (cref:BoundFunctionLiteralExpression.CapturedVariables) once
     /// the literal's body (and, for a group, the #4221 fixed-point capture
     /// reconciliation) has finished binding — see
-    /// `StatementBinder.BindLocalFunctionLiteralGroup`. Consulted by
-    /// method-group/delegate conversion (`ExpressionBinder.IsMethodGroupCandidateUsable`):
-    /// a NON-capturing direct-call local converts like an ordinary function,
-    /// but a CAPTURING one has no single stable closure instance to bind a
-    /// delegate to (each direct call to it materializes its own), so bare-
-    /// name conversion is not offered — same limitation an existing
-    /// capturing GENERIC local function already has.
+    /// `StatementBinder.BindLocalFunctionLiteralGroup`.
     prop HasCaptures bool {
         get;
         internal set;
