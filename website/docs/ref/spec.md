@@ -815,6 +815,26 @@ let x = Identity[int32](42)
 
 The implementation emits **reified CLR generic metadata** for user-declared and imported generic types and methods: `TypeDef` carries `GenericParam` rows, signatures over `T` encode `Var(idx)`/`MVar(idx)`, closed CLR generics that mention an in-scope type parameter (`List[T]`) emit as honest `GenericInstantiation` blobs, and open-bearing delegate shapes (`func(T) U`) dispatch through reified `Func`N` MemberRefs on constructed `TypeSpec`. Generic method inference is implemented for supported cases.
 
+#### Nullable type parameters
+
+An explicit source `T?` requires constraints proving a reference kind or a nonnullable value kind.
+Otherwise **GS0641** points to its `?` token.
+This applies in signatures, storage, bodies, constraint clauses, and nested type expressions.
+The same proof is required when a source operator creates `T?`, including conditional access, delegate invocation, and nil joins.
+Such a diagnostic points to the source operator instead of an annotation.
+`class` and `class?` prove reference kind; `struct` and `unmanaged` prove nonnullable value kind.
+A non-universal reference-class bound also proves reference kind, including through dependent bounds.
+Neither `notnull` nor an interface-only bound proves either kind.
+A dependent parameter does not inherit a bounding parameter's bare `class` flag: `[B class, T B]` still permits `B = object, T = int32`.
+
+Ordinary unconstrained `T` remains valid and accepts complete nullable arguments, such as `Identity[int32?](nil)`.
+Choose `class?`, rather than `class`, when nullable reference arguments are part of the API.
+An API that constructs nullable results for both reference and value arguments may need separate constrained contracts.
+For `T struct`, `default(T)` converted to `T?` is present zero, while `nil` and `default(T?)` are absent.
+Reference annotations retain the ordinary CLR reference representation.
+Imported CLR `[Nullable(2)]T` keeps its existing policy; it is not an explicit structural source annotation.
+See [ADR-0224](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0224-source-nullable-type-parameter-kind-constraints.md) for proof rules, compatibility, and migration.
+
 ### Type syntax
 
 ```ebnf

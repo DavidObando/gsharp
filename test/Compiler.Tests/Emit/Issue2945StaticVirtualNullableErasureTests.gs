@@ -17,10 +17,8 @@ import GSharp.Compiler
 import GSharp.Compiler.Tests
 import Xunit.Sdk
 
-/// Issue #2945: static-virtual interface properties use the same declared-type
-/// nullable erasure as instance interface properties. Tests load every emitted
-/// type, then execute get/set dispatch through constrained generic calls in a
-/// child process; IL verification is additional evidence, not the runtime gate.
+/// Static-virtual nullable properties retain their reference or value representation.
+/// Native consumers test constrained dispatch and absence after source-kind migration.
 open class Issue2945StaticVirtualNullableErasureTests {
     @Fact
     func NullableErasureMatrix_LoadsAndDispatchesThroughClrSlots() {
@@ -116,7 +114,7 @@ using Issue2945Matrix;
 
 Console.WriteLine(Read<IntImplicit, int>());
 Console.WriteLine(Read<IntExplicit, int>());
-Console.WriteLine(Read<TextImplicit, string>());
+Console.WriteLine(ReadReference<TextImplicit, string>());
 Console.WriteLine(Read<OpenImplicit<int>, int>());
 Console.WriteLine(ReadClass<CatImplicit, Cat>() is not null);
 Console.WriteLine(ReadSet<TextSet, string>());
@@ -128,10 +126,26 @@ Console.WriteLine(ReadSet<ExplicitTextSet, string>());
 Console.WriteLine(ReadStructSet<StructSet, int>());
 SetStruct<StructSet, int>(9);
 Console.WriteLine(ReadStructSet<StructSet, int>());
+SetStruct<StructSet, int>(null);
+Console.WriteLine(ReadStructSet<StructSet, int>() is null);
+SetStruct<StructSet, int>(0);
+Console.WriteLine(ReadStructSet<StructSet, int>() == 0);
+Console.WriteLine(SliceGet.Value[0]);
+Console.WriteLine(ArrayGet.Value[2]);
+Console.WriteLine(MapGet.Value["one"]);
+Console.WriteLine(FuncArgumentGet.Value(null));
+Console.WriteLine(FuncReturnGet.Value(4));
 
 static T? Read<TImpl, T>()
-    where T : notnull
+    where T : struct
     where TImpl : IGet<T>
+{
+    return TImpl.Value;
+}
+
+static T? ReadReference<TImpl, T>()
+    where T : class?
+    where TImpl : IReferenceGet<T>
 {
     return TImpl.Value;
 }
@@ -187,10 +201,54 @@ nil
 explicit-before
 explicit-after
 7
-9`
+9
+True
+True
+1
+3
+1
+1
+6`
         let directory = CreateWorkDirectory()
         try {
-            let libraryPath = CompileGSharp(source, directory, "Issue2945Matrix.dll", target: "library")
+            Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(
+                source,
+                []string{"T"},
+                7,
+                isLibrary: true,
+                occurrences: []int32{0, 2, 4, 5, 6, 7, 8}
+            )
+            let supported = source
+                .Replace("sealed interface IGet[T]", "sealed interface IGet[T struct]")
+                .Replace("struct OpenImplicit[T]", "struct OpenImplicit[T struct]")
+                .Replace("prop Value int32 ->", "prop Value int32? ->")
+                .Replace("prop (IGet[int32]) Value int32 ->", "prop (IGet[int32]) Value int32? ->")
+                .Replace("prop Value T -> default(T)", "prop Value T? -> default(T)")
+                .Replace(
+                "class TextImplicit : IGet[string]",
+                "sealed interface IReferenceGet[T class?] { shared { prop Value T? { get; } } }\nclass TextImplicit : IReferenceGet[string]"
+            )
+                .Replace("sealed interface ISet[T]", "sealed interface ISet[T class?]")
+                .Replace("sealed interface ISliceGet[T]", "sealed interface ISliceGet[T struct]")
+                .Replace("sealed interface IArrayGet[T]", "sealed interface IArrayGet[T struct]")
+                .Replace("sealed interface IMapGet[T]", "sealed interface IMapGet[T struct]")
+                .Replace("sealed interface IFuncArgumentGet[T]", "sealed interface IFuncArgumentGet[T struct]")
+                .Replace("sealed interface IFuncReturnGet[T]", "sealed interface IFuncReturnGet[T struct]")
+                .Replace("prop Value []int32 -> []int32{1}", "prop Value []int32? -> []int32?{1}")
+                .Replace("prop Value [3]int32 -> [3]int32{1, 2, 3}", "prop Value [3]int32? -> [3]int32?{1, 2, 3}")
+                .Replace(
+                "prop Value map[string,int32] -> map[string,int32]",
+                "prop Value map[string,int32?] -> map[string,int32?]"
+            )
+                .Replace(
+                "prop Value func(int32) int32 -> func(value int32) int32 { return value + 1 }",
+                "prop Value func(int32?) int32 -> func(value int32?) int32 { return (value ?? 0) + 1 }"
+            )
+                .Replace(
+                "prop Value func(int32) int32 -> func(value int32) int32 { return value + 2 }",
+                "prop Value func(int32) int32? -> func(value int32) int32? { return value + 2 }"
+            )
+            let libraryPath = CompileGSharp(supported, directory, "Issue2945Matrix.dll", target: "library")
             let _ = EmittedFixture.Load(libraryPath).GetTypes()
             let consumerPath = CompileCSharpConsumer(consumer, libraryPath, directory)
             Assert.Equal(expected + Environment.NewLine, RunChild(consumerPath, directory))
@@ -223,7 +281,12 @@ func Main() {
 }`
         let directory = CreateWorkDirectory()
         try {
-            let outputPath = CompileGSharp(source, directory, "Issue2945GSharp.dll", target: "exe")
+            Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(source, []string{"T"}, 1)
+            let supported = source.Replace("sealed interface I[T]", "sealed interface I[T struct]").Replace(
+                "prop Value int32 -> 1",
+                "prop Value int32? -> 1"
+            )
+            let outputPath = CompileGSharp(supported, directory, "Issue2945GSharp.dll", target: "exe")
             let _ = EmittedFixture.Load(outputPath).GetTypes()
             Assert.Equal("ok${Environment.NewLine}", RunChild(outputPath, directory))
             IlVerifier.Verify(

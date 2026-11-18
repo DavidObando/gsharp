@@ -54,6 +54,10 @@ Both forms are added; both are additive and behave the same as in C#:
    - a branch of a conditional expression whose type is supplied by
      its sibling (`true ? 42 : default`).
 
+`default(T?)` requires a well-formed nullable type under [ADR-0224](0224-source-nullable-type-parameter-kind-constraints.md).
+An explicit open-parameter `T?` therefore needs a proven representation kind.
+Ordinary unconstrained `default(T)` remains valid and keeps its reified behavior.
+
 The arm-leader use of `default` inside `switch`/`select` is unchanged.
 The parse is context-dependent: arm leaders are recognised before
 expression parsing is attempted, so a bare `default` token at the start

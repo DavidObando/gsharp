@@ -742,7 +742,7 @@ internal partial class ExpressionBinder {
                 // read/write degenerates into a plain `.c` against `b`'s nullable
                 // type and reports "Cannot find member c".
                 if nested.IsNullConditional {
-                    return BindNullConditionalAccessExpressionCore(head, nested.RightPart)
+                    return BindNullConditionalAccessExpressionCore(head, nested.RightPart, nested.DotToken.Location)
                 }
                 let fullReceiverStart = receiverStart ?? receiverSyntax?.Span.Start ?? nested.LeftPart.Span.Start
                 return BindAccessorStep(head, nil, nested.RightPart, nested.LeftPart, fullReceiverStart)
@@ -2462,10 +2462,13 @@ internal partial class ExpressionBinder {
                 if whenNotNull is BoundErrorExpression || whenNotNull.Type == TypeSymbol.Error {
                     return BoundErrorExpression(nil)
                 }
-                let resultType = if whenNotNull.Type is NullableTypeSymbol {
-                    whenNotNull.Type
-                } else {
-                    cast[TypeSymbol](NullableTypeSymbol.Get(whenNotNull.Type))
+                let resultType = binderCtx.BindSourceNullable(
+                    whenNotNull.Type,
+                    syntax.OpenBracketToken.Location,
+                    isOperator: true
+                )
+                if resultType == TypeSymbol.Error {
+                    return BoundErrorExpression(syntax)
                 }
                 // Issue #1475: allocate the result slot for ANY value-type underlying
                 // recognised by symbol (user enum/struct, value-constrained type
@@ -2998,10 +3001,13 @@ internal partial class ExpressionBinder {
                     if whenNotNull is BoundErrorExpression {
                         return whenNotNull
                     }
-                    let resultType = if whenNotNull.Type is NullableTypeSymbol {
-                        whenNotNull.Type
-                    } else {
-                        cast[TypeSymbol](NullableTypeSymbol.Get(whenNotNull.Type))
+                    let resultType = binderCtx.BindSourceNullable(
+                        whenNotNull.Type,
+                        diagnosticLocation,
+                        isOperator: true
+                    )
+                    if resultType == TypeSymbol.Error {
+                        return BoundErrorExpression(outerSyntax)
                     }
                     var resultSlot LocalVariableSymbol? = nil
                     if resultType is NullableTypeSymbol nullableResult &&
@@ -5673,7 +5679,7 @@ internal partial class ExpressionBinder {
                     return head
                 }
                 if nested.IsNullConditional {
-                    return BindNullConditionalAccessExpressionCore(head, nested.RightPart)
+                    return BindNullConditionalAccessExpressionCore(head, nested.RightPart, nested.DotToken.Location)
                 }
                 return BindAccessorStep(head, nil, nested.RightPart, nested.LeftPart, leftName.Span.Start)
             }

@@ -52,7 +52,11 @@ let di = Delivered[int32](7)
 Console.WriteLine("delivered-int=" + di.Ok.ToString() + ":" + di.Value.ToString())
 Console.WriteLine("done")
 `
-        let lines = CompileVerifyAndRun(source, out _)
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(source, []string{"T"}, 1)
+        let lines = CompileVerifyAndRun(
+            source.Replace(BoxSource, SupportedBoxSource).Replace("Closed[int32]", "ClosedValue[int32]"),
+            out _
+        )
         // The nil really reaches the field, and the value-type instantiation
         // stores the element's zero value rather than a lifted `Nullable`.
         Assert.Contains("closed-string=False:nil", lines)
@@ -74,7 +78,8 @@ Console.WriteLine("done")
         let source = BoxSource + `
 Console.WriteLine("done")
 `
-        let _ = CompileVerifyAndRun(source, out var assemblyPath)
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(source, []string{"T"}, 1)
+        let _ = CompileVerifyAndRun(source.Replace(BoxSource, SupportedBoxSource), out var assemblyPath)
         using let stream = File.OpenRead(assemblyPath)
         using let pe = PEReader(stream)
         let reader = pe.GetMetadataReader()
@@ -120,7 +125,8 @@ func Make[T]() Plain[T] {
 
 Console.WriteLine("unreachable")
 `
-        let log = CompileExpectingFailure(source)
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(source, []string{"T"}, 1, []string{"GS0154"})
+        let log = CompileExpectingFailure(source.Replace("Make[T]", "Make[T class?]"))
         Assert.Contains("GS0154", log, StringComparison.Ordinal)
     }
 
@@ -246,6 +252,12 @@ func Closed[T]() Box[T] {
 
 func Delivered[T](value T) Box[T] {
     return Box[T](value, true)
+}
+`
+
+        private prop SupportedBoxSource string -> BoxSource.Replace("Closed[T]", "Closed[T class?]") + `
+func ClosedValue[T struct]() Box[T] {
+    return Box[T](default(T), false)
 }
 `
 

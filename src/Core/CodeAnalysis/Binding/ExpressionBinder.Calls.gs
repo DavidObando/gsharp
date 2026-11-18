@@ -1203,7 +1203,7 @@ internal partial class ExpressionBinder {
         // conversion, never construction. Resolve imported generic targets
         // here because ordinary name lookup does not materialize their closed
         // CLR type.
-        if syntax.NullableQuestionToken != nil && syntax.Arguments.Count == 1 {
+        if syntax.NullableQuestionToken is {} nullableTargetQuestion && syntax.Arguments.Count == 1 {
             var checkedTarget = if openGenericDefinition != nil && !symbolicTypeArgs.IsDefaultOrEmpty {
                 cast[TypeSymbol](
                     ImportedTypeSymbol.GetConstructed(resolvedClrType, openGenericDefinition, symbolicTypeArgs)
@@ -1220,7 +1220,7 @@ internal partial class ExpressionBinder {
             }
             result = conversions.BindConversion(
                 syntax.Arguments[0],
-                NullableTypeSymbol.Get(checkedTarget),
+                binderCtx.BindSourceNullable(checkedTarget, nullableTargetQuestion.Location),
                 allowExplicit: true
             )
             return true
@@ -1434,8 +1434,8 @@ internal partial class ExpressionBinder {
             .Count == 1 &&
             boundArguments.Length == 1 &&
             conversionTarget != nil {
-            if syntax.NullableQuestionToken != nil {
-                conversionTarget = NullableTypeSymbol.Get(conversionTarget)
+            if syntax.NullableQuestionToken is {} nullableTargetQuestion {
+                conversionTarget = binderCtx.BindSourceNullable(conversionTarget, nullableTargetQuestion.Location)
             }
             let argument = boundArguments[0]
             // Issue #3684 (family F8): the same fallback must cover the

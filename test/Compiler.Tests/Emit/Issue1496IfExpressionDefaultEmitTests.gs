@@ -44,7 +44,8 @@ func Main() {
     Console.WriteLine(h.GetOrDefault(false, TagBox1496()) == nil)
     Console.WriteLine(h.GetOrDefault(true, TagBox1496()) == nil)
 }`
-        let output = CompileAndRun(source)
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(source, []string{"T"}, 1)
+        let output = CompileAndRun(source.Replace("[T ITag1496[T]]", "[T ITag1496[T] class?]"))
         Assert.Equal("True${Environment.NewLine}False${Environment.NewLine}", output)
     }
 

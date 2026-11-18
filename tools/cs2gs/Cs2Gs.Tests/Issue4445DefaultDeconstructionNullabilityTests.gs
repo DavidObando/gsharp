@@ -6,6 +6,7 @@ package Cs2Gs.Tests
 
 import System
 import System.Linq
+import System.Text.RegularExpressions
 import Cs2Gs.CodeModel.Printing
 import Cs2Gs.Translator
 import Cs2Gs.Translator.Loading
@@ -245,10 +246,34 @@ open class Issue4445DefaultDeconstructionNullabilityTests {
         Assert.Contains("suppressed = default(T)!!", printed, StringComparison.Ordinal)
         Assert.Contains("annotated T? = default(T)", printed, StringComparison.Ordinal)
         Assert.DoesNotContain("let _ =", printed, StringComparison.Ordinal)
-        let result = EmittedOracle.Evaluate(printed + Environment.NewLine + "Defaults.Run()")
-        Assert.DoesNotContain(
-            result.Diagnostics,
-            (diagnostic GSharp.Core.CodeAnalysis.Diagnostic) -> diagnostic.IsError
+        let rejected = EmittedOracle.Evaluate(printed + Environment.NewLine + "Defaults.Run()")
+        let errors = rejected.Diagnostics.Where((d GSharp.Core.CodeAnalysis.Diagnostic) -> d.IsError).ToArray()
+        Assert.NotEmpty(errors)
+        Assert.All(errors, (d GSharp.Core.CodeAnalysis.Diagnostic) -> Assert.Equal("GS0641", d.Id))
+        Assert.Contains(
+            errors,
+            (d GSharp.Core.CodeAnalysis.Diagnostic) -> d.Location.Span.Start == printed.IndexOf(
+                "T?",
+                StringComparison.Ordinal
+            ) +
+                1 &&
+                d
+                .Location
+                .Span
+                .Length == 1
+        )
+        let supported = Translate(KnownReferenceSource)
+        let result = EmittedOracle.Evaluate(supported + Environment.NewLine + "Defaults.Run()")
+        Assert.True(
+            !result.Diagnostics.Any((diagnostic GSharp.Core.CodeAnalysis.Diagnostic) -> diagnostic.IsError),
+            string.Join(
+                Environment.NewLine,
+                result.Diagnostics.Select(
+                    (diagnostic GSharp.Core.CodeAnalysis.Diagnostic) -> diagnostic.Id + ": " + diagnostic.ToString()
+                )
+            ) +
+                Environment.NewLine +
+                supported
         )
         Assert.DoesNotContain(
             result.Diagnostics,
@@ -3175,6 +3200,47 @@ public static class Defaults
 
         private func Translate() string {
             return Translate(Source)
+        }
+
+        private prop KnownReferenceSource string -> NullableReferenceStorage(Source)
+            .Replace(
+            "Fill<T>(ref T? value, T replacement) =>",
+            "Fill<T>(ref T? value, T replacement) where T : class =>"
+        )
+            .Replace("NullablePair<T>() =>", "NullablePair<T>() where T : class =>")
+            .Replace("class FieldCallbacks<T>", "class FieldCallbacks<T> where T : class")
+            .Replace("class ReceiverContainer<T>", "class ReceiverContainer<T> where T : class")
+            .Replace(
+            "Unconstrained<T>(T replacement, bool choose)",
+            "Unconstrained<T>(T replacement, bool choose) where T : class"
+        )
+            .Replace("IncrementorControl<T>(T replacement)", "IncrementorControl<T>(T replacement) where T : class")
+            .Replace(
+            "NestedFunctionControls<T>(T replacement)",
+            "NestedFunctionControls<T>(T replacement) where T : class"
+        )
+            .Replace(
+            "private static int Controls<T>(T replacement)",
+            "private static int Controls<T>(T replacement) where T : class"
+        )
+
+        private func NullableReferenceStorage(source string) string {
+            // Mutable reference slots that receive default(T) must permit nil in the constrained neighbor.
+            return Regex
+                .Replace(
+                source,
+                "\\bvar (\\w+) = \\(replacement, replacement\\)",
+                "(T?, T?) $1 = (replacement, replacement)"
+            )
+                .Replace("T assignmentSource", "T? assignmentSource")
+                .Replace("T initializerless", "T? initializerless")
+                .Replace("T repeatedSource", "T? repeatedSource")
+                .Replace("T conditionalCycleSource", "T? conditionalCycleSource")
+                .Replace("T switchCycleSource", "T? switchCycleSource")
+                .Replace("default((T, T))", "default((T?, T?))")
+                .Replace("default(((T, T), T))", "default(((T?, T?), T?))")
+                .Replace("((T, T))(default(T), default(T))", "((T?, T?))(default(T), default(T))")
+                .Replace("(T, T)? nullablePair", "(T?, T?)? nullablePair")
         }
 
         private func Translate(source string, outputKind OutputKind = OutputKind.DynamicallyLinkedLibrary) string {

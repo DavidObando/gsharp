@@ -197,7 +197,7 @@ open class Issue2516SliceCovarianceBindingTests {
         Assert.False(ClrTypeUtilities.IsAssignableByName(typeof([]object), structConstrained))
         Assert.True(ClrTypeUtilities.IsAssignableByName(typeof([]object), classConstrained))
         Assert.True(ClrTypeUtilities.IsAssignableByName(typeof([]object), baseClassConstrained))
-        Assert.True(ClrTypeUtilities.IsAssignableByName(typeof([]object), dependentClassConstrained))
+        Assert.False(ClrTypeUtilities.IsAssignableByName(typeof([]object), dependentClassConstrained))
         Assert.True(ClrTypeUtilities.IsAssignableByName(typeof([]object), dependentBaseClassConstrained))
 
         let objectSlice = TypeSymbol.FromClrType(typeof([]object))
@@ -229,7 +229,7 @@ open class Issue2516SliceCovarianceBindingTests {
                 allowPlatformNilCheck: false
             )
         )
-        Assert.True(
+        Assert.False(
             Conversion.IsVarianceArgumentCompatible(
                 TypeSymbol.FromClrType(dependentClassConstrained ?? typeof(void)),
                 objectSlice,

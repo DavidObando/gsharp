@@ -26,14 +26,14 @@ import Xunit
 /// type.
 open class Issue1395ArityCollisionStaticReceiverTests {
     @Fact
-    func ReproB_MinimalArityCollision_BindsWithoutDiagnostics() {
+    func ReproB_MinimalArityCollision_ResolvesBeforeNullableKindDiagnostic() {
         const source = `
 package p
 class Box { shared { func Make() Box -> Box() } }
 class Box[T] { let v T?  shared { func Make(v T) Box[T] -> Box[T]() } }
 class C { func F() Box[int32] { return Box[int32].Make(5) } }
 `
-        Assert.Empty(GetDiagnostics(source))
+        SourceNullableKindAssertions.Reject(source, "T", 1)
     }
 
     @Fact
@@ -66,25 +66,25 @@ class Caller {
     }
 
     @Fact
-    func NullableTypeArg_ArityCollision_BindsWithoutDiagnostics() {
+    func NullableTypeArg_ArityCollision_ResolvesBeforeNullableKindDiagnostic() {
         const source = `
 package p
 class Box { shared { func Make() Box -> Box() } }
 class Box[T] { let v T?  shared { func Make(v T) Box[T] -> Box[T]() } }
 class C { func F() Box[int32?] { return Box[int32?].Make(5) } }
 `
-        Assert.Empty(GetDiagnostics(source))
+        SourceNullableKindAssertions.Reject(source, "T", 1)
     }
 
     @Fact
-    func NonGenericSameNameStaticCall_StillBindsWithoutDiagnostics() {
+    func NonGenericSameNameStaticCall_ResolvesBeforeNullableKindDiagnostic() {
         const source = `
 package p
 class Box { shared { func Make() Box -> Box() } }
 class Box[T] { let v T?  shared { func Make(v T) Box[T] -> Box[T]() } }
 class C { func F() Box { return Box.Make() } }
 `
-        Assert.Empty(GetDiagnostics(source))
+        SourceNullableKindAssertions.Reject(source, "T", 1)
     }
 
     shared {

@@ -101,8 +101,9 @@ func Main() {
     }
 
     @Fact
-    func EndToEnd_AsUnconstrainedT_Coalesce_BothPaths_Runs() {
-        // Unconstrained `T` used as a reference: the matched path prints the
+    func EndToEnd_AsReferenceT_Coalesce_BothPaths_Runs() {
+        // The original unconstrained source is rejected; its reference-only control
+        // keeps both paths: the matched path prints the
         // cast value ("hello"); the fallback path prints the fallback ("fb2")
         // because boxing an int32 cannot be cast to string.
         const source = `package i1516unconstrained
@@ -122,7 +123,8 @@ func Main() {
     var n object = 5
     System.Console.WriteLine(Holder.Get[string](n, "fb2"))
 }`
-        let output = CompileAndRun(source)
+        Issue6040GenericNullableReturnDriverTests.CheckRejected(source, []string{"GS0641@7,24,7,26"})
+        let output = CompileAndRun(source.Replace("Get[T](", "Get[T class?]("))
         Assert.Equal("hello${Environment.NewLine}fb2${Environment.NewLine}", output)
     }
 

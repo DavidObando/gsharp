@@ -65,6 +65,15 @@ import Xunit
 /// out, so a gate that had become timid would show as a wrong number rather
 /// than merely as a compile error.
 open class Issue4010NilLiteralAtOpenParameterTests {
+    @Fact
+    func UnknownKindNullableForwarding_IsRejectedAtItsAnnotation() {
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(
+            UnknownKindNullableForwardSource,
+            []string{"T"},
+            1
+        )
+    }
+
     /// A `nil` literal at an OPEN non-nullable parameter now reports the
     /// same `GS0154` its closed sibling always did.
     /// @param name The case name.
@@ -165,6 +174,28 @@ Console.WriteLine(fwdClassT[string]())`
     }
 
     shared {
+        private const UnknownKindNullableForwardSource string = `package Demo
+import System
+
+func takesNullableT[T](x T?) int32 { return 3 }
+func fwdNullableT[T]() int32 { return takesNullableT[T](nil) }
+
+func takesNullableChan[T](c chan[T]?) int32 { return 4 }
+func fwdNullableChan[T]() int32 { return takesNullableChan[T](nil) }
+
+class Node[T] { public var V T }
+func takesNode[T](n Node[T]?) int32 { return 5 }
+func fwdNode[T]() int32 { return takesNode[T](nil) }
+
+interface IThing[T] { func Do() int32; }
+func takesIface[T](i IThing[T]?) int32 { return 6 }
+func fwdIface[T]() int32 { return takesIface[T](nil) }
+
+Console.WriteLine(fwdNullableT[int32]())
+Console.WriteLine(fwdNullableChan[int32]())
+Console.WriteLine(fwdNode[int32]())
+Console.WriteLine(fwdIface[int32]())`
+
         /// How long a compiled case may run before it counts as hung.
         private const RunTimeout int32 = 60_000
 
@@ -268,27 +299,12 @@ Console.WriteLine(n)`, "GS0154"}
             // compile-verify-and-run fact below rather than here, because it also
             // asserts the value that ARRIVES. It used to skip verification for a
             // pre-existing emit defect; #4027 fixed that and the skip is gone.
-            yield []object{"control-nil-still-reaches-every-null-tolerant-open-shape", `package Demo
-import System
-
-func takesNullableT[T](x T?) int32 { return 3 }
-func fwdNullableT[T]() int32 { return takesNullableT[T](nil) }
-
-func takesNullableChan[T](c chan[T]?) int32 { return 4 }
-func fwdNullableChan[T]() int32 { return takesNullableChan[T](nil) }
-
-class Node[T] { public var V T }
-func takesNode[T](n Node[T]?) int32 { return 5 }
-func fwdNode[T]() int32 { return takesNode[T](nil) }
-
-interface IThing[T] { func Do() int32; }
-func takesIface[T](i IThing[T]?) int32 { return 6 }
-func fwdIface[T]() int32 { return takesIface[T](nil) }
-
-Console.WriteLine(fwdNullableT[int32]())
-Console.WriteLine(fwdNullableChan[int32]())
-Console.WriteLine(fwdNode[int32]())
-Console.WriteLine(fwdIface[int32]())`, []string{"3", "4", "5", "6"}}
+            yield []object{
+                "control-nil-still-reaches-every-null-tolerant-open-shape",
+                UnknownKindNullableForwardSource.Replace("func takesNullableT[T]", "func takesNullableT[T struct]")
+                    .Replace("func fwdNullableT[T]", "func fwdNullableT[T struct]"),
+                []string{"3", "4", "5", "6"}
+            }
             // The gate must not become timid: a REAL map forwarded through the very
             // open parameter the repro used still binds, and its contents are read
             // back out, so a wrong argument would print a wrong number rather than

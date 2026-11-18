@@ -372,6 +372,10 @@ class BoundGlobalScope {
     /// function bodies. Defaults to (cref:ImmutableHashSet{T}.Empty).
     private var _preprocessorSymbols ImmutableHashSet[string] = ImmutableHashSet[string].Empty
 
+    // Header errors survive body-only reuse; body-local errors stay on BinderContext.
+    internal var SourceNullableAnnotationErrors ImmutableHashSet[TypeParameterSymbol] =
+    ImmutableHashSet[TypeParameterSymbol].Empty
+
     prop PreprocessorSymbols ImmutableHashSet[string] {
         get {
             return _preprocessorSymbols

@@ -16,6 +16,10 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 - **Preserve P/Invoke return marshalling overrides** (#6072). Emit return-target `MarshalAs` descriptors for `DllImport` and both `LibraryImport` methods. Preserve other return attributes, diagnose unsupported return forms, and keep unannotated boolean defaults unchanged.
 
+### Breaking Changes
+
+- **Source nullable type parameters require a known kind** (Fixes #6040, #6043, #6057, #6060; ADR-0224). Source `T?` annotations and operators that create nullable results or binding-header storage report `GS0641` unless constraints prove reference kind or nonnullable value kind. Diagnostics point to the annotation or source operator, including the `let` keyword in nullable binding headers. Use `class`/`class?`, a sufficient reference-class bound, `struct`, or `unmanaged` for the API's actual domain. `notnull`, interface-only bounds, and a dependent parameter's bare `class` bound are insufficient. Use ordinary unconstrained `T` when callers supply a complete nullable argument, such as `Id[int32?]`. Mixed APIs can require separate reference/value contracts. Imported CLR nullable annotations and the repository's published SDK pin are unchanged. This restriction replaces the draft return adapter and unimplemented companion proposal; it introduces no new nullable ABI.
+
 ### Bug Fixes
 
 - Set `MALLOC_MMAP_THRESHOLD_=131072` for mirrored `cs2gs` `dotnet test` runs. With this fixed glibc threshold, freed native blocks of 128 KB or more return to the OS. Under hosted-runner limits, the self-migrated `Cs2Gs.Tests` testhost peaks at 4.9 GB instead of 15.3 GB. Build environments do not change. (Fixes #6096)

@@ -2628,6 +2628,11 @@ internal shared class DiagnosticDescriptors {
         DiagnosticSeverity.Error,
         "Property initializers are not supported. Declare a field ('var {0} T = value') or assign the property in 'init'."
     )
+    internal let NullableTypeParameterRequiresKind DiagnosticDescriptor = DiagnosticDescriptor(
+        "GS0641",
+        DiagnosticSeverity.Error,
+        "Cannot use '{0}?' because '{0}' has no proven reference-type or non-nullable value-type kind. Add a class, class?, struct, or unmanaged constraint, or a sufficient reference-class bound. To accept an already nullable type argument, use bare '{0}'."
+    )
     internal let InvalidConstructorInitializerTarget DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0642",
         DiagnosticSeverity.Error,

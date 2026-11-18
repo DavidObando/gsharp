@@ -4,6 +4,7 @@
 
 package GSharp.Compiler.Tests.Binding
 
+import GSharp.Compiler.Tests
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
@@ -62,7 +63,18 @@ open class Issue3034NullableNarrowingDiagnosticTests {
         call string,
         isLibrary bool
     ) {
-        let diagnosticSource = sourceTemplate.Replace("/*CALL*/", "$receiver.$call", StringComparison.Ordinal)
+        var template = sourceTemplate
+        if receiverKind == "constrained-type-parameter" {
+            Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(
+                sourceTemplate.Replace("/*CALL*/", "$receiver.$call", StringComparison.Ordinal),
+                []string{"T"},
+                1,
+                []string{"GS0159"},
+                isLibrary: true
+            )
+            template = sourceTemplate.Replace("[T I]", "[T I class?]", StringComparison.Ordinal)
+        }
+        let diagnosticSource = template.Replace("/*CALL*/", "$receiver.$call", StringComparison.Ordinal)
         let diagnosticResult = Compile(diagnosticSource, isLibrary)
         let diagnostic = Assert.Single(
             diagnosticResult.Diagnostics,
@@ -82,7 +94,7 @@ open class Issue3034NullableNarrowingDiagnosticTests {
 }`))
         }
         for remedy in remedies {
-            let source = sourceTemplate.Replace("/*CALL*/", remedy.Item2, StringComparison.Ordinal)
+            let source = template.Replace("/*CALL*/", remedy.Item2, StringComparison.Ordinal)
             let result = Compile(source, isLibrary)
             Assert.True(
                 result.Success,
@@ -249,11 +261,19 @@ func Run() {
 
     @Fact
     func ConstrainedTypeParameterNullableReceiver_ExplainsMissingNarrowing() {
-        let diagnostic = GetGs0159(`interface I { func M(); }
+        const source = `interface I { func M(); }
 
 func Use[T I](value T?) {
     value.M()
-}`)
+}`
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(
+            source,
+            []string{"T"},
+            1,
+            []string{"GS0159"},
+            isLibrary: true
+        )
+        let diagnostic = GetGs0159(source.Replace("[T I]", "[T I class?]", StringComparison.Ordinal))
         Assert.Equal(
             "Cannot call function M because receiver 'value' may be nil. Use '?.' for a null-safe call or bind it with 'if let'.",
             diagnostic.Message

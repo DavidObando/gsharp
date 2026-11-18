@@ -55,7 +55,8 @@ Console.WriteLine(arr.HeadOr("z"))`
 
 var s string? = nil
 Console.WriteLine(s.MyOrElse("def"))`
-        Assert.Equal("def${Environment.NewLine}", RunSubmission(source))
+        Assert.Contains("(1,13,1,14): error GS0641:", RunSubmission(source), StringComparison.Ordinal)
+        Assert.Equal("def${Environment.NewLine}", RunSubmission(source.Replace("MyOrElse[T]", "MyOrElse[T class?]")))
     }
 
     @Fact
@@ -67,7 +68,8 @@ Console.WriteLine(s.MyOrElse("def"))`
 
 var v int32? = nil
 Console.WriteLine(v.MyOrElse(99))`
-        Assert.Equal("99${Environment.NewLine}", RunSubmission(source))
+        Assert.Contains("(1,13,1,14): error GS0641:", RunSubmission(source), StringComparison.Ordinal)
+        Assert.Equal("99${Environment.NewLine}", RunSubmission(source.Replace("MyOrElse[T]", "MyOrElse[T struct]")))
     }
 
     @Fact

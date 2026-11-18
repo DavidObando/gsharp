@@ -120,10 +120,18 @@ open class Issue3988NullableArgumentAtOpenGSharpParameterTests {
     @Theory
     @MemberData("AcceptedCases")
     func TheRemediesAndTheUngatedShapes_CompileVerifyAndRun(name string, source string, expectedLines[]string) {
+        var supportedSource = source
+        if name == "control-an-unconstrained-nullable-type-parameter-is-not-gated" {
+            Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(source, []string{"T"}, 1)
+            supportedSource = source.Replace("func fAnyT[T](v T?)", "func fAnyT[T](v T)").Replace(
+                "fAnyT[int32](7)",
+                "fAnyT[int32?](7)"
+            )
+        }
         let tempDir = Directory.CreateTempSubdirectory("gs_3988_").FullName
         try {
             let appPath = Path.Combine(tempDir, name + ".dll")
-            let appLog = Compile(tempDir, "App.gs", source, appPath, "/target:exe")
+            let appLog = Compile(tempDir, "App.gs", supportedSource, appPath, "/target:exe")
             Assert.True(File.Exists(appPath), (`'` + "$name" + `' must compile:
 ` + "$appLog"))
             IlVerifier.Verify(appPath, Array.Empty[string]())
@@ -487,9 +495,7 @@ Console.WriteLine("x")`, "GS0154", "chan[int32]?"}
         }
 
         /// The rows that must still COMPILE, RUN, and print. They hold the fix to
-        /// its scope: the remedies the diagnostic names still work, an
-        /// unconstrained `T?` is deliberately NOT gated, and a legitimately
-        /// non-nullable open channel is untouched.
+        /// its scope: nullable complete arguments and non-nullable open channels remain supported.
         /// @returns Name, source, and the expected stdout lines.
         func AcceptedCases() sequence[[]object] {
             // Remedy 1, the one the issue names: `!!`.
@@ -522,9 +528,7 @@ func fNullable[T](source chan[T]?) int32 {
 }
 
 Console.WriteLine(fNullable[int32](chan[int32](1)))`, []string{"42"}}
-            // An UNCONSTRAINED `T?` must stay ungated: `Conversion.IsReferenceLikeTarget`
-            // deliberately answers false for it (its `T?` erases to `Nullable<T>`
-            // and it keeps the value-type rules), so the gate must not fire.
+            // ADR-0224 rejects this original input. The accepted control reifies the complete nullable argument through bare T.
             yield []object{"control-an-unconstrained-nullable-type-parameter-is-not-gated", `package P
 import System
 
