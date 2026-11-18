@@ -5667,6 +5667,53 @@ internal partial class StatementBinder {
         // Created on first use: most functions have no closure.
         private var declarations Dictionary[SyntaxNode, Dictionary[string, List[VariableDeclarationSyntax]]]?
         private var parameters Dictionary[SyntaxNode, HashSet[string]]?
+        private var ordinaryFunctionValues Dictionary[SyntaxNode, HashSet[VariableDeclarationSyntax]]?
+
+        func IsOrdinaryLocalFunctionValue(declaration VariableDeclarationSyntax) bool {
+            let container = declaration.Parent
+            if container == nil {
+                return false
+            }
+            let index = ordinaryFunctionValues ?? Dictionary[SyntaxNode, HashSet[VariableDeclarationSyntax]]()
+            ordinaryFunctionValues = index
+            if !index.TryGetValue(container, out var values) {
+                values = HashSet[VariableDeclarationSyntax]()
+                let run = List[VariableDeclarationSyntax]()
+                for child in container.GetChildren() {
+                    if child is StatementSyntax statement {
+                        if StatementBinder.IsNonGenericLocalFunctionLiteralDeclaration(statement) {
+                            if run.Count > 0 && run[0].SyntaxTree != statement.SyntaxTree {
+                                RecordOrdinaryFunctionValues(run, values)
+                            }
+                            run.Add(cast[VariableDeclarationSyntax](statement))
+                        } else {
+                            RecordOrdinaryFunctionValues(run, values)
+                        }
+                    }
+                }
+                RecordOrdinaryFunctionValues(run, values)
+                index[container] = values
+            }
+            return values.Contains(declaration)
+        }
+
+        private func RecordOrdinaryFunctionValues(
+            run List[VariableDeclarationSyntax],
+            values HashSet[VariableDeclarationSyntax]
+        ) {
+            if run.Count == 0 {
+                return
+            }
+            let names = HashSet[string](StringComparer.Ordinal)
+            for declaration in run {
+                names.Add(declaration.Identifier.Text)
+            }
+            // This is the same eligibility decision the binder consumes, not a capture-syntax guess.
+            if !StatementBinder.HasLocalFunctionCrossReference(run, names) {
+                values.UnionWith(run)
+            }
+            run.Clear()
+        }
 
         /// The variable declarations that are children of [`container`](paramref), by name and in source order.
         func DeclarationsOf(container SyntaxNode) Dictionary[string, List[VariableDeclarationSyntax]] {

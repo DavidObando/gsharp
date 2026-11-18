@@ -211,6 +211,29 @@ shared class Probe {
 
     shared {
         func Cases() sequence[[]object] {
+            yield []object{"planned-method-preserves-parent-overload", "", `
+        let first = func(n int32) int32 {
+            let second = func(value int32, tag int32) int32 { return 0 }
+            let follow = func(value int32) int32 { return second(value, 0) }
+            return second(n)
+        }
+        let second = func(n int32) int32 { return n + 1 }
+        return first(41).ToString()
+`, "42", true}
+            yield []object{"backward-overload-does-not-widen-forward-region", "", `
+        var calls = 0
+        let first = func(n int32) int32 { return n + 1 }
+        let callback = func(n int32) int32 {
+            calls++
+            return first(n)
+        }
+        let first = func(n int32, other int32) int32 { return n + other }
+        let next = func(n int32) int32 { return callback(n) }
+        let alias = callback
+        let result = List[int32](){41}.Select(callback).Single()
+        let following = next(0)
+        return "$result:$following:$calls:${Object.ReferenceEquals(callback, alias)}"
+`, "42:1:2:True", true}
             yield []object{"qualified-member-keeps-capture-free-method-identity", `
 class Holder { shared { func second() int32 { return 42 } } }
 `, `
@@ -252,7 +275,11 @@ class Holder { shared { func second() int32 { return 42 } } }
         let second = func(n int32, rest ...int32) int32 { return n + 1 }
         return first(41).ToString()
 `, "42", true}
-            for variation in[](Name string, Literal string){("local", `func(n int32) int32 {
+            for variation in[](Name string, Literal string){("capturing-function-value", `func(n int32) int32 {
+                calls++
+                let later = func(x int32) int32 { return n + x + 1 }
+                return first(later(0))
+            }`), ("local", `func(n int32) int32 {
                     calls++
                     let later = n + 1
                     return first(later)

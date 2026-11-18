@@ -1221,8 +1221,11 @@ internal partial class StatementBinder {
             end int32
         )(Direct[]bool, HasCrossReference bool) {
             let siblingIndices = Dictionary[string, List[int32]]()
+            let declarations = List[VariableDeclarationSyntax]()
             for var idx = start; idx < end; idx++ {
-                let name = (cast[VariableDeclarationSyntax](statementSyntaxes[idx])).Identifier.Text
+                let declaration = cast[VariableDeclarationSyntax](statementSyntaxes[idx])
+                declarations.Add(declaration)
+                let name = declaration.Identifier.Text
                 if !siblingIndices.TryGetValue(name, out var overloads) {
                     overloads = List[int32]()
                     siblingIndices[name] = overloads
@@ -1232,10 +1235,9 @@ internal partial class StatementBinder {
             let groupEnds = [end - start]int32
             let direct = [end - start]bool
             let scopeIndex = ClosureScopeIndex()
-            var hasCrossReference = false
+            let hasCrossReference = HasLocalFunctionCrossReference(declarations, siblingIndices.Keys)
             for var idx = start; idx < end; idx++ {
                 let decl = cast[VariableDeclarationSyntax](statementSyntaxes[idx])
-                let selfName = decl.Identifier.Text
                 let literal = cast[FunctionLiteralExpressionSyntax](decl.Initializer!!)
                 groupEnds[idx - start] = idx
                 for node in literal.Body.DescendantNodesAndSelf() {
@@ -1243,15 +1245,9 @@ internal partial class StatementBinder {
                     // `Identifier` token — it is NOT a NameExpressionSyntax
                     // wrapping a call, so both shapes must be checked to catch
                     // the common "sibling(...)" recursive-call reference.
-                    let referencedName string? = switch node {
-                        case name is NameExpressionSyntax: name.IdentifierToken.Text
-                        case call is CallExpressionSyntax: call.Identifier.Text
-                        default: default(string?)
-                    }
+                    let referencedName = LocalFunctionReferenceName(node)
                     if referencedName != nil && siblingIndices.TryGetValue(referencedName, out var overloads) {
-                        // Keep historical capture-free method eligibility separate from required forward signatures.
-                        hasCrossReference |= referencedName != selfName
-                        let lastSibling = overloads[overloads.Count - 1]
+                        let lastSibling = LastReferencedLocalOverload(node, overloads, statementSyntaxes)
                         if lastSibling > idx &&
                             !(
                             node.Parent is AccessorExpressionSyntax accessor && object.ReferenceEquals(
@@ -1259,8 +1255,7 @@ internal partial class StatementBinder {
                                 node
                             )
                         ) &&
-                            !IsShadowedInsideLiteral(referencedName, node, literal, scopeIndex) &&
-                            CouldReferenceLocalOverload(node, overloads, statementSyntaxes) {
+                            !IsShadowedInsideLiteral(referencedName, node, literal, scopeIndex) {
                             groupEnds[idx - start] = Math.Max(groupEnds[idx - start], lastSibling + 1)
                         }
                     }
@@ -1298,7 +1293,10 @@ internal partial class StatementBinder {
                             .Span
                             .Start &&
                             !IsGenericLocalFunctionDeclaration(declaration) &&
-                            !IsNonGenericLocalFunctionLiteralDeclaration(declaration) &&
+                            (
+                            !IsNonGenericLocalFunctionLiteralDeclaration(declaration) ||
+                                index.IsOrdinaryLocalFunctionValue(declaration)
+                        ) &&
                             !IsRefReturningLocalFunctionDeclaration(declaration) {
                             return true
                         }
@@ -1314,15 +1312,41 @@ internal partial class StatementBinder {
             return false
         }
 
-        private func CouldReferenceLocalOverload(
+        private func LocalFunctionReferenceName(node SyntaxNode) string? -> switch node {
+            case name is NameExpressionSyntax: name.IdentifierToken.Text
+            case call is CallExpressionSyntax: call.Identifier.Text
+            default: default(string?)
+        }
+
+        private func HasLocalFunctionCrossReference(
+            declarations IEnumerable[VariableDeclarationSyntax],
+            siblingNames ICollection[string]
+        ) bool {
+            for declaration in declarations {
+                let literal = cast[FunctionLiteralExpressionSyntax](declaration.Initializer!!)
+                for node in literal.Body.DescendantNodesAndSelf() {
+                    if LocalFunctionReferenceName(node) is {} name &&
+                        name != declaration
+                        .Identifier
+                        .Text &&
+                        siblingNames.Contains(name) {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+
+        private func LastReferencedLocalOverload(
             site SyntaxNode,
             overloads List[int32],
             statements ImmutableArray[StatementSyntax]
-        ) bool {
+        ) int32 {
             if !(site is CallExpressionSyntax call) {
-                return true
+                return overloads[overloads.Count - 1]
             }
-            for index in overloads {
+            for var candidate = overloads.Count - 1; candidate >= 0; candidate-- {
+                let index = overloads[candidate]
                 let declaration = cast[VariableDeclarationSyntax](statements[index])
                 let literal = cast[FunctionLiteralExpressionSyntax](declaration.Initializer!!)
                 var required = 0
@@ -1334,10 +1358,10 @@ internal partial class StatementBinder {
                     }
                 }
                 if call.Arguments.Count >= required && (variadic || call.Arguments.Count <= literal.Parameters.Count) {
-                    return true
+                    return index
                 }
             }
-            return false
+            return -1
         }
 
         private func IsSyntacticallyInfiniteLoop(statement BoundForInfiniteStatement) bool {
