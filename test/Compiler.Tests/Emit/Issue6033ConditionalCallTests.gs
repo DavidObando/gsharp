@@ -36,6 +36,66 @@ Console.WriteLine(Demo.Run())`, "ConditionalDriver6033", executable: true)
     }
 
     @Theory
+    @InlineData("Probe.SharedKeep(Argument())", "Probe.SharedKeep(Argument())", "AS7O")
+    @InlineData("Receiver().Keep(Argument())", "Receiver().Keep(Argument())", "RAK7O")
+    func ExpressionTrees_PreserveConditionalEffects(gsharpCall string, csharpCall string, enabledOutput string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        for enabled in[]bool{false, true} {
+            // C# rejects elided calls in expression-tree syntax; a delegate witnesses their deferred-call effects.
+            let nativePath = fixture.CompileCSharp(
+                (
+                    if enabled {
+                        "#define ACTIVE_6033\n"
+                    } else {
+                        ""
+                    }
+                ) +
+                    CSharpDeclarations +
+                    "System.Action callback = () => " +
+                    csharpCall +
+                    "; var before = Trace; callback(); Trace += \"O\"; return before + \":\" + Trace; } }",
+                "NativeExpressionEffects6033"
+            )
+            let expected = Encoding.UTF8.GetBytes(
+                ":" +
+                    (
+                    if enabled {
+                        enabledOutput
+                    } else {
+                        "O"
+                    }
+                )
+            )
+            Assert.Equal(expected, Run(EmittedFixture.Load(nativePath)))
+            let source = "import System.Linq.Expressions\n" +
+                GSharpDeclarations +
+                "let tree Expression[Action] = () -> " +
+                gsharpCall +
+                `
+let callback = tree.Compile()
+let before = Trace
+callback()
+Trace += "O"
+return before + ":" + Trace
+} }`
+            let compilation = Compilation(SyntaxTree.Parse(SourceText.From(source))){
+                IsLibrary = true,
+                PreprocessorSymbols = if enabled {
+                    ImmutableHashSet.Create("ACTIVE_6033")
+                } else {
+                    ImmutableHashSet[string].Empty
+                }
+            }
+            using let image = MemoryStream()
+            let result = compilation.Emit(image)
+            Assert.True(result.Success, string.Join("\n", result.Diagnostics))
+            let emitted = EmittedFixture.Load(image.ToArray())
+            Assert.Equal(expected, Run(emitted))
+            AssertMetadata(emitted)
+        }
+    }
+
+    @Theory
     @InlineData("Keep(channel)", "", false)
     @InlineData("Probe().Keep(channel)", "", false)
     @InlineData("Derived().Send(channel)", "", false)

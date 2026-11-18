@@ -30,6 +30,77 @@ Console.WriteLine(Recorder.Trace)`, "ConditionalDriver6100", executable: true, "
     }
 
     @Theory
+    @InlineData("Probe.SharedKeep(Argument())", "Probe.SharedKeep(Argument())", "AS7O")
+    @InlineData("Receiver().Keep(Argument())", "Receiver().Keep(Argument())", "RAK7O")
+    func ExpressionTrees_PreserveFrozenConditionalEffects(gsharpCall string, csharpCall string, enabledOutput string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let library = fixture.CompileCSharp(NativeLibrary, "ConditionalExpressionLibrary6100")
+        let frozenBytes = File.ReadAllBytes(library)
+        for symbol in[]string{"", "ACTIVE_6100", "OTHER_6100"} {
+            // C# rejects elided calls in expression-tree syntax; keep its native deferred-call oracle.
+            let nativePath = fixture.CompileCSharp(
+                (
+                    if symbol.Length == 0 {
+                        ""
+                    } else {
+                        "#define " + symbol + "\n"
+                    }
+                ) +
+                    NativeConsumer +
+                    "System.Action callback = () => " +
+                    csharpCall +
+                    `;
+var before = Recorder.Trace;
+callback();
+Recorder.Trace = before + ":" + Recorder.Trace;
+} catch (InvalidOperationException) { Recorder.Trace += "X"; }
+Recorder.Trace += "O"; return Recorder.Trace; } }`,
+                "NativeExpressionConsumer6100",
+                library
+            )
+            let expected = Encoding.UTF8.GetBytes(
+                ":" +
+                    (
+                    if symbol.Length == 0 {
+                        "O"
+                    } else {
+                        enabledOutput
+                    }
+                )
+            )
+            Assert.Equal(expected, Run(EmittedFixture.Load(nativePath)))
+            let source = "import System.Linq.Expressions\n" +
+                GSharpConsumer +
+                "let tree Expression[Action] = () -> " +
+                gsharpCall +
+                `
+let callback = tree.Compile()
+let before = Recorder.Trace
+callback()
+Recorder.Trace = before + ":" + Recorder.Trace
+} catch (InvalidOperationException) { Recorder.Trace += "X" }
+Recorder.Trace += "O"
+return Recorder.Trace
+} }`
+            using let references = ReferenceResolver.WithReferences([]string{library})
+            let compilation = Compilation(references, SyntaxTree.Parse(SourceText.From(source))){
+                IsLibrary = true,
+                PreprocessorSymbols = if symbol.Length == 0 {
+                    ImmutableHashSet[string].Empty
+                } else {
+                    ImmutableHashSet.Create(symbol)
+                }
+            }
+            using let image = MemoryStream()
+            let result = compilation.Emit(image)
+            Assert.True(result.Success, string.Join("\n", result.Diagnostics))
+            let assemblies = EmittedFixture.LoadTogether(fixture.Directory, frozenBytes, image.ToArray())
+            Assert.Equal(expected, Run(assemblies[1]))
+            Assert.Equal(frozenBytes, File.ReadAllBytes(library))
+        }
+    }
+
+    @Theory
     @InlineData("Probe.SharedKeep(channel)", false)
     @InlineData("Probe().Keep(channel)", false)
     @InlineData("Derived().Send(channel)", false)
