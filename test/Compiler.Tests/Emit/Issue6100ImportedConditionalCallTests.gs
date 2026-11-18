@@ -28,6 +28,71 @@ Console.WriteLine(Recorder.Trace)`, "ConditionalDriver6100", executable: true, "
         IlVerifier.Verify(program, []string{library})
     }
 
+    @Fact
+    func ElidedArguments_DoNotDefinitelyAssignOutParameters() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let library = fixture.CompileCSharp(NativeLibrary, "ConditionalOutLibrary6100")
+        let frozenBytes = File.ReadAllBytes(library)
+        let nativeSource = `using ConditionalFixture6100;
+public static class Consumer {
+    static int Assign(out int value) { value = 7; return value; }
+    static void Set(out int value) { Probe.SharedKeep(Assign(out value)); }
+    public static string Run() {
+        Recorder.Trace = "";
+        Set(out var value);
+        return value.ToString() + ":" + Recorder.Trace;
+    }
+}`
+        let source = `import ConditionalFixture6100
+shared class Consumer {
+    func Assign(out value int32) int32 {
+        value = 7
+        return value
+    }
+    func Set(out value int32) { Probe.SharedKeep(Assign(out value)) }
+    func Run() string {
+        Recorder.Trace = ""
+        Set(out var value)
+        return value.ToString() + ":" + Recorder.Trace
+    }
+}`
+        for enabled in[]bool{false, true} {
+            using let references = ReferenceResolver.WithReferences([]string{library})
+            let compilation = Compilation(references, SyntaxTree.Parse(SourceText.From(source))){
+                IsLibrary = true,
+                PreprocessorSymbols = if enabled {
+                    ImmutableHashSet.Create("ACTIVE_6100")
+                } else {
+                    ImmutableHashSet[string].Empty
+                }
+            }
+            using let image = MemoryStream()
+            let result = compilation.Emit(image)
+            if !enabled {
+                let error = Assert.ThrowsAny[Exception](
+                    func () {
+                        fixture.CompileCSharp(nativeSource, "NativeConditionalOut6100", library)
+                    }
+                )
+                Assert.Contains("CS0177", error.Message)
+                Assert.False(result.Success)
+                Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0238")
+                continue
+            }
+            Assert.True(result.Success, string.Join("\n", result.Diagnostics))
+            let native = fixture.CompileCSharp(
+                "#define ACTIVE_6100\n" + nativeSource,
+                "NativeConditionalOut6100",
+                library
+            )
+            let expected = Encoding.UTF8.GetBytes("7:S7")
+            Assert.Equal(expected, Run(EmittedFixture.Load(native)))
+            let assemblies = EmittedFixture.LoadTogether(fixture.Directory, frozenBytes, image.ToArray())
+            Assert.Equal(expected, Run(assemblies[1]))
+        }
+        Assert.Equal(frozenBytes, File.ReadAllBytes(library))
+    }
+
     @Theory
     @InlineData("Probe.SharedKeep(Argument())", "Probe.SharedKeep(Argument())", "AS7O")
     @InlineData("Receiver().Keep(Argument())", "Receiver().Keep(Argument())", "RAK7O")

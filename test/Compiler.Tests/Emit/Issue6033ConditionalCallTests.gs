@@ -12,6 +12,7 @@ import System.IO
 import System.Linq
 import System.Reflection
 import System.Text
+import System.Threading.Tasks
 import Xunit
 
 class Issue6033ConditionalCallTests {
@@ -32,6 +33,73 @@ shared class Demo {
 Console.WriteLine(Demo.Run())`, "ConditionalDriver6033", executable: true)
         Assert.Equal(Encoding.UTF8.GetBytes("0\n"), fixture.RunBytes(program))
         IlVerifier.Verify(program)
+    }
+
+    @Theory
+    @InlineData("Keep(channel)")
+    @InlineData("Probe().Keep(channel)")
+    @InlineData("Derived().Send(channel)")
+    func ElidedSuspendingCalls_DoNotWrapCompletionsOrColorCallers(call string) {
+        let source = `import System.Diagnostics
+open class Probe {
+    @Conditional("ACTIVE_6033")
+    func Keep(channel chan[int32]) { channel <- 7 }
+}
+class Derived : Probe {
+    func Send(channel chan[int32]) { base.Keep(channel) }
+}
+shared class Consumer {
+    private var result int32 = -1
+    @Conditional("ACTIVE_6033")
+    func Keep(channel chan[int32]) { channel <- 7 }
+    func Run() {
+        let channel = chan[int32](1)
+        ` + call + `
+        channel.Reader.TryRead(out var value)
+        result = value
+    }
+    func ReadResult() int32 -> result
+}
+Consumer.Run()`
+        for enabled in[]bool{false, true} {
+            let compilation = Compilation(SyntaxTree.Parse(SourceText.From(source))){
+                PreprocessorSymbols = if enabled {
+                    ImmutableHashSet.Create("ACTIVE_6033")
+                } else {
+                    ImmutableHashSet[string].Empty
+                }
+            }
+            using let image = MemoryStream()
+            let result = compilation.Emit(image)
+            Assert.True(result.Success, string.Join("\n", result.Diagnostics))
+            let assembly = EmittedFixture.Load(image.ToArray())
+            let consumer = assembly.GetTypes().Single((t Type) -> t.Name == "Consumer")
+            Assert.Equal(
+                if enabled {
+                    typeof(ValueTask)
+                } else {
+                    typeof(void)
+                },
+                consumer.GetMethod("Run")!!.ReturnType
+            )
+            let entry = assembly.EntryPoint!!
+            entry.Invoke(
+                nil,
+                if entry.GetParameters().Length == 0 {
+                    nil
+                } else {
+                    []object{Array.Empty[string]()}
+                }
+            )
+            Assert.Equal(
+                if enabled {
+                    7
+                } else {
+                    0
+                },
+                cast[int32](consumer.GetMethod("ReadResult")!!.Invoke(nil, nil))
+            )
+        }
     }
 
     @Theory
