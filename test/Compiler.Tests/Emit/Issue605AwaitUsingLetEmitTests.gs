@@ -24,6 +24,58 @@ import Xunit.Sdk
 /// mixed IDisposable + IAsyncDisposable, exception safety, return semantics,
 /// and negative diagnostics (outside async, async-only with sync using).
 open class Issue605AwaitUsingLetEmitTests {
+    @Theory
+    @InlineData("Watcher", false)
+    @InlineData("Watcher", true)
+    @InlineData("Child", false)
+    @InlineData("Child", true)
+    @InlineData("Box[int32]", false)
+    @InlineData("Box[int32]", true)
+    func Issue6087_ConditionalNullableAsyncResource_DisposesOnce(resource string, fail bool) {
+        let source = `import System
+import System.Threading.Tasks
+open class Watcher : IAsyncDisposable {
+    public async func DisposeAsync() ValueTask {
+        await Task.Delay(1)
+        Console.Write("disposed;")
+    }
+}
+class Child : Watcher {}
+class Box[T] : IAsyncDisposable {
+    public async func DisposeAsync() ValueTask {
+        await Task.Delay(1)
+        Console.Write("disposed;")
+    }
+}
+
+async func Open(enabled bool) {
+    await using let watcher = if enabled { RESOURCE() } else { nil }
+    Console.Write("body:" + enabled.ToString() + ";")
+    if FAIL {
+        throw InvalidOperationException("body")
+    }
+}
+
+for enabled in []bool{true, false} {
+    try {
+        await Open(enabled)
+    } catch (ex InvalidOperationException) {
+        Console.Write("caught:" + ex.Message + ";")
+    }
+    Console.Write("after;")
+}`
+        let caught = if fail {
+            "caught:body;"
+        } else {
+            ""
+        }
+        let expected = "body:True;disposed;" + caught + "after;body:False;" + caught + "after;"
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(expected),
+            CompileAndRunBytes(source.Replace("RESOURCE", resource).Replace("FAIL", fail.ToString().ToLowerInvariant()))
+        )
+    }
+
     @Fact
     func DeleteTemporaryDirectory_PreservesPrimaryAndReportsCleanupFailure() {
         let directory = Directory.CreateTempSubdirectory("gs_issue605_cleanup_").FullName

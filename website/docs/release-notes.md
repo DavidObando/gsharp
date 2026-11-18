@@ -16,6 +16,7 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Accept nullable managed-reference resources in `using let` and `await using let`, including conditional initializers. Dispose non-nil resources once and skip nil resources. (Fixes #6087)
 - Initialize repository version metadata before G# build preparation when NBGV targets are imported, including projects that disable generated version sources. Preserve cold restore-and-publish evaluations before those imports exist. Build Extensions without a bundled self-reference and reuse its graph output for SDK packing. Unchanged builds retain identical metadata and skip compilation. Keep stage-2 certification's exact SDK target inventory current. (Fixes #5116)
 
 - Admit conversion operators whose owning class appears through a nullable reference type. Preserve nullable operand and return contracts. Reject same-type conversions and duplicate signatures that differ only by reference-nullability annotations. Translator acceptance remains gated on a released compiler SDK pin. (Fixes #6024)

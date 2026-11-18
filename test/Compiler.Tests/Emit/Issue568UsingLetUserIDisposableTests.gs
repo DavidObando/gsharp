@@ -11,6 +11,7 @@ import System.Collections.Generic
 import System.Diagnostics
 import System.IO
 import System.Linq
+import System.Text
 import Xunit
 
 /// Issue #568: `using let` on a G# class that implements
@@ -19,6 +20,57 @@ import Xunit
 /// `Dispose()` method — the user class had no CLR type yet. The fix
 /// adds a user-type path that probes `StructSymbol.TryGetMethodIncludingInherited`.
 open class Issue568UsingLetUserIDisposableTests {
+    @Theory
+    @InlineData("Watcher", false)
+    @InlineData("Watcher", true)
+    @InlineData("Child", false)
+    @InlineData("Child", true)
+    @InlineData("Box[int32]", false)
+    @InlineData("Box[int32]", true)
+    func Issue6087_ConditionalNullableResource_DisposesOnce(resource string, fail bool) {
+        let source = `import System
+open class Watcher : IDisposable {
+    public func Dispose() {
+        Console.Write("disposed;")
+    }
+}
+class Child : Watcher {}
+class Box[T] : IDisposable {
+    public func Dispose() {
+        Console.Write("disposed;")
+    }
+}
+
+func Open(enabled bool) {
+    using let watcher = if enabled { RESOURCE() } else { nil }
+    Console.Write("body:" + enabled.ToString() + ";")
+    if FAIL {
+        throw InvalidOperationException("body")
+    }
+}
+
+for enabled in []bool{true, false} {
+    try {
+        Open(enabled)
+    } catch (ex InvalidOperationException) {
+        Console.Write("caught:" + ex.Message + ";")
+    }
+    Console.Write("after;")
+}`
+        let caught = if fail {
+            "caught:body;"
+        } else {
+            ""
+        }
+        let expected = "body:True;disposed;" + caught + "after;body:False;" + caught + "after;"
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(expected),
+            Encoding.UTF8.GetBytes(
+                CompileAndRun(source.Replace("RESOURCE", resource).Replace("FAIL", fail.ToString().ToLowerInvariant()))
+            )
+        )
+    }
+
     @Fact
     func UsingLet_GSharpClassImplementingIDisposable_CallsDispose() {
         let source = `package Probe
