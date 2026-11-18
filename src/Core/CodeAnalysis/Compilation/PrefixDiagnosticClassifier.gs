@@ -22,7 +22,7 @@ internal sealed class PrefixDiagnosticClassifier {
     private let cancellationToken CancellationToken
     private let prefixTree SyntaxTree
     private let prefixParse HashSet[Diagnostic]
-    private let prefixLexer HashSet[Diagnostic]
+    private let unfinishedTokens HashSet[Diagnostic]
     private var sourceParse HashSet[string]?
     private var sourceDiagnostics HashSet[string]?
 
@@ -39,7 +39,7 @@ internal sealed class PrefixDiagnosticClassifier {
         this.prefixTree = prefixTree
         this.cancellationToken = cancellationToken
         prefixParse = HashSet[Diagnostic](prefixTree.Diagnostics, ReferenceEqualityComparer.Instance)
-        prefixLexer = HashSet[Diagnostic](prefixCut.LexerDiagnostics, ReferenceEqualityComparer.Instance)
+        unfinishedTokens = HashSet[Diagnostic](prefixCut.UnfinishedTokenDiagnostics, ReferenceEqualityComparer.Instance)
     }
 
     /// Returns the classified form of [`diagnostic`](paramref).
@@ -51,17 +51,9 @@ internal sealed class PrefixDiagnosticClassifier {
             return ClassifiedDiagnostic(diagnostic, DiagnosticFinality.Artifact, "cut")
         }
         let inPrefixText = object.ReferenceEquals(location.Text, prefixCut.Text)
-        // A lexer diagnostic in the last token before the cut or after it (an unterminated string or
-        // comment) is on text that the cut ended. Text after the cut can complete it.
-        if inPrefixText && prefixLexer.Contains(diagnostic) &&
-            location
-            .Span
-            .Start < prefixCut.Cut &&
-            location
-            .Span
-            .Start >= prefixCut
-            .LastToken
-            .Start {
+        // The lexer reached the cut inside this token (an unterminated string or comment). Text after the
+        // cut can finish the token.
+        if unfinishedTokens.Contains(diagnostic) {
             return ClassifiedDiagnostic(diagnostic, DiagnosticFinality.Artifact, "cut")
         }
         // A diagnostic that ends with a name, keyword or number at the cut depends on its spelling, and

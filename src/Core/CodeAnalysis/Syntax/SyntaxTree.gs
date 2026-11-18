@@ -168,7 +168,6 @@ open class SyntaxTree {
                 parser.DocumentationTokens
             )
             stream.Cut.Tree = syntaxTree
-            stream.Cut.LexerDiagnostics = stream.LexerDiagnostics
             syntaxTree.Prefix = stream.Cut
             return syntaxTree
         }

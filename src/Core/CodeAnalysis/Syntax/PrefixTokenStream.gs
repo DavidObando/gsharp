@@ -63,7 +63,8 @@ internal sealed class PrefixTokenStream {
             let tokens = List[SyntaxToken]()
             let documentationTokens = ImmutableArray.CreateBuilder[SyntaxToken]()
             let diagnostics = List[Diagnostic]()
-            Lex(prefixTree, 0, cut, tokens, documentationTokens, diagnostics)
+            let atCut = List[Diagnostic]()
+            Lex(prefixTree, 0, cut, tokens, documentationTokens, diagnostics, atCut)
             let openers = OpenDelimiters(tokens)
             let textLength = prefixTree.Text.Length
             var sealFrom = 0
@@ -139,6 +140,7 @@ internal sealed class PrefixTokenStream {
                     IsWordCharacter(lastToken.Text[lastToken.Text.Length - 1])
             }
             facts.HasKeptText = kept.Count > 0
+            facts.UnfinishedTokenDiagnostics = atCut.ToImmutableArray()
             return PrefixTokenStream(
                 tokens.ToImmutableArray(),
                 documentationTokens.ToImmutable(),
@@ -154,7 +156,8 @@ internal sealed class PrefixTokenStream {
             end int32,
             tokens List[SyntaxToken],
             documentationTokens ImmutableArray[SyntaxToken].Builder,
-            diagnostics List[Diagnostic]
+            diagnostics List[Diagnostic],
+            atEndOfInput List[Diagnostic]? = nil
         ) {
             let lexer = Lexer(tree, start, end)
             while true {
@@ -171,6 +174,7 @@ internal sealed class PrefixTokenStream {
                 }
             }
             diagnostics.AddRange(lexer.Diagnostics)
+            atEndOfInput?.AddRange(lexer.DiagnosticsAtEndOfInput)
         }
 
         // The opening delimiters that no later token closes, outermost first.

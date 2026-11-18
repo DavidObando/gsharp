@@ -334,6 +334,22 @@ func F(p int32) {
     }
 
     @Fact
+    func LexicalErrorInACompletedToken_IsFinal() {
+        let texts = []string{
+            "package P\nfunc Main() {\n    let s = \"\\q\" ",
+            "package P\nfunc Main() {\n    let s = \"\\q\""
+        }
+        for text in texts {
+            let tree = SyntaxTree.Parse(SourceText.From(text, "prefix.gs"))
+            for remainder in[]PrefixRemainder{PrefixRemainder.Nothing, PrefixRemainder.KeepDeclarations} {
+                let result = Compilation(tree).BindPrefix(tree, text.Length, PrefixBindOptions(remainder))
+                let escape = result.Diagnostics.Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0269")
+                Assert.Equal(DiagnosticFinality.Final, escape.Finality)
+            }
+        }
+    }
+
+    @Fact
     func PrefixOnlyTree_OpenTypeWithoutItsClosingBrace_IsSealed() {
         let text = "package P\nclass Holder : System.IDisposable {"
         let tree = SyntaxTree.Parse(SourceText.From(text, "prefix.gs"))

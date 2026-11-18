@@ -72,6 +72,20 @@ class Lexer {
         get;
     }
 
+    // ADR-0225: the diagnostics of tokens that the end of the input left unfinished. For a prefix tree,
+    // the end of the input is the cut, so text after the cut can finish the token.
+    private let diagnosticsAtEndOfInput List[Diagnostic] = List[Diagnostic]()
+
+    /// Gets the diagnostics of tokens that the end of the input left unfinished (ADR-0225).
+    internal prop DiagnosticsAtEndOfInput List[Diagnostic] -> diagnosticsAtEndOfInput
+
+    // Records the diagnostic just reported when the lexer reached the end of its input.
+    private func NoteIfAtEndOfInput() {
+        if position >= end && Diagnostics.LastAdded is {} reported {
+            diagnosticsAtEndOfInput.Add(reported)
+        }
+    }
+
     private prop Current char -> Peek(0)
     private prop Lookahead char -> Peek(1)
 
@@ -545,6 +559,7 @@ class Lexer {
                 case '\u0000' {
                     let location = TextLocation(this.text, TextSpan(start, position - start))
                     Diagnostics.ReportUnterminatedComment(location)
+                    NoteIfAtEndOfInput()
                     done = true
                 }
                 case '*' {
@@ -579,6 +594,7 @@ class Lexer {
                 case '\u0000' {
                     let loc = TextLocation(this.text, TextSpan(start, position - start))
                     Diagnostics.ReportUnterminatedString(loc)
+                    NoteIfAtEndOfInput()
                     done = true
                 }
                 case '`' {
@@ -857,6 +873,7 @@ class Lexer {
         }
         if !terminated {
             Diagnostics.ReportUnterminatedString(TextLocation(text, TextSpan(start, 3)))
+            NoteIfAtEndOfInput()
         }
         FlushPendingUtf8HighSurrogate(ref hasPendingHigh, pendingHighSpan, ref unpairedSurrogateSpans)
         if unpairedSurrogateSpans != nil {
@@ -969,6 +986,7 @@ class Lexer {
         }
         if !terminated {
             Diagnostics.ReportUnterminatedString(TextLocation(text, TextSpan(start, 2)))
+            NoteIfAtEndOfInput()
         }
         kind = SyntaxKind.ByteStringToken
         value = bytes.ToImmutable()
@@ -1062,12 +1080,14 @@ class Lexer {
                         Diagnostics.ReportNewlineInInterpolatedStringLiteral(newlineLoc)
                     } else {
                         Diagnostics.ReportUnterminatedString(newlineLoc)
+                        NoteIfAtEndOfInput()
                     }
                     done = true
                 }
                 case '\u0000' {
                     let location = TextLocation(this.text, TextSpan(start, 1))
                     Diagnostics.ReportUnterminatedString(location)
+                    NoteIfAtEndOfInput()
                     done = true
                 }
                 case '"' {
@@ -1267,6 +1287,7 @@ class Lexer {
             if c == '\u0000' {
                 let loc = TextLocation(this.text, TextSpan(holeStart, 1))
                 Diagnostics.ReportUnterminatedInterpolationHole(loc)
+                NoteIfAtEndOfInput()
                 return false
             }
             if (c == 'b' && Lookahead == '"') || (c == 'u' && Lookahead == '8' && Peek(2) == '"') {
@@ -1415,6 +1436,7 @@ class Lexer {
         if Current == '\u0000' || Current == '\r' || Current == '\n' {
             let loc = TextLocation(this.text, TextSpan(literalStart, position - literalStart))
             Diagnostics.ReportUnterminatedCharLiteral(loc)
+            NoteIfAtEndOfInput()
             value = '\u0000'
             kind = SyntaxKind.CharacterToken
             return
@@ -1525,6 +1547,7 @@ class Lexer {
                 position++
             } else {
                 Diagnostics.ReportUnterminatedCharLiteral(loc)
+                NoteIfAtEndOfInput()
             }
         }
         kind = SyntaxKind.CharacterToken

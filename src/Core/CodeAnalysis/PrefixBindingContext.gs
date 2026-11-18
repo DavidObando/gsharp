@@ -88,21 +88,22 @@ internal sealed class PrefixCut {
         return Remainder == PrefixRemainder.Nothing || !HasKeptText || location.Span.Start < KeptStart
     }
 
-    /// Gets the lexer diagnostics of the prefix tree. The parser sets them with (cref:Tree).
-    internal prop LexerDiagnostics ImmutableArray[Diagnostic] {
+    /// Gets or sets the lexer diagnostics of tokens that the cut left unfinished (an unterminated string
+    /// or comment). The lexer states them when it reaches the end of its input.
+    internal prop UnfinishedTokenDiagnostics ImmutableArray[Diagnostic] {
         get {
-            return if lexerDiagnostics.IsDefault {
+            return if unfinishedTokenDiagnostics.IsDefault {
                 ImmutableArray[Diagnostic].Empty
             } else {
-                lexerDiagnostics
+                unfinishedTokenDiagnostics
             }
         }
         set {
-            lexerDiagnostics = value
+            unfinishedTokenDiagnostics = value
         }
     }
 
-    private var lexerDiagnostics ImmutableArray[Diagnostic]
+    private var unfinishedTokenDiagnostics ImmutableArray[Diagnostic]
 
     /// Gets or sets the span of the last source token before the cut, or an empty span at 0.
     internal prop LastToken TextSpan {
