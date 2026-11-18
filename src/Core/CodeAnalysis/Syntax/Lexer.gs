@@ -1167,6 +1167,7 @@ class Lexer {
                             {
                                 let escLoc = TextLocation(this.text, TextSpan(position - 1, 2))
                                 Diagnostics.ReportInvalidStringEscape(escLoc, Current)
+                                NoteIfAtEndOfInput()
                                 if Current != '\u0000' && Current != '\r' && Current != '\n' && Current != '"' {
                                     sb.Append(Current)
                                     position++
@@ -1514,6 +1515,7 @@ class Lexer {
                     {
                         let loc = TextLocation(this.text, TextSpan(literalStart, position - literalStart + 1))
                         Diagnostics.ReportInvalidCharEscape(loc, Current)
+                        NoteIfAtEndOfInput()
                         produced = Current
                         if Current != '\u0000' && Current != '\r' && Current != '\n' && Current != '\'' {
                             position++
@@ -1566,6 +1568,7 @@ class Lexer {
         if consumed < minDigits {
             let loc = TextLocation(this.text, TextSpan(literalStart, position - literalStart))
             Diagnostics.ReportInvalidUnicodeEscape(loc)
+            NoteIfAtEndOfInput()
             errored = true
         }
         return char(accumulator)
@@ -1585,6 +1588,10 @@ class Lexer {
         if consumed < 8 || accumulator > int64(0xFFFF) {
             let loc = TextLocation(this.text, TextSpan(literalStart, position - literalStart))
             Diagnostics.ReportInvalidUnicodeEscape(loc)
+            // A complete eight-digit escape that is too large is not an escape that the end of input cut.
+            if consumed < 8 {
+                NoteIfAtEndOfInput()
+            }
             errored = true
         }
         return char((accumulator & int64(0xFFFF)))

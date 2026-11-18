@@ -315,7 +315,9 @@ func F(p int32) {
         let texts = []string{
             "package P\nfunc Main() {\n    let x =",
             "package P\nfunc Main() {\n    let s = \"abc",
-            "package P\n/* unfinished"
+            "package P\n/* unfinished",
+            "package P\nfunc Main() {\n    let s = \"abc\\",
+            "package P\nfunc Main() {\n    let s = \"\\u00"
         }
         for text in texts {
             let tree = SyntaxTree.Parse(SourceText.From(text, "prefix.gs"))
