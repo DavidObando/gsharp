@@ -286,6 +286,26 @@ func Main() {
     }
 
     @Fact
+    func OriginalGenericNullableFieldStorage_RequiresAKnownKind() {
+        CheckRejected(`class Box[T] {
+    var Value T?
+    func Read() T? -> Value
+}
+let box = Box[int32]()
+box.Value = 19
+System.Console.WriteLine(box.Read())
+`, []string{"GS0641@2,16,2,17", "GS0641@3,18,3,19"})
+        Check(`class Box[T struct] {
+    var Value T?
+    func Read() T? -> Value
+}
+let box = Box[int32]()
+box.Value = 19
+System.Console.WriteLine(box.Read())
+`, "19\n")
+    }
+
+    @Fact
     func UnconstrainedNullableReturn_IsRejectedAtTheSourceAnnotation() {
         CheckRejected(`import System
 func Missing[T]() T? -> default(T)

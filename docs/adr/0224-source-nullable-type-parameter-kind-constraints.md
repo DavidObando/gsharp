@@ -110,6 +110,9 @@ Existing concrete nullable normalization does not change.
 Accepted programs retain the existing ABI.
 Reference annotations use ordinary CLR references and nullable metadata.
 Value annotations use the actual `System.Nullable<T>` signature and layout.
+The exact #6043 field-storage example receives GS0641 at its field and return annotations, with no emitted image.
+Its `struct`-constrained neighbor passes strict IL verification and prints `19` followed by a newline.
+The published compiler accepted the original, failed strict IL verification, and printed `1` instead.
 Ordinary `T`, `typeof(T)`, reflection, dynamic calls, arrays, nested generics, delegates, and interface slots retain ordinary CLR identities.
 Reference nullable annotations do not create a distinct reflection `Type`.
 Struct nullable annotations do.
