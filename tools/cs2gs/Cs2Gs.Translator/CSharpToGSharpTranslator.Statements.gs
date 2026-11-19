@@ -166,13 +166,13 @@ partial class CSharpToGSharpTranslator {
         private class GenericLocalStorageConsumer {
             public let Contract GenericLocalStorageContract
             public let Value ExpressionSyntax
-            public let Target ISymbol
+            public let Target ISymbol?
             public let InferredTypeParameter ITypeParameterSymbol?
 
             init(
                 contract GenericLocalStorageContract,
                 value ExpressionSyntax,
-                target ISymbol,
+                target ISymbol? = nil,
                 inferredTypeParameter ITypeParameterSymbol? = nil
             ) {
                 this.Contract = contract
@@ -789,47 +789,211 @@ partial class CSharpToGSharpTranslator {
             local.RefKind == RefKind.None &&
             (
             if IsImplicitlyTypedLocal(local) {
-                !this.InferredLocalHasIndependentlyNullableInitializer(local)
+                !this.InferredLocalHasIndependentlyNullableStorage(local)
             } else {
                 local.Type.NullableAnnotation != Microsoft.CodeAnalysis.NullableAnnotation.Annotated
             }
         )
 
-        private func InferredLocalHasIndependentlyNullableInitializer(local ILocalSymbol) bool {
+        private func InferredLocalHasIndependentlyNullableStorage(local ILocalSymbol) bool {
             if this.state.IndependentlyNullableInferredLocals.TryGetValue(local, out var cached) {
                 return cached
             }
             let visited = HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
             visited.Add(local)
-            let result = this.ComputeInferredLocalHasIndependentlyNullableInitializer(local, visited)
+            let result = this.ComputeInferredLocalHasIndependentlyNullableStorage(local, visited, out _)
             this.state.IndependentlyNullableInferredLocals[local] = result
             return result
         }
 
-        private func ComputeInferredLocalHasIndependentlyNullableInitializer(
+        private func ComputeInferredLocalHasIndependentlyNullableStorage(
             local ILocalSymbol,
-            visited HashSet[ILocalSymbol]
+            visited HashSet[ILocalSymbol],
+            out hitCycle bool
         ) bool {
+            hitCycle = false
             let syntax = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
-            if syntax is VariableDeclaratorSyntax declarator {
-                return declarator.Initializer?.Value is {} initializer && this.ExpressionHasIndependentlyNullableOrigin(
-                    initializer,
-                    visited
-                )
+            if syntax is not VariableDeclaratorSyntax declarator {
+                return local
+                    .Type
+                    .NullableAnnotation == Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated ||
+                    ObliviousNullabilityAnalyzer.ValueContractIsPromoted(this.context.Compilation, local)
             }
-            return local
-                .Type
-                .NullableAnnotation == Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .Annotated ||
-                ObliviousNullabilityAnalyzer.ValueContractIsPromoted(this.context.Compilation, local)
+            if declarator.Initializer?.Value is {} initializer && this.ExpressionHasIndependentlyNullableOrigin(
+                initializer,
+                visited,
+                out var initCycle
+            ) {
+                return true
+            } else {
+                hitCycle |= initCycle
+            }
+            let scope_ = this.GetNullabilityScope(local)
+            if scope_ == nil {
+                return false
+            }
+            if scope_.SyntaxTree != this.context.SemanticModel.SyntaxTree {
+                if !this.context.Compilation.ContainsSyntaxTree(scope_.SyntaxTree) {
+                    return false
+                }
+                using let modelScope = this.context.UseSemanticModelFor(scope_.SyntaxTree)
+                return this.ComputeInferredLocalHasIndependentlyNullableStorage(local, visited, out hitCycle)
+            }
+            let executable = scope_.AncestorsAndSelf().LastOrDefault(
+                (node SyntaxNode) -> node is BaseMethodDeclarationSyntax ||
+                    node is AccessorDeclarationSyntax ||
+                    node is LocalFunctionStatementSyntax ||
+                    node is AnonymousFunctionExpressionSyntax
+            ) ??
+                scope_
+            let index = this.GetProjectionConsumerIndex(executable)
+            if !index.TryGetValue(local, out var uses) {
+                return false
+            }
+            for use in uses.OfType[IdentifierNameSyntax]() {
+                let targetNode SyntaxNode = Unparenthesize(use) ?? use
+                if targetNode.Parent is AssignmentExpressionSyntax assignment &&
+                    assignment.Left == targetNode &&
+                    (
+                    assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) || assignment.IsKind(
+                        SyntaxKind.CoalesceAssignmentExpression
+                    )
+                ) {
+                    if this.ExpressionHasIndependentlyNullableOrigin(assignment.Right, visited, out var rhsCycle) {
+                        return true
+                    }
+                    hitCycle |= rhsCycle
+                } else if targetNode.Parent is ArgumentSyntax argument &&
+                    (
+                    argument.RefKindKeyword.IsKind(SyntaxKind.OutKeyword) || argument.RefKindKeyword.IsKind(
+                        SyntaxKind.RefKeyword
+                    )
+                ) {
+                    if this.GetArgumentParameter(argument) is {} param &&
+                        (
+                        ObliviousNullabilityAnalyzer.SymbolDeclaredType(param)
+                            ?.NullableAnnotation == Microsoft
+                            .CodeAnalysis
+                            .NullableAnnotation
+                            .Annotated ||
+                            ObliviousNullabilityAnalyzer.ValueContractIsPromoted(this.context.Compilation, param) ||
+                            ObliviousNullabilityAnalyzer.IsImportedStatedNullablePosition(
+                            param,
+                            this.context.Compilation
+                        )
+                    ) {
+                        return true
+                    }
+                } else if this.DeconstructionAssignmentWriteIsIndependentlyNullable(
+                    targetNode,
+                    visited,
+                    out var deconstructCycle
+                ) {
+                    return true
+                } else {
+                    hitCycle |= deconstructCycle
+                }
+            }
+            return false
+        }
+
+        private func DeconstructionAssignmentWriteIsIndependentlyNullable(
+            targetNode SyntaxNode,
+            visited HashSet[ILocalSymbol],
+            out hitCycle bool
+        ) bool {
+            hitCycle = false
+            let indices = List[int32]()
+            var current SyntaxNode = targetNode
+            while current.Parent is ArgumentSyntax{Parent: TupleExpressionSyntax tuple} argument {
+                let idx = tuple.Arguments.IndexOf(argument)
+                if idx < 0 {
+                    return false
+                }
+                indices.Insert(0, idx)
+                current = Unparenthesize(tuple) ?? tuple
+            }
+            if indices.Count == 0 ||
+                current.Parent is not AssignmentExpressionSyntax assignment ||
+                assignment.Left != current ||
+                !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) {
+                return false
+            }
+            var rhs ExpressionSyntax? = assignment.Right
+            for idx in indices {
+                var unwrappedRhs = Unparenthesize(rhs)
+                if unwrappedRhs is TupleExpressionSyntax rhsTuple && idx >= 0 && idx < rhsTuple.Arguments.Count {
+                    rhs = rhsTuple.Arguments[idx].Expression
+                } else {
+                    rhs = nil
+                    break
+                }
+            }
+            if rhs != nil {
+                return this.ExpressionHasIndependentlyNullableOrigin(rhs, visited, out hitCycle)
+            }
+            let slotType = GetTupleSlot(this.context.GetTypeInfo(assignment.Right).Type, indices)
+            return slotType?.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated
+        }
+
+        private func InferredLocalHasNonInitializerWrite(local ILocalSymbol) bool {
+            let scope_ = this.GetNullabilityScope(local)
+            if scope_ == nil {
+                return false
+            }
+            if scope_.SyntaxTree != this.context.SemanticModel.SyntaxTree {
+                if !this.context.Compilation.ContainsSyntaxTree(scope_.SyntaxTree) {
+                    return false
+                }
+                using let modelScope = this.context.UseSemanticModelFor(scope_.SyntaxTree)
+                return this.InferredLocalHasNonInitializerWrite(local)
+            }
+            let executable = scope_.AncestorsAndSelf().LastOrDefault(
+                (node SyntaxNode) -> node is BaseMethodDeclarationSyntax ||
+                    node is AccessorDeclarationSyntax ||
+                    node is LocalFunctionStatementSyntax ||
+                    node is AnonymousFunctionExpressionSyntax
+            ) ??
+                scope_
+            let index = this.GetProjectionConsumerIndex(executable)
+            if !index.TryGetValue(local, out var uses) {
+                return false
+            }
+            for use in uses.OfType[IdentifierNameSyntax]() {
+                var targetNode SyntaxNode = Unparenthesize(use) ?? use
+                if targetNode.Parent is AssignmentExpressionSyntax assignment && assignment.Left == targetNode {
+                    return true
+                }
+                if targetNode.Parent is ArgumentSyntax argument &&
+                    (
+                    argument.RefKindKeyword.IsKind(SyntaxKind.OutKeyword) || argument.RefKindKeyword.IsKind(
+                        SyntaxKind.RefKeyword
+                    )
+                ) {
+                    return true
+                }
+                var current SyntaxNode = targetNode
+                while current.Parent is ArgumentSyntax{Parent: TupleExpressionSyntax tuple} {
+                    current = Unparenthesize(tuple) ?? tuple
+                }
+                if current is TupleExpressionSyntax &&
+                    current.Parent is AssignmentExpressionSyntax tupleAssignment &&
+                    tupleAssignment.Left == current {
+                    return true
+                }
+            }
+            return false
         }
 
         private func ExpressionHasIndependentlyNullableOrigin(
             expression ExpressionSyntax,
-            visited HashSet[ILocalSymbol]
+            visited HashSet[ILocalSymbol],
+            out hitCycle bool
         ) bool {
+            hitCycle = false
             var unwrapped ExpressionSyntax? = expression
             while (
                 unwrapped is Microsoft
@@ -880,17 +1044,21 @@ partial class CSharpToGSharpTranslator {
                 return true
             }
             if unwrapped is BinaryExpressionSyntax coalesce && coalesce.IsKind(SyntaxKind.CoalesceExpression) {
-                return this.ExpressionHasIndependentlyNullableOrigin(coalesce.Right, visited)
+                return this.ExpressionHasIndependentlyNullableOrigin(coalesce.Right, visited, out hitCycle)
             }
             if this.ComposedValueOperands(unwrapped) is {} operands {
-                return operands.Any(
-                    (operand ExpressionSyntax) -> this.ExpressionHasIndependentlyNullableOrigin(operand, visited)
-                )
+                for operand in operands {
+                    if this.ExpressionHasIndependentlyNullableOrigin(operand, visited, out var opCycle) {
+                        return true
+                    }
+                    hitCycle |= opCycle
+                }
+                return false
             }
             if unwrapped is AssignmentExpressionSyntax assignment && assignment.IsKind(
                 SyntaxKind.SimpleAssignmentExpression
             ) {
-                return this.ExpressionHasIndependentlyNullableOrigin(assignment.Right, visited)
+                return this.ExpressionHasIndependentlyNullableOrigin(assignment.Right, visited, out hitCycle)
             }
             let symbol = this.context.GetSymbolInfo(unwrapped).Symbol
             if symbol is ILocalSymbol otherLocal {
@@ -904,12 +1072,108 @@ partial class CSharpToGSharpTranslator {
                     return cached
                 }
                 if !visited.Add(otherLocal) {
+                    hitCycle = true
                     return false
                 }
-                let nested = this.ComputeInferredLocalHasIndependentlyNullableInitializer(otherLocal, visited)
+                let nested = this.ComputeInferredLocalHasIndependentlyNullableStorage(
+                    otherLocal,
+                    visited,
+                    out var nestedCycle
+                )
                 visited.Remove(otherLocal)
-                this.state.IndependentlyNullableInferredLocals[otherLocal] = nested
+                hitCycle |= nestedCycle
+                if nested || !nestedCycle {
+                    this.state.IndependentlyNullableInferredLocals[otherLocal] = nested
+                }
                 return nested
+            }
+            if unwrapped is ElementAccessExpressionSyntax elementAccess {
+                if symbol is IPropertySymbol indexer {
+                    if ObliviousNullabilityAnalyzer.ValueContractIsPromoted(this.context.Compilation, indexer) ||
+                        ObliviousNullabilityAnalyzer.IsImportedStatedNullablePosition(
+                        indexer.OriginalDefinition,
+                        this.context.Compilation
+                    ) ||
+                        indexer
+                        .OriginalDefinition
+                        .Type
+                        .NullableAnnotation == Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated {
+                        return true
+                    }
+                    if indexer
+                        .OriginalDefinition
+                        .Type is ITypeParameterSymbol elemTp &&
+                        elemTp.TypeParameterKind == TypeParameterKind.Type &&
+                        indexer
+                        .OriginalDefinition
+                        .ContainingType is INamedTypeSymbol{IsGenericType: true} containerType {
+                        return this.ContainerElementOriginIsIndependentlyNullable(
+                            elementAccess.Expression,
+                            containerType,
+                            elemTp,
+                            visited,
+                            out hitCycle
+                        )
+                    }
+                } else if this
+                    .context
+                    .GetTypeInfo(elementAccess.Expression)
+                    .Type is IArrayTypeSymbol receiverArray &&
+                    this
+                    .context
+                    .GetTypeInfo(unwrapped)
+                    .Type is ITypeParameterSymbol actualArrElem {
+                    let arrayPattern = this
+                        .context
+                        .Compilation
+                        .CreateArrayTypeSymbol(
+                        actualArrElem.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated),
+                        receiverArray.Rank
+                    )
+                    return this.ContainerElementOriginIsIndependentlyNullable(
+                        elementAccess.Expression,
+                        arrayPattern,
+                        actualArrElem.WithNullableAnnotation(
+                            Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated
+                        ) as ITypeParameterSymbol,
+                        visited,
+                        out hitCycle
+                    )
+                }
+            }
+            if unwrapped is MemberAccessExpressionSyntax memberAccess &&
+                symbol is {} memberSym &&
+                (memberSym is IFieldSymbol or IPropertySymbol) {
+                if ObliviousNullabilityAnalyzer.ValueContractIsPromoted(this.context.Compilation, memberSym) ||
+                    ObliviousNullabilityAnalyzer
+                    .IsImportedStatedNullablePosition(memberSym.OriginalDefinition, this.context.Compilation) {
+                    return true
+                }
+                let declaredMemberType = switch memberSym {
+                    case field is IFieldSymbol: field.OriginalDefinition.Type
+                    case property is IPropertySymbol: property.OriginalDefinition.Type
+                    default: default(ITypeSymbol?)
+                }
+                if declaredMemberType is ITypeParameterSymbol memberTp &&
+                    declaredMemberType.NullableAnnotation != Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated &&
+                    memberTp.TypeParameterKind == TypeParameterKind.Type &&
+                    memberSym
+                    .OriginalDefinition
+                    .ContainingType is INamedTypeSymbol{IsGenericType: true} containerType {
+                    return this.ContainerElementOriginIsIndependentlyNullable(
+                        memberAccess.Expression,
+                        containerType,
+                        memberTp,
+                        visited,
+                        out hitCycle
+                    )
+                }
             }
             if symbol is {} memberSymbol && (memberSymbol is IParameterSymbol or IFieldSymbol or IPropertySymbol) {
                 return ObliviousNullabilityAnalyzer.SymbolDeclaredType(memberSymbol)
@@ -942,7 +1206,8 @@ partial class CSharpToGSharpTranslator {
                         invocation,
                         method,
                         returnParam,
-                        visited
+                        visited,
+                        out hitCycle
                     )
                 }
                 return false
@@ -972,7 +1237,8 @@ partial class CSharpToGSharpTranslator {
                             awaitedInv,
                             awaitedMethod,
                             awaitedReturnParam,
-                            visited
+                            visited,
+                            out hitCycle
                         )
                     }
                 }
@@ -988,12 +1254,168 @@ partial class CSharpToGSharpTranslator {
                 .Annotated
         }
 
+        private func ContainerElementOriginIsIndependentlyNullable(
+            expr ExpressionSyntax?,
+            declaredPattern ITypeSymbol?,
+            targetTp ITypeParameterSymbol?,
+            visited HashSet[ILocalSymbol],
+            out hitCycle bool
+        ) bool {
+            hitCycle = false
+            if expr == nil || declaredPattern == nil || targetTp == nil {
+                return true
+            }
+            var unwrapped ExpressionSyntax? = expr
+            while (
+                unwrapped is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ParenthesizedExpressionSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .CheckedExpressionSyntax
+            ) {
+                unwrapped = switch unwrapped {
+                    case parenthesized is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ParenthesizedExpressionSyntax: parenthesized.Expression
+                    case checkedExpression is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .CheckedExpressionSyntax: checkedExpression.Expression
+                    default: unwrapped
+                }
+            }
+            if unwrapped == nil {
+                return true
+            }
+            if declaredPattern is ITypeParameterSymbol {
+                return !SymbolEqualityComparer.Default.Equals(declaredPattern, targetTp) ||
+                    this.ExpressionHasIndependentlyNullableOrigin(unwrapped, visited, out hitCycle)
+            }
+            let symbol = this.context.GetSymbolInfo(unwrapped).Symbol
+            if symbol is ILocalSymbol local {
+                if !IsImplicitlyTypedLocal(local) {
+                    return true
+                }
+                let declarator = local
+                    .DeclaringSyntaxReferences
+                    .FirstOrDefault()
+                    ?.GetSyntax() as VariableDeclaratorSyntax
+                if declarator?.Initializer?.Value is not{} initExpr || this.InferredLocalHasNonInitializerWrite(local) {
+                    return true
+                }
+                if !visited.Add(local) {
+                    hitCycle = true
+                    return false
+                }
+                try {
+                    return this.ContainerElementOriginIsIndependentlyNullable(
+                        initExpr,
+                        declaredPattern,
+                        targetTp,
+                        visited,
+                        out hitCycle
+                    )
+                } finally {
+                    visited.Remove(local)
+                }
+            }
+            if unwrapped is InvocationExpressionSyntax invocation && symbol is IMethodSymbol method {
+                if ObliviousNullabilityAnalyzer.SymbolDeclaredType(method)
+                    ?.NullableAnnotation == Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated ||
+                    ObliviousNullabilityAnalyzer.IsImportedStatedNullablePosition(method, this.context.Compilation) ||
+                    this.DeclaredCallResultIsAnnotatedNullable(unwrapped) {
+                    return true
+                }
+                let unreduced = method.ReducedFrom ?? method
+                let fedInnerPatterns = Dictionary[ITypeParameterSymbol, ITypeSymbol](SymbolEqualityComparer.Default)
+                if !this.CollectInnerMethodTypeParametersFeedingTarget(
+                    declaredPattern,
+                    unreduced.OriginalDefinition.ReturnType,
+                    targetTp,
+                    fedInnerPatterns
+                ) ||
+                    fedInnerPatterns.Count == 0 {
+                    return true
+                }
+                for entry in fedInnerPatterns {
+                    let innerTp = entry.Key
+                    let innerPattern = entry.Value
+                    let innerIsReduced = method.ReducedFrom != nil
+                    var matched = false
+                    if innerIsReduced &&
+                        unreduced
+                        .Parameters
+                        .Length > 0 &&
+                        invocation.Expression is MemberAccessExpressionSyntax memberAccess &&
+                        MentionsTypeParameter(unreduced.Parameters[0].OriginalDefinition.Type, innerTp) {
+                        matched = true
+                        let argPattern = this.SubstituteTypeParameters(
+                            unreduced.Parameters[0].OriginalDefinition.Type,
+                            Dictionary[ITypeParameterSymbol, ITypeSymbol](SymbolEqualityComparer.Default){
+                                [innerTp.OriginalDefinition] = innerPattern
+                            }
+                        )
+                        if this.ContainerElementOriginIsIndependentlyNullable(
+                            memberAccess.Expression,
+                            argPattern,
+                            targetTp,
+                            visited,
+                            out var receiverCycle
+                        ) {
+                            return true
+                        }
+                        hitCycle |= receiverCycle
+                    }
+                    for arg in invocation.ArgumentList.Arguments {
+                        if this.GetArgumentParameter(arg, unreduced) is {} argParam &&
+                            MentionsTypeParameter(argParam.OriginalDefinition.Type, innerTp) {
+                            matched = true
+                            let argPattern = this.SubstituteTypeParameters(
+                                argParam.OriginalDefinition.Type,
+                                Dictionary[ITypeParameterSymbol, ITypeSymbol](SymbolEqualityComparer.Default){
+                                    [innerTp.OriginalDefinition] = innerPattern
+                                }
+                            )
+                            if this.ContainerElementOriginIsIndependentlyNullable(
+                                arg.Expression,
+                                argPattern,
+                                targetTp,
+                                visited,
+                                out var argCycle
+                            ) {
+                                return true
+                            }
+                            hitCycle |= argCycle
+                        }
+                    }
+                    if !matched {
+                        return true
+                    }
+                }
+                return false
+            }
+            return true
+        }
+
         private func CallArgumentForReturnParameterIsIndependentlyNullable(
             invocation InvocationExpressionSyntax,
             method IMethodSymbol,
             returnParam ITypeParameterSymbol,
-            visited HashSet[ILocalSymbol]
+            visited HashSet[ILocalSymbol],
+            out hitCycle bool
         ) bool {
+            hitCycle = false
             if method.ReducedFrom is {} unreducedMethod &&
                 unreducedMethod
                 .Parameters
@@ -1006,7 +1428,7 @@ partial class CSharpToGSharpTranslator {
                 .Default
                 .Equals(receiverTp, returnParam) &&
                 invocation.Expression is MemberAccessExpressionSyntax memberAccess &&
-                this.ExpressionHasIndependentlyNullableOrigin(memberAccess.Expression, visited) {
+                this.ExpressionHasIndependentlyNullableOrigin(memberAccess.Expression, visited, out var receiverCycle) {
                 return true
             }
             for arg in invocation.ArgumentList.Arguments {
@@ -1016,11 +1438,11 @@ partial class CSharpToGSharpTranslator {
                 ) is {} argTp &&
                     SymbolEqualityComparer
                     .Default
-                    .Equals(argTp, returnParam) && this.ExpressionHasIndependentlyNullableOrigin(
-                    arg.Expression,
-                    visited
-                ) {
-                    return true
+                    .Equals(argTp, returnParam) {
+                    if this.ExpressionHasIndependentlyNullableOrigin(arg.Expression, visited, out var argCycle) {
+                        return true
+                    }
+                    hitCycle |= argCycle
                 }
             }
             return false
@@ -1163,7 +1585,7 @@ partial class CSharpToGSharpTranslator {
                             !this.OtherArgumentFixesTypeParameterToNonNull(consumer.Value, paramTarget, inferredTp) {
                             continue
                         }
-                    } else if this.SinkInfersTypeFromValue(consumer.Target, consumer.Value) {
+                    } else if consumer.Target != nil && this.SinkInfersTypeFromValue(consumer.Target, consumer.Value) {
                         continue
                     }
                     root.IsFixed = true
@@ -1209,6 +1631,27 @@ partial class CSharpToGSharpTranslator {
                 }
                 var (sink, slotType) = this.ResolveValueStoreContract(expr)
                 sink ??= this.TryResolveReducedExtensionReceiverParameter(expr)
+                if sink == nil &&
+                    projectedPattern != nil &&
+                    projectedTypeParameter != nil &&
+                    this.TryProjectMemberOrIndexerResult(
+                    expr,
+                    projectedPattern,
+                    projectedTypeParameter
+                ) is {} projectedMember {
+                    this.CollectGenericLocalStorageConsumers(
+                        sourceType,
+                        contract,
+                        projectedMember.NextExpr,
+                        index,
+                        getContract,
+                        consumers,
+                        visitedProjectedLocals,
+                        projectedMember.Pattern,
+                        projectedMember.TypeParameter
+                    )
+                    return
+                }
                 this.RecordGenericLocalStorageConsumer(
                     sourceType,
                     contract,
@@ -1253,6 +1696,27 @@ partial class CSharpToGSharpTranslator {
                 var (sink, knownSlot) = this.ResolveStoreAtNode(outerExpr, outerExpr)
                 if sink == nil {
                     sink = this.TryResolveReducedExtensionReceiverParameter(outerExpr)
+                }
+                if sink == nil &&
+                    projectedPattern != nil &&
+                    projectedTypeParameter != nil &&
+                    this.TryProjectMemberOrIndexerResult(
+                    outerExpr,
+                    projectedPattern,
+                    projectedTypeParameter
+                ) is {} projectedMember {
+                    this.CollectGenericLocalStorageConsumers(
+                        sourceType,
+                        contract,
+                        projectedMember.NextExpr,
+                        index,
+                        getContract,
+                        consumers,
+                        visitedProjectedLocals,
+                        projectedMember.Pattern,
+                        projectedMember.TypeParameter
+                    )
+                    return
                 }
                 this.ClassifyGenericStoreSlot(outerExpr, sink, knownSlot, out var slotType, out _)
                 this.RecordGenericLocalStorageConsumer(
@@ -1300,6 +1764,8 @@ partial class CSharpToGSharpTranslator {
                         visitedProjectedLocals.Add(inferredLocal, seenPatterns)
                     }
                     if seenPatterns.Count >= 4 || ProjectedTypeDepth(projectedPattern) > 16 {
+                        // Preserve the explicit contract when projection traversal hits its cycle/depth bound.
+                        consumers.Add(GenericLocalStorageConsumer(contract, expr))
                         return
                     }
                     for seen in seenPatterns {
@@ -1418,6 +1884,201 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
+        private func AwaitAwareExpression(expression ExpressionSyntax)(NextExpr ExpressionSyntax, IsAwaited bool) {
+            var awaitedNode SyntaxNode = expression
+            while awaitedNode.Parent is ParenthesizedExpressionSyntax or CheckedExpressionSyntax {
+                awaitedNode = awaitedNode.Parent!!
+            }
+            let isAwaited = awaitedNode.Parent is AwaitExpressionSyntax
+            let nextExpr ExpressionSyntax = if isAwaited {
+                cast[ExpressionSyntax](awaitedNode.Parent!!)
+            } else {
+                expression
+            }
+            return (nextExpr, isAwaited)
+        }
+
+        private func TryProjectMemberOrIndexerResult(
+            expr ExpressionSyntax,
+            projectedPattern ITypeSymbol,
+            projectedTypeParameter ITypeParameterSymbol
+        )(NextExpr ExpressionSyntax, Pattern ITypeSymbol?, TypeParameter ITypeParameterSymbol?)? {
+            let parentNode = OutermostTransparentNode(expr, stopAtAssignment: true)
+            if parentNode?.Parent is ElementAccessExpressionSyntax elementAccess &&
+                elementAccess.Expression == parentNode {
+                if projectedPattern is IArrayTypeSymbol arrPattern {
+                    let elementType = arrPattern.ElementType
+                    if !MentionsTypeParameter(elementType, projectedTypeParameter) {
+                        return nil
+                    }
+                    if SymbolEqualityComparer.Default.Equals(elementType, projectedTypeParameter) {
+                        return (cast[ExpressionSyntax](elementAccess), nil, nil)
+                    }
+                    return (cast[ExpressionSyntax](elementAccess), elementType, projectedTypeParameter)
+                }
+                let indexer = this
+                    .context
+                    .GetSymbolInfo(elementAccess)
+                    .Symbol as IPropertySymbol ??
+                    (this.context.SemanticModel.GetOperation(elementAccess) as IPropertyReferenceOperation)?.Property
+                if indexer == nil || this.ShouldPromoteToNullableReference(indexer) ||
+                    this.IsTranslatorWidenedDeclaration(indexer) || this.IsImportedObliviousNullableMember(indexer) ||
+                    ObliviousNullabilityAnalyzer.IsImportedStatedNullablePosition(
+                    indexer.OriginalDefinition,
+                    this.context.Compilation
+                ) ||
+                    indexer
+                    .OriginalDefinition
+                    .Type
+                    .NullableAnnotation == Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated {
+                    return nil
+                }
+                let bindings = Dictionary[ITypeParameterSymbol, ITypeSymbol](SymbolEqualityComparer.Default)
+                this.CollectProjectedTypeParameterBindings(
+                    indexer.OriginalDefinition.ContainingType,
+                    projectedPattern,
+                    projectedTypeParameter,
+                    bindings,
+                    includeTypeParameters: true
+                )
+                if bindings.Count == 0 {
+                    return nil
+                }
+                let composed = this.SubstituteTypeParameters(indexer.OriginalDefinition.Type, bindings)
+                if composed.NullableAnnotation == Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated ||
+                    !MentionsTypeParameter(composed, projectedTypeParameter) {
+                    return nil
+                }
+                if SymbolEqualityComparer.Default.Equals(composed, projectedTypeParameter) {
+                    return (cast[ExpressionSyntax](elementAccess), nil, nil)
+                }
+                return (cast[ExpressionSyntax](elementAccess), composed, projectedTypeParameter)
+            }
+            if parentNode?.Parent is MemberAccessExpressionSyntax memberAccess &&
+                memberAccess.Expression == parentNode {
+                let memberSymbol = this.context.GetSymbolInfo(memberAccess).Symbol
+                if memberSymbol is {} memberSym && (memberSym is IFieldSymbol or IPropertySymbol) {
+                    if this.ShouldPromoteToNullableReference(memberSym) || this.IsTranslatorWidenedDeclaration(
+                        memberSym
+                    ) ||
+                        this.IsImportedObliviousNullableMember(memberSym) ||
+                        ObliviousNullabilityAnalyzer
+                        .IsImportedStatedNullablePosition(memberSym.OriginalDefinition, this.context.Compilation) {
+                        return nil
+                    }
+                    if memberSym is IFieldSymbol tupleField &&
+                        projectedPattern is INamedTypeSymbol{IsTupleType: true} tuplePattern {
+                        let matchName = tupleField.CorrespondingTupleField?.Name ?? tupleField.Name
+                        for candidate in tuplePattern.TupleElements {
+                            let candidateName = candidate.CorrespondingTupleField?.Name ?? candidate.Name
+                            if candidate.Name == tupleField.Name || candidateName == matchName {
+                                let elementType = candidate.Type
+                                if !MentionsTypeParameter(elementType, projectedTypeParameter) {
+                                    return nil
+                                }
+                                if SymbolEqualityComparer.Default.Equals(elementType, projectedTypeParameter) {
+                                    return (cast[ExpressionSyntax](memberAccess), nil, nil)
+                                }
+                                return (cast[ExpressionSyntax](memberAccess), elementType, projectedTypeParameter)
+                            }
+                        }
+                        return nil
+                    }
+                    let declaredMemberType = switch memberSym {
+                        case field is IFieldSymbol: field.OriginalDefinition.Type
+                        case property is IPropertySymbol: property.OriginalDefinition.Type
+                        default: default(ITypeSymbol?)
+                    }
+                    if declaredMemberType == nil ||
+                        declaredMemberType.NullableAnnotation == Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated {
+                        return nil
+                    }
+                    let bindings = Dictionary[ITypeParameterSymbol, ITypeSymbol](SymbolEqualityComparer.Default)
+                    this.CollectProjectedTypeParameterBindings(
+                        memberSym.OriginalDefinition.ContainingType,
+                        projectedPattern,
+                        projectedTypeParameter,
+                        bindings,
+                        includeTypeParameters: true
+                    )
+                    if bindings.Count == 0 {
+                        return nil
+                    }
+                    let composed = this.SubstituteTypeParameters(declaredMemberType, bindings)
+                    if composed.NullableAnnotation == Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated ||
+                        !MentionsTypeParameter(composed, projectedTypeParameter) {
+                        return nil
+                    }
+                    if SymbolEqualityComparer.Default.Equals(composed, projectedTypeParameter) {
+                        return (cast[ExpressionSyntax](memberAccess), nil, nil)
+                    }
+                    return (cast[ExpressionSyntax](memberAccess), composed, projectedTypeParameter)
+                }
+                if memberAccess.Parent is InvocationExpressionSyntax invocation &&
+                    memberSymbol is IMethodSymbol method &&
+                    !method.IsStatic &&
+                    method.ReducedFrom == nil &&
+                    method
+                    .TypeParameters
+                    .Length == 0 {
+                    if this.ShouldPromoteToNullableReference(method) || this.IsTranslatorWidenedDeclaration(method) ||
+                        this.IsImportedObliviousNullableMember(method) ||
+                        ObliviousNullabilityAnalyzer.IsImportedStatedNullablePosition(
+                        method,
+                        this.context.Compilation
+                    ) ||
+                        this.DeclaredCallResultIsAnnotatedNullable(invocation) {
+                        return nil
+                    }
+                    let (nextExpr, isAwaited) = this.AwaitAwareExpression(invocation)
+                    let effectiveReturn = GetEffectiveReturnType(method.OriginalDefinition.ReturnType, isAwaited)
+                    if effectiveReturn == nil ||
+                        effectiveReturn.NullableAnnotation == Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated {
+                        return nil
+                    }
+                    let bindings = Dictionary[ITypeParameterSymbol, ITypeSymbol](SymbolEqualityComparer.Default)
+                    this.CollectProjectedTypeParameterBindings(
+                        method.OriginalDefinition.ContainingType,
+                        projectedPattern,
+                        projectedTypeParameter,
+                        bindings,
+                        includeTypeParameters: true
+                    )
+                    if bindings.Count == 0 {
+                        return nil
+                    }
+                    let composed = this.SubstituteTypeParameters(effectiveReturn, bindings)
+                    if composed.NullableAnnotation == Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated ||
+                        !MentionsTypeParameter(composed, projectedTypeParameter) {
+                        return nil
+                    }
+                    if SymbolEqualityComparer.Default.Equals(composed, projectedTypeParameter) {
+                        return (nextExpr, nil, nil)
+                    }
+                    return (nextExpr, composed, projectedTypeParameter)
+                }
+            }
+            return nil
+        }
+
         private func TryProjectInferredCallResult(
             expr ExpressionSyntax,
             parameter IParameterSymbol,
@@ -1433,16 +2094,7 @@ partial class CSharpToGSharpTranslator {
             if invocation == nil {
                 return nil
             }
-            var awaitedNode SyntaxNode = invocation
-            while awaitedNode.Parent is ParenthesizedExpressionSyntax or CheckedExpressionSyntax {
-                awaitedNode = awaitedNode.Parent!!
-            }
-            let isAwaited = awaitedNode.Parent is AwaitExpressionSyntax
-            let nextExpr ExpressionSyntax = if isAwaited {
-                cast[ExpressionSyntax](awaitedNode.Parent!!)
-            } else {
-                invocation
-            }
+            let (nextExpr, isAwaited) = this.AwaitAwareExpression(invocation)
             // Unwrap an async return only when awaited; unawaited calls produce `Task<U>` / `ValueTask<U>`.
             let calleeReturn = GetEffectiveReturnType(callee.OriginalDefinition.ReturnType, isAwaited)
             if calleeReturn == nil {
@@ -1467,9 +2119,9 @@ partial class CSharpToGSharpTranslator {
                 Dictionary[ITypeParameterSymbol, ITypeSymbol](SymbolEqualityComparer.Default)
             if this.InferredGenericParameterTypeParameter(parameter, expr) is {} directTp &&
                 IsBareTypeParameter(directTp) {
-                bindings[directTp] = projectedPattern
+                bindings[directTp.OriginalDefinition] = projectedPattern
             } else {
-                this.CollectMethodTypeParameterBindings(
+                this.CollectProjectedTypeParameterBindings(
                     parameter.OriginalDefinition.Type,
                     projectedPattern,
                     projectedTypeParameter,
@@ -1479,7 +2131,7 @@ partial class CSharpToGSharpTranslator {
             if bindings.Count == 0 {
                 return nil
             }
-            let composed = this.SubstituteProjectedTypeParameters(calleeReturn, bindings, this.context.Compilation)
+            let composed = this.SubstituteTypeParameters(calleeReturn, bindings)
             if !MentionsTypeParameter(composed, projectedTypeParameter) {
                 return nil
             }
@@ -1489,15 +2141,20 @@ partial class CSharpToGSharpTranslator {
             return (nextExpr, composed, projectedTypeParameter)
         }
 
-        private func CollectMethodTypeParameterBindings(
+        private func CollectProjectedTypeParameterBindings(
             declaredType ITypeSymbol,
             actualType ITypeSymbol,
             targetTp ITypeParameterSymbol,
-            bindings Dictionary[ITypeParameterSymbol, ITypeSymbol]
+            bindings Dictionary[ITypeParameterSymbol, ITypeSymbol],
+            includeTypeParameters bool = false
         ) {
-            if declaredType is ITypeParameterSymbol tp && tp.TypeParameterKind == TypeParameterKind.Method {
-                if MentionsTypeParameter(actualType, targetTp) && !bindings.ContainsKey(tp) {
-                    bindings[tp] = actualType
+            if declaredType is ITypeParameterSymbol tp &&
+                (
+                tp.TypeParameterKind == TypeParameterKind.Method ||
+                    (includeTypeParameters && tp.TypeParameterKind == TypeParameterKind.Type)
+            ) {
+                if MentionsTypeParameter(actualType, targetTp) && !bindings.ContainsKey(tp.OriginalDefinition) {
+                    bindings[tp.OriginalDefinition] = actualType
                 }
                 return
             }
@@ -1505,95 +2162,56 @@ partial class CSharpToGSharpTranslator {
                 actualType is IArrayTypeSymbol actualArray &&
                 declaredArray.Rank == actualArray
                 .Rank {
-                this.CollectMethodTypeParameterBindings(
+                this.CollectProjectedTypeParameterBindings(
                     declaredArray.ElementType,
                     actualArray.ElementType,
                     targetTp,
-                    bindings
+                    bindings,
+                    includeTypeParameters
                 )
+                return
+            }
+            if declaredType is INamedTypeSymbol{IsTupleType: true} declaredTuple &&
+                actualType is INamedTypeSymbol{IsTupleType: true} actualTuple &&
+                declaredTuple
+                .TupleElements
+                .Length == actualTuple
+                .TupleElements
+                .Length {
+                for var i = 0; i < declaredTuple.TupleElements.Length; i++ {
+                    this.CollectProjectedTypeParameterBindings(
+                        declaredTuple.TupleElements[i].Type,
+                        actualTuple.TupleElements[i].Type,
+                        targetTp,
+                        bindings,
+                        includeTypeParameters
+                    )
+                }
                 return
             }
             if declaredType is INamedTypeSymbol{IsGenericType: true} declaredNamed &&
                 FindMatchingNamedTypeInHierarchy(actualType, declaredNamed.OriginalDefinition) is {} actualNamed {
                 if declaredNamed.ContainingType != nil && actualNamed.ContainingType != nil {
-                    this.CollectMethodTypeParameterBindings(
+                    this.CollectProjectedTypeParameterBindings(
                         declaredNamed.ContainingType,
                         actualNamed.ContainingType,
                         targetTp,
-                        bindings
+                        bindings,
+                        includeTypeParameters
                     )
                 }
                 if declaredNamed.TypeArguments.Length == actualNamed.TypeArguments.Length {
                     for var i = 0; i < declaredNamed.TypeArguments.Length; i++ {
-                        this.CollectMethodTypeParameterBindings(
+                        this.CollectProjectedTypeParameterBindings(
                             declaredNamed.TypeArguments[i],
                             actualNamed.TypeArguments[i],
                             targetTp,
-                            bindings
+                            bindings,
+                            includeTypeParameters
                         )
                     }
                 }
             }
-        }
-
-        private func SubstituteProjectedTypeParameters(
-            type ITypeSymbol,
-            bindings Dictionary[ITypeParameterSymbol, ITypeSymbol],
-            compilation CSharpCompilation
-        ) ITypeSymbol {
-            if type is ITypeParameterSymbol tp && bindings.TryGetValue(tp, out var replacement) {
-                return replacement
-            }
-            if type is IArrayTypeSymbol array {
-                let element = this.SubstituteProjectedTypeParameters(array.ElementType, bindings, compilation)
-                return if SymbolEqualityComparer.Default.Equals(element, array.ElementType) {
-                    array
-                } else {
-                    compilation.CreateArrayTypeSymbol(element, array.Rank)
-                }
-            }
-            if type is INamedTypeSymbol{IsGenericType: true} named {
-                let rebuiltContaining = if named.ContainingType != nil {
-                    this.SubstituteProjectedTypeParameters(
-                        named.ContainingType,
-                        bindings,
-                        compilation
-                    ) as INamedTypeSymbol
-                } else {
-                    default(INamedTypeSymbol?)
-                }
-                var changed = rebuiltContaining != nil && !SymbolEqualityComparer.IncludeNullability.Equals(
-                    rebuiltContaining,
-                    named.ContainingType
-                )
-                let arguments = List[ITypeSymbol](named.TypeArguments.Length)
-                for argument in named.TypeArguments {
-                    let substituted = this.SubstituteProjectedTypeParameters(argument, bindings, compilation)
-                    if !SymbolEqualityComparer.Default.Equals(substituted, argument) {
-                        changed = true
-                    }
-                    arguments.Add(substituted)
-                }
-                if !changed {
-                    return named
-                }
-                if named.IsTupleType {
-                    let elements = arguments.ToImmutableArray()
-                    let names = named
-                        .TupleElements
-                        .Select(
-                        (element IFieldSymbol) -> if element.IsExplicitlyNamedTupleElement {
-                            element.Name
-                        } else {
-                            default(string?)
-                        }
-                    )
-                        .ToImmutableArray()
-                    return compilation.CreateTupleTypeSymbol(elements, names)
-                }
-                return ConstructNamedTypeWithContaining(named, rebuiltContaining, arguments, named.NullableAnnotation)
-            }
-            return type
         }
 
         private func HasErasingProjectionConversion(expr ExpressionSyntax, projectedPattern ITypeSymbol?) bool {

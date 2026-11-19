@@ -44,6 +44,8 @@ open class Issue5960GenericLocalStorageTests {
     @InlineData("ref-choose-projected")
     @InlineData("extension-receiver")
     @InlineData("nullable-alias-assignment")
+    @InlineData("projected-indexer")
+    @InlineData("deep-projected-depth")
     async func ExplicitGenericStorage_PreservesNativeRuntimeBytes(shape string) {
         let effectful = shape == "effectful"
         let fixedConsumers = shape == "fixed-consumers"
@@ -92,6 +94,10 @@ open class Issue5960GenericLocalStorageTests {
                 ExtensionReceiverSource
             } else if shape == "nullable-alias-assignment" {
                 NullableAliasAssignmentSource
+            } else if shape == "projected-indexer" {
+                ProjectedIndexerSource
+            } else if shape == "deep-projected-depth" {
+                DeepProjectedDepthSource
             } else if shape == "fixed-loop" {
                 ConstrainedSource
                     .Replace(
@@ -163,7 +169,7 @@ open class Issue5960GenericLocalStorageTests {
                     expected
                 )
             } else if shape == "projected-containers" {
-                Assert.Equal("1:True:1:True:1:True:True:True:True:1:True" + Environment.NewLine, expected)
+                Assert.Equal("1:True:1:True:1:True:True:True:True:True:True:1:True" + Environment.NewLine, expected)
             } else if shape == "async-projected" {
                 Assert.Equal("True:1:True:1:True:True:1:True" + Environment.NewLine, expected)
             } else if shape == "object-alias" {
@@ -171,9 +177,13 @@ open class Issue5960GenericLocalStorageTests {
             } else if shape == "ref-choose-projected" {
                 Assert.Equal("True:True:True" + Environment.NewLine, expected)
             } else if shape == "extension-receiver" {
-                Assert.Equal("True:True:0" + Environment.NewLine, expected)
+                Assert.Equal("True:True:True:True:0" + Environment.NewLine, expected)
             } else if shape == "nullable-alias-assignment" {
-                Assert.Equal("keep:ok:True" + Environment.NewLine, expected)
+                Assert.Equal("keep:ok:True:True" + Environment.NewLine, expected)
+            } else if shape == "projected-indexer" {
+                Assert.Equal("True:True:True:True:True" + Environment.NewLine, expected)
+            } else if shape == "deep-projected-depth" {
+                Assert.Equal("True" + Environment.NewLine, expected)
             } else {
                 Assert.Contains("False:True:", expected)
                 Assert.Contains("False:False:", expected)
@@ -252,8 +262,14 @@ open class Issue5960GenericLocalStorageTests {
             } else if shape == "out-parameter" {
                 Assert.DoesNotContain("value T?", printed)
                 Assert.DoesNotContain("!!", printed)
-            } else if shape == "projected-containers" || shape == "async-projected" || shape == "ref-choose-projected" {
+            } else if shape == "projected-containers" ||
+                shape == "async-projected" ||
+                shape == "ref-choose-projected" ||
+                shape == "projected-indexer" {
                 Assert.Contains("let kept T? = default(T)", printed)
+                Assert.DoesNotContain("value T?", printed)
+                Assert.DoesNotContain("!!", printed)
+            } else if shape == "deep-projected-depth" {
                 Assert.DoesNotContain("value T?", printed)
                 Assert.DoesNotContain("!!", printed)
             } else if shape == "object-alias" {
@@ -265,6 +281,9 @@ open class Issue5960GenericLocalStorageTests {
             } else if shape == "nullable-alias-assignment" {
                 Assert.Contains("let y = input", printed)
                 Assert.Contains("x = y!!", printed)
+                Assert.Contains("var alias T? = value", printed)
+                Assert.Contains("alias = input", printed)
+                Assert.DoesNotContain("value T?", printed)
                 Assert.DoesNotContain("input!!", printed)
             } else if loopCase && shape != "fixed-loop" {
                 Assert.Contains("var seed T?", printed)
@@ -558,6 +577,7 @@ public static class P
     static (U, U) Pair<U>(U x) => (x, x);
     static B Second<A, B>((A, B) x) => x.Item2;
     static Outer<V>.Item Box<V>(V x) => new Outer<V>.Item(x);
+    static (V, V, V, V, V, V, V, V, V) Repeat9<V>(V x) => (x, x, x, x, x, x, x, x, x);
     static System.Collections.Generic.List<T> MakeInferredLocalList<T>() where T : class
     {
         T value = default(T);
@@ -590,6 +610,34 @@ public static class P
         T value = default(T);
         return Box(Wrap(value));
     }
+    static (
+        System.Collections.Generic.List<T>,
+        System.Collections.Generic.List<T>,
+        System.Collections.Generic.List<T>,
+        System.Collections.Generic.List<T>,
+        System.Collections.Generic.List<T>,
+        System.Collections.Generic.List<T>,
+        System.Collections.Generic.List<T>,
+        System.Collections.Generic.List<T>,
+        System.Collections.Generic.List<T>) MakeRepeat9Wrap<T>() where T : class
+    {
+        T value = default(T);
+        return Repeat9(Wrap(value));
+    }
+    static (
+        System.Collections.Generic.List<T?>,
+        System.Collections.Generic.List<T?>,
+        System.Collections.Generic.List<T?>,
+        System.Collections.Generic.List<T?>,
+        System.Collections.Generic.List<T?>,
+        System.Collections.Generic.List<T?>,
+        System.Collections.Generic.List<T?>,
+        System.Collections.Generic.List<T?>,
+        System.Collections.Generic.List<T?>) MakeRepeat9WrapNullable<T>() where T : class
+    {
+        T kept = default(T);
+        return Repeat9(Wrap(kept));
+    }
     static System.Collections.Generic.List<T?> MakeNullableList<T>() where T : class
     {
         T kept = default(T);
@@ -604,6 +652,8 @@ public static class P
         var second = MakeSecond<string>();
         var secondNullable = MakeSecondNullable<string>();
         var boxed = MakeBoxedList<string>();
+        var repeat9 = MakeRepeat9Wrap<string>();
+        var repeat9Nullable = MakeRepeat9WrapNullable<string>();
         var nullable = MakeNullableList<string>();
         System.Console.WriteLine(
             single.Count + ":" + (single[0] is null) + ":" +
@@ -611,6 +661,8 @@ public static class P
             chained.Count + ":" + (chained[0][0] is null) + ":" +
             (second is null) + ":" + (secondNullable is null) + ":" +
             (boxed.Value[0] is null) + ":" +
+            (repeat9.Item9[0] is null) + ":" +
+            (repeat9Nullable.Item9[0] is null) + ":" +
             nullable.Count + ":" + (nullable[0] is null));
     }
 }`
@@ -741,6 +793,16 @@ public static class P
         T value = default(T);
         return value.Id();
     }
+    static T MakeStatic<T>() where T : class
+    {
+        T value = default(T);
+        return Ext.Id(value);
+    }
+    static T MakeStaticUnconstrained<T>()
+    {
+        T value = default(T);
+        return Ext.Id(value);
+    }
     static T MakeUnconstrained<T>()
     {
         T value = default(T);
@@ -750,6 +812,8 @@ public static class P
     {
         System.Console.WriteLine(
             (Make<string>() is null) + ":" +
+            (MakeStatic<string>() is null) + ":" +
+            (MakeStaticUnconstrained<string>() is null) + ":" +
             (MakeUnconstrained<string>() is null) + ":" +
             MakeUnconstrained<int>());
     }
@@ -773,12 +837,106 @@ public static class P
         if (x is null) x = y;
         return x is null;
     }
+    static T MakeSubsequentAliasWrite<T>(T? input) where T : class
+    {
+        T value = default(T);
+        var alias = value;
+        alias = input;
+        return value;
+    }
     public static void Main()
     {
         System.Console.WriteLine(
             Make("keep", null, false) + ":" +
             Make("keep", "ok", true) + ":" +
-            MakeUnfixed<string>(null));
+            MakeUnfixed<string>(null) + ":" +
+            (MakeSubsequentAliasWrite<string>("ok") is null));
+    }
+}`
+
+        private const ProjectedIndexerSource string = `
+#nullable enable
+public static class P
+{
+    sealed class Boxed<B>
+    {
+        public B Value { get; }
+        public Boxed(B value) { Value = value; }
+    }
+    static System.Collections.Generic.List<U> Wrap<U>(U x) => new System.Collections.Generic.List<U> { x };
+    static Boxed<U> Box<U>(U x) => new Boxed<U>(x);
+    static T MakeIndexer<T>() where T : class
+    {
+        T value = default(T);
+        var items = Wrap(value);
+        return items[0];
+    }
+    static T MakeDirectIndexer<T>() where T : class
+    {
+        T value = default(T);
+        return Wrap(value)[0];
+    }
+    static T MakeItemAliasIndexer<T>() where T : class
+    {
+        T value = default(T);
+        var items = Wrap(value);
+        var item = items[0];
+        return item;
+    }
+    static T MakeBoxMember<T>() where T : class
+    {
+        T value = default(T);
+        var box = Box(value);
+        return box.Value;
+    }
+    static T? MakeNullableIndexer<T>() where T : class
+    {
+        T kept = default(T);
+        var items = Wrap(kept);
+        return items[0];
+    }
+    public static void Main()
+    {
+        System.Console.WriteLine(
+            (MakeIndexer<string>() is null) + ":" +
+            (MakeDirectIndexer<string>() is null) + ":" +
+            (MakeItemAliasIndexer<string>() is null) + ":" +
+            (MakeBoxMember<string>() is null) + ":" +
+            (MakeNullableIndexer<string>() is null));
+    }
+}`
+
+        private const DeepProjectedDepthSource string = `
+#nullable enable
+public static class P
+{
+    static System.Collections.Generic.List<U> Wrap<U>(U x) => new System.Collections.Generic.List<U> { x };
+    static System.Collections.Generic.List<
+        System.Collections.Generic.List<
+        System.Collections.Generic.List<
+        System.Collections.Generic.List<
+        System.Collections.Generic.List<
+        System.Collections.Generic.List<
+        System.Collections.Generic.List<
+        System.Collections.Generic.List<
+        System.Collections.Generic.List<
+        System.Collections.Generic.List<
+        System.Collections.Generic.List<
+        System.Collections.Generic.List<
+        System.Collections.Generic.List<
+        System.Collections.Generic.List<
+        System.Collections.Generic.List<
+        System.Collections.Generic.List<
+        System.Collections.Generic.List<T>>>>>>>>>>>>>>>>> MakeDeep<T>() where T : class
+    {
+        T value = default(T);
+        var result = Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(value)))))))))))))))));
+        return result;
+    }
+    public static void Main()
+    {
+        var deep = MakeDeep<string>();
+        System.Console.WriteLine(deep[0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0] is null);
     }
 }`
 
