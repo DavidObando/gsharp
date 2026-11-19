@@ -2711,33 +2711,11 @@ internal partial class DeclarationBinder {
                 }
                 let typeParamMap = BuildInterfaceTypeParameterMap(iface)
                 // ADR-0149 (issue #944 / #2362 follow-up): an INDEXER's plain
-                // name is always "Item", so distinguishing which of possibly
-                // several explicit indexer slots on the SAME implementer
-                // matches THIS particular interface indexer member requires
-                // comparing the index-parameter list too (types AND count) —
-                // the exact same substitution rules as the element Type check
-                // below. A no-op for an ordinary (non-indexer) property, whose
-                // Parameters is always empty on both sides.
-                if iprop.Parameters.Length != candidate.Parameters.Length {
-                    continue
-                }
-                var parametersMatch = true
-                for var i = 0; i < iprop.Parameters.Length; i++ {
-                    if iprop
-                        .Parameters[i]
-                        .RefKind != candidate
-                        .Parameters[i]
-                        .RefKind ||
-                        !ConformanceSignaturesEquivalent(
-                        iprop.Parameters[i].Type,
-                        candidate.Parameters[i].Type,
-                        typeParamMap
-                    ) {
-                        parametersMatch = false
-                        break
-                    }
-                }
-                if !parametersMatch {
+                // name is always "Item", so distinguishing explicit indexer
+                // slots on the same implementer requires comparing the
+                // index-parameter list via HaveSameIndexerSignature. A no-op
+                // for an ordinary property, whose Parameters is empty.
+                if !HaveSameIndexerSignature(iprop.Parameters, candidate.Parameters, typeParamMap) {
                     continue
                 }
                 if !IsInterfacePropertyTypeCompatible(candidate.Type, iprop.Type, iprop.HasSetter, typeParamMap) {

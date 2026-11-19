@@ -818,6 +818,164 @@ func ReadInherited() int32 {
         )
     }
 
+    @Fact
+    func Issue6125_OverloadedExplicitInterfaceIndexers_DistinctSignatures_NoDiagnostics() {
+        let source = `
+package P
+
+interface IOverloadedIndexer[T] {
+    prop this[key int32] T { get; set }
+    prop this[key string] T { get; set }
+    prop this[row int32, col string] T { get; }
+    prop this[in key int64] T { get; }
+    prop this[key int64] T { get; }
+}
+
+class C : IOverloadedIndexer[string] {
+    private prop (IOverloadedIndexer[string]) this[key int32] string {
+        get { return "int" }
+        set { }
+    }
+
+    private prop (IOverloadedIndexer[string]) this[key string] string {
+        get { return "str" }
+        set { }
+    }
+
+    private prop (IOverloadedIndexer[string]) this[row int32, col string] string -> "pair"
+
+    private prop (IOverloadedIndexer[string]) this[in key int64] string -> "in64"
+
+    private prop (IOverloadedIndexer[string]) this[key int64] string -> "i64"
+}
+`
+        let diagnostics = GetDiagnostics(source)
+        Assert.Empty(diagnostics)
+    }
+
+    @Fact
+    func Issue6125_OverloadedExplicitInterfaceIndexers_GenericParameterAndConcrete_NoDiagnostics() {
+        let source = `
+package P
+
+interface IGenericIndexer[T] {
+    prop this[key T] string { get; }
+    prop this[key int32] string { get; }
+}
+
+class G[U] : IGenericIndexer[U] {
+    private prop (IGenericIndexer[U]) this[key U] string -> "u"
+
+    private prop (IGenericIndexer[U]) this[key int32] string -> "i32"
+}
+`
+        let diagnostics = GetDiagnostics(source)
+        Assert.Empty(diagnostics)
+    }
+
+    @Theory
+    @InlineData("private prop (IOverloadedIndexer[string]) this[other int32] string -> \"dup\"")
+    @InlineData("private prop (IOverloadedIndexer[string]) this[other string?] string -> \"dup\"")
+    func Issue6125_OverloadedExplicitInterfaceIndexers_DuplicateSignature_ReportsGS0495(duplicateDecl string) {
+        let source = (`
+package P
+
+interface IOverloadedIndexer[T] {
+    prop this[key int32] T { get; }
+    prop this[key string] T { get; }
+}
+
+class C : IOverloadedIndexer[string] {
+    private prop (IOverloadedIndexer[string]) this[key int32] string -> "a"
+
+    private prop (IOverloadedIndexer[string]) this[key string] string -> "b"
+
+    ` + duplicateDecl + `
+}
+`)
+        let diagnostics = GetDiagnostics(source)
+        let dupError = Assert.Single(diagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0495", dupError.Id)
+    }
+
+    @Fact
+    func Issue6125_OverloadedExplicitInterfaceIndexers_UnmatchedOverload_ReportsGS0494WithoutGS0495() {
+        let source = `
+package P
+
+interface IOverloadedIndexer[T] {
+    prop this[key int32] T { get; }
+    prop this[key string] T { get; }
+}
+
+class C : IOverloadedIndexer[string] {
+    private prop (IOverloadedIndexer[string]) this[key int32] string -> "a"
+
+    private prop (IOverloadedIndexer[string]) this[key string] string -> "b"
+
+    private prop (IOverloadedIndexer[string]) this[key bool] string -> "missing"
+}
+`
+        let diagnostics = GetDiagnostics(source)
+        let error = Assert.Single(diagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0494", error.Id)
+    }
+
+    @Fact
+    func Issue6125_ImportedCSharpOverloadedExplicitInterfaceIndexers_DistinctPasses_DuplicateReportsGS0495() {
+        using let library = CSharpFixture(`namespace Clib;
+public interface ICsOverloaded<T>
+{
+    T this[int key] { get; set; }
+    T this[string key] { get; set; }
+}`)
+        using let resolver = ReferenceResolver.WithReferences([]string{library.AssemblyPath})
+        let validSource = `
+package P
+import Clib
+
+class C : ICsOverloaded[string] {
+    private prop (ICsOverloaded[string]) this[key int32] string {
+        get { return "a" }
+        set { }
+    }
+
+    private prop (ICsOverloaded[string]) this[key string] string {
+        get { return "b" }
+        set { }
+    }
+}
+`
+        let validCompilation = Compilation(resolver, SyntaxTree.Parse(SourceText.From(validSource)))
+        Assert.Empty(validCompilation.GlobalScope.Diagnostics.AddRange(validCompilation.BoundProgram.Diagnostics))
+
+        let dupSource = `
+package P
+import Clib
+
+class C : ICsOverloaded[string] {
+    private prop (ICsOverloaded[string]) this[key int32] string {
+        get { return "a" }
+        set { }
+    }
+
+    private prop (ICsOverloaded[string]) this[key string] string {
+        get { return "b" }
+        set { }
+    }
+
+    private prop (ICsOverloaded[string]) this[other int32] string {
+        get { return "dup" }
+        set { }
+    }
+}
+`
+        let dupCompilation = Compilation(resolver, SyntaxTree.Parse(SourceText.From(dupSource)))
+        let dupDiagnostics = dupCompilation.GlobalScope.Diagnostics.AddRange(dupCompilation.BoundProgram.Diagnostics)
+        let dupError = Assert.Single(dupDiagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0495", dupError.Id)
+    }
+
     shared {
         private func GetDiagnostics(source string) IEnumerable[Diagnostic] {
             let tree = SyntaxTree.Parse(SourceText.From(source))
