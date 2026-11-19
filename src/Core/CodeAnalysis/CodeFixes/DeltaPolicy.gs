@@ -26,9 +26,11 @@ class DeltaPolicy {
     /// Returns a value that tells whether the policy accepts the edit.
     /// @param delta The delta of the edit.
     /// @returns `true` when the host can offer the edit.
+    /// @remarks A delta that stopped after the parse (cref:DiagnosticDelta.ParseOnly) is a partial
+    /// result: no bind ran, so no policy accepts it.
     func Accepts(delta DiagnosticDelta) bool {
         ArgumentNullException.ThrowIfNull(delta)
-        return accepts(delta)
+        return !delta.ParseOnly && accepts(delta)
     }
 
     /// Returns the name.

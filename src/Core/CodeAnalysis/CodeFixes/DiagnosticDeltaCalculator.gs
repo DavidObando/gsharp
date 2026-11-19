@@ -30,7 +30,7 @@ internal shared class DiagnosticDeltaCalculator {
         cancellationToken.ThrowIfCancellationRequested()
         let stopwatch = Stopwatch.StartNew()
         let compilation = baseline.Compilation
-        let options = baseline.Options
+        let options = baseline.EffectiveOptions
         let oldTrees = ImmutableArray.CreateBuilder[SyntaxTree]()
         let newTrees = ImmutableArray.CreateBuilder[SyntaxTree]()
         let maps = Dictionary[SourceText, DocumentMap](ReferenceEqualityComparer.Instance)
@@ -123,12 +123,16 @@ internal shared class DiagnosticDeltaCalculator {
         removed List[Diagnostic],
         options DeltaOptions
     ) bool {
+        // Each target consumes a removed occurrence of its own.
+        let used = List[bool](Enumerable.Repeat(false, removed.Count))
         var any = false
         for target in targets {
             for effective in Filter(ImmutableArray.Create(target), options) {
                 any = true
-                let found = removed.Any(
-                    (r Diagnostic) -> object.ReferenceEquals(r.Location.Text, effective.Location.Text) &&
+                var found = -1
+                for var index = 0; index < removed.Count; index++ {
+                    let r = removed[index]
+                    if !used[index] && object.ReferenceEquals(r.Location.Text, effective.Location.Text) &&
                         r.Id == effective.Id &&
                         r.Message == effective.Message &&
                         r.Severity == effective.Severity &&
@@ -145,11 +149,15 @@ internal shared class DiagnosticDeltaCalculator {
                         .Length == effective
                         .Location
                         .Span
-                        .Length
-                )
-                if !found {
+                        .Length {
+                        found = index
+                        break
+                    }
+                }
+                if found < 0 {
                     return false
                 }
+                used[found] = true
             }
         }
         return any
@@ -257,9 +265,13 @@ internal shared class DiagnosticDeltaCalculator {
         for pair in maps {
             oldByNew.Add(pair.Value.NewText, pair.Key)
         }
-        let exact = Dictionary[object, Dictionary[string, Queue[Diagnostic]]](ReferenceEqualityComparer.Instance)
+        // Occurrences are tracked by index: one diagnostic object can be reported twice, and each
+        // report is an occurrence of its own.
         let orderedAfter = after.OrderBy((x Diagnostic) -> x.Location.Span.Start).ToList()
-        for d in orderedAfter {
+        let matchedAfter = List[bool](Enumerable.Repeat(false, orderedAfter.Count))
+        let exact = Dictionary[object, Dictionary[string, Queue[int32]]](ReferenceEqualityComparer.Instance)
+        for var index = 0; index < orderedAfter.Count; index++ {
+            let d = orderedAfter[index]
             var document object = NoDocument
             let text SourceText? = d.Location.Text
             if text != nil {
@@ -269,17 +281,16 @@ internal shared class DiagnosticDeltaCalculator {
                 }
             }
             if !exact.TryGetValue(document, out var keys) {
-                keys = Dictionary[string, Queue[Diagnostic]](StringComparer.Ordinal)
+                keys = Dictionary[string, Queue[int32]](StringComparer.Ordinal)
                 exact.Add(document, keys)
             }
             let key = Key(d, d.Location.Span)
             if !keys.TryGetValue(key, out var queue) {
-                queue = Queue[Diagnostic]()
+                queue = Queue[int32]()
                 keys.Add(key, queue)
             }
-            queue.Enqueue(d)
+            queue.Enqueue(index)
         }
-        let matchedAfter = HashSet[Diagnostic](ReferenceEqualityComparer.Instance)
         let touchedBefore = List[Diagnostic]()
         for d in before.OrderBy((x Diagnostic) -> x.Location.Span.Start) {
             var document object = NoDocument
@@ -295,36 +306,37 @@ internal shared class DiagnosticDeltaCalculator {
             if exact.TryGetValue(document, out var keys) && keys.TryGetValue(Key(d, span), out var queue) &&
                 queue.Count > 0 {
                 let other = queue.Dequeue()
-                matchedAfter.Add(other)
-                result.Persisting.Add(other)
+                matchedAfter[other] = true
+                result.Persisting.Add(orderedAfter[other])
             } else {
                 result.Removed.Add(d)
             }
         }
         for d in touchedBefore {
-            let newText = maps[d.Location.Text!!].NewText
-            var found Diagnostic? = nil
             let documentMap = maps[d.Location.Text!!]
-            for candidate in orderedAfter {
-                if !matchedAfter.Contains(candidate) && object.ReferenceEquals(candidate.Location.Text, newText) &&
+            let newText = documentMap.NewText
+            var found = -1
+            for var index = 0; index < orderedAfter.Count; index++ {
+                let candidate = orderedAfter[index]
+                if !matchedAfter[index] && object.ReferenceEquals(candidate.Location.Text, newText) &&
                     documentMap.TouchesNewRegion(candidate.Location.Span) &&
                     candidate.Id == d.Id &&
                     candidate.Severity == d.Severity &&
                     candidate.Message == d.Message {
-                    found = candidate
+                    found = index
                     break
                 }
             }
-            if found != nil {
-                matchedAfter.Add(found)
-                result.Persisting.Add(found)
+            if found >= 0 {
+                matchedAfter[found] = true
+                result.Persisting.Add(orderedAfter[found])
             } else {
                 result.Removed.Add(d)
             }
         }
-        for d in orderedAfter {
-            if !matchedAfter.Contains(d) {
-                result.Added.Add(d)
+        for var index = 0; index < orderedAfter.Count; index++ {
+            if !matchedAfter[index] {
+                result.Added.Add(orderedAfter[index])
             }
         }
         return result

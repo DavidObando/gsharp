@@ -17,6 +17,15 @@ class DeltaOptions {
     /// Initializes a new instance of the (cref:DeltaOptions) class with the defaults.
     init() { }
 
+    // A copy, so a baseline keeps the options that it was computed with.
+    internal func Snapshot() DeltaOptions {
+        let copy = DeltaOptions()
+        copy.Analyzers = Analyzers
+        copy.StopOnNewSyntaxError = StopOnNewSyntaxError
+        copy.DiagnosticFilter = DiagnosticFilter
+        return copy
+    }
+
     /// Gets or sets the analyzers that run before and after the edit. The default is none.
     prop Analyzers ImmutableArray[GSharpDiagnosticAnalyzer] {
         get -> analyzers

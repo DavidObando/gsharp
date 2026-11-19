@@ -153,7 +153,7 @@ open class Adr0227DiagnosticDeltaTests {
         Assert.Empty(service.ComputeDelta(baseline, fix).Added)
         // The baseline sees GS0125 as a warning, the check after the edit as an error.
         let mixed = service.ComputeDelta(
-            DeltaBaselineWith(compilation, baseline.Options, promoted.Diagnostics),
+            DeltaBaselineWith(compilation, baseline.EffectiveOptions, promoted.Diagnostics),
             fix.GetChanges(),
             fix.Diagnostics
         )
@@ -283,6 +283,91 @@ open class Adr0227DiagnosticDeltaTests {
     }
 
     @Fact
+    func Baseline_KeepsItsOptions_WhenTheCallerChangesThem() {
+        let tree = SyntaxTree.Parse(NullSource)
+        let compilation = Compilation(tree)
+        let target = compilation.GetDiagnostics().Single((d Diagnostic) -> d.Id == "GS0273")
+        let options = DeltaOptions()
+        options.DiagnosticFilter = (d Diagnostic) -> if d.Id == "GS0125" {
+            nil
+        } else {
+            d
+        }
+        let baseline = DeltaBaseline.Create(compilation, options)
+        options.DiagnosticFilter = nil
+        baseline.Options.DiagnosticFilter = nil
+        let delta = CodeFixService(CodeFixRegistry()).ComputeDelta(baseline, Fix(tree, target, "null", "nil"))
+        Assert.Empty(delta.Added)
+    }
+
+    @Fact
+    func ParseOnlyDelta_IsAcceptedByNoPolicy() {
+        const source = "package P\n\nfunc F(n int32) string {\n    return 1 +\n}\n"
+        let tree = SyntaxTree.Parse(source)
+        let compilation = Compilation(tree)
+        let target = Assert.Single(tree.Diagnostics)
+        let editor = SyntaxEditor(tree)
+        editor.InsertAfter(
+            tree.Root.DescendantTokens().First((t SyntaxToken) -> t.Text == "+"),
+            " undefinedName\n        let s = switch n {\n            case 0 -> 1\n            default: 2\n        }"
+        )
+        let fix = CodeFix(
+            "complete",
+            "test",
+            Applicability.MaybeIncorrect,
+            ImmutableArray.Create(target),
+            "test",
+            (ct CancellationToken) -> FixChanges(
+                ImmutableArray.Create(DocumentChanges(tree, editor.GetChanges(), ImmutableArray[TextSpan].Empty))
+            )
+        )
+        let delta = CodeFixService(CodeFixRegistry()).ComputeDelta(compilation, fix)
+        Assert.True(delta.ParseOnly)
+        Assert.True(delta.Added.All((d Diagnostic) -> !d.IsError))
+        Assert.False(DeltaPolicy.RemovesTargetNoNewErrors.Accepts(delta))
+        Assert.False(DeltaPolicy.NetImprovement.Accepts(delta))
+        Assert.False(DeltaPolicy.PhaseAware.Accepts(delta))
+    }
+
+    @Fact
+    func TwoEquivalentTargets_NeedTwoRemovals() {
+        let tree = SyntaxTree.Parse(NullSource)
+        let compilation = Compilation(tree)
+        let target = compilation.GetDiagnostics().Single((d Diagnostic) -> d.Id == "GS0273")
+        let fix = Fix(tree, target, "null", "nil")
+        let twice = service().ComputeDelta(
+            DeltaBaseline.Create(compilation),
+            fix.GetChanges(),
+            ImmutableArray.Create(target, target)
+        )
+        Assert.False(twice.TargetRemoved)
+    }
+
+    @Fact
+    func RepeatedDiagnosticReference_CountsAsTwoOccurrences() {
+        let tree = SyntaxTree.Parse(NullSource)
+        let compilation = Compilation(tree)
+        let missing = compilation.GetDiagnostics().Single((d Diagnostic) -> d.Id == "GS0125")
+        let target = compilation.GetDiagnostics().Single((d Diagnostic) -> d.Id == "GS0273")
+        let options = DeltaOptions()
+        options.Analyzers = ImmutableArray.Create[GSharp.Core.CodeAnalysis.Analyzers.GSharpDiagnosticAnalyzer](
+            DoubleReportAnalyzer()
+        )
+        let before = DeltaBaseline.Create(compilation, options)
+        // One report before the edit (the analyzer is quiet while `null` is there), two after.
+        let delta = service().ComputeDelta(
+            before,
+            Fix(tree, target, "null", "nil").GetChanges(),
+            ImmutableArray.Create(target)
+        )
+        Assert.Equal(1, delta.Added.Count((d Diagnostic) -> d.Id == "TEST0227"))
+        Assert.False(DeltaPolicy.NoNewDiagnostics.Accepts(delta))
+        Assert.NotNull(missing)
+    }
+
+    private func service() CodeFixService -> CodeFixService(CodeFixRegistry())
+
+    @Fact
     func WithReplacedSyntaxTrees_RejectsUnknownAndRepeatedTrees() {
         let a = SyntaxTree.Parse("package P\n")
         let compilation = Compilation(a)
@@ -321,5 +406,25 @@ open class Adr0227DiagnosticDeltaTests {
                 ImmutableArray.Create(DocumentChanges(tree, changes, ImmutableArray[TextSpan].Empty))
             )
         )
+    }
+
+    // Reports one diagnostic at the start of the file: once while the file has `null`, else the same
+    // object twice.
+    private class DoubleReportAnalyzer : GSharp.Core.CodeAnalysis.Analyzers.GSharpDiagnosticAnalyzer {
+        private let Rule DiagnosticDescriptor = DiagnosticDescriptor("TEST0227", DiagnosticSeverity.Warning, "probe")
+
+        override prop SupportedDiagnostics ImmutableArray[DiagnosticDescriptor] -> ImmutableArray.Create(Rule)
+
+        override func Initialize(context GSharp.Core.CodeAnalysis.Analyzers.AnalysisContext) {
+            context.RegisterSyntaxTreeAction(
+                (c GSharp.Core.CodeAnalysis.Analyzers.SyntaxTreeAnalysisContext) -> {
+                    let d = Diagnostic.Create(Rule, TextLocation(c.Tree.Text, TextSpan(0, 7)))
+                    c.ReportDiagnostic(d)
+                    if !c.Tree.Text.ToString().Contains("null") {
+                        c.ReportDiagnostic(d)
+                    }
+                }
+            )
+        }
     }
 }

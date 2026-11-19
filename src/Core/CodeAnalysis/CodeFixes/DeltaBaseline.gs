@@ -16,7 +16,7 @@ import System.Threading
 class DeltaBaseline {
     internal init(compilation Compilation, options DeltaOptions, diagnostics ImmutableArray[Diagnostic]) {
         Compilation = compilation
-        Options = options
+        EffectiveOptions = options
         Diagnostics = diagnostics
     }
 
@@ -25,8 +25,11 @@ class DeltaBaseline {
         get;
     }
 
-    /// Gets the options of the checks.
-    prop Options DeltaOptions {
+    /// Gets a copy of the options that the baseline was computed with. Changing it has no effect.
+    prop Options DeltaOptions -> EffectiveOptions.Snapshot()
+
+    // The options of the checks, fixed when the baseline was created.
+    internal prop EffectiveOptions DeltaOptions {
         get;
     }
 
@@ -54,7 +57,9 @@ class DeltaBaseline {
             cancellationToken CancellationToken = default(CancellationToken)
         ) DeltaBaseline {
             ArgumentNullException.ThrowIfNull(compilation)
-            let effective = options ?? DeltaOptions()
+            // A snapshot: a later change to the caller's options must not change what the
+            // baseline compares with.
+            let effective = (options ?? DeltaOptions()).Snapshot()
             return DeltaBaseline(
                 compilation,
                 effective,
