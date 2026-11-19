@@ -44,13 +44,22 @@ public class Probe {
         return sourceType.EndsWith("?", StringComparison.Ordinal);
     }
 
+    private static bool RefWithObjectInterpolationGuard(ref string? sourceType, object o) {
+        if (sourceType == null || $"{o}".Length == 0) {
+            return false;
+        }
+        return sourceType.EndsWith("?", StringComparison.Ordinal);
+    }
+
     public static void Main() {
+        string? objRef = "str?";
         Console.Write(
             TryParse("string?", "string", out _, out _) + "|" +
             TryParse(null, "string", out _, out _) + "|" +
             SingleGuard("int?", out _) + "|" +
             MixedNilAndCallOrGuard("bool?", "bool", out _, out _) + "|" +
-            MixedNilAndCallOrGuard(null, "bool", out _, out _));
+            MixedNilAndCallOrGuard(null, "bool", out _, out _) + "|" +
+            RefWithObjectInterpolationGuard(ref objRef, 42));
     }
 }
 `
@@ -65,7 +74,7 @@ public class Probe {
             verifyAssembly: (assembly string) -> {
                 Issue5585ReadonlyNullArgumentTests.VerifyStrictIL(assembly)
             },
-            expectedOutput: "True|False|True|True|False"
+            expectedOutput: "True|False|True|True|False|True"
         )
     }
 
@@ -79,6 +88,10 @@ using System.Collections.Generic;
 public enum State {
     None,
     Done
+}
+
+public struct Flags {
+    public bool Stop;
 }
 
 public class Probe {
@@ -186,6 +199,20 @@ public class Probe {
         return p.EndsWith("?", StringComparison.Ordinal);
     }
 
+    private static bool RefWithEffectFreeStructLiteral(ref string? p) {
+        if (p == null || (new Flags()).Stop) {
+            return false;
+        }
+        return p.EndsWith("?", StringComparison.Ordinal);
+    }
+
+    private static bool RefWithIntInterpolation(ref string? p, int n) {
+        if (p == null || $"{n}".Length == 0) {
+            return false;
+        }
+        return p.EndsWith("?", StringComparison.Ordinal);
+    }
+
     public static void Main() {
         var probe = new Probe();
         string? refVal = "enum?";
@@ -202,7 +229,9 @@ public class Probe {
             RefWithEnumCompare(ref refVal, State.None) + "|" +
             RefWithCoalesce(ref refVal, null) + "|" +
             RefWithIsNotEmptyBraces(ref refVal) + "|" +
-            RefWithObjectTypeTest(ref refVal, 1));
+            RefWithObjectTypeTest(ref refVal, 1) + "|" +
+            RefWithEffectFreeStructLiteral(ref refVal) + "|" +
+            RefWithIntInterpolation(ref refVal, 7));
     }
 }
 `
@@ -215,7 +244,7 @@ public class Probe {
             verifyAssembly: (assembly string) -> {
                 Issue5585ReadonlyNullArgumentTests.VerifyStrictIL(assembly)
             },
-            expectedOutput: "True|True|True|True|True|True|True|True|True|True|True|True|True"
+            expectedOutput: "True|True|True|True|True|True|True|True|True|True|True|True|True|True|True"
         )
     }
 

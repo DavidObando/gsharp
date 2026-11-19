@@ -17023,22 +17023,12 @@ partial class CSharpToGSharpTranslator {
                     .CodeAnalysis
                     .CSharp
                     .Syntax
-                    .BaseObjectCreationExpressionSyntax or
-                    Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
                     .AnonymousObjectCreationExpressionSyntax or
                     Microsoft
                     .CodeAnalysis
                     .CSharp
                     .Syntax
                     .CollectionExpressionSyntax or
-                    Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .InterpolatedStringExpressionSyntax or
                     Microsoft
                     .CodeAnalysis
                     .CSharp
@@ -17069,6 +17059,16 @@ partial class CSharpToGSharpTranslator {
                     .CSharp
                     .Syntax
                     .ThrowExpressionSyntax: true
+                case creation is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .BaseObjectCreationExpressionSyntax: this.CreationEmitsCallOrInitializerEffects(creation)
+                case interpolation is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .InterpolatedStringExpressionSyntax: this.InterpolatedStringRunsUserCode(interpolation)
                 case binary is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax: this.IsLoweredToCall(binary)
                 case _ is Microsoft
                     .CodeAnalysis
@@ -17105,6 +17105,133 @@ partial class CSharpToGSharpTranslator {
                     ?.TypeKind == TypeKind.Dynamic
                 default: false
             }
+        }
+
+        private func CreationEmitsCallOrInitializerEffects(creation BaseObjectCreationExpressionSyntax) bool {
+            let typeSymbol = this.context.GetTypeInfo(creation).Type as INamedTypeSymbol
+            if typeSymbol == nil {
+                return true
+            }
+            if typeSymbol.TypeKind == TypeKind.Delegate {
+                return false
+            }
+            let hasObjectInitializer = creation.Initializer != nil && creation.Initializer!!.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.ObjectInitializerExpression
+            )
+            if creation.Initializer != nil && !hasObjectInitializer {
+                return true
+            }
+            if (creation.ArgumentList?.Arguments.Count ?? 0) > 0 {
+                return true
+            }
+            let isStructLiteral = (
+                typeSymbol.TypeKind == TypeKind.Struct &&
+                    typeSymbol.SpecialType == SpecialType.None &&
+                    !typeSymbol.IsTupleType &&
+                    this.IsSourceSymbol(typeSymbol)
+            ) ||
+                (hasObjectInitializer && typeSymbol.SpecialType != SpecialType.System_Object)
+            if !isStructLiteral {
+                return true
+            }
+            return this.SourceTypeHasConstructorOrInitializerEffects(typeSymbol)
+        }
+
+        private func SourceTypeHasConstructorOrInitializerEffects(type INamedTypeSymbol) bool {
+            for var current INamedTypeSymbol? = type; current != nil; current = current!!.BaseType {
+                if current.SpecialType is SpecialType.System_Object or SpecialType.System_ValueType {
+                    break
+                }
+                if !this.IsSourceSymbol(current) {
+                    return true
+                }
+                let definition = current.OriginalDefinition
+                if this.TypeDeclaresStaticInitializer(definition) {
+                    return true
+                }
+                for reference in definition.DeclaringSyntaxReferences {
+                    if reference.GetSyntax() is not Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .TypeDeclarationSyntax declaration {
+                        continue
+                    }
+                    if declaration.ParameterList != nil {
+                        return true
+                    }
+                    for member in declaration.Members {
+                        if member is Microsoft
+                            .CodeAnalysis
+                            .CSharp
+                            .Syntax
+                            .ConstructorDeclarationSyntax ctor &&
+                            !this.HasModifier(ctor.Modifiers, Microsoft.CodeAnalysis.CSharp.SyntaxKind.StaticKeyword) {
+                            return true
+                        }
+                        if member is Microsoft
+                            .CodeAnalysis
+                            .CSharp
+                            .Syntax
+                            .FieldDeclarationSyntax field &&
+                            !this.HasModifier(
+                            field.Modifiers,
+                            Microsoft.CodeAnalysis.CSharp.SyntaxKind.StaticKeyword
+                        ) &&
+                            !this.HasModifier(field.Modifiers, Microsoft.CodeAnalysis.CSharp.SyntaxKind.ConstKeyword) &&
+                            field
+                            .Declaration
+                            .Variables
+                            .Any((v VariableDeclaratorSyntax) -> v.Initializer != nil) {
+                            return true
+                        }
+                        if member is Microsoft
+                            .CodeAnalysis
+                            .CSharp
+                            .Syntax
+                            .PropertyDeclarationSyntax propDecl &&
+                            !this.HasModifier(
+                            propDecl.Modifiers,
+                            Microsoft.CodeAnalysis.CSharp.SyntaxKind.StaticKeyword
+                        ) &&
+                            propDecl.Initializer != nil {
+                            return true
+                        }
+                    }
+                }
+            }
+            return false
+        }
+
+        private func InterpolatedStringRunsUserCode(
+            interpolation Microsoft.CodeAnalysis.CSharp.Syntax.InterpolatedStringExpressionSyntax
+        ) bool {
+            var operation = this.context.SemanticModel.GetOperation(interpolation)
+            while operation != nil && operation.Syntax.Span.Contains(interpolation.Span) {
+                if operation is IInterpolatedStringHandlerCreationOperation {
+                    return true
+                }
+                operation = operation.Parent
+            }
+            for hole in interpolation.Contents.OfType[Microsoft.CodeAnalysis.CSharp.Syntax.InterpolationSyntax]() {
+                let holeType = this.context.GetTypeInfo(hole.Expression).Type
+                if holeType == nil {
+                    return true
+                }
+                if holeType.SpecialType == SpecialType.System_String || holeType.TypeKind == TypeKind.Pointer {
+                    continue
+                }
+                if holeType.TypeKind != TypeKind.Enum &&
+                    (
+                    this.IsBuiltInPrimitive(hole.Expression) ||
+                        holeType.SpecialType is SpecialType.System_IntPtr or
+                        SpecialType.System_UIntPtr
+                ) {
+                    continue
+                }
+                return true
+            }
+            return false
         }
 
         // Mirrors gsc's HasMemberStorageWrite (#6124): separate source field and auto-property writes keep facts.
