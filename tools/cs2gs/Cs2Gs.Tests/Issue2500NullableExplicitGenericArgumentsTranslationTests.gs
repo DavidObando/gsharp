@@ -113,29 +113,29 @@ public static class Repro
     }
 #nullable restore
 }`)
-        Assert.Contains("Same[T?](default(T?))", printed, StringComparison.Ordinal)
+        Assert.Contains("Same[T](default(T))", printed, StringComparison.Ordinal)
         Assert.Contains("Same[TClass?](default(TClass?))", printed, StringComparison.Ordinal)
-        Assert.Contains("Same[TInterface?](default(TInterface?))", printed, StringComparison.Ordinal)
+        Assert.Contains("Same[TInterface](default(TInterface))", printed, StringComparison.Ordinal)
         Assert.Contains("Same[TBase?](default(TBase?))", printed, StringComparison.Ordinal)
         Assert.Contains("Same[TValue?](default(TValue?))", printed, StringComparison.Ordinal)
-        Assert.Contains("Echo[T?](default(T?))", printed, StringComparison.Ordinal)
-        Assert.Contains("Task.FromResult[T?](default(T?))", printed, StringComparison.Ordinal)
-        Assert.Contains("host.Instance[T?](default(T?))", printed, StringComparison.Ordinal)
-        Assert.Contains("Extensions.Reduced[T?](host, default(T?))", printed, StringComparison.Ordinal)
-        Assert.Contains("Same[List[T?]?](default(List[T?]?))", printed, StringComparison.Ordinal)
+        Assert.Contains("Echo[T](default(T))", printed, StringComparison.Ordinal)
+        Assert.Contains("Task.FromResult[T](default(T))", printed, StringComparison.Ordinal)
+        Assert.Contains("host.Instance[T](default(T))", printed, StringComparison.Ordinal)
+        Assert.Contains("Extensions.Reduced[T](host, default(T))", printed, StringComparison.Ordinal)
+        Assert.Contains("Same[List[T]?](default(List[T]?))", printed, StringComparison.Ordinal)
         Assert.Contains(
-            "Same[Dictionary[T?, List[[]?T?]?]?](default(Dictionary[T?, List[[]?T?]?]?))",
+            "Same[Dictionary[T, List[[]?T]?]?](default(Dictionary[T, List[[]?T]?]?))",
             printed,
             StringComparison.Ordinal
         )
-        Assert.Contains("Pair[T?, List[T?]?](default(T?), default(List[T?]?))", printed, StringComparison.Ordinal)
-        Assert.Contains("Same[(T?, TClass?)](default((T?, TClass?)))", printed, StringComparison.Ordinal)
-        Assert.Contains("Same[[]?T?](default([]?T?))", printed, StringComparison.Ordinal)
-        Assert.Contains("Same[(() -> T?)?](Factory)", printed, StringComparison.Ordinal)
-        Assert.Contains("LocalBox[T?](default(T?))", printed, StringComparison.Ordinal)
-        Assert.Contains("Box[T?](default(T?))", printed, StringComparison.Ordinal)
-        Assert.Contains("LocalBox[T?].Create(default(T?))", printed, StringComparison.Ordinal)
-        Assert.Contains("Box[T?].Create(default(T?))", printed, StringComparison.Ordinal)
+        Assert.Contains("Pair[T, List[T]?](default(T), default(List[T]?))", printed, StringComparison.Ordinal)
+        Assert.Contains("Same[(T, TClass?)](default((T, TClass?)))", printed, StringComparison.Ordinal)
+        Assert.Contains("Same[[]?T](default([]?T))", printed, StringComparison.Ordinal)
+        Assert.Contains("Same[(() -> T)?](Factory)", printed, StringComparison.Ordinal)
+        Assert.Contains("LocalBox[T](default(T))", printed, StringComparison.Ordinal)
+        Assert.Contains("Box[T](default(T))", printed, StringComparison.Ordinal)
+        Assert.Contains("LocalBox[T].Create(default(T))", printed, StringComparison.Ordinal)
+        Assert.Contains("Box[T].Create(default(T))", printed, StringComparison.Ordinal)
         Assert.Contains("Same[T](default(T))", printed, StringComparison.Ordinal)
         Assert.Contains("Echo[T](default(T))", printed, StringComparison.Ordinal)
     }
@@ -151,15 +151,17 @@ namespace Demo;
 
 public static class Repro
 {
-    public static void Run<T>()
+    public static void Run<T, TClass>() where TClass : class
     {
         _ = TaskAlias.FromResult<T?>(default);
+        _ = TaskAlias.FromResult<TClass?>(default);
         _ = ExternalAlias.Echo<T?>(default);
         _ = new ClosedBoxAlias(default);
     }
 }`)
-        Assert.Contains("TaskAlias.FromResult[T?](default(T?))", printed, StringComparison.Ordinal)
-        Assert.Contains("ExternalAlias.Echo[T?](default(T?))", printed, StringComparison.Ordinal)
+        Assert.Contains("TaskAlias.FromResult[T](default(T))", printed, StringComparison.Ordinal)
+        Assert.Contains("TaskAlias.FromResult[TClass?](default(TClass?))", printed, StringComparison.Ordinal)
+        Assert.Contains("ExternalAlias.Echo[T](default(T))", printed, StringComparison.Ordinal)
         Assert.Contains("Box[string?](default(string?))", printed, StringComparison.Ordinal)
     }
 

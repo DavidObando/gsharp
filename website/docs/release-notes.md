@@ -14,6 +14,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ## Unreleased (0.5 line)
 
+- **Code-fix API and span editor** (Part of #6119; ADR-0227). `GSharp.Core` adds `TextChange`, `SourceText.WithChanges`, `SyntaxEditor`, `SyntaxNode.DescendantTokens` and `SyntaxNode.FindToken`, and the `GSharp.Core.CodeAnalysis.CodeFixes` namespace: `CodeFix` with an equivalence key and an `Applicability`, `GSharpCodeFixProvider`, `CodeFixRegistry` and `CodeFixService`. `GSharpAnalyzerHost.LoadCodeFixProviders` loads `@GSharpCodeFixProvider` types from analyzer assemblies. A provider that throws reports GS9308 and gives no fix.
+
 - **Preserve P/Invoke return marshalling overrides** (#6072). Emit return-target `MarshalAs` descriptors for `DllImport` and both `LibraryImport` methods. Preserve other return attributes, diagnose unsupported return forms, and keep unannotated boolean defaults unchanged.
 
 ### Breaking Changes
@@ -23,6 +25,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 ### Bug Fixes
 
 - Replace recursive closure-chain traversal and full callable-state copies in `StatementBinder.AssignedRootsCollector` with an explicit heap work stack and immutable persistent state. Deep closure-call chains no longer overflow the compiler host stack or allocate quadratically, while preserving callable provenance, argument-dependent effects, cycles, and captured-write invalidation. (Fixes #6111)
+
+- Lower open generic `T?` and `default(T?)` in `cs2gs` to bare `T` and `default(T)` when type-parameter constraints do not prove a reference or value kind under ADR-0224, while preserving `T?` for proven `class`/`class?`/`struct`/`unmanaged`/concrete-reference bounds and preserving runtime semantics across callers, overrides, generic interface property bridges, async awaited forwarding, and `??=` without throwing assertions. (Fixes #6113)
 
 - Keep the SDK reference-assembly pack regression independent of installed Android workloads. Retain four inner builds and exact effective-framework path checks. (Fixes #6032)
 
@@ -819,6 +823,8 @@ The entries below are newer than v0.5.212. Published features and migration note
 - **Nullable tuple and block consumers after backward jumps** (Fixes #5653). Tuple literals capture narrowed reads per element and resolve them for the consumer's target type, including nested tuples and `defer` or `using` block values. Nullable destinations accept the declared value; non-null destinations still check a retracted narrowing. Existing tuple conversion classification and ordinary call results remain unchanged. Later conversions preserve committed element checks, and cleanup values keep the result saved before cleanup runs. Top-level statements in multiple files keep the same checks.
 
 - Keep writable pattern destinations separate from narrowed reads in `cs2gs`. Invalidate matched-value read proofs after writes, preserve nullable stores and projected storage contracts, and materialize reassigned or address-taken captures, including readonly aliases, exact readonly arguments, and receivers. Constructor writes complete before initializer reads. Guard reads, closures, switch bodies, and lifted recursive local functions share capture storage with matching nullable contracts. Readonly address-exposed captures use readonly reference parameters, not copies; suspending helpers and nested by-reference closures report explicit unsupported diagnostics (#6053). Lifted helpers use their own parameter contracts and local null guards, not outer pattern proofs. (Fixes #5991)
+
+- Keep required `!!` assertions in `cs2gs` where `gsc` drops narrowing on exited `if` conditions for by-reference (`out`/`ref`/`in`) parameters and `ref` locals when the condition contains a call or mutating expression, and on readonly fields after intervening calls or CLR member accesses inside the same `&&`/`||` operand, while keeping `!!` omitted where `gsc` genuinely narrows. (Fixes #6124)
 
 ## 0.5.212 (October 22, 2026)
 

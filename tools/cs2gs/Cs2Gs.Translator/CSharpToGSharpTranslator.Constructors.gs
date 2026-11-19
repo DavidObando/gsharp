@@ -190,6 +190,13 @@ partial class CSharpToGSharpTranslator {
             if symbol != nil {
                 type = this.PromoteIfUsedAsNullable(type, symbol)
             }
+            if usesExplicitInterfaceIndexerClause &&
+                type != nil &&
+                type.IsNullable &&
+                this
+                .TryGetErasedExplicitInterfacePropertySlotType(symbol!!, node.GetLocation(), out var explicitSlotType) {
+                type = explicitSlotType
+            }
             let isPartialIndexerImplementation = symbol is IPropertySymbol{PartialDefinitionPart: not nil}
             var indexParameters = if symbol != nil {
                 symbol
@@ -1101,7 +1108,7 @@ partial class CSharpToGSharpTranslator {
                     .CodeAnalysis
                     .NullableAnnotation
                     .Annotated
-                return if nonNullableValueType {
+                return if nonNullableValueType || type is not{IsNullable: true} {
                     cast[GExpression](DefaultValueExpression(type))
                 } else {
                     cast[GExpression](IdentifierExpression("nil"))

@@ -475,7 +475,7 @@ partial class CSharpToGSharpTranslator {
                         this.context,
                         declaration!!.Type.GetLocation()
                     )
-                    if type == nil && tupleStorage.Type.IsReferenceType {
+                    if type == nil && CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(tupleStorage.Type) {
                         mapped = CSharpTypeMapper.WithNullable(
                             mapped,
                             this.InferredLocalDeclarationIsNullable(tupleStorage)
@@ -7188,7 +7188,7 @@ partial class CSharpToGSharpTranslator {
             // the branches into the nullable type instead of guessing the non-null
             // one. Restricted to reference-type results (a `Nullable<V>` value
             // result is handled by C#'s own lifting / numeric paths above).
-            if resultType != nil && resultType.IsReferenceType == true {
+            if CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(resultType) {
                 let nullableResult GTypeReference? = MakeNullable(
                     this.typeMapper.Map(resultType, this.context, conditional.GetLocation())
                 )
@@ -7897,6 +7897,23 @@ partial class CSharpToGSharpTranslator {
             }
             value = this.ForgiveElementAccessAssignmentRhs(assignment, value)
             value = this.ForgiveObliviousExternalAssignmentRhs(assignment, value)
+            if assignment.IsKind(SyntaxKind.CoalesceAssignmentExpression) {
+                let coalesceTarget ISymbol? = this.GetProjectedAssignmentTarget(
+                    assignment.Left,
+                    this.context.GetSymbolInfo(assignment.Left).Symbol
+                )
+                let coalesceTargetType ITypeSymbol? = this.GetAssignmentTargetType(assignment.Left, coalesceTarget)
+                if this.TryGetEmittedNonNullGenericSlotType(coalesceTarget, assignment.Right.GetLocation(), out _) {
+                    return this.ForgiveNullableReferenceValue(
+                        assignment.Right,
+                        value,
+                        coalesceTargetType,
+                        coalesceTarget,
+                        includePromotedValue: true
+                    )
+                }
+                return value
+            }
             if !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) {
                 return value
             }
@@ -8280,7 +8297,43 @@ partial class CSharpToGSharpTranslator {
             return this.WithHoistedAssignments(
                 expression,
                 includeSelf: false,
-                () -> if hoistPostfix {
+                () -> if expression is AssignmentExpressionSyntax coalesceStmt && coalesceStmt.IsKind(
+                    SyntaxKind.CoalesceAssignmentExpression
+                ) &&
+                    this
+                    .CoalesceAssignmentTargetIsNonNullInGSharp(coalesceStmt) {
+                    let statements = List[GStatement]()
+                    let target GExpression? = this.MakeDuplicationSafeTarget(
+                        this.TranslateAssignmentTarget(coalesceStmt.Left)!!,
+                        statements,
+                        coalesceStmt.Left
+                    )
+                    let isUnqualifiedProperty = target is IdentifierExpression &&
+                        this
+                        .context
+                        .GetSymbolInfo(Unparenthesize(coalesceStmt.Left))
+                        .Symbol is IPropertySymbol
+                    let current GExpression? = this.SpillOperand(
+                        target!!,
+                        statements,
+                        forceNonTrivial: isUnqualifiedProperty
+                    )
+                    statements.Add(
+                        IfStatement(
+                            BinaryExpression(current, "==", LiteralExpression.Null()),
+                            BlockStatement(
+                                List[GStatement]{
+                                    AssignmentStatement(
+                                        target,
+                                        this.TranslateAssignmentValue(coalesceStmt),
+                                        isVoid: true
+                                    )
+                                }
+                            )
+                        )
+                    )
+                    statements
+                } else if hoistPostfix {
                     this.WithHoistedPostfix(
                         expression,
                         func () IEnumerable[GStatement] {

@@ -383,11 +383,9 @@ partial class CSharpToGSharpTranslator {
                     this.typeMapper.MapExplicitType(binderSymbolType, this.context, clause.GetLocation()),
                     mainBinder
                 )
-                if binderType != nil &&
-                    !binderType.IsNullable &&
-                    mainBinder
-                    .Type
-                    .IsReferenceType &&
+                if binderType != nil && !binderType.IsNullable && CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(
+                    mainBinder.Type
+                ) &&
                     (
                     (
                         deferScrutineeCapture &&
@@ -467,11 +465,9 @@ partial class CSharpToGSharpTranslator {
                     this.typeMapper.MapExplicitType(nestedSymbolType, this.context, clause.GetLocation()),
                     nestedBinder
                 )
-                if nestedType != nil &&
-                    !nestedType.IsNullable &&
-                    nestedBinder
-                    .Type
-                    .IsReferenceType &&
+                if nestedType != nil && !nestedType.IsNullable && CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(
+                    nestedBinder.Type
+                ) &&
                     (
                     (
                         wholeValueBinders.Contains(nestedBinder) &&
@@ -985,6 +981,9 @@ partial class CSharpToGSharpTranslator {
                 out var sharedInitializer,
                 out var requiresNotNullConditional
             )
+            if !isSharedNode && !CSharpTypeMapper.CanAnnotateTypeParameterNullableInGSharp(targetSymbol) {
+                return false
+            }
             let targetType GTypeReference? = if isSharedNode {
                 sharedTargetType
             } else {
@@ -1254,6 +1253,7 @@ partial class CSharpToGSharpTranslator {
             var hoistInitializer GExpression?
             var targetType GTypeReference?
             var negatedRequiresNullConditionalGuard = false
+            var canAnnotateHoistType = true
             if typeSyntax != nil {
                 // The hoisted `as T` + `== nil` guard is only valid when T is a
                 // reference type (or nullable value type); a non-nullable value-type
@@ -1273,6 +1273,9 @@ partial class CSharpToGSharpTranslator {
                     out var sharedInitializer,
                     out negatedRequiresNullConditionalGuard
                 )
+                if !isSharedNode && !CSharpTypeMapper.CanAnnotateTypeParameterNullableInGSharp(targetSymbol) {
+                    return false
+                }
                 targetType = if isSharedNode {
                     sharedTargetType
                 } else {
@@ -1311,6 +1314,7 @@ partial class CSharpToGSharpTranslator {
                     return false
                 }
                 let nonNullTarget ITypeSymbol? = UnwrapNullable(receiverType)
+                canAnnotateHoistType = CSharpTypeMapper.CanAnnotateTypeParameterNullableInGSharp(nonNullTarget)
                 targetType = this.typeMapper.Map(nonNullTarget, this.context, isPattern!!.Expression.GetLocation())
                 hoistInitializer = receiver
             }
@@ -1327,7 +1331,12 @@ partial class CSharpToGSharpTranslator {
             } else {
                 BindingKind.Let
             }
-            let hoist = LocalDeclarationStatement(binding, localName, MakeNullable(targetType), hoistInitializer)
+            let hoistType = if canAnnotateHoistType {
+                MakeNullable(targetType)
+            } else {
+                targetType
+            }
+            let hoist = LocalDeclarationStatement(binding, localName, hoistType, hoistInitializer)
             this.RecordEmittedLocalNullability(designationSymbol as ILocalSymbol, hoist.Type, nil, nil)
             // `if t == nil { <then> }` reproduces the negated guard: when the cast
             // fails the local is nil, so the original then-block runs.
@@ -1605,6 +1614,7 @@ partial class CSharpToGSharpTranslator {
                 var initializer GExpression?
                 var targetType GTypeReference?
                 var requiresNullConditionalGuard = false
+                var canAnnotateHoistType = true
                 if typeSyntax != nil {
                     let targetSymbol ITypeSymbol? = this.context.GetTypeInfo(typeSyntax).Type
                     if targetSymbol == nil {
@@ -1618,6 +1628,9 @@ partial class CSharpToGSharpTranslator {
                         out var sharedInitializer,
                         out requiresNullConditionalGuard
                     )
+                    if !isSharedNode && !CSharpTypeMapper.CanAnnotateTypeParameterNullableInGSharp(targetSymbol) {
+                        return false
+                    }
                     targetType = if isSharedNode {
                         sharedTargetType
                     } else {
@@ -1650,11 +1663,9 @@ partial class CSharpToGSharpTranslator {
                     if receiverType == nil {
                         return false
                     }
-                    targetType = this.typeMapper.Map(
-                        UnwrapNullable(receiverType),
-                        this.context,
-                        isPattern!!.Expression.GetLocation()
-                    )
+                    let nonNullTarget ITypeSymbol? = UnwrapNullable(receiverType)
+                    canAnnotateHoistType = CSharpTypeMapper.CanAnnotateTypeParameterNullableInGSharp(nonNullTarget)
+                    targetType = this.typeMapper.Map(nonNullTarget, this.context, isPattern!!.Expression.GetLocation())
                     initializer = receiver
                 }
                 let designationSymbol ISymbol? = this.context.GetDeclaredSymbol(single)
@@ -1666,7 +1677,11 @@ partial class CSharpToGSharpTranslator {
                 } else {
                     BindingKind.Let
                 }
-                let localType = MakeNullable(targetType)
+                let localType = if canAnnotateHoistType {
+                    MakeNullable(targetType)
+                } else {
+                    targetType
+                }
                 this.RecordEmittedLocalNullability(designationSymbol as ILocalSymbol, localType, nil, nil)
                 statements.Add(LocalDeclarationStatement(binding, localName, localType, initializer))
                 var guard_ GExpression = BinaryExpression(

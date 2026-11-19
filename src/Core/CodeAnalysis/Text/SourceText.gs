@@ -76,6 +76,35 @@ class SourceText {
     /// @returns The underlying document.
     override func ToString() string -> text
 
+    /// Returns a new text with [`changes`](paramref) applied (ADR-0227 D1). The new text keeps the
+    /// file name of this text and has no raw bytes.
+    /// @remarks The changes refer to positions in this text. They must be in position order and
+    /// must not overlap. Two insertions at one position are applied in array order.
+    /// @param changes The changes to apply.
+    /// @returns The changed text, or this text when there is no change.
+    func WithChanges(changes ImmutableArray[TextChange]) SourceText {
+        if changes.IsDefaultOrEmpty {
+            return this
+        }
+        let builder = StringBuilder(text.Length)
+        var position = 0
+        for change in changes {
+            ArgumentNullException.ThrowIfNull(change)
+            let span = change.Span
+            if span.Start < position {
+                throw ArgumentException("The changes overlap or are not in position order.", nameof(changes))
+            }
+            if span.End > text.Length {
+                throw ArgumentOutOfRangeException(nameof(changes), "A change ends after the end of the text.")
+            }
+            builder.Append(text, position, span.Start - position)
+            builder.Append(change.NewText)
+            position = span.End
+        }
+        builder.Append(text, position, text.Length - position)
+        return From(builder.ToString(), FileName)
+    }
+
     /// Returns a subset of the document represented by this source text.
     /// @param start Start index.
     /// @param length Length.
