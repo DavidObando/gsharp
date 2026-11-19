@@ -16945,6 +16945,55 @@ partial class CSharpToGSharpTranslator {
             return nil
         }
 
+        // gsc drops by-reference facts at an `if` exit when its condition can mutate member paths (#6124).
+        private func GetExitedConditionIf(
+            $guard Microsoft.CodeAnalysis.SyntaxNode,
+            use Microsoft.CodeAnalysis.SyntaxNode,
+            readPosition int32? = nil
+        ) Microsoft
+            .CodeAnalysis
+            .CSharp
+            .Syntax
+            .IfStatementSyntax? {
+            let readStart = readPosition ?? use.SpanStart
+            for var current Microsoft.CodeAnalysis.SyntaxNode? = $guard; current != nil; current = current!!.Parent {
+                switch current.Parent {
+                    case ifStatement is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .IfStatementSyntax when ifStatement.Condition == current {
+                        return if readStart >= ifStatement.Span.End {
+                            ifStatement
+                        } else {
+                            default(Microsoft.CodeAnalysis.CSharp.Syntax.IfStatementSyntax?)
+                        }
+                    }
+                    case Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ParenthesizedExpressionSyntax,
+                    Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .PrefixUnaryExpressionSyntax,
+                    Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .BinaryExpressionSyntax {
+                        continue
+                    }
+                    default {
+                        return nil
+                    }
+                }
+            }
+            return nil
+        }
+
         /// ADR-0213 section 9 (#5650, #5692): gsc scans a loop's region without types, so a `for ... in` nested in the
         /// body of a loop counts as an iteration that runs user code for the enclosing loop, whatever its collection
         /// is, and a conversion emitted as `T(x)` counts as a construction call (`CallIsIndirect`). The loop then
@@ -22283,14 +22332,7 @@ partial class CSharpToGSharpTranslator {
             return scope_ != nil && regions.Any(
                 (region Microsoft.CodeAnalysis.SyntaxNode) -> region.Span.Contains(expression!!.Span)
             ) &&
-                !this.ClosureAssignedLocalLosesNarrowing(
-                field,
-                GetConditionRoot(guardTest),
-                expression!!,
-                scope_,
-                regions,
-                readPosition
-            )
+                !this.ClosureAssignedLocalLosesNarrowing(field, guardTest, expression!!, scope_, regions, readPosition)
         }
 
         private func ClosureAssignedLocalLosesNarrowing(
@@ -22318,14 +22360,60 @@ partial class CSharpToGSharpTranslator {
             }
             // ADR-0208 R15 (#5237): a closure-assigned variable loses its fact at every node that may run source code.
             let RunsSourceCode = func (node Microsoft.CodeAnalysis.SyntaxNode) bool {
-                // Member paths use the same call barriers, limited to their proven non-null regions.
-                return (closureAssigned || memberPath) &&
-                    (
-                    memberRegions == nil || memberRegions.Any(
-                        (region Microsoft.CodeAnalysis.SyntaxNode) -> region.Span.Contains(node.Span)
-                    )
-                ) &&
-                    this.NodeMayRunEscapedClosure(node)
+                if closureAssigned && this.NodeMayRunEscapedClosure(node) {
+                    return true
+                }
+                if !memberPath {
+                    return false
+                }
+                if memberRegions == nil {
+                    return this.NodeMayRunEscapedClosure(node)
+                }
+                // Member paths drop on calls in statements or the use's own region; sibling condition operands
+                // drop a separate-storage field only on member-storage writes (#6124).
+                for region in memberRegions {
+                    if !region.Span.Contains(node.Span) {
+                        continue
+                    }
+                    if region is Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax || region.Span.Contains(
+                        use.Span
+                    ) {
+                        return this.NodeMayRunEscapedClosure(node)
+                    }
+                    if (
+                        node is Microsoft
+                            .CodeAnalysis
+                            .CSharp
+                            .Syntax
+                            .AssignmentExpressionSyntax ||
+                            (
+                            node is Microsoft
+                                .CodeAnalysis
+                                .CSharp
+                                .Syntax
+                                .PrefixUnaryExpressionSyntax prefix &&
+                                (
+                                prefix.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.PreIncrementExpression) ||
+                                    prefix.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.PreDecrementExpression)
+                            )
+                        ) ||
+                            (
+                            node is Microsoft
+                                .CodeAnalysis
+                                .CSharp
+                                .Syntax
+                                .PostfixUnaryExpressionSyntax postfix &&
+                                (
+                                postfix.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.PostIncrementExpression) ||
+                                    postfix.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.PostDecrementExpression)
+                            )
+                        )
+                    ) &&
+                        this.NodeMayWriteReferenceStorage(node) {
+                        return true
+                    }
+                }
+                return false
             }
             // ADR-0208 R11, R12, R14, R16 and R17 (#5520, #5617, #5650): a by-reference variable loses its fact at a
             // node that gsc counts as a write of by-reference storage, which includes a loop whose iteration runs user
@@ -22366,6 +22454,19 @@ partial class CSharpToGSharpTranslator {
                 .Pattern
                 .DescendantNodesAndSelf(OutsideNestedFunctions)
                 .Any(WritesReferenceStorage) {
+                return true
+            }
+            if byReference && this.GetExitedConditionIf(narrowingGuard, use, readPosition) is {} exitedIf &&
+                exitedIf
+                .Condition
+                .DescendantNodesAndSelf(OutsideNestedFunctions)
+                .Any(
+                (node Microsoft.CodeAnalysis.SyntaxNode) -> this.NodeMayRunEscapedClosure(node) ||
+                    this.NodeRunsStaticTypeInitializer(node) || this.NodeMayWriteReferenceStorage(
+                    node,
+                    this.ReferenceStorageType(symbol)
+                )
+            ) {
                 return true
             }
             let exitedLoop = this.GetExitedConditionLoop(narrowingGuard, use)
