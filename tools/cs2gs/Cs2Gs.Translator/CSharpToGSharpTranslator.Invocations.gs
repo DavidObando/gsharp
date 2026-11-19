@@ -713,6 +713,7 @@ partial class CSharpToGSharpTranslator {
             this.BuildNullConditionalStaticExtensionHelper(
                 conditionalAccess,
                 invocation,
+                method,
                 this.StaticQualifierReceiver(
                     (method!!.ReducedFrom ?? method)!!.ContainingType,
                     invocation!!.GetLocation()
@@ -785,6 +786,7 @@ partial class CSharpToGSharpTranslator {
                 this.BuildNullConditionalStaticExtensionHelper(
                     conditionalAccess,
                     invocation,
+                    method,
                     this.StaticQualifierReceiver(
                         (method!!.ReducedFrom ?? method)!!.ContainingType,
                         invocation!!.GetLocation()
@@ -847,6 +849,7 @@ partial class CSharpToGSharpTranslator {
         private func BuildNullConditionalStaticExtensionHelper(
             conditionalAccess ConditionalAccessExpressionSyntax,
             invocation InvocationExpressionSyntax?,
+            method IMethodSymbol?,
             ownerReceiver GExpression,
             name string?,
             helperName SimpleNameSyntax?,
@@ -870,7 +873,7 @@ partial class CSharpToGSharpTranslator {
                 default(IReadOnlyList[GTypeReference]?)
             }
             let TranslateCall = func () GExpression {
-                let callArgs = List[GExpression]{helperReceiver!!}
+                let callArgs = List[GExpression]{PassStaticExtensionHelperReceiver(helperReceiver, method)!!}
                 callArgs.AddRange(this.TranslateCallArguments(invocation!!, invocation!!.ArgumentList.Arguments))
                 return InvocationExpression(MemberAccessExpression(ownerReceiver, name), callArgs, callTypeArgs)
             }
@@ -2502,9 +2505,33 @@ partial class CSharpToGSharpTranslator {
                     field.Instance!!
                     .Type
                     ?.IsReferenceType == true ||
-                    IsReadOnlyAddressableStorageOperation(field.Instance)
+                    field.Instance!!.Type is IPointerTypeSymbol ||
+                    this.IsPointerStorageSyntax(field.Syntax) || this.IsReadOnlyAddressableStorageOperation(
+                    field.Instance
+                )
             )
-            default: false
+            default: value != nil && this.IsPointerStorageSyntax(value.Syntax)
+        }
+
+        private func IsPointerStorageSyntax(syntax Microsoft.CodeAnalysis.SyntaxNode?) bool {
+            let unwrapped = Unparenthesize(syntax as Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax)
+            return (
+                unwrapped is PrefixUnaryExpressionSyntax ptr && ptr.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.PointerIndirectionExpression
+                )
+            ) ||
+                (
+                unwrapped is MemberAccessExpressionSyntax ptrMember && ptrMember.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.PointerMemberAccessExpression
+                )
+            ) ||
+                (
+                unwrapped is ElementAccessExpressionSyntax ptrElem &&
+                    this
+                    .context
+                    .GetTypeInfo(ptrElem.Expression)
+                    .Type is IPointerTypeSymbol
+            )
         }
 
         private func IsVariableStorageOperation(value IOperation?) bool ->

@@ -2536,6 +2536,7 @@ public static class IntExt
     public static void Bump(this ref int value) { value++; }
     public static string Who(this in int value, [CallerMemberName] string caller = "") => caller + ":" + value;
 }
+public sealed class IntBox { public int Value; }
 public static class Demo
 {
     private static void PrivateBump(this ref int value) { value += 2; }
@@ -2555,7 +2556,11 @@ public static class Demo
         int other = 10;
         counters[0].Swap(ref other);
         counters[0].AddExternal(5);
-        return direct + "|" + counters[0] + ":" + other + "|" + other.SameInt(in other) + "|" + other.Who() + "|" + other.ReadA() + ":" + other.ReadB() + "|" + counters[0].Total() + ":" + counters[0].Total(2, 3);
+        IntBox? box = new IntBox { Value = 3 };
+        box?.Value.Bump();
+        IntBox? missing = null;
+        missing?.Value.Bump();
+        return direct + "|" + counters[0] + ":" + other + "|" + other.SameInt(in other) + "|" + other.Who() + "|" + other.ReadA() + ":" + other.ReadB() + "|" + counters[0].Total() + ":" + counters[0].Total(2, 3) + "|" + box.Value;
     }
 }`, `
 using System.Collections.Generic;
@@ -2580,11 +2585,40 @@ namespace B
     {
         public static int ReadB(this in int value) => value + 2;
     }
-}`, strictIl: true, rejectConditionalIndexWarnings: true, expectedOutput: "1:a:1|15:4|True|Run:4|5:6|15:20")
+}`, strictIl: true, rejectConditionalIndexWarnings: true, expectedOutput: "1:a:1|15:4|True|Run:4|5:6|15:20|4")
         Assert.Contains("func Bump(ref value int32)", printed, StringComparison.Ordinal)
         Assert.Contains("private func PrivateBump(ref value int32)", printed, StringComparison.Ordinal)
         Assert.Contains("IntExt.Bump(&counters[0])", printed, StringComparison.Ordinal)
         Assert.DoesNotContain("@ExtensionOwner", printed, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func PermutedReadOnlyDelegate_PointerBackedOperands_PreserveAddressIdentity() {
+        let printed = Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System.Runtime.CompilerServices;
+public struct Pair { public int Value; }
+public static class Demo
+{
+    delegate bool SameDelegate(ref readonly int left, ref readonly int right);
+    static bool Same(ref readonly int left, ref readonly int right) =>
+        Unsafe.AreSame(ref Unsafe.AsRef(in left), ref Unsafe.AsRef(in right));
+    public static unsafe string Run()
+    {
+        int x = 7;
+        int* p = &x;
+        Pair pair = new Pair { Value = 9 };
+        Pair* pairPtr = &pair;
+        SameDelegate d = Same;
+        return Same(in *p, in *p) + "|" +
+            d(right: *p, left: *p) + "|" +
+            d(right: in *p, left: in *p) + "|" +
+            d(right: pairPtr->Value, left: pairPtr->Value) + "|" +
+            d(right: p[0], left: p[0]);
+    }
+}`, strictIl: false, expectedOutput: "True|True|True|True|True")
+        Assert.Contains("in (*p)", printed, StringComparison.Ordinal)
+        Assert.Contains("let ref readonly", printed, StringComparison.Ordinal)
     }
 
     shared {
