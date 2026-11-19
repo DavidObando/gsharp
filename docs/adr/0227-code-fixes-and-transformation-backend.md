@@ -433,6 +433,36 @@ All tests obey ADR-0154: each new test fails on the code before the change.
 - **LSP tests.** Extend `test/LanguageServer.Tests/CodeActionHandlerTests.gs`: `context.only` filtering, resolve, `isPreferred`, stale versions, and the moved nullability fixes with the same titles and edits as today.
 - **Performance.** A benchmark of `ComputeDelta` on the repository samples and on the Oats dev programs, which reports p50 and p95 against the budgets of D4.
 
+## Implementation notes (phases 1–3)
+
+The implementation follows the decision, with these differences and results:
+
+- **Compiler suggestions replace one provider.** GS0273 (`null` → `nil`) is a `Diagnostic.Suggestions` entry at its report site (D2 option b), not a provider. GS0302 (`->` switch arm → `:`) also has a suggestion. `CodeFixService` offers suggestions before provider fixes.
+- **Names.** A fix that edits several trees uses `CodeFixContext.RegisterMultiDocumentFix` and `MultiDocumentEditor`. `FixAll` takes a nullable equivalence key: `null` takes the first fix of each diagnostic (used by `source.fixAll.gsharp`). `FixAllDocument.GetChanges()` gives one change between the common prefix and suffix of the texts.
+- **FixAll conflicts.** Two changes of different fixes conflict when they share a character, or when an insertion touches the other change.
+- **Editor guards.** The editor rejects a token whose text is not the source text at its span (parser-generated tokens of desugared forms), and a node that borrows tokens of another node (payload-enum cases). `SyntaxNode.FindToken` returns the smallest real token at a position.
+- **Language server.** `source.fixAll.gsharp` runs only when the request's `only` asks for it. Analyzer diagnostics are computed only when a provider fixes one of the analyzers' IDs, and are cached per compilation snapshot.
+- **Programs edit only their captures.** A program cannot express an edit at a declaration that the pattern does not reach, such as `let` → `var` at the declaration of a reassigned variable. That fix stays a provider.
+- **Semantic-model gaps.** `GetSymbolInfo` on an implicit-receiver field assignment answers the `this` parameter (#6126), and the receiver of a member access that reports GS0158 has no symbol or type (#6127). The `let` → `var` provider and the program interpreter fall back to `LookupSymbols` and the variable's declared type.
+- **Deferred.** The body-local speculative bind (#6128), snippet edits for `HasPlaceholders` fixes (#6129), and packaging of `GSharp.CodeAnalysis.Transformations` (#6130).
+- **Extra fix.** GS0156 between two numeric types gets `Convert to 'T'` (`MaybeIncorrect`, a checked conversion).
+
+**Measured** over the 327 broken programs of the Oats S0 dev repair log, with the built-in providers and suggestions, in one process at low priority while another benchmark ran:
+
+| Measure | Result |
+| --- | --- |
+| Programs with at least one fix | 78 of 327 |
+| Fixes | 118 |
+| Fixes that pass `NoNewDiagnostics` | 112 |
+| First error of the program fixed and accepted | 67 programs |
+| Warm check (`GetDiagnostics`), p50 / p95 | 4.85 ms / 21.5 ms |
+| Full-bind delta of one fix, p50 / p95 | 4.9 ms / 21.1 ms |
+| Fixes whose edit removes a comment | 0 of 118 |
+
+By key: `GS0156.NumericConversion` 64 (64 accepted), `GS0125.DropNew` 17 (15), `GS0127.LetToVar` 13 (13), `LogicalWord.or` 12 (12), `LogicalWord.and` 5 (1), `GS0273.UseNil` 4 (4), `LogicalWord.not` 3 (3). The delta costs about one warm check, which meets the Oats budget of D4.
+
+**Phase 4 decision.** No fix lost a comment, and every phase 1–3 fix edits tokens or composes `OriginalText`. Option B stays. Revisit option A when a provider makes structural rewrites of nodes that hold comments.
+
 ## Consequences
 
 - G# gets one fix mechanism for compiler and analyzer diagnostics, for the language server and for library hosts.
