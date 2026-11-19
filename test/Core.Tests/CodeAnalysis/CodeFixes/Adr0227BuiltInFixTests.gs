@@ -222,6 +222,64 @@ open class Adr0227BuiltInFixTests {
     }
 
     @Fact
+    func LogicalWords_BeforeEmptyParentheses_HaveNoFix() {
+        for word in[]string{"and", "or", "not"} {
+            let prefix = if word == "not" {
+                ""
+            } else {
+                "a "
+            }
+            let source = "package P\n\nfunc F(a bool) bool {\n    return " + prefix + word + "()\n}\n"
+            let tree = SyntaxTree.Parse(source)
+            let compilation = Compilation(tree)
+            let service = CodeFixService(CodeFixRegistry.CreateDefault())
+            for target in compilation.GetDiagnostics().Where((d Diagnostic) -> d.Id == "GS0130" || d.Id == "GS0125") {
+                Assert.Empty(
+                    service.GetFixes(compilation, target).Where(
+                        (f CodeFix) -> f.ProviderId == "GSharp.CodeFixes.LogicalWord"
+                    )
+                )
+            }
+        }
+    }
+
+    @Fact
+    func Not_BeforeANegation_KeepsTwoPrefixOperators() {
+        const source = "package P\n\nfunc F(a bool) bool {\n    return not !a\n}\n"
+        let tree = SyntaxTree.Parse(source)
+        let compilation = Compilation(tree)
+        let target = compilation.GetDiagnostics().First((d Diagnostic) -> d.Id == "GS0125")
+        let service = CodeFixService(CodeFixRegistry.CreateDefault())
+        let fix = Assert.Single(service.GetFixes(compilation, target))
+        let changed = Assert.Single(service.Apply(fix))
+        Assert.Contains("return ! !a\n", changed.Text.ToString())
+        Assert.Empty(changed.Diagnostics)
+    }
+
+    @Fact
+    func NewOfAFunctionValue_HasNoFix() {
+        const source = "package P\n\nclass C { }\n\nfunc F(make () -> C) C {\n    return new make()\n}\n"
+        let tree = SyntaxTree.Parse(source)
+        let compilation = Compilation(tree)
+        let target = compilation.GetDiagnostics().First((d Diagnostic) -> d.Id == "GS0125")
+        Assert.Empty(CodeFixService(CodeFixRegistry.CreateDefault()).GetFixes(compilation, target))
+    }
+
+    @Fact
+    func NullCoalescingDefault_ForANarrowType_IsTyped() {
+        const source = "package P\n\nfunc F(x uint8?) uint8 -> x\n"
+        let tree = SyntaxTree.Parse(source)
+        let compilation = Compilation(tree)
+        let diagnostic = compilation.GetDiagnostics().First((d Diagnostic) -> d.Id == "GS0155" || d.Id == "GS0156")
+        let service = CodeFixService(CodeFixRegistry.CreateDefault())
+        let fallback = service.GetFixes(compilation, diagnostic).Single(
+            (f CodeFix) -> f.Title.StartsWith("Provide default", StringComparison.Ordinal)
+        )
+        Assert.Contains("(x ?? uint8(0))", Assert.Single(service.Apply(fallback)).Text.ToString())
+        Assert.True(DeltaPolicy.NoNewDiagnostics.Accepts(service.ComputeDelta(compilation, fallback)))
+    }
+
+    @Fact
     func LogicalWords_WithoutOperands_HaveNoFix() {
         for source in[]string{
             "package P\n\nfunc F() bool {\n    return or\n}\n",

@@ -6,6 +6,7 @@ package GSharp.Core.CodeAnalysis.CodeFixes.BuiltIn
 
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.CodeFixes
+import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import System.Collections.Immutable
 import System.Linq
@@ -50,6 +51,12 @@ internal class DropNewCodeFixProvider : GSharpCodeFixProvider {
         }
         let type = model.GetTypeInfo(call, context.CancellationToken).Type
         if type == nil || type.IsValueType {
+            return
+        }
+        // A call of a function value (`new make()` with a parameter `make () -> C`) has no symbol
+        // either. The callee's name must not name a variable or a function in scope.
+        let named = model.LookupSymbols(call.Span.Start, next.Text, context.CancellationToken)
+        if named.Any((s Symbol) -> !(s is TypeSymbol)) {
             return
         }
         context.RegisterFix(

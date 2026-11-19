@@ -29,6 +29,13 @@ internal class LogicalWordCodeFixProvider : GSharpCodeFixProvider {
         if next == nil || !FixSyntax.SameLine(tree.Text, token.Span.Start, next.Span.Start) {
             return
         }
+        // `and()` is a call with no argument, not an operand.
+        if next.Kind == SyntaxKind.OpenParenthesisToken {
+            let afterParenthesis SyntaxToken? = FixSyntax.NextRealToken(tree, next)
+            if afterParenthesis == nil || afterParenthesis.Kind == SyntaxKind.CloseParenthesisToken {
+                return
+            }
+        }
         switch token.Text {
             case "or", "and" {
                 // `a or b` reports GS0125; `a or (b)` parses as a call and reports GS0130.
@@ -68,7 +75,15 @@ internal class LogicalWordCodeFixProvider : GSharpCodeFixProvider {
                     Applicability.MaybeIncorrect,
                     (editor SyntaxEditor) -> {
                         editor.RemoveToken(token)
-                        editor.InsertBefore(following, "!")
+                        // `!` before `!` would lex as `!!`, the postfix null assertion.
+                        editor.InsertBefore(
+                            following,
+                            if following.Kind == SyntaxKind.BangToken {
+                                "! "
+                            } else {
+                                "!"
+                            }
+                        )
                     }
                 )
             }

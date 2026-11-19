@@ -194,8 +194,17 @@ internal class NullableValueCodeFixProvider : GSharpCodeFixProvider {
     private func SuggestDefaultLiteral(targetType string) string -> switch targetType {
         case "string": "\"\""
         case "bool": "false"
-        case "int" or "int8" or "int16" or "int32" or "int64" or "uint8" or "uint16" or "uint32" or "uint64": "0"
-        case "float" or "float32" or "float64" or "double" or "decimal": "0"
+        // An `int32` literal widens to `int64` and `float64`; a narrower or unsigned type needs a
+        // typed zero, or the fix reports GS0156 again.
+        case "int" or "int32" or "int64" or "float" or "float64" or "double": "0"
+        case "int8" or
+            "int16" or
+            "uint8" or
+            "uint16" or
+            "uint32" or
+            "uint64" or
+            "float32" or
+            "decimal": "${targetType}(0)"
         default: "default"
     }
 }
