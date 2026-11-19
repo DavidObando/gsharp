@@ -102,7 +102,15 @@ class SyntaxEditor {
     // Use it to move or wrap a subtree without losing its inner comments.
     func OriginalText(node SyntaxNode) string
 
+    // Marks the text that an edit inserted as a placeholder (Applicability.HasPlaceholders).
+    func MarkPlaceholder(insertedText TextSpan)
+
     func GetChanges() ImmutableArray[TextChange]  // sorted by position, then by call order
+}
+
+// One SyntaxEditor for each tree of a compilation (phase 2).
+class MultiDocumentEditor {
+    func EditorFor(tree SyntaxTree) SyntaxEditor
 }
 ```
 
@@ -120,7 +128,7 @@ Rules:
 
 | Option | Comments kept | Minimal diff | Works on broken code | Cost |
 | --- | --- | --- | --- | --- |
-| A. Full-fidelity red/green tree with trivia, `ReplaceNode`, `SyntaxFactory`, `NormalizeWhitespace` | yes, by construction | yes | yes | Very high. The parser, the 190 node classes, the generated child accessors, span caches, the parent index and gsfmt all change. Memory grows for every compilation, also in `gsc`. |
+| A. Full-fidelity red/green tree with trivia, `ReplaceNode`, `SyntaxFactory`, `NormalizeWhitespace` | yes, by construction | yes | yes | Very high. The parser, about 160 node classes, the generated child accessors, span caches, the parent index and gsfmt all change. Memory grows for every compilation, also in `gsc`. |
 | **B. Span edits + re-parse + optional gsfmt** | yes outside the edited tokens; inside a replaced node only through `OriginalText` | yes | yes | Low: two text types, an editor, a re-parse per candidate. |
 | C. cs2gs `Cs2Gs.CodeModel` + `GSharpPrinter` | only comments attached to model nodes | no, it prints the whole unit | no, it needs a model built from a clean tree | It lives in `tools/` and references Core, so Core cannot reference it. A parse-tree → model converter for 140 node kinds does not exist. |
 
@@ -146,8 +154,9 @@ class CodeFix {
     prop ProviderId string               // stable name of the provider or program
     prop Placeholders ImmutableArray[TextSpan]    // spans in the result text, for HasPlaceholders
 
-    // Computes the changes. Lazy, so the language server can list titles first and
-    // compute edits in codeAction/resolve. The result for one input is always the same.
+    // Computes the changes. Lazy, so a list that is not gated can show titles first and
+    // compute edits in codeAction/resolve. A gated fix computes its changes at list time
+    // (the gate needs them) and caches them. The result for one input is always the same.
     func GetChanges(cancellationToken CancellationToken = default(CancellationToken)) FixChanges
 }
 
@@ -174,8 +183,12 @@ class CodeFixContext {
     prop SemanticModel SemanticModel        // created on first read
     prop CancellationToken CancellationToken
     func CreateEditor() SyntaxEditor
+    // A fix in the diagnostic's tree. The editor can mark placeholder spans (HasPlaceholders).
     func RegisterFix(title string, equivalenceKey string, applicability Applicability,
                      compute (SyntaxEditor) -> void)
+    // A fix that changes more than one tree of the compilation (phase 2).
+    func RegisterFix(title string, equivalenceKey string, applicability Applicability,
+                     compute (MultiDocumentEditor) -> void)
 }
 ```
 
@@ -211,7 +224,7 @@ partial class Diagnostic {
 }
 ```
 
-`Descriptor` becomes non-nil for compiler diagnostics. `Properties` does not change (ADR-0225). Diagnostic equality and the bag's de-duplication do not read the new member, so `GetDiagnostics()` keeps the same results.
+`Descriptor` becomes non-nil for compiler diagnostics. `Properties` does not change (ADR-0225). The bag's de-duplication (`DiagnosticBag.gs:685-705`) compares location, additional locations and `Properties`, not the descriptor, and the new member is not added to it. The analyzer driver reads `Descriptor.IsEnabledByDefault` (`GSharpAnalyzerDriver.gs:221`) on analyzer diagnostics. That `GetDiagnostics()` keeps the same results, including suppression and severity configuration, is **to verify in phase 1** with the sample comparison that ADR-0225 used.
 
 **Structured fix-its on the diagnostic.** Some report sites already know the fix (GS0273 names `nil`; "did you mean" messages name a symbol). Options:
 
@@ -326,11 +339,11 @@ The pattern language is deliberately small. It has no loops and no arbitrary cod
 ### D7. Language server wiring
 
 - `CodeActionParams` gets `context` (`diagnostics`, `only`, `triggerKind`).
-- `CodeAction` gets `diagnostics`, `isPreferred` and `data`. The server declares `resolveProvider: true` and handles `codeAction/resolve`. The list request computes titles and runs the gate. Resolve computes the edit, which is the result that the gate already computed.
+- `CodeAction` gets `diagnostics`, `isPreferred` and `data`. The server declares `resolveProvider: true` and handles `codeAction/resolve`. For a gated fix, the list request computes the edit and runs the gate; resolve returns the cached edit. For a fix that is not gated, the list request computes only the title, and resolve computes the edit.
 - Kinds: `quickfix` for fixes, `source.fixAll.gsharp` for a document FixAll of `MachineApplicable` fixes, `refactor.rewrite` for sort imports.
-- The computer reads syntax, declaration, body and analyzer diagnostics of the document. It reads analyzer diagnostics from the analyzer results that the server already holds for the document, and does not run the analyzers again.
+- The computer reads syntax, declaration, body and analyzer diagnostics of the document. Today `DocumentSyncHandler` runs `GSharpAnalyzerDriver.Run` in its debounced phase and converts the result to LSP diagnostics at once; it keeps no Core diagnostics. Phase 1 keeps the analyzer diagnostics of the last run for each document version, so the computer does not run the analyzers again.
 - `NullabilityQuickFixes` moves to Core as built-in providers. The language server keeps only the protocol mapping. Sort imports stays in the server as a refactoring, because it is not a diagnostic fix.
-- Edits use the version of the document that the request names. A stale result is dropped.
+- `CodeActionParams.textDocument` is a `TextDocumentIdentifier` with no version. The server records in `data` the document version that it computed against, and resolve drops a result whose version is not current.
 
 ### D8. First fixes (phase 1)
 
@@ -360,7 +373,7 @@ Integer-cast fixes (GS0156 `int64` → `int32`, 28 tasks) need an expected-type 
 - `Diagnostic.MessageArguments` and a non-nil `Descriptor` for compiler diagnostics (D2).
 - The fixes of D8 and the moved nullability fixes.
 - LSP: `context`, `diagnostics`, `isPreferred`, `data`, resolve, all diagnostic sources (D7).
-- The delta gate on in Oats. In the language server, the gate is on for data-defined fixes only, until the phase-2 budget is measured.
+- The full delta gate is available to Oats through `ComputeDelta`. In the language server, every fix gets the parse-only stage of the gate (D4 step 2: no new syntax error, no bind). The full gate is on in the server only for data-defined fixes, which arrive in phase 3, and for others after the phase-2 budget is measured (Q4).
 
 **Phase 2: FixAll and the fast path.**
 
@@ -368,6 +381,7 @@ Integer-cast fixes (GS0156 `int64` → `int32`, 28 tasks) need an expected-type 
 - The body-local speculative bind for the delta, and the LSP budget measurement (D4).
 - Integer-cast fixes, and fixes for analyzer IDs (GSA0004–GSA0007 where a fix is mechanical).
 - Snippet edits for `HasPlaceholders`.
+- Multi-document fixes (`MultiDocumentEditor`), for example a `let` field used from another file.
 
 **Phase 3: data and suggestions.**
 
@@ -396,7 +410,7 @@ All tests obey ADR-0154: each new test fails on the code before the change.
 - Compiler diagnostics keep their descriptor and arguments. Providers stop parsing message text.
 - The public API snapshot grows by the types of D1, D2, D4 and, in phase 3, D6.
 - Span edits do not keep a comment that is inside a replaced node unless the provider composes `OriginalText`. Phase 1 fixes edit single tokens, so this does not occur for them.
-- The full-bind delta costs one bind for each candidate until phase 2. The language server limits the gate to data-defined fixes until then.
+- The full-bind delta costs one bind for each candidate until phase 2. Until then the language server runs only the parse-only stage on its fixes, so a phase-1 fix in the editor can add a bind error. The golden tests of each built-in fix cover that risk.
 - A mined program can be wrong. The gate bounds the harm, but it cannot show that an edit is wanted. Applicability and the host's evidence rules do that.
 
 ## Alternatives considered
