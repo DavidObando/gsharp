@@ -186,6 +186,14 @@ class SyntaxEditor {
                 "The token '${token.Kind}' at ${token.Position} has no source text. Edit a real token (ADR-0227 D1)."
             )
         }
+        // A token that the parser made for a desugared form can sit on the position of other
+        // source text (the `class` of a payload enum is at `enum`). Its text then differs.
+        let text = OriginalTree.Text
+        if token.Span.End > text.Length || text.ToString(token.Span) != token.Text {
+            throw InvalidOperationException(
+                "The token '${token.Text}' at ${token.Position} is not the source text there. Edit a real token (ADR-0227 D1)."
+            )
+        }
         return token.Span
     }
 
@@ -215,7 +223,30 @@ class SyntaxEditor {
                 "The node '${node.Kind}' has no token with source text. Edit a real token (ADR-0227 D1)."
             )
         }
+        // A desugared node can borrow tokens of other nodes (a payload-enum case borrows the
+        // enum's name and braces). Its token span then is not its source extent, so the editor
+        // rejects it.
+        for t in node.DescendantTokens() {
+            if !IsOwnedBy(t, node) {
+                throw InvalidOperationException(
+                    "The node '${node.Kind}' borrows the token '${t.Text}' of another node. Edit a node that the source wrote (ADR-0227 D1)."
+                )
+            }
+        }
         return TextSpan.FromBounds(start, end)
+    }
+
+    // The parent index of the tree holds one parent for each token. A borrowed token's parent
+    // chain does not reach the borrowing node.
+    private func IsOwnedBy(token SyntaxToken, node SyntaxNode) bool {
+        var current SyntaxNode? = token.Parent
+        while current != nil {
+            if object.ReferenceEquals(current, node) {
+                return true
+            }
+            current = current.Parent
+        }
+        return false
     }
 
     private func RequireOwnTree(node SyntaxNode) {
@@ -231,7 +262,12 @@ class SyntaxEditor {
             end++
         }
         let endsLine = end == text.Length || text[end] == '\n' || text[end] == '\r'
+        let spaceBefore = span.Start == 0 || char.IsWhiteSpace(text[span.Start - 1])
         if end > span.End && !endsLine {
+            if !spaceBefore {
+                // `return+ x`: the space after the token is the only separator that is left.
+                return span
+            }
             return TextSpan.FromBounds(span.Start, end)
         }
         if !endsLine {

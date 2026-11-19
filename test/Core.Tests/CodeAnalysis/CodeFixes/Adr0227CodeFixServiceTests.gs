@@ -96,6 +96,16 @@ open class Adr0227CodeFixServiceTests {
     }
 
     @Fact
+    func FindToken_InsideAnInterpolationHole_ReturnsTheHoleToken() {
+        let source = "package P\n\nfunc F(customerName string) string -> \"a $" + "{customerName} b\"\n"
+        let tree = SyntaxTree.Parse(source)
+        let token SyntaxToken? = tree.Root.FindToken(source.IndexOf("ustomerName}", StringComparison.Ordinal))
+        Assert.NotNull(token)
+        Assert.Equal("customerName", token!!.Text)
+        Assert.Null(tree.Root.FindToken(source.IndexOf("\n\nfunc", StringComparison.Ordinal)))
+    }
+
+    @Fact
     func Registry_RejectsAProviderWithNoFixableId() {
         Assert.Throws[ArgumentException](() -> CodeFixRegistry().Add(NoIdProvider()))
     }

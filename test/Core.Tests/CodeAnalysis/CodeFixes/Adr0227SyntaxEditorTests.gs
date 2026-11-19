@@ -118,6 +118,44 @@ open class Adr0227SyntaxEditorTests {
     }
 
     @Fact
+    func RemoveToken_WithNoSpaceBefore_KeepsTheSpaceAfter() {
+        const source = "package P\n\nfunc F(x int32) int32 {\n    return+ x\n}\n"
+        let tree = SyntaxTree.Parse(source)
+        let editor = SyntaxEditor(tree)
+        editor.RemoveToken(Token(tree, "+"))
+        Assert.Contains("    return x\n", editor.GetChangedText().ToString())
+    }
+
+    @Fact
+    func PayloadEnum_GeneratedTokensAndDeclarations_AreRejected() {
+        const source = "package P\n\nenum E { Some(value int32), None }\n"
+        let tree = SyntaxTree.Parse(source)
+        let editor = SyntaxEditor(tree)
+        let generated = tree
+            .Root
+            .DescendantTokens()
+            .Where((t SyntaxToken) -> t.Text == "class" && !t.IsMissing)
+            .ToList()
+        Assert.NotEmpty(generated)
+        for token in generated {
+            Assert.Throws[InvalidOperationException](() -> editor.ReplaceToken(token, "struct"))
+        }
+        // Each generated case declaration borrows the enum's tokens.
+        let cases = tree
+            .Root
+            .DescendantNodes()
+            .Where(
+            (n SyntaxNode) -> n.Kind == SyntaxKind.StructDeclaration && n.DescendantTokens().Any(
+                (t SyntaxToken) -> t.Text == "Some"
+            )
+        )
+            .ToList()
+        Assert.NotEmpty(cases)
+        Assert.All(cases, (n SyntaxNode) -> Assert.Throws[InvalidOperationException](() -> editor.ReplaceNode(n, "x")))
+        Assert.False(editor.HasChanges)
+    }
+
+    @Fact
     func RemoveNode_AloneOnItsLine_RemovesTheLine() {
         const source = "package P\n\nfunc F() int32 {\n    var x = 1\n    x = 2\n    return x\n}\n"
         let tree = SyntaxTree.Parse(source)
