@@ -1461,7 +1461,8 @@ partial class CSharpToGSharpTranslator {
                 let argument = switch refKind {
                     case RefKind.Out: cast[GExpression](OutArgumentExpression("out", parameters[i].Name))
                     case RefKind.Ref: cast[GExpression](UnaryExpression("&", IdentifierExpression(parameters[i].Name)))
-                    case RefKind.In: cast[GExpression](OutArgumentExpression("in", parameters[i].Name))
+                    case RefKind.In or
+                        RefKind.RefReadOnlyParameter: cast[GExpression](OutArgumentExpression("in", parameters[i].Name))
                     default: cast[GExpression](IdentifierExpression(parameters[i].Name))
                 }
                 arguments.Add(argument)
@@ -1722,7 +1723,10 @@ partial class CSharpToGSharpTranslator {
                                 case RefKind.Ref: cast[GExpression](
                                     UnaryExpression("&", IdentifierExpression(ctorParameters[i].Name))
                                 )
-                                case RefKind.In: cast[GExpression](OutArgumentExpression("in", ctorParameters[i].Name))
+                                case RefKind.In or
+                                    RefKind.RefReadOnlyParameter: cast[GExpression](
+                                    OutArgumentExpression("in", ctorParameters[i].Name)
+                                )
                                 default: cast[GExpression](IdentifierExpression(ctorParameters[i].Name))
                             }
                             baseArguments.Add(arg)

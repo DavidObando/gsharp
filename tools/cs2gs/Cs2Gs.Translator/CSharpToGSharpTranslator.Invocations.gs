@@ -1512,8 +1512,13 @@ partial class CSharpToGSharpTranslator {
             }
             // Capture an address, never a copy of its pointee. This also runs
             // an array index/getter and its exceptions in source order.
-            if value is UnaryExpression{Operator: "&"} address {
-                let needsValueTemporary = argument.Parameter!!.RefKind == RefKind.In &&
+            if value is UnaryExpression{Operator: "&" or "in "} address {
+                if address.Operand is ThisExpression {
+                    return value
+                }
+                let isReadOnlyParam = argument.Parameter!!.RefKind == RefKind.In ||
+                    argument.Parameter!!.RefKind == RefKind.RefReadOnlyParameter
+                let needsValueTemporary = isReadOnlyParam &&
                     argument.Syntax is ArgumentSyntax syntax &&
                     syntax
                     .RefKindKeyword
@@ -1524,17 +1529,27 @@ partial class CSharpToGSharpTranslator {
                         not IFieldReferenceOperation and
                         not IArrayElementReferenceOperation
                 )
+                let isReadOnlyAlias = address.Operator == "in " && isReadOnlyParam && !needsValueTemporary
                 let temp = this.NewSpillName()
                 this.state.PendingSpillPrologue!!.Add(
                     LocalDeclarationStatement(
-                        BindingKind.Var,
+                        if isReadOnlyAlias {
+                            BindingKind.Let
+                        } else {
+                            BindingKind.Var
+                        },
                         temp,
                         this.typeMapper.Map(argument.Parameter!!.Type, this.context, argument.Syntax.GetLocation()),
                         address.Operand,
-                        isRefAlias: !needsValueTemporary
+                        isRefAlias: !needsValueTemporary,
+                        isReadOnlyRefAlias: isReadOnlyAlias
                     )
                 )
-                return UnaryExpression("&", IdentifierExpression(temp))
+                return if isReadOnlyAlias {
+                    cast[GExpression](OutArgumentExpression("in", temp))
+                } else {
+                    cast[GExpression](UnaryExpression("&", IdentifierExpression(temp)))
+                }
             }
             if value is OutArgumentExpression outArgument {
                 return if outArgument.Keyword == "out var" {
@@ -2022,13 +2037,11 @@ partial class CSharpToGSharpTranslator {
             }
             // ADR-0060: an explicit C# `in x` argument keeps its keyword, and
             // an implicit one naming a variable that targets a source-declared
-            // `in` parameter gains it. Non-identifier explicit lvalues use the
-            // universal `&expr` back-compat form the binder accepts at any
-            // ref-kind parameter. Issue #4400: any other implicit argument
-            // stays a plain value — gsc now binds it like C#, taking an
-            // lvalue's address or spilling an rvalue to a readonly temp, so
-            // `Scale(x + 1)` must not become the non-lvalue `&(x + 1)`.
-            // Imported CLR targets keep the plain value too.
+            // `in` or `ref readonly` parameter gains it. Explicit non-identifier
+            // lvalues keep `in <expr>` so readonly storage (`in this`, `in x.Value`)
+            // is addressed without copying or failing GS9005. Issue #4400: any other
+            // implicit argument stays a plain value — gsc now binds it like C#,
+            // taking an lvalue's address or spilling an rvalue to a readonly temp.
             if refKind == Microsoft.CodeAnalysis.CSharp.SyntaxKind.InKeyword || this.TargetsSourceDeclaredInParameter(
                 argument
             ) {
@@ -2045,11 +2058,8 @@ partial class CSharpToGSharpTranslator {
                 ) {
                     return OutArgumentExpression("in", inIdentifier.Name)
                 }
-                // An implicit non-variable argument stays a plain value (its
-                // `!!` is a valid value assertion); only an explicit `in`
-                // needs the address form.
                 return if refKind == Microsoft.CodeAnalysis.CSharp.SyntaxKind.InKeyword {
-                    AddressOf(translatedIn)
+                    ReadOnlyAddressOf(translatedIn)
                 } else {
                     translatedValue
                 }
@@ -2381,7 +2391,7 @@ partial class CSharpToGSharpTranslator {
             .context
             .SemanticModel
             .GetOperation(argument) is IArgumentOperation{Parameter: {} parameter} &&
-            parameter.RefKind == RefKind.In &&
+            (parameter.RefKind == RefKind.In || parameter.RefKind == RefKind.RefReadOnlyParameter) &&
             !parameter
             .ContainingSymbol
             .DeclaringSyntaxReferences
@@ -11851,14 +11861,37 @@ partial class CSharpToGSharpTranslator {
             }
 
             /// The G# address of [`operand`](paramref) (`&x`), the form
-            /// every by-reference position takes: `ref`/`out`/`in`
-            /// arguments, `&` in unsafe code, and ref aliases.
+            /// every writable by-reference position takes.
             /// @param operand The translated variable.
             /// @returns The address-of expression.
             private func AddressOf(operand GExpression?) GExpression -> UnaryExpression(
                 "&",
                 WithoutNonNullAssertion(operand)
             )
+
+            /// The G# `in` operand expression for an explicit readonly by-reference
+            /// argument (`in this`, `in x.Value`, `in (*p)`).
+            /// @param operand The translated storage operand.
+            /// @returns The `in` expression.
+            private func ReadOnlyAddressOf(operand GExpression?) GExpression {
+                let unwrapped = WithoutNonNullAssertion(operand)
+                let safeOperand = if CanStartRefArgumentOperand(unwrapped) {
+                    unwrapped
+                } else {
+                    cast[GExpression](ParenthesizedExpression(unwrapped))
+                }
+                return UnaryExpression("in ", safeOperand)
+            }
+
+            private func CanStartRefArgumentOperand(operand GExpression?) bool -> switch operand {
+                case _ is IdentifierExpression or _ is ThisExpression or _ is ParenthesizedExpression: true
+                case member is MemberAccessExpression: CanStartRefArgumentOperand(member.Target)
+                case index is IndexExpression: CanStartRefArgumentOperand(index.Target)
+                case invocation is InvocationExpression: CanStartRefArgumentOperand(invocation.Target)
+                case conversion is ConversionExpression: conversion.IsCheckedReferenceCast ||
+                    conversion.TargetType is NamedTypeReference
+                default: false
+            }
 
             /// Drops a non-null assertion from a by-reference operand. `x!!` is
             /// a value, not a variable, so `&x!!` is rejected (GS9001);

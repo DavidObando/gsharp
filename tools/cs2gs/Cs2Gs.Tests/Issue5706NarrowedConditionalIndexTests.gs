@@ -2522,6 +2522,50 @@ namespace Demo
         Assert.DoesNotContain("?[", printed)
     }
 
+    @Fact
+    func ByRefExtension_PrimitiveAndValueTypes_PreserveWritableReceiverContract() {
+        let printed = Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System.Runtime.CompilerServices;
+using System.Threading;
+using ExternalRefExt6063;
+public static class IntExt
+{
+    public static void Bump(this ref int value) { value++; }
+}
+public static class Demo
+{
+    private static void PrivateBump(this ref int value) { value += 2; }
+    public static void AtomicBump(this ref int value) { Interlocked.Increment(ref value); }
+    public static void Swap<T>(this ref T left, ref T right) where T : struct { T tmp = left; left = right; right = tmp; }
+    public static bool SameInt(this in int left, in int right) =>
+        Unsafe.AreSame(ref Unsafe.AsRef(in left), ref Unsafe.AsRef(in right));
+    public static string Run()
+    {
+        int[] counters = new int[1];
+        string? s = null;
+        s = "a";
+        counters[0].Bump();
+        var direct = s.Length + ":" + s?[0] + ":" + counters[0];
+        counters[0].PrivateBump();
+        counters[0].AtomicBump();
+        int other = 10;
+        counters[0].Swap(ref other);
+        counters[0].AddExternal(5);
+        return direct + "|" + counters[0] + ":" + other + "|" + other.SameInt(in other);
+    }
+}`, `
+namespace ExternalRefExt6063;
+public static class ExternalIntExtensions
+{
+    public static void AddExternal(this ref int value, int delta) { value += delta; }
+}`, strictIl: true, rejectConditionalIndexWarnings: true, expectedOutput: "1:a:1|15:4|True")
+        Assert.Contains("func Bump(ref value int32)", printed, StringComparison.Ordinal)
+        Assert.Contains("private func PrivateBump(ref value int32)", printed, StringComparison.Ordinal)
+        Assert.Contains("IntExt.Bump(&counters[0])", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("@ExtensionOwner", printed, StringComparison.Ordinal)
+    }
+
     shared {
         private func AssertRunsWithoutConditionalIndexWarning(source string, expectedOutput string? = nil) string {
             let printed = Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(source, expectedOutput)

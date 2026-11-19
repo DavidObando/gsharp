@@ -1667,6 +1667,10 @@ partial class CSharpToGSharpTranslator {
                         }
                         continue
                     }
+                    if method.Parameters.Length > 0 && method.Parameters[0].RefKind != RefKind.None {
+                        result.AddStaticHelper(methodDeclaration)
+                        continue
+                    }
                     if !TryGetOwnedExtensionReceiver(method, out var receiverDefinition) {
                         continue
                     }
@@ -1676,13 +1680,11 @@ partial class CSharpToGSharpTranslator {
             for (receiver, syntax, method) in candidates {
                 let crossContainerOverload = HasCrossContainerOwnedExtensionOverload(receiver, method)
                 let reducedCollision = HasReducedDeclarationCollision(receiver, method)
-                let byRefReceiver = method.Parameters[0].RefKind != RefKind.None
-                if crossContainerOverload || reducedCollision || byRefReceiver {
+                if crossContainerOverload || reducedCollision {
                     result.AddStaticHelper(syntax)
                     if crossContainerOverload &&
                         !HasCrossContainerOwnedExtensionDuplicate(receiver, method) &&
-                        !reducedCollision &&
-                        !byRefReceiver {
+                        !reducedCollision {
                         result.AddReceiverCompanion(syntax)
                     }
                     continue
@@ -1767,13 +1769,20 @@ partial class CSharpToGSharpTranslator {
 
         private func IsReproducibleStaticHelper(method IMethodSymbol?) bool {
             let original IMethodSymbol? = method?.ReducedFrom ?? method
+            if original != nil &&
+                original.IsExtensionMethod &&
+                original
+                .Parameters
+                .Length > 0 &&
+                original
+                .Parameters[0]
+                .RefKind != RefKind.None {
+                return true
+            }
             return TryGetOwnedExtensionReceiver(original, out var receiver) &&
                 (
                 HasCrossContainerOwnedExtensionOverload(receiver, original) ||
-                    HasReducedDeclarationCollision(receiver, original) ||
-                    original!!
-                    .Parameters[0]
-                    .RefKind != RefKind.None
+                    HasReducedDeclarationCollision(receiver, original)
             )
         }
 
