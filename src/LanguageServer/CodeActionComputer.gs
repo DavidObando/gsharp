@@ -179,7 +179,11 @@ shared class CodeActionComputer {
         ct CancellationToken
     ) sequence[CodeAction] {
         let tree = content.SyntaxTree
-        let compilation = CompilationFor(content)
+        // The project snapshot is captured once, before the fixes are computed, and the fixes use
+        // it when it holds the document's tree. The resolve entry records the same snapshot, so
+        // resolve cannot accept a fix that was gated against older files.
+        let projectCompilation Compilation? = content.Project?.GetCompilation()
+        let compilation = CompilationFor(content, projectCompilation)
         let registry = registryOverride ?? content.Project?.GetCodeFixRegistry() ?? DefaultRegistry
         let service = CodeFixService(registry)
         let fixes = service.GetFixes(
@@ -220,9 +224,6 @@ shared class CodeActionComputer {
             }
         }
         let offered = survivors.Select((c Candidate) -> c.Fix).ToImmutableArray()
-        // The project's compilation is the snapshot of the other files; a one-tree snapshot of an
-        // open buffer is created per call and has no stable identity.
-        let projectCompilation Compilation? = content.Project?.GetCompilation()
         for candidate in survivors {
             let fix = candidate.Fix
             let action = CodeAction{
@@ -348,11 +349,11 @@ shared class CodeActionComputer {
     }
 
     // The compilation that holds the document's tree: the project's, else a one-tree compilation.
-    private func CompilationFor(content DocumentContent) Compilation {
+    private func CompilationFor(content DocumentContent, projectCompilation Compilation? = nil) Compilation {
         let tree = content.SyntaxTree
         let project ProjectState? = content.Project
         if project != nil {
-            let compilation = project.GetCompilation()
+            let compilation = projectCompilation ?? project.GetCompilation()
             if compilation.SyntaxTrees.Contains(tree) {
                 return compilation
             }
