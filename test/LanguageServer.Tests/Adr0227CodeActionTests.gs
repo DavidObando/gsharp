@@ -488,6 +488,63 @@ open class Adr0227CodeActionTests {
         }
     }
 
+    @Fact
+    func DataDefinedFix_ThatAddsADiagnostic_IsNotOffered() {
+        const source = "package P\n\nfunc F() string? {\n    return null\n}\n"
+        let content = LanguageServerTestHelpers.Content(source)
+        let uri = DocumentUri.From("file:///a.gs")!!
+        let at = LanguageServerTestHelpers.PositionOf(source, "null")
+        for dataDefined in[]bool{false, true} {
+            let registry = GSharp.Core.CodeAnalysis.CodeFixes.CodeFixRegistry()
+            registry.Add(UndefinedNameProvider(dataDefined))
+            let titles = CodeActionComputer
+                .ComputeCodeActions(
+                uri,
+                content,
+                Range(at, at),
+                nil,
+                CodeActionClientOptions(),
+                registry,
+                default(System.Threading.CancellationToken)
+            )
+                .Select((a CommandOrCodeAction) -> a.CodeAction.Title)
+                .ToList()
+            // The hand-written fix gets only the syntax gate; the data-defined one gets the full gate.
+            Assert.Equal(!dataDefined, titles.Contains("Use an undefined name"))
+            Assert.Contains("Use 'nil'", titles)
+        }
+    }
+
+    // A fix that replaces `null` with a name that does not exist: it adds GS0125.
+    private class UndefinedNameProvider : GSharp.Core.CodeAnalysis.CodeFixes.GSharpCodeFixProvider {
+        private let dataDefined bool
+
+        init(dataDefined bool) {
+            this.dataDefined = dataDefined
+        }
+
+        override prop FixableDiagnosticIds System
+            .Collections
+            .Immutable
+            .ImmutableArray[string] -> System
+            .Collections
+            .Immutable
+            .ImmutableArray
+            .Create("GS0273")
+
+        override prop IsDataDefined bool -> dataDefined
+
+        override func RegisterCodeFixes(context GSharp.Core.CodeAnalysis.CodeFixes.CodeFixContext) {
+            let token = context.Tree.Root.FindToken(context.Diagnostic.Location.Span.Start)!!
+            context.RegisterFix(
+                "Use an undefined name",
+                "test.undefined",
+                GSharp.Core.CodeAnalysis.CodeFixes.Applicability.MaybeIncorrect,
+                (editor SyntaxEditor) -> editor.ReplaceToken(token, "undefinedName")
+            )
+        }
+    }
+
     private func AssertOffered(source string, at string, title string, newText string) {
         let content = LanguageServerTestHelpers.Content(source)
         let uri = DocumentUri.From("file:///a.gs")!!

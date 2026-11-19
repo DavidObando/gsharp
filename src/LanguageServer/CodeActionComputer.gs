@@ -208,6 +208,7 @@ shared class CodeActionComputer {
         let gateOptions = DeltaOptions()
         gateOptions.SyntaxOnly = true
         let baseline = DeltaBaseline.Create(compilation, gateOptions, ct)
+        var fullBaseline DeltaBaseline? = nil
         // First the fixes that survive the gate, their computation and the edit; then the actions,
         // so that the preferred fix is chosen among the fixes that the client gets.
         let survivors = List[Candidate]()
@@ -218,6 +219,15 @@ shared class CodeActionComputer {
             try {
                 if !service.ComputeDelta(baseline, fix, ct).AddedSyntax.IsEmpty {
                     continue
+                }
+                // ADR-0227 Q4: a data-defined fix must pass the full gate: it adds no diagnostic.
+                if fix.IsDataDefined {
+                    if fullBaseline == nil {
+                        fullBaseline = DeltaBaseline.Create(compilation, nil, ct)
+                    }
+                    if !DeltaPolicy.NoNewDiagnostics.Accepts(service.ComputeDelta(fullBaseline, fix, ct)) {
+                        continue
+                    }
                 }
                 changes = fix.GetChanges(ct)
             } catch (ex OperationCanceledException) when ct.IsCancellationRequested {

@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/DavidObando/gsharp/blob/main/src/Analyzers/GSharp.CodeAnalysis.Transformations/transformation-program.schema.json",
+  "title": "G# transformation program (ADR-0227 D6)",
+  "description": "A data-defined code fix: a trigger, a tree pattern with captures, guards over syntax and semantic facts, and edit operations. ProgramJson rejects unknown properties.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "title", "trigger", "pattern", "edits", "applicability"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1, "description": "Stable ID; also the equivalence key of the fixes." },
+    "title": { "type": "string", "minLength": 1 },
+    "trigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["diagnosticIds"],
+      "properties": {
+        "diagnosticIds": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "argumentIndex": { "type": "integer", "minimum": 0 },
+        "argumentEquals": { "type": "string" }
+      }
+    },
+    "pattern": { "$ref": "#/$defs/pattern" },
+    "guards": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["predicate", "capture"],
+        "properties": {
+          "predicate": {
+            "enum": [
+              "textEquals",
+              "kindIs",
+              "sameLine",
+              "symbolKind",
+              "declaredWith",
+              "constructsReferenceType",
+              "typeIs",
+              "isNullable"
+            ]
+          },
+          "capture": { "type": "string" },
+          "other": { "type": "string" },
+          "value": { "type": "string" }
+        }
+      }
+    },
+    "edits": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["op", "capture"],
+        "properties": {
+          "op": { "enum": ["replace", "delete", "insertBefore", "insertAfter"] },
+          "capture": { "type": "string" },
+          "template": { "type": "string", "description": "Text with ${capture} slots; $$ is a literal $." }
+        }
+      }
+    },
+    "applicability": { "enum": ["MachineApplicable", "MaybeIncorrect", "HasPlaceholders", "Unspecified"] },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin"],
+      "properties": {
+        "origin": { "enum": ["HandWritten", "Mined", "Synthesized"] },
+        "source": { "type": "string" },
+        "support": { "type": "integer", "minimum": 0 }
+      }
+    }
+  },
+  "$defs": {
+    "pattern": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "capture": { "type": "string" },
+        "kind": { "type": "string", "description": "A SyntaxKind name." },
+        "text": { "type": "string" },
+        "sameLine": { "type": "boolean" },
+        "next": { "$ref": "#/$defs/pattern" },
+        "previous": { "$ref": "#/$defs/pattern" },
+        "ancestor": { "$ref": "#/$defs/pattern" }
+      }
+    }
+  }
+}
