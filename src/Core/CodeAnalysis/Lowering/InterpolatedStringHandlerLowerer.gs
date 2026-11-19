@@ -60,9 +60,19 @@ internal class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewriter {
     private var counter int32
     private var stringFormat MethodInfo?
 
-    private init(references ReferenceResolver) {
+    private init(
+        references ReferenceResolver,
+        consumerAssemblyName string? = nil,
+        hasExplicitConsumerAssemblyName bool = false
+    ) {
         this.references = references
-        if DefaultInterpolatedStringHandlerShape.TryResolve(references, out var shape, out _) {
+        if DefaultInterpolatedStringHandlerShape.TryResolve(
+            references,
+            out var shape,
+            out _,
+            consumerAssemblyName,
+            hasExplicitConsumerAssemblyName
+        ) {
             this.handler = shape
         }
     }
@@ -757,7 +767,11 @@ internal class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewriter {
         /// being compiled against rather than the SDK hosting `gsc`.
         /// @returns The lowered program.
         func Lower(program BoundProgram, references ReferenceResolver) BoundProgram {
-            let lowerer = InterpolatedStringHandlerLowerer(references)
+            let lowerer = InterpolatedStringHandlerLowerer(
+                references,
+                program.ConsumerAssemblyName,
+                program.HasExplicitConsumerAssemblyName
+            )
             var changed = false
             let functions = ImmutableDictionary.CreateBuilder[FunctionSymbol, BoundBlockStatement]()
             // Issue #4663: deterministic order, never identity-hash order.

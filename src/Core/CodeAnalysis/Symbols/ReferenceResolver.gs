@@ -723,13 +723,22 @@ class ReferenceResolver : IDisposable {
     /// @param hostType The CLR type to project.
     /// @param projected The projected type on success.
     /// @returns `true` when projection succeeded.
-    internal func TryMapClrTypeToReferences(hostType Type?, @NotNullWhen(true) out projected Type?) bool {
+    internal func TryMapClrTypeToReferences(
+        hostType Type?,
+        @NotNullWhen(true) out projected Type?
+    ) bool -> TryMapClrTypeToReferences(hostType, CurrentAssemblyName, out projected)
+
+    internal func TryMapClrTypeToReferences(
+        hostType Type?,
+        consumerAssemblyName string?,
+        @NotNullWhen(true) out projected Type?
+    ) bool {
         projected = nil
         if hostType == nil {
             return false
         }
         try {
-            projected = MapClrTypeToReferences(hostType)
+            projected = ProjectClrType(hostType, consumerAssemblyName)
             return projected != nil
         } catch (ex Exception) when IsProjectionFailure(ex) {
             return false

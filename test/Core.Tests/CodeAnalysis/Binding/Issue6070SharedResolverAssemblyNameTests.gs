@@ -499,6 +499,68 @@ public func Echo(x string?) string? -> x
         Assert.True(hasEchoNullableAttr)
     }
 
+    @Fact
+    func InterpolatedStringHandlerLowering_UsesCompilationAssemblyNameOverResolverName() {
+        using let internalHandler = CSharpFixture(`using System.Runtime.CompilerServices;
+[assembly: InternalsVisibleTo("Friend")]
+namespace System.Runtime.CompilerServices {
+    internal struct DefaultInterpolatedStringHandler {
+        private string _result;
+        public DefaultInterpolatedStringHandler(int literalLength, int formattedCount) { _result = ""; }
+        public void AppendLiteral(string value) { _result += value; }
+        public void AppendFormatted<T>(T value) { _result += value?.ToString(); }
+        public string ToStringAndClear() => _result;
+    }
+}`, assemblyName: "FriendOnlyHandler")
+        using let resolver = ReferenceResolver.WithReferences([]string{internalHandler.AssemblyPath})
+        resolver.CurrentAssemblyName = "Stranger"
+        let source = `package Probe
+public func Format(v int32) string -> "v=$v"
+`
+        let friend = Compilation(resolver, SyntaxTree.Parse(SourceText.From(source, "friend.gs"))){
+            AssemblyName = "Friend"
+        }
+        let stranger = Compilation(resolver, SyntaxTree.Parse(SourceText.From(source, "stranger.gs"))){
+            AssemblyName = "Stranger"
+        }
+        using let friendPe = MemoryStream()
+        let friendEmit = friend.Emit(friendPe, nil, nil, assemblyName: "Friend")
+        Assert.True(friendEmit.Success, Describe(friendEmit.Diagnostics))
+        using let strangerPe = MemoryStream()
+        let strangerEmit = stranger.Emit(strangerPe, nil, nil, assemblyName: "Stranger")
+        Assert.True(strangerEmit.Success, Describe(strangerEmit.Diagnostics))
+
+        friendPe.Position = 0
+        using let friendReader = PEReader(friendPe)
+        let friendMd = friendReader.GetMetadataReader()
+        let friendHandlerScopes = friendMd
+            .TypeReferences
+            .Select((h TypeReferenceHandle) -> friendMd.GetTypeReference(h))
+            .Where((tr TypeReference) -> friendMd.GetString(tr.Name) == "DefaultInterpolatedStringHandler")
+            .Select(
+            (tr TypeReference) -> friendMd.GetString(
+                friendMd.GetAssemblyReference(cast[AssemblyReferenceHandle](tr.ResolutionScope)).Name
+            )
+        )
+            .ToArray()
+        Assert.Equal("FriendOnlyHandler", Assert.Single(friendHandlerScopes))
+
+        strangerPe.Position = 0
+        using let strangerReader = PEReader(strangerPe)
+        let strangerMd = strangerReader.GetMetadataReader()
+        let strangerHandlerScopes = strangerMd
+            .TypeReferences
+            .Select((h TypeReferenceHandle) -> strangerMd.GetTypeReference(h))
+            .Where((tr TypeReference) -> strangerMd.GetString(tr.Name) == "DefaultInterpolatedStringHandler")
+            .Select(
+            (tr TypeReference) -> strangerMd.GetString(
+                strangerMd.GetAssemblyReference(cast[AssemblyReferenceHandle](tr.ResolutionScope)).Name
+            )
+        )
+            .ToArray()
+        Assert.NotEqual("FriendOnlyHandler", Assert.Single(strangerHandlerScopes))
+    }
+
     shared {
         private const SharedLibrarySource string = `using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("Friend")]
