@@ -145,8 +145,7 @@ public static class Paths
     /// the accepted exception-type compatibility limit recorded in ADR-0115.
     @Fact
     func NullForgivingOperator_FollowsTheContextualSinkPolicy() {
-        let printed = TranslateSource(NullForgivingSource)
-        TranslationTestValidation.AssertSourceNullableKindRejection(printed, "T")
+        let printed = Translate(NullForgivingSource)
         Assert.Contains("func NullableSink() object? -> Pick(false)", printed, StringComparison.Ordinal)
         Assert.DoesNotContain("func NullableSink() object? -> Pick(false)!!", printed, StringComparison.Ordinal)
         Assert.Contains("prop NullableProperty object?", printed, StringComparison.Ordinal)
@@ -155,8 +154,9 @@ public static class Paths
         Assert.DoesNotContain("let result object? = value!!", printed, StringComparison.Ordinal)
         Assert.Contains("return value!!", printed, StringComparison.Ordinal)
         Assert.Contains("func NullableValue(value int32?) int32 -> value!!", printed, StringComparison.Ordinal)
-        Assert.Contains("func Generic[T](value T?) T -> value!!", printed, StringComparison.Ordinal)
-        let _ = Translate(KnownReferenceNullForgivingSource)
+        Assert.Contains("func Generic[T](value T) T -> value!!", printed, StringComparison.Ordinal)
+        let supported = Translate(KnownReferenceNullForgivingSource)
+        Assert.Contains("func Generic[T class](value T?) T -> value!!", supported, StringComparison.Ordinal)
     }
 
     /// A genuinely nil value reaches a nullable sink unchanged. This is the

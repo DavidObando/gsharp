@@ -876,11 +876,10 @@ partial class CSharpToGSharpTranslator {
                 // context (Avalonia x:Name fields are the common case) retain
                 // C#'s ability to hold/test null when translated as a standalone
                 // generated partial part.
-                if this.widenObliviousReferenceFields &&
-                    symbol
-                    ?.Type
-                    ?.IsReferenceType == true &&
-                    symbol
+                if this.widenObliviousReferenceFields && CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(
+                    symbol?.Type
+                ) &&
+                    symbol!!
                     .Type
                     .NullableAnnotation == Microsoft
                     .CodeAnalysis
@@ -2594,6 +2593,13 @@ partial class CSharpToGSharpTranslator {
                 // maybe-null ELEMENT renders `[]T?` — `Command.Arguments`,
                 // written `[uri, range.Start]` with `uri` a `string?`.
                 type = this.PromoteArrayElementIfGeneratedNullElement(type, symbol)
+            }
+            if usesExplicitInterfacePropertyClause &&
+                type != nil &&
+                type.IsNullable &&
+                this
+                .TryGetErasedExplicitInterfacePropertySlotType(symbol!!, node.GetLocation(), out var explicitSlotType) {
+                type = explicitSlotType
             }
             // Issue #1907: register a synthesized backing field BEFORE mapping the
             // accessor bodies below, so a `field` reference inside them (bound via

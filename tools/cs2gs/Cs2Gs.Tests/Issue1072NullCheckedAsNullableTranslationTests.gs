@@ -254,13 +254,8 @@ namespace Demo
         public T? GetChild<T>() where T : IBox => default;
     }
 }`
-        let printed = TranslateUnitSource(source)
-        Assert.Contains("GetChild[T IBox]() T?", printed)
-        let rejected = EmittedOracle.Evaluate(printed)
-        let error = Assert.Single(rejected.Diagnostics.Where((d GSharp.Core.CodeAnalysis.Diagnostic) -> d.IsError))
-        Assert.Equal("GS0641", error.Id)
-        Assert.Equal(printed.IndexOf("T?", StringComparison.Ordinal) + 1, error.Location.Span.Start)
-        Assert.Equal(1, error.Location.Span.Length)
+        let printed = TranslateUnit(source)
+        Assert.Contains("GetChild[T IBox]() T", printed)
         let supported = TranslateUnit(source.Replace("where T : IBox", "where T : class, IBox"))
         Assert.Contains("() T?", supported, StringComparison.Ordinal)
     }

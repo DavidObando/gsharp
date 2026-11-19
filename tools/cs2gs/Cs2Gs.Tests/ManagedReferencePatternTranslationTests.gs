@@ -1287,21 +1287,22 @@ public class Probe {
         let text = Translate(source)
         Assert.Contains("recordItem!!.Borrow()", text, StringComparison.Ordinal)
         Assert.Contains("boxItem!!.Borrow()", text, StringComparison.Ordinal)
-        Assert.Contains("nullableItem!!.Borrow()", text, StringComparison.Ordinal)
-        let rejected = EmittedOracle.Evaluate(
+        Assert.Contains("nullableItem.Borrow()", text, StringComparison.Ordinal)
+        Assert.DoesNotContain("nullableItem!!.Borrow()", text, StringComparison.Ordinal)
+        let unconstrainedResult = EmittedOracle.Evaluate(
             text + "\nProbe.Run()",
             []string{typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location}
         )
-        let error = Assert.Single(rejected.Diagnostics.Where((d GSharp.Core.CodeAnalysis.Diagnostic) -> d.IsError))
-        Assert.Equal("GS0641", error.Id)
-        Assert.Equal(text.IndexOf("T?", StringComparison.Ordinal) + 1, error.Location.Span.Start)
-        Assert.Equal(1, error.Location.Span.Length)
+        Assert.Empty(unconstrainedResult.Diagnostics)
+        Assert.Null(unconstrainedResult.UnhandledException)
+        Assert.Equal(42, unconstrainedResult.Value)
         let supported = Translate(
             source.Replace(
                 "record NullableHolder<T>(T? First, int Second);",
                 "record NullableHolder<T>(T? First, int Second) where T : class;"
             )
         )
+        Assert.Contains("nullableItem!!.Borrow()", supported, StringComparison.Ordinal)
         let result = EmittedOracle.Evaluate(
             supported + "\nProbe.Run()",
             []string{typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location}

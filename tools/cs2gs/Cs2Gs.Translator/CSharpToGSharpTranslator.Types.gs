@@ -638,6 +638,7 @@ partial class CSharpToGSharpTranslator {
             if this.TryGetManagedReferenceArrayProjectedMethod(creation, out var projectedConstructor) {
                 typeSymbol = projectedConstructor!!.ContainingType
             }
+            typeSymbol = this.TryProjectErasedGenericType(this.ResolveValueSink(creation), typeSymbol) ?? typeSymbol
             var type GTypeReference? = if typeSymbol != nil {
                 this.typeMapper.Map(typeSymbol, this.context, creation.GetLocation())
             } else {
@@ -840,7 +841,7 @@ partial class CSharpToGSharpTranslator {
             node Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax
         ) GTypeReference? {
             let resultType ITypeSymbol? = this.context.GetTypeInfo(node).Type
-            if !(resultType != nil && resultType.IsReferenceType == true) {
+            if !CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(resultType) {
                 return nil
             }
             let mapped GTypeReference? = this.typeMapper.Map(resultType, this.context, node.GetLocation())

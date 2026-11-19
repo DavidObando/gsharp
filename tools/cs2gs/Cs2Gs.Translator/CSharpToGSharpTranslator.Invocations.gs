@@ -722,7 +722,9 @@ partial class CSharpToGSharpTranslator {
                 this.context,
                 conditionalAccess.GetLocation()
             )
-            if !nullableType!!.IsNullable {
+            if !nullableType!!.IsNullable && CSharpTypeMapper.CanAnnotateTypeParameterNullableInGSharp(
+                conditionalType
+            ) {
                 nullableType = MakeNullable(nullableType)
             }
             result = ParenthesizedExpression(IfExpression(guard_, call, DefaultValueExpression(nullableType)))
@@ -1556,14 +1558,16 @@ partial class CSharpToGSharpTranslator {
             if (argument.Value is IConversionOperation or IDelegateCreationOperation) ||
                 value is DefaultValueExpression {
                 let temp = this.NewSpillName()
-                this.state.PendingSpillPrologue!!.Add(
-                    LocalDeclarationStatement(
-                        BindingKind.Let,
-                        temp,
-                        this.typeMapper.Map(argument.Parameter!!.Type, this.context, argument.Syntax.GetLocation()),
-                        value
-                    )
-                )
+                let tempType = if this.TryGetEmittedNonNullGenericSlotType(
+                    argument.Parameter,
+                    argument.Syntax.GetLocation(),
+                    out var nonNullSlotType
+                ) {
+                    nonNullSlotType
+                } else {
+                    this.typeMapper.Map(argument.Parameter!!.Type, this.context, argument.Syntax.GetLocation())
+                }
+                this.state.PendingSpillPrologue!!.Add(LocalDeclarationStatement(BindingKind.Let, temp, tempType, value))
                 return IdentifierExpression(temp)
             }
             return this.SpillOperand(value!!, forceNonTrivial: true)
@@ -1600,7 +1604,42 @@ partial class CSharpToGSharpTranslator {
                         "$parameterKind default value of type '${parameter.Type}' has no gsc constant form."
                     )
                 }
-                defaultValue = IdentifierExpression("nil")
+                defaultValue = if legitimateNull && callSyntax != nil && this.TryGetEmittedNonNullGenericSlotType(
+                    parameter,
+                    callSyntax.GetLocation(),
+                    out var nonNullSlotType
+                ) {
+                    cast[GExpression](DefaultValueExpression(nonNullSlotType))
+                } else {
+                    let mappedType GTypeReference? = this.typeMapper.Map(
+                        parameter.Type,
+                        this.context,
+                        callSyntax?.GetLocation() ?? parameter.Locations.FirstOrDefault()
+                    )
+                    let nonNullableValueType = parameter
+                        .Type
+                        .IsValueType &&
+                        parameter
+                        .Type
+                        .OriginalDefinition
+                        ?.SpecialType != SpecialType.System_Nullable_T &&
+                        parameter
+                        .Type
+                        .NullableAnnotation != Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated
+                    if legitimateNull &&
+                        (
+                        nonNullableValueType ||
+                            (parameter.Type is ITypeParameterSymbol && mappedType is not{IsNullable: true})
+                    ) &&
+                        mappedType != nil {
+                        cast[GExpression](DefaultValueExpression(mappedType))
+                    } else {
+                        cast[GExpression](IdentifierExpression("nil"))
+                    }
+                }
             }
             return if coerceToParameterType {
                 this.CoerceMaterializedArgument(defaultValue, parameter.Type, callSyntax!!.GetLocation())
@@ -1681,6 +1720,36 @@ partial class CSharpToGSharpTranslator {
         /// so the statement carries the same suppression as a dropped `!`.
         /// @param argument The C# argument.
         /// @returns `true` when the statement must suppress GS0612.
+        private func ByRefErasedGenericSlotNeedsSuppression(argument ArgumentSyntax) bool {
+            let boundParameter IParameterSymbol? = this.GetArgumentParameter(argument)
+            if boundParameter == nil || !this.TryGetEmittedNonNullGenericSlotType(
+                boundParameter,
+                argument.Expression.GetLocation(),
+                out _
+            ) {
+                return false
+            }
+            let operand = Unparenthesize(argument.Expression)
+            let symbol ISymbol? = this.context.GetSymbolInfo(operand).Symbol
+            let storageType ITypeSymbol? = switch symbol {
+                case local is ILocalSymbol: local.Type
+                case parameter is IParameterSymbol: parameter.Type
+                case field is IFieldSymbol: field.Type
+                case property is IPropertySymbol: property.Type
+                default: (this.context.SemanticModel.GetOperation(operand) as IArrayElementReferenceOperation)?.Type ??
+                    this
+                    .context
+                    .GetTypeInfo(operand)
+                    .Type
+            }
+            return storageType != nil &&
+                (
+                storageType.NullableAnnotation == NullableAnnotation.Annotated || this.IsTranslatorWidenedDeclaration(
+                    symbol
+                )
+            )
+        }
+
         private func FlowProvenByRefArgumentNeedsSuppression(argument ArgumentSyntax) bool {
             if !argument.RefKindKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.RefKeyword) &&
                 !argument
@@ -1920,7 +1989,8 @@ partial class CSharpToGSharpTranslator {
                 (
                 this.DropsByRefNullabilitySuppression(argument) || this.FlowProvenByRefArgumentNeedsSuppression(
                     argument
-                )
+                ) ||
+                    this.ByRefErasedGenericSlotNeedsSuppression(argument)
             ) {
                 // Issues #4422 and #6036: carry a dropped `!`, or a csc flow proof that
                 // gsc does not narrow, across as a statement-scoped suppression of GS0612.
@@ -2172,6 +2242,24 @@ partial class CSharpToGSharpTranslator {
                 !isXunitNullAssertion &&
                 targetParameter is {} nullableTargetParam &&
                 targetType != nil {
+                if this.TryGetEmittedNonNullGenericSlotType(
+                    nullableTargetParam,
+                    argument.Expression.GetLocation(),
+                    out var nonNullGenericSlotType,
+                    argument.Expression
+                ) {
+                    if IsNullOrSuppressedNull(argument.Expression) {
+                        if translated is not DefaultValueExpression {
+                            translated = DefaultValueExpression(nonNullGenericSlotType)
+                        }
+                    } else if !this.SinkInfersTypeFromValue(nullableTargetParam, argument.Expression) &&
+                        !this
+                        .GSharpExpressionIsStaticallyNonNull(argument.Expression, translated) {
+                        translated = ParenthesizedExpression(
+                            BinaryExpression(translated, "??", DefaultValueExpression(nonNullGenericSlotType))
+                        )
+                    }
+                }
                 translated = this.BridgeWidenedImplicitArrayConsumer(
                     argument.Expression,
                     translated,
@@ -2411,6 +2499,9 @@ partial class CSharpToGSharpTranslator {
                 out _
             ) {
                 targetType = paramsElementType
+            }
+            if parameter != nil {
+                targetType = this.TryProjectErasedGenericDelegateType(parameter, targetType) ?? targetType
             }
             invoke = GetDelegateInvokeMethod(targetType)
             return invoke != nil
@@ -2675,6 +2766,13 @@ partial class CSharpToGSharpTranslator {
             }
             return GetLambdaResultExpressions(lambda).Any(
                 (result Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax) -> {
+                    if IsNullOrDefaultLiteral(result) && this.TryGetEmittedNonNullLambdaReturnSlotType(
+                        lambda,
+                        result.GetLocation(),
+                        out _
+                    ) {
+                        return true
+                    }
                     let resultType ITypeSymbol? = this.context.GetTypeInfo(result).Type
                     return resultType != nil &&
                         (
@@ -3050,6 +3148,7 @@ partial class CSharpToGSharpTranslator {
             if this.TryGetManagedReferenceArrayProjectedMethod(creation, out var projectedConstructor) {
                 typeSymbol = projectedConstructor!!.ContainingType
             }
+            typeSymbol = this.TryProjectErasedGenericType(this.ResolveValueSink(creation), typeSymbol) ?? typeSymbol
             var type GTypeReference? = if typeSymbol != nil {
                 this.typeMapper.Map(typeSymbol, this.context, creation.GetLocation())
             } else {
@@ -3311,6 +3410,9 @@ partial class CSharpToGSharpTranslator {
             parameterType ITypeSymbol,
             location Location
         ) GExpression? {
+            if value is DefaultValueExpression {
+                return value
+            }
             if !parameterType.IsReferenceType {
                 return this.CoerceOperandTo(value, parameterType, location)
             }
@@ -4577,18 +4679,20 @@ partial class CSharpToGSharpTranslator {
                     ){IsNullable = namedDelegateRef.IsNullable}
                 }
             }
+            let effectiveCastTargetType GTypeReference? = if cast.Type is NullableTypeSyntax &&
+                !targetType!!.IsNullable &&
+                CSharpTypeMapper.CanAnnotateTypeParameterNullableInGSharp(targetSymbol) {
+                MakeNullable(targetType)
+            } else {
+                targetType
+            }
             if StripParentheses(cast.Expression).IsKind(
                 Microsoft.CodeAnalysis.CSharp.SyntaxKind.NullLiteralExpression
             ) &&
                 (targetSymbol != nil && targetSymbol.IsReferenceType == true || targetType!!.IsNullable) {
                 // Typed null keeps overload selection without an unparseable
                 // conversion such as `[]char(nil)` or `Guid?(nil)`.
-                let defaultType GTypeReference? = if cast.Type is NullableTypeSyntax && !targetType!!.IsNullable {
-                    MakeNullable(targetType)
-                } else {
-                    targetType
-                }
-                return DefaultValueExpression(defaultType)
+                return DefaultValueExpression(effectiveCastTargetType)
             }
             var operand GExpression? = this.TranslateExpression(cast.Expression)
             let conversion = if sourceSymbol == nil || targetSymbol == nil {
@@ -4610,13 +4714,8 @@ partial class CSharpToGSharpTranslator {
                 operand = EnsureNonNullAssertion(operand)
             }
             if conversion.IsBoxing {
-                let boxingTargetType GTypeReference? = if cast.Type is NullableTypeSyntax && !targetType!!.IsNullable {
-                    MakeNullable(targetType)
-                } else {
-                    targetType
-                }
                 let useUnambiguousCast = targetSymbol?.SpecialType != SpecialType.System_Object
-                return ConversionExpression(boxingTargetType, operand, useUnambiguousCast)
+                return ConversionExpression(effectiveCastTargetType, operand, useUnambiguousCast)
             }
             // Preserve explicit class/interface-to-object casts when they
             // supply a surrounding expression's common type, such as
@@ -4627,12 +4726,7 @@ partial class CSharpToGSharpTranslator {
             if targetSymbol?.SpecialType == SpecialType.System_Object &&
                 sourceSymbol != nil &&
                 sourceSymbol.IsReferenceType == true {
-                let objectTargetType GTypeReference? = if cast.Type is NullableTypeSyntax && !targetType!!.IsNullable {
-                    MakeNullable(targetType)
-                } else {
-                    targetType
-                }
-                return ConversionExpression(objectTargetType, operand)
+                return ConversionExpression(effectiveCastTargetType, operand)
             }
             // Issue #3843: a C# reference cast over a NULLABLE operand stays
             // `cast[T](expr)`. It used to lower to the null-preserving safe
@@ -4647,11 +4741,7 @@ partial class CSharpToGSharpTranslator {
             // wrong-type cast from a throw into a nil. `cast[T]` matches C#
             // `(T)x` exactly: nil in → nil out, wrong type → InvalidCastException,
             // static result non-nullable.
-            let conversionTargetType GTypeReference? = if cast.Type is NullableTypeSyntax && !targetType!!.IsNullable {
-                MakeNullable(targetType)
-            } else {
-                targetType
-            }
+            let conversionTargetType GTypeReference? = effectiveCastTargetType
             // Issue #3907: a TUPLE target has no `T(expr)` spelling. That form
             // renders as `(TaskArm, SelectWaiter)(state)`, which G# reads as a
             // call on a parenthesized expression rather than a conversion —
