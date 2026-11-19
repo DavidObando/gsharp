@@ -32,6 +32,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Report `GS0325` at the declaration for bodyless top-level functions, extension functions, receiver-clause operators, and conversion operators without `@DllImport` or `@LibraryImport`, and skip body binding when `Body` is absent so `gsc` exits with diagnostics instead of `GS9998` or emitting an empty method. (Fixes #6116)
+
 - Allow overloaded explicit interface indexers with distinct parameter signatures on the same interface while still reporting `GS0495` for duplicate signatures, and align metadata-only explicit property accessor names with emitted runtime accessors. (Fixes #6125)
 
 - Preserve `ref` and `in` contracts across primitive/value-type extension receivers, non-identifier `in` operands (`in this`, `in x.Value`, `in xs[0]`), and source `ref readonly` parameter declarations and calls in `cs2gs` without copying storage operands. (Fixes #6063, #6052, #6047)
