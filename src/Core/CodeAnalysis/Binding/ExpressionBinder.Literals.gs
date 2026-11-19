@@ -998,7 +998,9 @@ internal partial class ExpressionBinder {
                     $scope.References is {} interpolationRefs && DefaultInterpolatedStringHandlerShape.TryResolve(
                         interpolationRefs,
                         out _,
-                        out _
+                        out _,
+                        $scope.ConsumerAssemblyName,
+                        $scope.HasExplicitConsumerAssemblyName
                     )
                 )
                 if usesIncrementalHandler {

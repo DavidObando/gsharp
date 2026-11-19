@@ -561,6 +561,77 @@ public func Format(v int32) string -> "v=$v"
         Assert.NotEqual("FriendOnlyHandler", Assert.Single(strangerHandlerScopes))
     }
 
+    @Fact
+    func InterpolatedStringBinding_TwoHoleEffectInvalidation_UsesCompilationAssemblyName() {
+        let refDir = typeof(Issue6070SharedResolverAssemblyNameTests)
+            .Assembly
+            .GetCustomAttributes[AssemblyMetadataAttribute]()
+            .Single((attribute AssemblyMetadataAttribute) -> attribute.Key == "NetStandard20ReferenceDirectory")
+            .Value!!
+        Assert.True(Directory.Exists(refDir))
+        let netStandardPaths = Directory.EnumerateFiles(refDir, "*.dll").ToArray()
+        let tempDir = Path.Combine(AppContext.BaseDirectory, "issue6070-handler-${Guid.NewGuid():N}")
+        Directory.CreateDirectory(tempDir)
+        try {
+            let handlerPath = Path.Combine(tempDir, "FriendOnlyNetStandardHandler.dll")
+            let handlerSource = `package System.Runtime.CompilerServices
+@assembly: InternalsVisibleTo("Friend")
+internal struct DefaultInterpolatedStringHandler {
+    private var _result string
+    public init(literalLength int32, formattedCount int32) { _result = "" }
+    public func AppendLiteral(value string) { _result = _result + value }
+    public func AppendFormatted[T](value T) { _result = _result + (value?.ToString() ?? "") }
+    public func ToStringAndClear() string -> _result
+}
+`
+            using let handlerResolver = ReferenceResolver.WithReferences(netStandardPaths)
+            let handlerCompilation = Compilation(
+                handlerResolver,
+                SyntaxTree.Parse(SourceText.From(handlerSource, "handler.gs"))
+            ){IsLibrary = true}
+            {
+                using let stream = File.Create(handlerPath)
+                let handlerEmit = handlerCompilation.Emit(
+                    stream,
+                    pdbStream: nil,
+                    refStream: nil,
+                    assemblyName: "FriendOnlyNetStandardHandler"
+                )
+                Assert.True(handlerEmit.Success, Describe(handlerEmit.Diagnostics))
+            }
+            using let shared = ReferenceResolver.WithReferences(netStandardPaths.Prepend(handlerPath).ToArray())
+            shared.CurrentAssemblyName = "Stranger"
+            let source = `package Probe
+var g string? = "ok"
+class Mutator {
+    public override func ToString() string {
+        g = nil
+        return "mutated"
+    }
+}
+public func Use(m Mutator) int32 {
+    if g != nil {
+        let _ = "${m}-${g.Length}"
+    }
+    return 0
+}
+`
+            let friend = Compilation(shared, SyntaxTree.Parse(SourceText.From(source, "friend.gs"))){
+                AssemblyName = "Friend"
+            }
+            let friendErrors = friend.GetDiagnostics().Where((d Diagnostic) -> d.IsError).ToArray()
+            Assert.Contains(friendErrors, (d Diagnostic) -> d.Id == "GS0158")
+
+            let stranger = Compilation(shared, SyntaxTree.Parse(SourceText.From(source, "stranger.gs"))){
+                AssemblyName = "Stranger"
+            }
+            let strangerErrors = stranger.GetDiagnostics().Where((d Diagnostic) -> d.IsError).ToArray()
+            Assert.Empty(strangerErrors)
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
+
     shared {
         private const SharedLibrarySource string = `using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("Friend")]
