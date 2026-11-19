@@ -16994,7 +16994,7 @@ partial class CSharpToGSharpTranslator {
             return nil
         }
 
-        // Mirrors gsc's RestrictConditionalExit (#6124): exclude call-free array, tuple, and pure-property reads.
+        // Mirrors gsc's RestrictConditionalExit (#6124): exclude call-free array, tuple, enum, and pure-property reads.
         private func ExitedIfConditionNodeMayMutate(node Microsoft.CodeAnalysis.SyntaxNode, symbol ISymbol?) bool {
             if this.NodeRunsStaticTypeInitializer(node) || this.NodeMayWriteReferenceStorage(
                 node,
@@ -17010,6 +17010,25 @@ partial class CSharpToGSharpTranslator {
                 .BracketedArgumentListSyntax {
                 return false
             }
+            if node is SimpleNameSyntax name &&
+                (
+                (name.Parent is MemberAccessExpressionSyntax member && member.Name == name) ||
+                    name.Parent is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .MemberBindingExpressionSyntax ||
+                    (
+                    name.Parent is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .QualifiedNameSyntax qualified &&
+                        qualified.Right == name
+                )
+            ) {
+                return false
+            }
             if node is Microsoft
                 .CodeAnalysis
                 .CSharp
@@ -17021,23 +17040,53 @@ partial class CSharpToGSharpTranslator {
                 .GetOperation(elementAccess) is IArrayElementReferenceOperation {
                 return false
             }
-            if node is MemberAccessExpressionSyntax memberAccess {
+            if node is MemberAccessExpressionSyntax or IdentifierNameSyntax {
                 if this
                     .context
-                    .GetSymbolInfo(memberAccess)
-                    .Symbol is IFieldSymbol{ContainingType: {IsTupleType: true}} {
+                    .GetSymbolInfo(node)
+                    .Symbol is IFieldSymbol field &&
+                    (field.ContainingType?.IsTupleType == true || this.IsSourceSymbol(field)) {
                     return false
                 }
                 if this
                     .context
                     .SemanticModel
-                    .GetOperation(memberAccess) is IPropertyReferenceOperation propertyReference &&
+                    .GetOperation(node) is IPropertyReferenceOperation propertyReference &&
                     !this.AccessorRunsUserCode(propertyReference.Property, propertyReference.Instance?.Type) {
                     return false
                 }
             }
+            if node is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax binary && !this.IsLoweredToCall(
+                binary
+            ) &&
+                (
+                IsNullOrSuppressedNull(binary.Left) ||
+                    IsNullOrSuppressedNull(binary.Right) ||
+                    (this.IsBuiltInPrimitiveOrEnum(binary.Left) && this.IsBuiltInPrimitiveOrEnum(binary.Right))
+            ) {
+                return false
+            }
+            if node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .PrefixUnaryExpressionSyntax prefix &&
+                this.IsBuiltInPrimitiveOrEnum(prefix.Operand) {
+                return false
+            }
+            if node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .PostfixUnaryExpressionSyntax postfix &&
+                this.IsBuiltInPrimitiveOrEnum(postfix.Operand) {
+                return false
+            }
             return true
         }
+
+        private func IsBuiltInPrimitiveOrEnum(expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax) bool ->
+        this.IsBuiltInPrimitive(expression) || this.context.GetTypeInfo(expression).Type?.TypeKind == TypeKind.Enum
 
         // Mirrors gsc's HasMemberStorageWrite (#6124): separate source field and auto-property writes keep facts.
         private func SiblingOperandHasMemberStorageWrite(node Microsoft.CodeAnalysis.SyntaxNode) bool {
@@ -17064,11 +17113,16 @@ partial class CSharpToGSharpTranslator {
             if stripped is not IdentifierNameSyntax && stripped is not MemberAccessExpressionSyntax {
                 return false
             }
+            let symbol ISymbol? = this.context.GetSymbolInfo(stripped).Symbol
+            if symbol == nil {
+                return false
+            }
             let receiver Microsoft
                 .CodeAnalysis
                 .CSharp
                 .Syntax
-                .ExpressionSyntax? = if stripped is MemberAccessExpressionSyntax member {
+                .ExpressionSyntax? = if !symbol.IsStatic &&
+                stripped is MemberAccessExpressionSyntax member {
                 member.Expression
             } else {
                 default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
@@ -17076,7 +17130,7 @@ partial class CSharpToGSharpTranslator {
             if receiver != nil && !this.IsSeparateWriteReceiver(receiver) {
                 return false
             }
-            return switch this.context.GetSymbolInfo(stripped).Symbol {
+            return switch symbol {
                 case field is IFieldSymbol: !field.IsReadOnly && this.IsSourceSymbol(field) &&
                     !ObliviousNullabilityAnalyzer.MayHaveOverlappingFields(field.ContainingType)
                 case property is IPropertySymbol: !property.IsIndexer &&
@@ -17108,6 +17162,8 @@ partial class CSharpToGSharpTranslator {
                 case _ is IdentifierNameSyntax: switch this.context.GetSymbolInfo(stripped).Symbol {
                     case local is ILocalSymbol: local.RefKind == RefKind.None
                     case parameter is IParameterSymbol: parameter.RefKind == RefKind.None
+                    case field is IFieldSymbol: this.IsSourceSymbol(field) &&
+                        !ObliviousNullabilityAnalyzer.MayHaveOverlappingFields(field.ContainingType)
                     default: false
                 }
                 case member is MemberAccessExpressionSyntax: this

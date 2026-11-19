@@ -75,7 +75,16 @@ public class Probe {
 #nullable enable
 using System;
 
+public enum State {
+    None,
+    Done
+}
+
 public class Probe {
+    private static readonly bool StaticFlag = false;
+
+    private bool Flag { get; }
+
     private static bool PlainParams(string? sourceType, string? targetType) {
         if (string.IsNullOrEmpty(sourceType) || string.IsNullOrEmpty(targetType)) {
             return false;
@@ -108,12 +117,58 @@ public class Probe {
         return p.EndsWith("?", StringComparison.Ordinal);
     }
 
+    private bool OutWithQualifiedAutoProp(string? a, out string? p) {
+        p = a;
+        if (p == null || this.Flag) {
+            return false;
+        }
+        return p.EndsWith("?", StringComparison.Ordinal);
+    }
+
+    private bool OutWithUnqualifiedAutoProp(string? a, out string? p) {
+        p = a;
+        if (p == null || Flag) {
+            return false;
+        }
+        return p.EndsWith("?", StringComparison.Ordinal);
+    }
+
+    private static bool OutWithNullableHasValue(string? a, int? n, out string? p) {
+        p = a;
+        if (p == null || n.HasValue) {
+            return false;
+        }
+        return p.EndsWith("?", StringComparison.Ordinal);
+    }
+
+    private static bool OutWithStaticSourceField(string? a, out string? p) {
+        p = a;
+        if (p == null || StaticFlag) {
+            return false;
+        }
+        return p.EndsWith("?", StringComparison.Ordinal);
+    }
+
+    private static bool RefWithEnumCompare(ref string? p, State state) {
+        if (p == null || state == State.Done) {
+            return false;
+        }
+        return p.EndsWith("?", StringComparison.Ordinal);
+    }
+
     public static void Main() {
+        var probe = new Probe();
+        string? refVal = "enum?";
         Console.Write(
             PlainParams("string?", "string") + "|" +
             OutInElseBranch("int?", out _) + "|" +
             OutWithCallFreeNilGuard("bool?", out _) + "|" +
-            OutWithArrayReadNilGuard("char?", new[] { false }, out _));
+            OutWithArrayReadNilGuard("char?", new[] { false }, out _) + "|" +
+            probe.OutWithQualifiedAutoProp("byte?", out _) + "|" +
+            probe.OutWithUnqualifiedAutoProp("short?", out _) + "|" +
+            OutWithNullableHasValue("long?", null, out _) + "|" +
+            OutWithStaticSourceField("float?", out _) + "|" +
+            RefWithEnumCompare(ref refVal, State.None));
     }
 }
 `
@@ -126,7 +181,7 @@ public class Probe {
             verifyAssembly: (assembly string) -> {
                 Issue5585ReadonlyNullArgumentTests.VerifyStrictIL(assembly)
             },
-            expectedOutput: "True|True|True|True"
+            expectedOutput: "True|True|True|True|True|True|True|True|True"
         )
     }
 
@@ -196,9 +251,15 @@ public class Probe {
 using System;
 using System.Collections.Generic;
 
+public struct Counters {
+    public static int Value;
+    public int InstanceValue;
+}
+
 public class Probe {
     private readonly string? entryType;
     private int count;
+    private Counters counter;
 
     public Probe(string? entryType) {
         this.entryType = entryType;
@@ -228,12 +289,28 @@ public class Probe {
         return 0;
     }
 
+    public int StaticStructFieldWriteInSiblingOperand() {
+        if (this.entryType != null && (Counters.Value = 1) == 1) {
+            return this.entryType.Length;
+        }
+        return 0;
+    }
+
+    public int UnqualifiedStructFieldWriteInSiblingOperand() {
+        if (this.entryType != null && (counter.InstanceValue = 1) == 1) {
+            return this.entryType.Length;
+        }
+        return 0;
+    }
+
     public static void Main() {
         Console.Write(
             new Probe("abc").DirectInAnd() + "|" +
             new Probe("abc").CrossOperandCallBeforeIfBody() + "|" +
             new Probe("abc").ChainedAndCall() + "|" +
-            new Probe("abc").SeparateFieldWriteInSiblingOperand());
+            new Probe("abc").SeparateFieldWriteInSiblingOperand() + "|" +
+            new Probe("abc").StaticStructFieldWriteInSiblingOperand() + "|" +
+            new Probe("abc").UnqualifiedStructFieldWriteInSiblingOperand());
     }
 }
 `
@@ -246,7 +323,7 @@ public class Probe {
             verifyAssembly: (assembly string) -> {
                 Issue5585ReadonlyNullArgumentTests.VerifyStrictIL(assembly)
             },
-            expectedOutput: "True|3|True|3"
+            expectedOutput: "True|3|True|3|3|3"
         )
     }
 }
