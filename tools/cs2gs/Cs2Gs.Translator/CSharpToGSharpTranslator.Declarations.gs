@@ -1947,15 +1947,21 @@ partial class CSharpToGSharpTranslator {
                     if explicitIfaceType == nil {
                         continue
                     }
-                    let key = "${GSharpPrinter.RenderTypeReference(explicitIfaceType)}:${ifaceProp.Name}:${ifaceProp.Parameters.Length}"
-                    if !seenBridges.Add(key) {
-                        continue
-                    }
                     let implName = this.EmittedName(impl, impl.Name)
                     let indexerParams = if ifaceProp.IsIndexer {
                         ifaceProp.Parameters.Select((p IParameterSymbol) -> this.MapParameter(p, nil)).ToList()
                     } else {
                         List[Parameter]()
+                    }
+                    let paramKey = string.Join(
+                        ",",
+                        indexerParams.Select(
+                            (p Parameter) -> "${p.RefKind}:${GSharpPrinter.RenderTypeReference(p.Type)}"
+                        )
+                    )
+                    let key = "${GSharpPrinter.RenderTypeReference(explicitIfaceType)}:${ifaceProp.Name}($paramKey)"
+                    if !seenBridges.Add(key) {
+                        continue
                     }
                     let targetAccess GExpression = if ifaceProp.IsIndexer {
                         let args = indexerParams.Select(

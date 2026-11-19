@@ -26423,6 +26423,17 @@ partial class CSharpToGSharpTranslator {
             if enclosingMember == nil {
                 return false
             }
+            if enclosingMember is IMethodSymbol{IsAsync: true} asyncMethod {
+                let awaitedType = GetEffectiveReturnType(asyncMethod.ReturnType, isAsync: true)
+                if awaitedType == nil || !CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(awaitedType) ||
+                    awaitedType.NullableAnnotation == Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated {
+                    return false
+                }
+                return !this.AwaitedReturnIsTainted(awaitedType, asyncMethod)
+            }
             // The member's return type must be reference-typed and NOT promoted
             // to nullable — confirming the analyzer deliberately kept it non-null.
             let returnType ITypeSymbol? = switch enclosingMember {

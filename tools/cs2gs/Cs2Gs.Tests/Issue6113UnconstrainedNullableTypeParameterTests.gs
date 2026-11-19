@@ -813,6 +813,22 @@ public sealed class NonNullModal : IModal<string>
     public string Result => "always";
 }
 
+public interface IIntIndexer<T>
+{
+    T? this[int key] { get; }
+}
+
+public interface IStringIndexer<T>
+{
+    T? this[string key] { get; }
+}
+
+public sealed class StringIndexers : IIntIndexer<string>, IStringIndexer<string>
+{
+    public string? this[int key] => key > 0 ? "pos" : null;
+    public string? this[string key] => key == "hit" ? "found" : null;
+}
+
 public static class Probe
 {
     public static string Run()
@@ -832,6 +848,8 @@ public static class Probe
         IMutableBox<string> mutableIface = mutable;
         mutableIface.Value = "via-iface";
         IModal<string> nn = new NonNullModal();
+        IIntIndexer<string> intIdx = new StringIndexers();
+        IStringIndexer<string> strIdx = new StringIndexers();
         return string.Join(
             "|",
             c1.Result ?? "nil",
@@ -844,7 +862,11 @@ public static class Probe
             nnConstraint.Result ?? "nil",
             mutable.Value ?? "nil",
             mutableIface.Value ?? "nil",
-            nn.Result);
+            nn.Result,
+            intIdx[0] ?? "nil",
+            intIdx[1] ?? "nil",
+            strIdx["miss"] ?? "nil",
+            strIdx["hit"] ?? "nil");
     }
 }`
         let printed = Translate(source)
@@ -856,10 +878,61 @@ public static class Probe
         Assert.Contains("class NotNullConstraintModal : INotNullModal[string]", printed, StringComparison.Ordinal)
         Assert.Contains("class MutableStringBox : IMutableBox[string]", printed, StringComparison.Ordinal)
         Assert.Contains("class NonNullModal : IModal[string]", printed, StringComparison.Ordinal)
+        Assert.Contains(
+            "class StringIndexers : IIntIndexer[string], IStringIndexer[string]",
+            printed,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("prop (IIntIndexer[string]) this[key int32] string", printed, StringComparison.Ordinal)
+        Assert.Contains("prop (IStringIndexer[string]) this[key string] string", printed, StringComparison.Ordinal)
         Assert.Equal(
-            "nil|ok|nil|ok|nil|exp|drv|nil|via-iface|via-iface|always",
+            "nil|ok|nil|ok|nil|exp|drv|nil|via-iface|via-iface|always|nil|pos|nil|found",
             CompileAndRun(printed, "Demo.Probe.Run()")
         )
+    }
+
+    @Fact
+    func AsyncMethodForwardingPromotedNullableCall_DoesNotAssertNonNull() {
+        const source = `#nullable disable
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+
+namespace Demo;
+
+public sealed class Config
+{
+    public List<string> Items;
+    public IEnumerable<string> GetSorted() => Items?.OrderBy(x => x).ToList();
+}
+
+public sealed class Service
+{
+    private Config config;
+    public async Task<IEnumerable<string>> GetRegisteredAsync()
+    {
+        if (config is null)
+        {
+            await Task.Yield();
+            config = new Config();
+        }
+        return config.GetSorted();
+    }
+}
+
+public static class Probe
+{
+    public static string Run()
+    {
+        var svc = new Service();
+        var items = svc.GetRegisteredAsync().GetAwaiter().GetResult();
+        return items is null ? "nil" : "some";
+    }
+}`
+        let printed = Translate(source)
+        Assert.DoesNotContain("GetSorted()!!", printed, StringComparison.Ordinal)
+        Assert.Equal("nil", CompileAndRun(printed, "Demo.Probe.Run()"))
     }
 
     shared {
