@@ -116,6 +116,55 @@ class CodeFixService {
         return result.ToImmutable()
     }
 
+    /// Computes the diagnostic delta of a fix over the whole compilation (ADR-0227 D4).
+    /// @param compilation The compilation before the fix. It is not changed.
+    /// @param fix The fix.
+    /// @param options The options; `null` uses the defaults.
+    /// @param cancellationToken Cancels the check, including the bind of the snapshot compilation.
+    /// @returns The delta.
+    func ComputeDelta(
+        compilation Compilation,
+        fix CodeFix,
+        options DeltaOptions? = nil,
+        cancellationToken CancellationToken = default(CancellationToken)
+    ) DiagnosticDelta -> ComputeDelta(
+        DeltaBaseline.Create(compilation, options, cancellationToken),
+        fix,
+        cancellationToken
+    )
+
+    /// Computes the diagnostic delta of a fix against a baseline that the checks of one request share.
+    /// @param baseline The diagnostics before the fix.
+    /// @param fix The fix.
+    /// @param cancellationToken Cancels the check, including the bind of the snapshot compilation.
+    /// @returns The delta.
+    func ComputeDelta(
+        baseline DeltaBaseline,
+        fix CodeFix,
+        cancellationToken CancellationToken = default(CancellationToken)
+    ) DiagnosticDelta {
+        ArgumentNullException.ThrowIfNull(baseline)
+        ArgumentNullException.ThrowIfNull(fix)
+        return ComputeDelta(baseline, fix.GetChanges(cancellationToken), fix.Diagnostics, cancellationToken)
+    }
+
+    /// Computes the diagnostic delta of a complete edit set, such as the result of a FixAll.
+    /// @param baseline The diagnostics before the edit.
+    /// @param changes The changes of every edited document.
+    /// @param targets The diagnostics that the edit is for.
+    /// @param cancellationToken Cancels the check, including the bind of the snapshot compilation.
+    /// @returns The delta.
+    func ComputeDelta(
+        baseline DeltaBaseline,
+        changes FixChanges,
+        targets ImmutableArray[Diagnostic],
+        cancellationToken CancellationToken = default(CancellationToken)
+    ) DiagnosticDelta {
+        ArgumentNullException.ThrowIfNull(baseline)
+        ArgumentNullException.ThrowIfNull(changes)
+        return DiagnosticDeltaCalculator.Compute(baseline, changes, targets, cancellationToken)
+    }
+
     private func Collect(
         compilation Compilation,
         tree SyntaxTree,

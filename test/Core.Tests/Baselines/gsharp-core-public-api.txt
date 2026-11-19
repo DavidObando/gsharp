@@ -354,6 +354,7 @@ type class GSharp.Core.CodeAnalysis.Compilation.Compilation : System.Object
   method public GSharp.Core.CodeAnalysis.Compilation.Compilation RemoveSyntaxTrees(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree[] trees)
   method public GSharp.Core.CodeAnalysis.Compilation.Compilation ReplaceSyntaxTree(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree oldTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxTree newTree)
   method public GSharp.Core.CodeAnalysis.Compilation.Compilation WithReplacedSyntaxTree(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree oldTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxTree newTree)
+  method public GSharp.Core.CodeAnalysis.Compilation.Compilation WithReplacedSyntaxTrees(System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxTree> oldTrees, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxTree> newTrees)
   method public GSharp.Core.CodeAnalysis.Compilation.CompilationWorkBudget get_WorkBudget()
   method public GSharp.Core.CodeAnalysis.Compilation.EmitResult Emit()
   method public GSharp.Core.CodeAnalysis.Compilation.EmitResult Emit(System.IO.Stream peStream)
@@ -3338,12 +3339,60 @@ type sealed class GSharp.Core.CodeAnalysis.CodeFixes.CodeFixRegistry : System.Ob
   property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.CodeFixes.GSharpCodeFixProvider> Providers { get; }
 type sealed class GSharp.Core.CodeAnalysis.CodeFixes.CodeFixService : System.Object
   method public GSharp.Core.CodeAnalysis.CodeFixes.CodeFixRegistry get_Registry()
+  method public GSharp.Core.CodeAnalysis.CodeFixes.DiagnosticDelta ComputeDelta(GSharp.Core.CodeAnalysis.CodeFixes.DeltaBaseline baseline, GSharp.Core.CodeAnalysis.CodeFixes.CodeFix fix, System.Threading.CancellationToken cancellationToken = null)
+  method public GSharp.Core.CodeAnalysis.CodeFixes.DiagnosticDelta ComputeDelta(GSharp.Core.CodeAnalysis.CodeFixes.DeltaBaseline baseline, GSharp.Core.CodeAnalysis.CodeFixes.FixChanges changes, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> targets, System.Threading.CancellationToken cancellationToken = null)
+  method public GSharp.Core.CodeAnalysis.CodeFixes.DiagnosticDelta ComputeDelta(GSharp.Core.CodeAnalysis.Compilation.Compilation compilation, GSharp.Core.CodeAnalysis.CodeFixes.CodeFix fix, GSharp.Core.CodeAnalysis.CodeFixes.DeltaOptions options = null, System.Threading.CancellationToken cancellationToken = null)
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.CodeFixes.CodeFix> GetFixes(GSharp.Core.CodeAnalysis.Compilation.Compilation compilation, GSharp.Core.CodeAnalysis.Diagnostic diagnostic, System.Threading.CancellationToken cancellationToken = null)
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.CodeFixes.CodeFix> GetFixes(GSharp.Core.CodeAnalysis.Compilation.Compilation compilation, GSharp.Core.CodeAnalysis.Diagnostic diagnostic, out System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> providerDiagnostics, System.Threading.CancellationToken cancellationToken = null)
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.CodeFixes.CodeFix> GetFixes(GSharp.Core.CodeAnalysis.Compilation.Compilation compilation, GSharp.Core.CodeAnalysis.Syntax.SyntaxTree tree, GSharp.Core.CodeAnalysis.Text.TextSpan span, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> additionalDiagnostics, out System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> providerDiagnostics, System.Threading.CancellationToken cancellationToken = null)
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxTree> Apply(GSharp.Core.CodeAnalysis.CodeFixes.CodeFix fix, System.Threading.CancellationToken cancellationToken = null)
   method public Void .ctor(GSharp.Core.CodeAnalysis.CodeFixes.CodeFixRegistry registry)
   property public GSharp.Core.CodeAnalysis.CodeFixes.CodeFixRegistry Registry { get; }
+type sealed class GSharp.Core.CodeAnalysis.CodeFixes.DeltaBaseline : System.Object
+  method public GSharp.Core.CodeAnalysis.CodeFixes.DeltaOptions get_Options()
+  method public GSharp.Core.CodeAnalysis.Compilation.Compilation get_Compilation()
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> get_Diagnostics()
+  method public static GSharp.Core.CodeAnalysis.CodeFixes.DeltaBaseline Create(GSharp.Core.CodeAnalysis.Compilation.Compilation compilation, GSharp.Core.CodeAnalysis.CodeFixes.DeltaOptions options = null, System.Threading.CancellationToken cancellationToken = null)
+  property public GSharp.Core.CodeAnalysis.CodeFixes.DeltaOptions Options { get; }
+  property public GSharp.Core.CodeAnalysis.Compilation.Compilation Compilation { get; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> Diagnostics { get; }
+type sealed class GSharp.Core.CodeAnalysis.CodeFixes.DeltaOptions : System.Object
+  method public Boolean get_StopOnNewSyntaxError()
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Analyzers.GSharpDiagnosticAnalyzer> get_Analyzers()
+  method public System.Func`2<GSharp.Core.CodeAnalysis.Diagnostic, GSharp.Core.CodeAnalysis.Diagnostic> get_DiagnosticFilter()
+  method public Void .ctor()
+  method public Void set_Analyzers(System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Analyzers.GSharpDiagnosticAnalyzer> value)
+  method public Void set_DiagnosticFilter(System.Func`2<GSharp.Core.CodeAnalysis.Diagnostic, GSharp.Core.CodeAnalysis.Diagnostic> value)
+  method public Void set_StopOnNewSyntaxError(Boolean value)
+  property public Boolean StopOnNewSyntaxError { get; set; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Analyzers.GSharpDiagnosticAnalyzer> Analyzers { get; set; }
+  property public System.Func`2<GSharp.Core.CodeAnalysis.Diagnostic, GSharp.Core.CodeAnalysis.Diagnostic> DiagnosticFilter { get; set; }
+type sealed class GSharp.Core.CodeAnalysis.CodeFixes.DeltaPolicy : System.Object
+  field public static readonly GSharp.Core.CodeAnalysis.CodeFixes.DeltaPolicy NetImprovement
+  field public static readonly GSharp.Core.CodeAnalysis.CodeFixes.DeltaPolicy NoNewDiagnostics
+  field public static readonly GSharp.Core.CodeAnalysis.CodeFixes.DeltaPolicy PhaseAware
+  field public static readonly GSharp.Core.CodeAnalysis.CodeFixes.DeltaPolicy RemovesTargetNoNewErrors
+  method public Boolean Accepts(GSharp.Core.CodeAnalysis.CodeFixes.DiagnosticDelta delta)
+  method public String get_Name()
+  method public virtual override String ToString()
+  property public String Name { get; }
+type sealed class GSharp.Core.CodeAnalysis.CodeFixes.DiagnosticDelta : System.Object
+  method public Boolean get_ParseOnly()
+  method public Boolean get_TargetRemoved()
+  method public Boolean get_TargetsAreSyntax()
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> get_Added()
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> get_AddedSyntax()
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> get_Persisting()
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> get_Removed()
+  method public System.TimeSpan get_Elapsed()
+  property public Boolean ParseOnly { get; }
+  property public Boolean TargetRemoved { get; }
+  property public Boolean TargetsAreSyntax { get; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> Added { get; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> AddedSyntax { get; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> Persisting { get; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> Removed { get; }
+  property public System.TimeSpan Elapsed { get; }
 type sealed class GSharp.Core.CodeAnalysis.CodeFixes.DocumentChanges : System.Object
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxTree get_Tree()
   method public GSharp.Core.CodeAnalysis.Text.SourceText GetChangedText()
