@@ -62,6 +62,9 @@ public class Probe {
                 Assert.Contains("sourceType!!.Substring", printed, StringComparison.Ordinal)
                 Assert.Contains("sourceType!!.Length", printed, StringComparison.Ordinal)
             },
+            verifyAssembly: (assembly string) -> {
+                Issue5585ReadonlyNullArgumentTests.VerifyStrictIL(assembly)
+            },
             expectedOutput: "True|False|True|True|False"
         )
     }
@@ -97,11 +100,20 @@ public class Probe {
         return sourceType.EndsWith("?", StringComparison.Ordinal);
     }
 
+    private static bool OutWithArrayReadNilGuard(string? a, bool[] flags, out string? p) {
+        p = a;
+        if (p == null || flags[0]) {
+            return false;
+        }
+        return p.EndsWith("?", StringComparison.Ordinal);
+    }
+
     public static void Main() {
         Console.Write(
             PlainParams("string?", "string") + "|" +
             OutInElseBranch("int?", out _) + "|" +
-            OutWithCallFreeNilGuard("bool?", out _));
+            OutWithCallFreeNilGuard("bool?", out _) + "|" +
+            OutWithArrayReadNilGuard("char?", new[] { false }, out _));
     }
 }
 `
@@ -111,7 +123,10 @@ public class Probe {
                 Issue5585ReadonlyNullArgumentTests.AssertClean(printed)
                 Assert.DoesNotContain("!!", printed, StringComparison.Ordinal)
             },
-            expectedOutput: "True|True|True"
+            verifyAssembly: (assembly string) -> {
+                Issue5585ReadonlyNullArgumentTests.VerifyStrictIL(assembly)
+            },
+            expectedOutput: "True|True|True|True"
         )
     }
 
@@ -167,6 +182,9 @@ public class Probe {
                 Issue5585ReadonlyNullArgumentTests.AssertClean(printed)
                 Assert.Contains("this.entryType!!.Length", printed, StringComparison.Ordinal)
             },
+            verifyAssembly: (assembly string) -> {
+                Issue5585ReadonlyNullArgumentTests.VerifyStrictIL(assembly)
+            },
             expectedOutput: "True|False|True|0"
         )
     }
@@ -180,6 +198,7 @@ using System.Collections.Generic;
 
 public class Probe {
     private readonly string? entryType;
+    private int count;
 
     public Probe(string? entryType) {
         this.entryType = entryType;
@@ -202,11 +221,19 @@ public class Probe {
         return (this.entryType != null && Check()) && this.entryType.Length > 0;
     }
 
+    public int SeparateFieldWriteInSiblingOperand() {
+        if (this.entryType != null && (this.count = 1) == 1) {
+            return this.entryType.Length;
+        }
+        return 0;
+    }
+
     public static void Main() {
         Console.Write(
             new Probe("abc").DirectInAnd() + "|" +
             new Probe("abc").CrossOperandCallBeforeIfBody() + "|" +
-            new Probe("abc").ChainedAndCall());
+            new Probe("abc").ChainedAndCall() + "|" +
+            new Probe("abc").SeparateFieldWriteInSiblingOperand());
     }
 }
 `
@@ -216,7 +243,10 @@ public class Probe {
                 Issue5585ReadonlyNullArgumentTests.AssertClean(printed)
                 Assert.DoesNotContain("!!", printed, StringComparison.Ordinal)
             },
-            expectedOutput: "True|3|True"
+            verifyAssembly: (assembly string) -> {
+                Issue5585ReadonlyNullArgumentTests.VerifyStrictIL(assembly)
+            },
+            expectedOutput: "True|3|True|3"
         )
     }
 }
