@@ -281,6 +281,10 @@ class DiagnosticDelta {
 class DeltaOptions {
     prop Analyzers ImmutableArray[GSharpDiagnosticAnalyzer]   // run before and after; default empty
     prop StopOnNewSyntaxError bool      // default true
+    // The host's severity policy (/nowarn, /warnaserror, .editorconfig), applied to every
+    // diagnostic before and after: it returns the diagnostic with its effective severity, or
+    // null to drop it. Default: the identity. Core applies source suppressions itself.
+    prop DiagnosticFilter (Diagnostic) -> Diagnostic?
 }
 ```
 
