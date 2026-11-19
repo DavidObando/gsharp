@@ -801,23 +801,18 @@ namespace Demo
 }`
         let compilation = CompileFiles("App", nil, ("Exts.cs", source))
         let printed = TranslateFile(compilation, "Exts.cs", []CSharpCompilation{compilation})
-        let rejected = EmittedOracle.Evaluate(printed)
-        let error = Assert.Single(rejected.Diagnostics.Where((d GSharp.Core.CodeAnalysis.Diagnostic) -> d.IsError))
-        Assert.Equal("GS0641", error.Id)
-        let annotation = printed.LastIndexOf(
-            "T?",
-            printed.IndexOf("ExtU", StringComparison.Ordinal),
-            StringComparison.Ordinal
+        Assert.Contains("ExtU[T]() string", printed, StringComparison.Ordinal)
+        Assert.Equal(
+            "null null null null null null/null nulltaken",
+            CompileAndRun([]string{printed}, "Demo.P.Run()").Trim()
         )
-        Assert.True(annotation >= 0)
-        Assert.Equal(annotation + 1, error.Location.Span.Start)
-        Assert.Equal(1, error.Location.Span.Length)
         let supportedCompilation = CompileFiles(
             "App",
             nil,
             ("Exts.cs", source.Replace("ExtU<T>(this T? x) =>", "ExtU<T>(this T? x) where T : class =>"))
         )
         let supported = TranslateFile(supportedCompilation, "Exts.cs", []CSharpCompilation{supportedCompilation})
+        Assert.Contains("ExtU[T class]() string", supported, StringComparison.Ordinal)
         Assert.Equal(
             "null null null null null null/null nulltaken",
             CompileAndRun([]string{supported}, "Demo.P.Run()").Trim()

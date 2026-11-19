@@ -419,11 +419,8 @@ namespace Demo
         }
     }
 }`
-        let rejected = TranslateEnabled(
-            roundTripOnlyReason: "ADR-0224 rejects source T? with no proven kind.",
-            ("Node.cs", source)
-        )
-        TranslationTestValidation.AssertSourceNullableKindRejection(rejected[0], "T")
+        let unconstrained = TranslateEnabled(("Node.cs", source))
+        Assert.Contains("slot = default(T)", unconstrained[0])
         let printed = TranslateEnabled(("Node.cs", source.Replace("class Node<T>", "class Node<T> where T : class")))
         Assert.Contains("slot = default(T?)", printed[0])
     }

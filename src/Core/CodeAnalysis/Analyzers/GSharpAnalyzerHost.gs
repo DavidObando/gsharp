@@ -13,6 +13,7 @@ import System.Reflection
 import System.Runtime.Loader
 import System.Threading
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.CodeFixes
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Text
 import System.Text
@@ -87,6 +88,51 @@ shared class GSharpAnalyzerHost {
         }
         hostDiagnostics = diagnostics.ToImmutable()
         return analyzers.ToImmutable()
+    }
+
+    /// Loads every assembly in [`analyzerPaths`](paramref) and discovers its code-fix providers
+    /// (ADR-0227 D2): the exported, non-abstract (cref:GSharp.Core.CodeAnalysis.CodeFixes.GSharpCodeFixProvider)
+    /// types with (cref:GSharp.Core.CodeAnalysis.CodeFixes.GSharpCodeFixProviderAttribute). The order is
+    /// the order of the paths, then the full type name (ordinal). An assembly with no provider is
+    /// not an error. Load failures surface as GS9301; Core version mismatches as GS9303.
+    /// @param analyzerPaths Analyzer assembly paths.
+    /// @param hostDiagnostics GS9301/GS9303 diagnostics produced while loading.
+    /// @returns The discovered providers.
+    func LoadCodeFixProviders(
+        analyzerPaths IReadOnlyList[string],
+        out hostDiagnostics ImmutableArray[Diagnostic]
+    ) ImmutableArray[GSharpCodeFixProvider] {
+        let diagnostics = ImmutableArray.CreateBuilder[Diagnostic]()
+        let providers = ImmutableArray.CreateBuilder[GSharpCodeFixProvider]()
+        for path in analyzerPaths {
+            try {
+                let fullPath = Path.GetFullPath(path)
+                let assembly = AnalyzerLoadContext(fullPath).LoadFromAssemblyPath(fullPath)
+                CheckCoreVersion(assembly, fullPath, diagnostics)
+                let types = assembly
+                    .GetExportedTypes()
+                    .Where(
+                    (type Type) -> !type.IsAbstract && typeof(GSharpCodeFixProvider).IsAssignableFrom(type) &&
+                        type.GetCustomAttribute[GSharpCodeFixProviderAttribute]() != nil
+                )
+                    .OrderBy((type Type) -> type.FullName, StringComparer.Ordinal)
+                for type in types {
+                    // `!!`: the filter admits only non-abstract reference types.
+                    providers.Add(cast[GSharpCodeFixProvider](Activator.CreateInstance(type)!!))
+                }
+            } catch (ex Exception) when !(ex is OutOfMemoryException) && !(ex is StackOverflowException) {
+                diagnostics.Add(
+                    Diagnostic.Create(
+                        DiagnosticDescriptors.AnalyzerAssemblyLoadFailure,
+                        default(TextLocation),
+                        path,
+                        DescribeLoadException(ex)
+                    )
+                )
+            }
+        }
+        hostDiagnostics = diagnostics.ToImmutable()
+        return providers.ToImmutable()
     }
 
     /// Loads the analyzers in [`analyzerPaths`](paramref) and runs them

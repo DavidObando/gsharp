@@ -496,15 +496,18 @@ namespace Demo
         LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Console.WriteLine(C[int32]().Run())", "Member")
     }
 
-    @Fact
-    func AsyncRecursiveLift_WithWrittenCapture_RemainsALoudGap() {
+    @Theory
+    @InlineData("x = 42;")
+    @InlineData("Remember(in x);")
+    func AsyncRecursiveLift_WithSharedCapture_RemainsALoudGap(exposure string) {
         let printed = LocalFunctionHoistTranslationTests.TranslateUnit(`using System.Threading.Tasks;
 
 namespace Demo {
     public class C {
+        private static void Remember(in int value) { }
         public async Task<int> Run() {
             int x = 1;
-            x = 42;
+            EXPOSURE
             return await First(1);
             async Task<int> First(int n) =>
                 n == 0 ? x : await Second<int>(n - 1);
@@ -512,7 +515,7 @@ namespace Demo {
                 n == 0 ? x : await First(n - 1);
         }
     }
-}`, "suspending recursive helpers cannot carry ref captures")
+}`.Replace("EXPOSURE", exposure), "suspending recursive helpers cannot carry ref captures")
         Assert.Contains(
             "// unsupported: suspending recursive local function 'First' requires a ref capture",
             printed,
@@ -525,15 +528,18 @@ namespace Demo {
         )
     }
 
-    @Fact
-    func IteratorRecursiveLift_WithWrittenCapture_RemainsALoudGap() {
+    @Theory
+    @InlineData("x = 42;")
+    @InlineData("Remember(in x);")
+    func IteratorRecursiveLift_WithSharedCapture_RemainsALoudGap(exposure string) {
         let printed = LocalFunctionHoistTranslationTests.TranslateUnit(`using System.Collections.Generic;
 
 namespace Demo {
     public class C {
+        private static void Remember(in int value) { }
         public IEnumerable<int> Run() {
             int x = 1;
-            x = 42;
+            EXPOSURE
             return First(1);
 
             IEnumerable<int> First(int n) {
@@ -559,7 +565,7 @@ namespace Demo {
             }
         }
     }
-}`, "suspending recursive helpers cannot carry ref captures")
+}`.Replace("EXPOSURE", exposure), "suspending recursive helpers cannot carry ref captures")
         Assert.Contains(
             "// unsupported: suspending recursive local function 'First' requires a ref capture",
             printed,
