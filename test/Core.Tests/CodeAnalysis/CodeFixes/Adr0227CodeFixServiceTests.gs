@@ -106,6 +106,19 @@ open class Adr0227CodeFixServiceTests {
     }
 
     @Fact
+    func FindToken_SkipsGeneratedTokens() {
+        const arrow = "package P\n\nstruct S { var field int32 }\n\nfunc F(p *S) int32 -> p->field\n"
+        let arrowTree = SyntaxTree.Parse(arrow)
+        let atArrow SyntaxToken? = arrowTree.Root.FindToken(arrow.IndexOf("->field", StringComparison.Ordinal))
+        Assert.True(atArrow == nil || atArrow.Text == "->" || atArrow.Text == "-", atArrow?.Text)
+        const payload = "package P\n\nenum E { Some(value int32), None }\n"
+        let payloadTree = SyntaxTree.Parse(payload)
+        let atSome SyntaxToken? = payloadTree.Root.FindToken(payload.IndexOf("Some", StringComparison.Ordinal))
+        Assert.NotNull(atSome)
+        Assert.Equal("Some", atSome!!.Text)
+    }
+
+    @Fact
     func Registry_RejectsAProviderWithNoFixableId() {
         Assert.Throws[ArgumentException](() -> CodeFixRegistry().Add(NoIdProvider()))
     }
