@@ -29,6 +29,33 @@ open class Adr0227BuiltInFixTests {
     }
 
     @Fact
+    func Null_CarriesACompilerSuggestion() {
+        let compilation = Compilation(SyntaxTree.Parse("package P\n\nfunc F() string? -> null\n"))
+        let diagnostic = Assert.Single(compilation.GetDiagnostics())
+        let suggestion = Assert.Single(diagnostic.Suggestions)
+        Assert.Equal("Use 'nil'", suggestion.Message)
+        Assert.Equal(Applicability.MachineApplicable, suggestion.Applicability)
+        let change = Assert.Single(suggestion.Changes)
+        Assert.Equal(diagnostic.Location.Span, change.Span)
+        Assert.Equal("nil", change.NewText)
+        let fix = Assert.Single(CodeFixService(CodeFixRegistry()).GetFixes(compilation, diagnostic))
+        Assert.Equal(CodeFixService.SuggestionProviderId, fix.ProviderId)
+        // Severity configuration keeps the suggestions.
+        Assert.Single(diagnostic.WithSeverity(DiagnosticSeverity.Warning).Suggestions)
+    }
+
+    @Fact
+    func SwitchArmArrow_BecomesColon() {
+        VerifyFix(
+            "package P\n\nfunc F(n int32) string {\n    return switch n {\n        case 0 -> \"zero\" // z\n        default: \"other\"\n    }\n}\n",
+            "GS0302",
+            "Use ':'",
+            Applicability.MachineApplicable,
+            "package P\n\nfunc F(n int32) string {\n    return switch n {\n        case 0: \"zero\" // z\n        default: \"other\"\n    }\n}\n"
+        )
+    }
+
+    @Fact
     func NewOfAClass_IsRemoved() {
         VerifyFix(
             "package P\n\nimport System.Text\n\nfunc F() string {\n    let sb = new StringBuilder() // keep\n    return sb.ToString()\n}\n",
