@@ -6904,29 +6904,6 @@ partial class Binder {
             configureRoot: nil
         )
 
-        internal func BindGlobalScopeForCompilation(
-            syntaxTrees ImmutableArray[SyntaxTree],
-            references ReferenceResolver?,
-            implicitSystemImport bool,
-            preprocessorSymbols ImmutableHashSet[string]?,
-            isLibrary bool,
-            submission SubmissionBindingOptions?,
-            consumerAssemblyName string?
-        ) BoundGlobalScope -> BindGlobalScopeWithRoot(
-            previous: nil,
-            syntaxTrees,
-            references,
-            implicitSystemImport,
-            preprocessorSymbols,
-            isLibrary,
-            configureRoot: (root BoundScope) -> {
-                if submission != nil {
-                    SubmissionBinding.ConfigureRootScope(root, submission)
-                }
-                root.SetConsumerAssemblyName(consumerAssemblyName)
-            }
-        )
-
         private func BindGlobalScopeWithRoot(
             previous BoundGlobalScope?,
             syntaxTrees ImmutableArray[SyntaxTree],

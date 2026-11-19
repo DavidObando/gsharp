@@ -58,6 +58,29 @@ partial class Binder {
             }
         )
 
+        internal func BindGlobalScopeForCompilation(
+            syntaxTrees ImmutableArray[SyntaxTree],
+            references ReferenceResolver?,
+            implicitSystemImport bool,
+            preprocessorSymbols ImmutableHashSet[string]?,
+            isLibrary bool,
+            submission SubmissionBindingOptions?,
+            consumerAssemblyName string?
+        ) BoundGlobalScope -> BindGlobalScopeWithRoot(
+            previous: nil,
+            syntaxTrees,
+            references,
+            implicitSystemImport,
+            preprocessorSymbols,
+            isLibrary,
+            configureRoot: (root BoundScope) -> {
+                if submission != nil {
+                    SubmissionBinding.ConfigureRootScope(root, submission)
+                }
+                root.SetConsumerAssemblyName(consumerAssemblyName)
+            }
+        )
+
         private func ReplayPriorCellImports($scope BoundScope) {
             let submission = $scope.SubmissionOptions
             if submission?.ReplayImports.IsDefaultOrEmpty == false {
