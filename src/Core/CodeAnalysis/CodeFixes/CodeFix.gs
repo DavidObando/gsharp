@@ -81,10 +81,10 @@ class CodeFix {
         if existing != nil {
             return existing
         }
-        let computed = compute(cancellationToken)
+        // One computation: a second caller waits for the first.
         lock gate {
             if changes == nil {
-                changes = computed
+                Volatile.Write[FixChanges?](&changes, compute(cancellationToken))
             }
             return changes!!
         }

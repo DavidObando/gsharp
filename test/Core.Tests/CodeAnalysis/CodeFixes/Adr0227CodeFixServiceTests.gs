@@ -54,6 +54,21 @@ open class Adr0227CodeFixServiceTests {
     }
 
     @Fact
+    func GetChanges_FromParallelCallers_ComputesOnce() {
+        let tree = SyntaxTree.Parse(Source)
+        let compilation = Compilation(tree)
+        let provider = TestNilProvider()
+        let fix = Assert.Single(
+            CodeFixService(Registry(provider)).GetFixes(compilation, compilation.GetDiagnostics()[0])
+        )
+        let results = System.Collections.Concurrent.ConcurrentBag[FixChanges]()
+        System.Threading.Tasks.Parallel.For(0, 16, (i int32) -> results.Add(fix.GetChanges()))
+        Assert.Equal(1, provider.ComputeCount)
+        Assert.Equal(16, results.Count)
+        Assert.Single(results.Distinct())
+    }
+
+    @Fact
     func GetFixes_BySpan_HitsOnlyOverlappingDiagnostics() {
         let tree = SyntaxTree.Parse(Source)
         let compilation = Compilation(tree)
@@ -61,6 +76,10 @@ open class Adr0227CodeFixServiceTests {
         let at = Source.IndexOf("null", StringComparison.Ordinal)
         Assert.Single(service.GetFixes(compilation, tree, TextSpan(at + 2, 0), ImmutableArray[Diagnostic].Empty, out _))
         Assert.Empty(service.GetFixes(compilation, tree, TextSpan(0, 3), ImmutableArray[Diagnostic].Empty, out _))
+        // A non-empty selection next to the diagnostic does not hit it.
+        Assert.Empty(service.GetFixes(compilation, tree, TextSpan(at - 1, 1), ImmutableArray[Diagnostic].Empty, out _))
+        Assert.Empty(service.GetFixes(compilation, tree, TextSpan(at + 4, 1), ImmutableArray[Diagnostic].Empty, out _))
+        Assert.Single(service.GetFixes(compilation, tree, TextSpan(at + 4, 0), ImmutableArray[Diagnostic].Empty, out _))
     }
 
     @Fact

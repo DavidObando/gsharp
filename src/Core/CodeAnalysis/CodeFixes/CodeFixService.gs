@@ -66,8 +66,8 @@ class CodeFixService {
     }
 
     /// Gets the fixes for the diagnostics of [`tree`](paramref) whose span overlaps
-    /// [`span`](paramref), in diagnostic order and then registry order. A zero-length span hits a
-    /// diagnostic that contains or touches it.
+    /// [`span`](paramref), in diagnostic order and then registry order. Two non-empty spans overlap
+    /// when they share a character. A zero-length span hits a diagnostic that contains or touches it.
     /// @param compilation The compilation of the tree.
     /// @param tree A tree of the compilation.
     /// @param span The span.
@@ -93,7 +93,7 @@ class CodeFixService {
         for diagnostic in DiagnosticsOf(compilation, tree, additionalDiagnostics, cancellationToken) {
             cancellationToken.ThrowIfCancellationRequested()
             let location = diagnostic.Location.Span
-            if location.Start <= span.End && span.Start <= location.End {
+            if Overlaps(location, span) {
                 Collect(compilation, tree, diagnostic, fixes, failures, cancellationToken)
             }
         }
@@ -147,6 +147,15 @@ class CodeFixService {
     }
 
     shared {
+        // Two non-empty spans overlap when they share a character. A zero-length span (a caret)
+        // hits a span that contains or touches it.
+        internal func Overlaps(a TextSpan, b TextSpan) bool {
+            if a.Length == 0 || b.Length == 0 {
+                return a.Start <= b.End && b.Start <= a.End
+            }
+            return a.Start < b.End && b.Start < a.End
+        }
+
         // The diagnostics of one tree in GetDiagnostics order, then the additional ones in their order.
         internal func DiagnosticsOf(
             compilation Compilation,

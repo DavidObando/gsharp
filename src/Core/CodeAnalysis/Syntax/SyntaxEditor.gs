@@ -50,8 +50,9 @@ class SyntaxEditor {
         Add(NodeSpan(node), newText)
     }
 
-    /// Removes a token and the spaces or tabs after it on the same line. When no space follows,
-    /// the editor removes the spaces before it instead, so two words do not join.
+    /// Removes a token and the spaces or tabs after it on the same line. When the token ends its
+    /// line, the editor removes the spaces before it instead. When another token follows with no
+    /// space between, the editor removes only the token, so two words do not join.
     /// @param token A real token of the original tree.
     func RemoveToken(token SyntaxToken) {
         Add(WithHorizontalSpace(RealTokenSpan(token)), string.Empty)
@@ -152,9 +153,18 @@ class SyntaxEditor {
     /// @returns The new tree.
     func GetChangedTree() SyntaxTree -> SyntaxTree.Parse(GetChangedText())
 
-    private func Ordered() sequence[RecordedEdit] -> edits.OrderBy((e RecordedEdit) -> e.Change.Span.Start).ThenBy(
-        (e RecordedEdit) -> e.Order
+    // Position order. At one position the insertions come before a replacement, in call order, so
+    // (cref:SourceText.WithChanges) can apply them.
+    private func Ordered() sequence[RecordedEdit] -> edits
+        .OrderBy((e RecordedEdit) -> e.Change.Span.Start)
+        .ThenBy(
+        (e RecordedEdit) -> if e.Change.Span.Length == 0 {
+            0
+        } else {
+            1
+        }
     )
+        .ThenBy((e RecordedEdit) -> e.Order)
 
     private func Add(span TextSpan, newText string) {
         ArgumentNullException.ThrowIfNull(newText)
@@ -185,7 +195,27 @@ class SyntaxEditor {
         if node is SyntaxToken token {
             return RealTokenSpan(token)
         }
-        return node.Span
+        // The span of the real tokens. A node's own span can include the positions of missing and
+        // synthesized tokens, such as the `return` of an expression body.
+        var start = -1
+        var end = -1
+        for t in node.DescendantTokens() {
+            if t.IsMissing || t.IsSynthesized || t.Span.Length == 0 {
+                continue
+            }
+            if start < 0 || t.Span.Start < start {
+                start = t.Span.Start
+            }
+            if t.Span.End > end {
+                end = t.Span.End
+            }
+        }
+        if start < 0 {
+            throw InvalidOperationException(
+                "The node '${node.Kind}' has no token with source text. Edit a real token (ADR-0227 D1)."
+            )
+        }
+        return TextSpan.FromBounds(start, end)
     }
 
     private func RequireOwnTree(node SyntaxNode) {
@@ -200,14 +230,19 @@ class SyntaxEditor {
         while end < text.Length && IsHorizontalSpace(text[end]) {
             end++
         }
-        if end > span.End {
+        let endsLine = end == text.Length || text[end] == '\n' || text[end] == '\r'
+        if end > span.End && !endsLine {
             return TextSpan.FromBounds(span.Start, end)
+        }
+        if !endsLine {
+            // Another token follows with no space between: keep the space before the token.
+            return span
         }
         var start = span.Start
         while start > 0 && IsHorizontalSpace(text[start - 1]) {
             start--
         }
-        return TextSpan.FromBounds(start, span.End)
+        return TextSpan.FromBounds(start, end)
     }
 
     shared {

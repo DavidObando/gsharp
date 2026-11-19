@@ -86,6 +86,38 @@ open class Adr0227SyntaxEditorTests {
     }
 
     @Fact
+    func RemoveToken_FollowedDirectlyByAToken_KeepsThePrecedingSpace() {
+        const source = "package P\n\nfunc F(x int32) int32 {\n    return +x\n}\n"
+        let tree = SyntaxTree.Parse(source)
+        let editor = SyntaxEditor(tree)
+        editor.RemoveToken(Token(tree, "+"))
+        Assert.Contains("    return x\n", editor.GetChangedText().ToString())
+    }
+
+    @Fact
+    func ReplaceNode_OfASynthesizedReturn_EditsOnlyTheRealTokens() {
+        const source = "package P\n\nfunc F() int32 -> /* keep */ 1\n"
+        let tree = SyntaxTree.Parse(source)
+        let statement = tree.Root.DescendantNodes().OfType[ReturnStatementSyntax]().Single()
+        let editor = SyntaxEditor(tree)
+        Assert.Equal("1", editor.OriginalText(statement))
+        editor.ReplaceNode(statement, "2")
+        Assert.Equal("package P\n\nfunc F() int32 -> /* keep */ 2\n", editor.GetChangedText().ToString())
+    }
+
+    @Fact
+    func InsertBefore_AReplacedToken_IsAppliedBeforeTheReplacement() {
+        const source = "package P\n\nfunc F() string? {\n    return null\n}\n"
+        let tree = SyntaxTree.Parse(source)
+        let editor = SyntaxEditor(tree)
+        let token = Token(tree, "null")
+        editor.ReplaceToken(token, "nil")
+        editor.InsertBefore(token, "(")
+        editor.InsertAfter(token, ")")
+        Assert.Contains("    return (nil)\n", editor.GetChangedText().ToString())
+    }
+
+    @Fact
     func RemoveNode_AloneOnItsLine_RemovesTheLine() {
         const source = "package P\n\nfunc F() int32 {\n    var x = 1\n    x = 2\n    return x\n}\n"
         let tree = SyntaxTree.Parse(source)
