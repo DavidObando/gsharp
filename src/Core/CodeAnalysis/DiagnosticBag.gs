@@ -529,8 +529,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         severity DiagnosticSeverity,
         messageArguments[]object
     ) {
-        let message = string.Format(descriptor.MessageFormat, messageArguments)
-        let created = Diagnostic(location, descriptor.Id, severity, message)
+        let created = Diagnostic.CreateReported(descriptor, location, severity, messageArguments)
         // ADR-0225: the binder states the premise when it reports, so the finality is fixed at
         // creation. A copy after Add would break the reference identity that the bag tracks.
         let stack List[PrefixPremise]? = premises
