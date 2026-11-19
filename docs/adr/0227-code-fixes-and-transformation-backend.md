@@ -154,7 +154,6 @@ class CodeFix {
     prop Applicability Applicability
     prop Diagnostics ImmutableArray[Diagnostic]   // the diagnostics this fix is for
     prop ProviderId string               // stable name of the provider or program
-    prop Placeholders ImmutableArray[TextSpan]    // spans in the result text, for HasPlaceholders
 
     // Computes the changes. Lazy, so a list that is not gated can show titles first and
     // compute edits in codeAction/resolve. A gated fix computes its changes at list time
@@ -169,6 +168,7 @@ class FixChanges {
 class DocumentChanges {
     prop Tree SyntaxTree                    // the original tree
     prop Changes ImmutableArray[TextChange] // positions in Tree.Text
+    prop Placeholders ImmutableArray[TextSpan]  // spans in the changed text, for HasPlaceholders
 }
 
 abstract class GSharpCodeFixProvider {
@@ -238,7 +238,7 @@ partial class Diagnostic {
 }
 ```
 
-`Descriptor` becomes non-nil for compiler diagnostics. `Properties` does not change (ADR-0225). The bag's de-duplication (`DiagnosticBag.gs:685-705`) compares location, additional locations and `Properties`, not the descriptor, and the new member is not added to it. The analyzer driver reads `Descriptor.IsEnabledByDefault` (`GSharpAnalyzerDriver.gs:221`) on analyzer diagnostics. That `GetDiagnostics()` keeps the same results, including suppression and severity configuration, is **to verify in phase 1** with the sample comparison that ADR-0225 used.
+`Descriptor` becomes non-nil for compiler diagnostics. `Properties` does not change (ADR-0225). The bag's de-duplication (`DiagnosticBag.gs:685-705`) compares location, additional locations and `Properties`, not the descriptor, and the new member is not added to it. The analyzer driver reads `Descriptor.IsEnabledByDefault` (`GSharpAnalyzerDriver.gs:221`) on analyzer diagnostics. **Verified (phase 1):** `GetDiagnostics()` gives the same ID, severity, span, message, property count and additional-location count before and after the change for 1644 diagnostics: every `.gs` file in `samples/` and the Core test data (194 files), plus the 327 broken programs of the Oats S0 dev repair log. Severity configuration copies the diagnostic with `WithSeverity`, which keeps the new member.
 
 **Structured fix-its on the diagnostic.** Some report sites already know the fix (GS0273 names `nil`; "did you mean" messages name a symbol). Options:
 
@@ -372,7 +372,12 @@ The pattern language is deliberately small. It has no loops and no arbitrary cod
 
 ### D8. First fixes (phase 1)
 
-Each provider has a syntax guard and, where the table says so, a semantic guard. The parse shape of the `new`, `or`, `and` and `not` cases (which tokens the parser makes, and where GS0125 is reported) is **to be verified in phase 1** against the Oats dev pairs. The design does not assume it.
+Each provider has a syntax guard and, where the table says so, a semantic guard. **Verified parse shapes (phase 1):**
+
+- `return new T(x)` is two statements: `return new` (a name, GS0125 on `new`) and the call `T(x)`. Removing the token `new` and its space gives `return T(x)`. A construction has no symbol in `GetSymbolInfo` and has the constructed type in `GetTypeInfo`; a function call has a symbol. `new S(1)` for a struct also reports GS0155 and has no type, so it gets no fix.
+- `a or b` and `a and b` are three statements; GS0125 is on the word. In a pattern the words are combinators and report nothing.
+- `not a` reports GS0125 on `not`. `not (a and b)` reports GS0130 ("Function 'not' doesn't exist") on `not`, and GS0005 twice and GS0125 for `and`. Replacing `and` removes all three.
+- GS0127 is reported on the operator token (`=` or `+=`); a compound assignment parses as `EventSubscriptionExpression`.
 
 | Fix | Trigger | Guard | Edit | Applicability |
 | --- | --- | --- | --- | --- |
@@ -382,10 +387,10 @@ Each provider has a syntax guard and, where the table says so, a semantic guard.
 | `let` → `var` | GS0127 | the target resolves to a local declared with `let` in this tree | `ReplaceToken(let → var)` at the declaration | MachineApplicable |
 | `let` field → `var` field | GS0127 | the target is a field | `ReplaceToken` | MaybeIncorrect (changes the type's surface) |
 | `a or b`, `a and b` → `\|\|`, `&&` | GS0125 with argument `or` / `and` | an expression position, not a pattern: `or`, `and` and `not` are contextual pattern keywords (`Parser.Patterns.gs:159-192`) | `ReplaceToken` | MachineApplicable |
-| `not x` → `!x` | GS0125 with argument `not` | as above | `ReplaceToken`; wrap the operand in parentheses when it is not a primary expression | MaybeIncorrect |
+| `not x` → `!x` | GS0125 or GS0130 on `not` | as above | remove `not` and its space, insert `!` before the next token; no parentheses, because the parser has not attached the operand to `not` | MaybeIncorrect |
 | nullability fixes of ADR-0099 | GS0158, GS0154/0155/0156/0274 | as today, but read `MessageArguments`, not the message text | as today | MaybeIncorrect |
 
-GS0127 is reported at the assignment, but the edit is at the declaration. The provider needs the declaration of a local symbol. `Symbol.DeclaringSyntaxNodes` exists, but ADR-0225 lists `GetDeclaredSymbol` for locals as missing. Phase 1 adds the public path for locals if it is not there.
+GS0127 is reported at the assignment, but the edit is at the declaration. The provider needs the declaration of a local symbol. **Verified (phase 1):** the public path exists. `GetSymbolInfo` on the assignment (or on the target name of a compound assignment) gives the `LocalVariableSymbol`, and its `DeclaringSyntaxNodes` holds the identifier token of the declaration, whose parent `VariableDeclarationSyntax` has the `let` keyword. No new API is needed.
 
 Integer-cast fixes (GS0156 `int64` → `int32`, 28 tasks) need an expected-type query and are in phase 2.
 
