@@ -1,6 +1,6 @@
 # ADR-0227: Code fixes, a span-edit transformation backend and a diagnostic-delta gate
 
-- **Status**: Proposed
+- **Status**: Accepted (provisional decisions on the open questions, see "Decisions"; the maintainer may revise them)
 - **Date**: 2026-11-18
 - **Phase**: Tooling
 - **Issue**: Refs [#6119](https://github.com/DavidObando/gsharp/issues/6119)
@@ -209,8 +209,20 @@ class CodeFixService {
     func GetFixes(compilation Compilation, tree SyntaxTree, span TextSpan, ct CancellationToken) ImmutableArray[CodeFix]
     func Apply(fix CodeFix, ct CancellationToken) ImmutableArray[SyntaxTree]   // re-parsed trees
     func ComputeDelta(compilation Compilation, fix CodeFix, options DeltaOptions, ct CancellationToken) DiagnosticDelta
-    func FixAll(compilation Compilation, scope FixAllScope, equivalenceKey string,
+    func FixAll(scope FixAllScope, equivalenceKey string,
                 options FixAllOptions, ct CancellationToken) FixAllResult
+}
+
+// The targets of a FixAll. The factories are the only constructors.
+class FixAllScope {
+    shared {
+        func Document(compilation Compilation, tree SyntaxTree) FixAllScope
+        func Project(compilation Compilation) FixAllScope
+        func Solution(compilations ImmutableArray[Compilation]) FixAllScope   // handled in the given order
+    }
+    prop Kind FixAllScopeKind      // Document | Project | Solution
+    prop Compilations ImmutableArray[Compilation]
+    prop Tree SyntaxTree?          // Document scope only
 }
 ```
 
@@ -236,7 +248,7 @@ partial class Diagnostic {
 
 ### D3. FixAll and conflicts
 
-`FixAllScope` is `Document`, `Project` or `Solution`. A `Compilation` is a project. `Solution` is a list of compilations that the host gives; the service handles them one by one, in the given order.
+`FixAllScope` (D2) is `Document` (one tree of one compilation), `Project` (one compilation) or `Solution` (a list of compilations that the host gives). The service handles the compilations one by one, in the given order.
 
 The default `FixAllProvider.Batch` works like Roslyn's batch fixer:
 
@@ -265,10 +277,12 @@ class DiagnosticDelta {
 }
 
 class DeltaOptions {
-    prop IncludeAnalyzers bool          // default false
+    prop Analyzers ImmutableArray[GSharpDiagnosticAnalyzer]   // run before and after; default empty
     prop StopOnNewSyntaxError bool      // default true
 }
 ```
+
+**Scope of the comparison.** The delta compares the diagnostics of the **whole compilation** before and after the **complete** edit set of the fix (or of the FixAll result), with every edited tree replaced at once. A declaration change in one file can break a caller in another file, so the edited tree alone is not enough. Diagnostics are matched within the same document. Each edited document has its own span map; an unedited document has the identity map.
 
 **Matching.** A diagnostic before and a diagnostic after match when the ID and the message are equal and the span maps across the changes. A position before the first change keeps its value. A position after a change moves by the length difference of the changes before it. A span that intersects a change has no mapped span; it matches a diagnostic after with the same ID and message whose span intersects the changed region. Each diagnostic matches at most one other, in position order. The result is a fact. The consumer decides the policy.
 
@@ -276,12 +290,14 @@ class DeltaOptions {
 
 1. Apply the changes and parse the new text. `SyntaxTree.Parse` is cheap compared with a bind.
 2. Compare syntax diagnostics. If a new syntax error exists and `StopOnNewSyntaxError` is set, return with `ParseOnly = true`. No bind is done.
-3. Otherwise bind with `compilation.WithReplacedSyntaxTree(old, new)` and read the diagnostics of that tree. **Never use `ReplaceSyntaxTree`**: it retires the host's compilation.
-4. If `IncludeAnalyzers` is set, run the analyzer driver on the new compilation for that tree.
+3. Otherwise bind a snapshot compilation with every edited tree replaced, and read all its diagnostics. Phase 1 adds `Compilation.WithReplacedSyntaxTrees(pairs)`, the multi-tree form of `WithReplacedSyntaxTree`: it binds from scratch, has no body cache and does not re-point symbols. **Never use `ReplaceSyntaxTree`**: it retires the host's compilation.
+4. If `Analyzers` is not empty, run the analyzer driver with those analyzers on both compilations.
 
 The "before" diagnostics come from the host's compilation and are computed once for each request, not once for each candidate.
 
-**Cost.** Step 3 is a full bind of a new compilation. For an Oats single-file program this is one warm check (2–8 ms). In a large project it is the cost of binding the project. Phase 2 adds a body-local speculative bind: when all changes are in one function body, bind only that body against the existing global scope, without re-pointing symbols. This is the `GetSpeculativeStatementDiagnostics` follow-up of ADR-0225 D6.7, generalized to a body. It falls back to step 3 when a change touches a declaration. Candidates for one request are checked one after another on one thread. Parallel checks share the reference resolver, which #6070 does not yet allow.
+**Cost.** Step 3 is a full bind of a new compilation. For an Oats single-file program this is one warm check (2–8 ms). In a large project it is the cost of binding the project. Phase 2 adds a body-local speculative bind: when all changes are in one function body, bind only that body against the existing global scope, without re-pointing symbols. This is the `GetSpeculativeStatementDiagnostics` follow-up of ADR-0225 D6.7, generalized to a body. It applies only when the changes are inside one body and the signature of the enclosing member is unchanged, so no other body can see the change. Otherwise it falls back to step 3.
+
+**Resolver sharing.** A snapshot compilation uses the host compilation's `ReferenceResolver` and the same assembly name. #6070 is a hazard between compilations with *different* assembly names on one resolver. Compilations with one assembly name on one resolver are what the ADR-0223 D5 stress test (`Adr0223SharedResolverStressTests`) checked. The service takes no lock of its own. A host whose resolver also serves compilations with other assembly names must keep its ADR-0223 D5 serialization: it holds that serialization from the construction of the snapshot compilation to its last query, or it gives `DeltaOptions` an isolated resolver. In phase 1 the language server checks the candidates of one request one after another, inside the request's existing project scope. The phase-1 LSP work verifies that no other request can use a resolver of another assembly name concurrently, and uses an isolated resolver for gate checks if it cannot verify that.
 
 **Budget.** Targets, to measure before the gate is on by default in the language server:
 
@@ -295,7 +311,7 @@ The "before" diagnostics come from the host's compilation and are computed once 
 - `NetImprovement`: `Removed` is not empty and the error count goes down.
 - `PhaseAware`: when every target is a syntax diagnostic, judge only syntax diagnostics. Body diagnostics that the fix makes reachable do not count against it.
 
-The IntelliCode rule ("removes existing diagnostics or at least adds none") is `NoNewDiagnostics`, or `NoNewDiagnostics` or `NetImprovement`, depending on how the "or" is read (open question Q3). A fix of a parse error often unmasks bind errors that the parse error hid. A strict rule then rejects a correct fix. `PhaseAware` is the answer for that case.
+The default policy is the IntelliCode rule: the pattern applies and the edit adds no new diagnostic (`NoNewDiagnostics`). Errors and warnings count, and compiler and analyzer diagnostics count alike (decision Q3). A fix of a parse error often unmasks bind errors that the parse error hid, and a strict rule then rejects a correct fix. So `PhaseAware` is allowed, but only for a fix whose targets are all parse errors. `NetImprovement` stays available to hosts, but it is not the default.
 
 ### D5. Applicability
 
@@ -314,7 +330,7 @@ Use in the language server:
 
 ### D6. Data-defined transformations
 
-**In scope, as a provider kind (phase 3).** The backend must host fixes that are not hand-written providers, because Oats keeps a knowledge base of mined and synthesized programs. A `TransformationProgram` is data:
+**In scope, as a provider kind (phase 3), in a separate assembly** (decision Q7): `GSharp.CodeAnalysis.Transformations`, which references `GSharp.Core`. Core keeps the provider API that the interpreter implements. Oats references the extra assembly. The backend must host fixes that are not hand-written providers, because Oats keeps a knowledge base of mined and synthesized programs. A `TransformationProgram` is data:
 
 ```gsharp
 class TransformationProgram {
@@ -343,7 +359,7 @@ The pattern language is deliberately small. It has no loops and no arbitrary cod
 - Kinds: `quickfix` for fixes, `source.fixAll.gsharp` for a document FixAll of `MachineApplicable` fixes, `refactor.rewrite` for sort imports.
 - The computer reads syntax, declaration, body and analyzer diagnostics of the document. Today `DocumentSyncHandler` runs `GSharpAnalyzerDriver.Run` in its debounced phase and converts the result to LSP diagnostics at once; it keeps no Core diagnostics. Phase 1 keeps the analyzer diagnostics of the last run for each document version, so the computer does not run the analyzers again.
 - `NullabilityQuickFixes` moves to Core as built-in providers. The language server keeps only the protocol mapping. Sort imports stays in the server as a refactoring, because it is not a diagnostic fix.
-- `CodeActionParams.textDocument` is a `TextDocumentIdentifier` with no version. The server records in `data` the document version that it computed against, and resolve drops a result whose version is not current.
+- **Versions.** `CodeActionParams.textDocument` is a `TextDocumentIdentifier` with no version, and `DocumentContent` keeps none today. Phase 1 adds the client's version to `DocumentContent`, captured with the text in one step when `didOpen` or `didChange` stores the snapshot. The computer records that version in `data` for each document that a fix edits. Resolve returns no edit if any of those versions is not current. The edit is a versioned `WorkspaceEdit.documentChanges` (`TextDocumentEdit` with `OptionalVersionedTextDocumentIdentifier`) for every edited document, so the client rejects an edit that became stale after the response. The server falls back to `changes` only when the client does not declare `workspaceEdit.documentChanges`.
 
 ### D8. First fixes (phase 1)
 
@@ -385,7 +401,7 @@ Integer-cast fixes (GS0156 `int64` → `int32`, 28 tasks) need an expected-type 
 
 **Phase 3: data and suggestions.**
 
-- `TransformationProgram`, its JSON schema and `ProgramFixProvider` (D6).
+- `TransformationProgram`, its JSON schema and `ProgramFixProvider` in `GSharp.CodeAnalysis.Transformations` (D6).
 - `Diagnostic.Suggestions` and `SuggestionFixProvider` (D2 option b).
 - A command-line FixAll for `MachineApplicable` fixes (`gsfmt --fix` or a `gsc` switch; open question Q6).
 
@@ -406,7 +422,7 @@ All tests obey ADR-0154: each new test fails on the code before the change.
 ## Consequences
 
 - G# gets one fix mechanism for compiler and analyzer diagnostics, for the language server and for library hosts.
-- Oats can list, apply and check fixes in process with `GSharp.Core` only, and can register its own programs.
+- Oats can list, apply and check fixes in process with `GSharp.Core` only. It registers data-defined programs through `GSharp.CodeAnalysis.Transformations` (phase 3).
 - Compiler diagnostics keep their descriptor and arguments. Providers stop parsing message text.
 - The public API snapshot grows by the types of D1, D2, D4 and, in phase 3, D6.
 - Span edits do not keep a comment that is inside a replaced node unless the provider composes `OriginalText`. Phase 1 fixes edit single tokens, so this does not occur for them.
@@ -423,7 +439,21 @@ All tests obey ADR-0154: each new test fails on the code before the change.
 - **Roslyn's code-fix types through a projection.** Rejected by ADR-0027 and ADR-0169.
 - **Rewrite through bound trees (`BoundTreeRewriter`).** Rejected: bound trees are lowered and have no source text, so the edit cannot go back to the user's source.
 
-## Open questions for the maintainer
+## Decisions (provisional; the maintainer may revise them)
+
+The maintainer did not answer the open questions before implementation. These defaults apply until the maintainer changes them:
+
+- **Q1.** `SyntaxEditor` is in `GSharp.Core.CodeAnalysis.Syntax`, with the tree.
+- **Q2.** Code-fix providers are separate types. `GSharpAnalyzerHost` loads them from the analyzer assemblies.
+- **Q3.** The default gate is `NoNewDiagnostics`: offer a fix only when its pattern applies and the edit adds no new diagnostic. Errors and warnings count. Compiler and analyzer diagnostics count alike. `PhaseAware` is allowed only for fixes of parse errors. `NetImprovement` is available, not the default.
+- **Q4.** In phase 1 the language server runs the full gate only on data-defined fixes. Measure before the gate is extended.
+- **Q5.** `Diagnostic.Suggestions` is accepted, for phase 3.
+- **Q6.** The location of a command-line FixAll is deferred. It is not implemented.
+- **Q7.** The program interpreter and its JSON schema are in a separate assembly, not in Core (D6).
+- **Q8.** `let` → `var` for locals is `MachineApplicable`.
+- **Q9.** GS9308 is the ID for "code-fix provider failed".
+
+## Open questions for the maintainer (answered provisionally above)
 
 - **Q1. Layering of the editor.** Is `SyntaxEditor` in `GSharp.Core.CodeAnalysis.Syntax` (with the tree) or in `CodeFixes`? The proposal puts the text types in `Text` and the editor in `CodeFixes`.
 - **Q2. Provider discovery.** Do code-fix providers ship in analyzer assemblies and load through `GSharpAnalyzerHost`, or in separate assemblies with their own host? The proposal reuses the analyzer host.
@@ -431,6 +461,6 @@ All tests obey ADR-0154: each new test fails on the code before the change.
 - **Q4. The gate in the language server.** Should the language server gate hand-written built-in fixes too, at the cost of a bind for each candidate, or only data-defined fixes? The proposal gates data-defined fixes only, until the phase-2 budget is measured.
 - **Q5. `Diagnostic.Suggestions` (D2 option b).** Accept it for phase 3, and accept the change at report sites?
 - **Q6. A command-line FixAll.** Should unattended `MachineApplicable` fixes be in `gsfmt --fix`, a `gsc` switch, or neither?
-- **Q7. Data-defined programs in Core.** Should the program interpreter and its JSON schema be in `GSharp.Core` (so Oats needs no other assembly), or in a separate assembly that Oats also references? The proposal puts them in Core.
+- **Q7. Data-defined programs in Core.** Should the program interpreter and its JSON schema be in `GSharp.Core` (so Oats needs no other assembly), or in a separate assembly that Oats also references?
 - **Q8. Applicability of `let` → `var`.** The proposal makes it `MachineApplicable` for locals. A reassignment can be the bug and the `let` the intent. Is `MaybeIncorrect` preferred?
 - **Q9. New diagnostic ID.** Is GS9308 acceptable for "code-fix provider failed"?
