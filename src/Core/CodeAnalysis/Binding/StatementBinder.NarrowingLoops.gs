@@ -330,7 +330,7 @@ internal partial class StatementBinder {
         isProperty = false
         getterRunsUserCode = false
         touchesInitializingType = false
-        let imported = ImportedClassSymbol(clrType, declaration: nil, references: $scope.References)
+        let imported = $scope.CreateImportedClassSymbol(clrType, declaration: nil)
         if !imported.TryLookupMember(name, ne: nil, out var member) {
             return false
         }
@@ -699,7 +699,7 @@ internal partial class StatementBinder {
         } else {
             name + "`" + arity.ToString()
         }
-        if binderCtx.References.TryResolveType(fullName, out var clrType) {
+        if binderCtx.TryResolveType(fullName, out var clrType) {
             return TypeSymbol.FromClrTypeWithoutNullability(clrType, NullabilityFreeReason.ResolvedTypeName)
         }
         return nil
@@ -1438,13 +1438,13 @@ internal partial class StatementBinder {
             "System.Threading.Tasks.Task"
         }
         if function.Type == TypeSymbol.Void {
-            return if binderCtx.References.TryResolveType(wrapperName, out var taskType) && taskType != nil {
+            return if binderCtx.TryResolveType(wrapperName, out var taskType) && taskType != nil {
                 ImportedTypeSymbol.GetWithoutNullability(taskType, NullabilityFreeReason.TypeLiteral)
             } else {
                 default(TypeSymbol?)
             }
         }
-        if !binderCtx.References.TryResolveType(wrapperName + "`1", out var openTask) || openTask == nil {
+        if !binderCtx.TryResolveType(wrapperName + "`1", out var openTask) || openTask == nil {
             return nil
         }
         if TypeSymbol.RequiresSymbolicProjection(function.Type) {
@@ -1482,7 +1482,7 @@ internal partial class StatementBinder {
     }
 
     private func IsVisibleClrStepMember(member MemberInfo) bool {
-        let includeInternal = binderCtx.References.CanAccessInternalMembers(member.DeclaringType?.Assembly)
+        let includeInternal = binderCtx.CanAccessInternalMembers(member.DeclaringType?.Assembly)
         switch member {
             case field is FieldInfo {
                 return ClrMemberVisibility.IsVisible(field, includeInternal)
@@ -1502,8 +1502,7 @@ internal partial class StatementBinder {
     private func IsFamilyAccessibleClrBase(clrBase Type?) bool -> clrBase != nil &&
         Expressions != nil &&
         Expressions!!
-        .WithFamilyAccess(ImportedClassSymbol(clrBase, declaration: nil, references: $scope.References))
-        .IsFamilyAccessible(clrBase)
+        .WithFamilyAccess($scope.CreateImportedClassSymbol(clrBase, declaration: nil)).IsFamilyAccessible(clrBase)
 
     // The CLR form of a step. [`definition`](paramref) is the open definition of an imported generic type whose
     // type arguments are [`arguments`](paramref); a member type that is one of its type parameters is the argument.
@@ -2749,18 +2748,15 @@ internal partial class StatementBinder {
     ) List[MethodInfo] {
         if staticAccess {
             let imported = if Expressions != nil {
-                Expressions!!.WithFamilyAccess(
-                    ImportedClassSymbol(reflected, declaration: nil, references: $scope.References)
-                )
+                Expressions!!.WithFamilyAccess($scope.CreateImportedClassSymbol(reflected, declaration: nil))
             } else {
-                ImportedClassSymbol(reflected, declaration: nil, references: $scope.References)
+                $scope.CreateImportedClassSymbol(reflected, declaration: nil)
             }
             return imported.GetVisibleStaticCandidateMethods(name)
         }
-        let canAccessInternals(Type?) -> bool = (type Type?) -> type != nil &&
-            binderCtx
-            .References
-            .CanAccessInternalMembers(type.Assembly)
+        let canAccessInternals(Type?) -> bool = (type Type?) -> type != nil && binderCtx.CanAccessInternalMembers(
+            type.Assembly
+        )
         let methods = MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(
             reflected,
             name,
@@ -7989,8 +7985,7 @@ internal partial class StatementBinder {
             let names = HashSet[string](StringComparer.Ordinal)
             let callbackPositions = Dictionary[string, HashSet[int32]](StringComparer.Ordinal)
             var enumerableType = typeof(Enumerable)
-            let references = $scope.References ?? binderCtx.References
-            if references != nil && references.TryResolveType("System.Linq.Enumerable", out var importedEnumerable) {
+            if binderCtx.TryResolveType("System.Linq.Enumerable", out var importedEnumerable) {
                 enumerableType = importedEnumerable ?? enumerableType
             }
             for method in enumerableType.GetMethods(BindingFlags.Public | BindingFlags.Static) {
@@ -8557,7 +8552,7 @@ internal partial class StatementBinder {
                     try {
                         for type in asm.GetTypes() {
                             let contracts = List[Type](type.GetInterfaces())
-                            if type.IsVisible || refs.CanAccessInternalMembers(type.Assembly) {
+                            if type.IsVisible || $scope.CanAccessInternalMembers(type.Assembly) {
                                 for method in type.GetMethods(
                                     BindingFlags.Public |
                                     BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly

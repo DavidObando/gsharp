@@ -258,26 +258,18 @@ open class Compilation {
     internal prop BodyBindProbe Action?
 
     /// Gets or sets the assembly-identity override (e.g. from MSBuild's
-    /// `AssemblyName` or the SDK). Setting this immediately pushes the
-    /// value onto (cref:References)'s
-    /// (cref:ReferenceResolver.CurrentAssemblyName) so binding-time
-    /// internal-visibility checks ((cref:Symbols.ImportedAssemblySemantics.GrantsInternalAccessTo))
-    /// see the correct consumer name regardless of whether the caller reads
-    /// (cref:Diagnostics)/(cref:GlobalScope) before or after
-    /// calling `Emit`. Previously this was only set inside `Emit`,
-    /// so any earlier access to the lazy (cref:GlobalScope) (which
-    /// caches per-consumer-assembly visibility, see
-    /// `ImportedTypeSymbol.AggregateCache`) would freeze visibility with
-    /// an empty assembly name. Callers that know the target assembly name
-    /// up front (the gsc CLI, the language server) should set this before
-    /// touching (cref:GlobalScope) or (cref:Diagnostics).
+    /// `AssemblyName` or the SDK). Binding-time internal-visibility checks
+    /// ((cref:Symbols.ImportedAssemblySemantics.GrantsInternalAccessTo)) read
+    /// this per-compilation name without mutating the shared
+    /// (cref:ReferenceResolver). Callers that know the target assembly name up
+    /// front (the gsc CLI, the language server) should set this before touching
+    /// (cref:GlobalScope) or (cref:Diagnostics).
     prop AssemblyName string? {
         get -> assemblyName
-        set {
-            assemblyName = value
-            PrepareReferencesForBinding(value)
-        }
+        set -> assemblyName = value
     }
+
+    internal prop EffectiveConsumerAssemblyName string? -> assemblyName ?? References?.CurrentAssemblyName
 
     /// Gets or sets the interactive submission options (ADR-0156 Phase 2).
     /// When set, the compilation binds as one REPL submission: prior
@@ -410,12 +402,6 @@ open class Compilation {
         if reused != nil {
             CompilationMeasurements.Count("declarations.reuses")
         }
-        // Belt-and-braces: make sure References sees the current
-        // assembly name before the (possibly cached, see
-        // ImportedTypeSymbol.AggregateCache) binding pass runs, even
-        // if the caller only ever set AssemblyName and never called
-        // Emit.
-        PrepareReferencesForBinding(assemblyName)
         // ADR-0186: metadata import happens under this bind, and the
         // reader that decides what an oblivious byte means is a static
         // leaf with no Compilation in reach.
@@ -430,14 +416,14 @@ open class Compilation {
             let scopeFailedCalls = CallCandidateRecorder.BeginBody()
             var recordedFailedCalls = ImmutableArray[BoundErrorExpression].Empty
             try {
-                bound = Binder.BindGlobalScope(
-                    previous: nil,
+                bound = Binder.BindGlobalScopeForCompilation(
                     EmbeddedAttributeSource.AddEmbeddedAttributes(SyntaxTrees, References),
                     References,
                     ImplicitSystemImport,
                     PreprocessorSymbols,
                     IsLibrary,
-                    Submission
+                    Submission,
+                    EffectiveConsumerAssemblyName
                 )
             } finally {
                 recordedFailedCalls = CallCandidateRecorder.EndBody(scopeFailedCalls)
@@ -1300,14 +1286,6 @@ open class Compilation {
             staged.Position = 0
             staged.CopyTo(destination)
         }
-    }
-
-    private func PrepareReferencesForBinding(assemblyName string?) {
-        if References == nil {
-            return
-        }
-        let references = References
-        this.References.CurrentAssemblyName = assemblyName ?? references.CurrentAssemblyName
     }
 
     /// Bundle holding the results of the lowering pipeline passes.

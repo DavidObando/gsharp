@@ -397,7 +397,9 @@ class ImportedTypeSymbol : TypeSymbol {
         internal func TryCreateSemanticAggregate(
             type Type?,
             references ReferenceResolver?,
-            @NotNullWhen(true) out aggregate StructSymbol?
+            @NotNullWhen(true) out aggregate StructSymbol?,
+            consumerAssemblyName string? = nil,
+            hasExplicitConsumerAssemblyName bool = false
         ) bool {
             aggregate = nil
             if type == nil || type.IsPrimitive || type.IsEnum || type.IsGenericParameter || type.IsInterface {
@@ -443,7 +445,11 @@ class ImportedTypeSymbol : TypeSymbol {
                 // non-data reference classes stay ordinary CLR imports and do not build a semantic aggregate.
                 return false
             }
-            let consumerAssemblyName = references?.CurrentAssemblyName ?? string.Empty
+            let consumerAssemblyName = if hasExplicitConsumerAssemblyName {
+                consumerAssemblyName ?? string.Empty
+            } else {
+                consumerAssemblyName ?? references?.CurrentAssemblyName ?? string.Empty
+            }
             // Issue #2263 / #2269: cache the aggregate on the resolver instance so
             // its lifetime is tied to the metadata load context that owns `type`.
             // A process-wide static cache would strongly pin these CLR Types (and
@@ -473,7 +479,9 @@ class ImportedTypeSymbol : TypeSymbol {
         internal func NormalizeSemanticAggregate(
             type TypeSymbol,
             clrType Type?,
-            references ReferenceResolver?
+            references ReferenceResolver?,
+            consumerAssemblyName string? = nil,
+            hasExplicitConsumerAssemblyName bool = false
         ) TypeSymbol {
             let type = ByRefStorageMatching.PreserveReferenceTupleIdentity(clrType, type)
             let nullable = type is NullableTypeSymbol
@@ -489,7 +497,13 @@ class ImportedTypeSymbol : TypeSymbol {
                 !imported
                 .TypeArguments
                 .IsDefaultOrEmpty ||
-                !TryCreateSemanticAggregate(clrType, references, out var aggregate) {
+                !TryCreateSemanticAggregate(
+                clrType,
+                references,
+                out var aggregate,
+                consumerAssemblyName,
+                hasExplicitConsumerAssemblyName
+            ) {
                 return type
             }
             let normalized TypeSymbol = if annotated == nil {

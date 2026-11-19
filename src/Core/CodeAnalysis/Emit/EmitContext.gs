@@ -108,6 +108,17 @@ internal class EmitContext {
         get;
     }
 
+    internal prop ConsumerAssemblyName string? -> if Program.HasExplicitConsumerAssemblyName {
+        AssemblyNameOverride ?? Program.ConsumerAssemblyName
+    } else {
+        AssemblyNameOverride ?? References.CurrentAssemblyName
+    }
+
+    internal func CanAccessInternalMembers(assembly Assembly?) bool -> References.CanAccessInternalMembers(
+        assembly,
+        ConsumerAssemblyName
+    )
+
     /// Gets a value indicating whether this is a metadata-only reference-
     /// assembly emit (no method bodies, marked with
     /// `ReferenceAssemblyAttribute`).

@@ -9090,7 +9090,7 @@ internal partial class StatementBinder {
                     continue
                 }
                 let member = members[i]
-                let memberType = GetDeconstructionMemberType(receiverType, aggregate, i, member, $scope.References)
+                let memberType = GetDeconstructionMemberType(receiverType, aggregate, i, member, $scope)
                 let elemVar = bindLocalVariable(idTok, isReadOnly, memberType)
                 let access = BindDeconstructionMemberAccess(
                     BoundVariableExpression(nil, tempVar),
@@ -9251,7 +9251,7 @@ internal partial class StatementBinder {
                     continue
                 }
                 let member = members[i]
-                let memberType = GetDeconstructionMemberType(elementType, aggregate, i, member, $scope.References)
+                let memberType = GetDeconstructionMemberType(elementType, aggregate, i, member, $scope)
                 let elemVar = bindLocalVariable(identifiers[i], true, memberType)
                 let access = BindDeconstructionMemberAccess(elementAccessBase, aggregate, member, memberType)
                 // LanguageServer fix: see the matching comment in the tuple
@@ -10138,7 +10138,7 @@ internal partial class StatementBinder {
             if IsDiscard(fieldSyntax.LocalIdentifier) {
                 continue
             }
-            let fieldType = GetDeconstructionMemberType(receiverType, field, $scope.References)
+            let fieldType = GetDeconstructionMemberType(receiverType, field, $scope)
             let variable = bindLocalVariable(fieldSyntax.LocalIdentifier, true, fieldType)
             let access = BindDeconstructionMemberAccess(
                 BoundVariableExpression(nil, tempVar),
@@ -10163,9 +10163,8 @@ internal partial class StatementBinder {
             case NullabilityAnnotatedTypeSymbol{BaseType: StructSymbol annotated}: annotated
             default: default(StructSymbol?)
         }
-        if structType == nil && type.ClrType is {} clrType && ImportedTypeSymbol.TryCreateSemanticAggregate(
+        if structType == nil && type.ClrType is {} clrType && $scope.TryCreateSemanticAggregate(
             clrType,
-            $scope.References,
             out var importedAggregate
         ) {
             structType = importedAggregate
@@ -10214,7 +10213,7 @@ internal partial class StatementBinder {
         let arguments = ImmutableArray.CreateBuilder[BoundExpression](members.Length)
         let declarations = ImmutableArray.CreateBuilder[BoundStatement](members.Length)
         for var i = 0; i < identifiers.Count; i++ {
-            let memberType = GetDeconstructionMemberType(receiverType, aggregate, i, members[i], $scope.References)
+            let memberType = GetDeconstructionMemberType(receiverType, aggregate, i, members[i], $scope)
             let temp = LocalVariableSymbol(
                 "<deconstruct${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>",
                 isReadOnly: false,
@@ -12346,9 +12345,9 @@ internal partial class StatementBinder {
             aggregate StructSymbol,
             index int32,
             member Symbol,
-            references ReferenceResolver?
+            scope_ BoundScope
         ) TypeSymbol {
-            let memberType = GetDeconstructionMemberType(receiverType, member, references)
+            let memberType = GetDeconstructionMemberType(receiverType, member, scope_)
             if aggregate.IsData &&
                 aggregate.HasPrimaryConstructor &&
                 index >= 0 &&
@@ -12374,16 +12373,14 @@ internal partial class StatementBinder {
                         aggregateClrType,
                         aggregate.PrimaryConstructorParameters
                     ) is {} primaryCtor {
-                        ImportedTypeSymbol.NormalizeSemanticAggregate(
+                        scope_.NormalizeSemanticAggregate(
                             MemberLookup.GetClrMethodParameterTypeSymbol(receiverType, primaryCtor, index),
-                            importedProperty.PropertyType,
-                            references
+                            importedProperty.PropertyType
                         )
                     } else {
-                        ImportedTypeSymbol.NormalizeSemanticAggregate(
+                        scope_.NormalizeSemanticAggregate(
                             aggregate.PrimaryConstructorParameters[index].Type,
-                            importedProperty.PropertyType,
-                            references
+                            importedProperty.PropertyType
                         )
                     }
                     return if TypeMemberModel.PositionalTypeSatisfiedByInheritedGetter(memberType, positionalType) {
@@ -12399,13 +12396,12 @@ internal partial class StatementBinder {
         private func GetDeconstructionMemberType(
             receiverType TypeSymbol,
             member Symbol,
-            references ReferenceResolver?
+            scope_ BoundScope
         ) TypeSymbol -> switch member {
             case field is FieldSymbol: if field.ImportedMember is FieldInfo importedField {
-                ImportedTypeSymbol.NormalizeSemanticAggregate(
+                scope_.NormalizeSemanticAggregate(
                     MemberLookup.GetClrFieldTypeSymbol(receiverType, importedField),
-                    importedField.FieldType,
-                    references
+                    importedField.FieldType
                 )
             } else {
                 field.Type
@@ -12423,7 +12419,7 @@ internal partial class StatementBinder {
                 } else {
                     importedProperty.PropertyType
                 }
-                ImportedTypeSymbol.NormalizeSemanticAggregate(pointee, clrPropertyType, references)
+                scope_.NormalizeSemanticAggregate(pointee, clrPropertyType)
             } else {
                 property.Type
             }

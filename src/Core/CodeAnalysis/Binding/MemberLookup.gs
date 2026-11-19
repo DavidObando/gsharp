@@ -112,7 +112,7 @@ internal class MemberLookup {
             if current is not StructSymbol {
                 continue
             }
-            let canAccessInternals = (owner Type?) -> binderCtx.References.CanAccessInternalMembers(owner?.Assembly)
+            let canAccessInternals = (owner Type?) -> binderCtx.CanAccessInternalMembers(owner?.Assembly)
             if ClrTypeUtilities.SafeGetInheritedInstanceProperty(clrBase, name, canAccessInternals) != nil ||
                 ClrTypeUtilities.SafeGetInheritedInstanceField(clrBase, name, canAccessInternals) != nil {
                 return current
@@ -178,7 +178,7 @@ internal class MemberLookup {
         }
         var hasSetOnlyIndexer = false
         for property in properties {
-            let includeInternal = this.binderCtx.References.CanAccessInternalMembers(property.DeclaringType?.Assembly)
+            let includeInternal = this.binderCtx.CanAccessInternalMembers(property.DeclaringType?.Assembly)
             let visibleGetter = if fromDerivedType {
                 ClrMemberVisibility.GetDerivedVisibleGetter(property, includeInternal)
             } else {
@@ -403,7 +403,7 @@ internal class MemberLookup {
             // declaring assembly named this compilation in an
             // `InternalsVisibleTo`; only `assembly` accessibility is admitted.
             var staticFlags = BindingFlags.Static | BindingFlags.Public
-            let staticsIncludeInternal = this.binderCtx.References.CanAccessInternalMembers(staticClassType.Assembly)
+            let staticsIncludeInternal = this.binderCtx.CanAccessInternalMembers(staticClassType.Assembly)
             if staticsIncludeInternal {
                 staticFlags |= BindingFlags.NonPublic
             }
@@ -426,12 +426,9 @@ internal class MemberLookup {
                 SafeGetMethodsIncludingSelfAndInterfaces(
                     receiverClrType,
                     methodName,
-                    includeInternal: this.binderCtx.References.CanAccessInternalMembers(receiverClrType.Assembly),
+                    includeInternal: this.binderCtx.CanAccessInternalMembers(receiverClrType.Assembly),
                     includeExplicitInterfaceMembers: false,
-                    canAccessInternals: (owner Type?) -> this
-                        .binderCtx
-                        .References
-                        .CanAccessInternalMembers(owner?.Assembly)
+                    canAccessInternals: (owner Type?) -> this.binderCtx.CanAccessInternalMembers(owner?.Assembly)
                 )
             )
             if instance.Count > 0 {
@@ -662,8 +659,8 @@ internal class MemberLookup {
             services.CachedImportedExtensionImportCount == importCount &&
             object.ReferenceEquals(services.CachedImportedExtensionReferences, binderCtx.References) &&
             services.CachedImportedExtensionAssemblyName == binderCtx
-            .References
-            .CurrentAssemblyName &&
+            .RootScope
+            .ConsumerAssemblyName &&
             services
             .CachedImportedExtensionImports
             .SequenceEqual(imports) && object.ReferenceEquals(
@@ -709,7 +706,7 @@ internal class MemberLookup {
         services.CachedImportedExtensionImportCount = importCount
         services.CachedImportedExtensionImports = imports
         services.CachedImportedExtensionReferences = binderCtx.References
-        services.CachedImportedExtensionAssemblyName = binderCtx.References.CurrentAssemblyName
+        services.CachedImportedExtensionAssemblyName = binderCtx.RootScope.ConsumerAssemblyName
         services.CachedImportedExtensionSyntaxTree = binderCtx.RootScope.GetCurrentReferencingSyntaxTreeForCache()
         return classes
     }
@@ -734,13 +731,13 @@ internal class MemberLookup {
         // `{ get; internal set; }` indexer — was invisible while its
         // methods, properties and fields were not. Only metadata `assembly`
         // accessibility is admitted.
-        let includeInternal = this.binderCtx.References.CanAccessInternalMembers(clrTarget.Assembly)
+        let includeInternal = this.binderCtx.CanAccessInternalMembers(clrTarget.Assembly)
         var anyAncestorGrantsInternal = includeInternal
         for var ancestor Type? = clrTarget.BaseType;
             ancestor != nil &&
             !anyAncestorGrantsInternal;
             ancestor = ancestor?.BaseType {
-            anyAncestorGrantsInternal = this.binderCtx.References.CanAccessInternalMembers(ancestor.Assembly)
+            anyAncestorGrantsInternal = this.binderCtx.CanAccessInternalMembers(ancestor.Assembly)
         }
         let collected = List[PropertyInfo]()
         for declaringType in declaringTypes {
@@ -760,10 +757,7 @@ internal class MemberLookup {
                         break
                     }
                 }
-                let propertyIncludeInternal = this
-                    .binderCtx
-                    .References
-                    .CanAccessInternalMembers(property.DeclaringType?.Assembly)
+                let propertyIncludeInternal = this.binderCtx.CanAccessInternalMembers(property.DeclaringType?.Assembly)
                 let isVisibleProperty = if fromDerivedType {
                     ClrMemberVisibility.GetDerivedVisibleGetter(property, propertyIncludeInternal) != nil ||
                         ClrMemberVisibility.GetDerivedVisibleSetter(property, propertyIncludeInternal) != nil
@@ -800,7 +794,7 @@ internal class MemberLookup {
 
     private func IsVisibleImportedMethod(method MethodBase) bool -> ClrMemberVisibility.IsVisible(
         method,
-        this.binderCtx.References.CanAccessInternalMembers(method.DeclaringType?.Assembly)
+        this.binderCtx.CanAccessInternalMembers(method.DeclaringType?.Assembly)
     )
 
     private func IsVisibleImportedType(type Type) bool -> type.IsPublic ||
@@ -809,7 +803,6 @@ internal class MemberLookup {
         (type.IsNotPublic || type.IsNestedAssembly || type.IsNestedFamORAssem) &&
             this
             .binderCtx
-            .References
             .CanAccessInternalMembers(type.Assembly)
     )
 

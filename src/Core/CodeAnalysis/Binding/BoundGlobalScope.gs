@@ -433,6 +433,11 @@ class BoundGlobalScope {
         }
     }
 
+    /// Gets or sets the consumer assembly name this global scope was bound for (#6070).
+    internal prop ConsumerAssemblyName string?
+
+    internal prop HasExplicitConsumerAssemblyName bool
+
     /// Gets the interactive submission import set this scope was bound with
     /// (ADR-0156 Phase 2), or `null` for an ordinary
     /// compilation. Carried on the scope so `BindProgram`'s

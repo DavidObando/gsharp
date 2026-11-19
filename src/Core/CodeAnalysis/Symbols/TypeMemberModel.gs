@@ -809,7 +809,9 @@ shared class TypeMemberModel {
         parameter ParameterSymbol,
         references ReferenceResolver?,
         @NotNullWhen(true) out property PropertySymbol?,
-        out declaringType StructSymbol?
+        out declaringType StructSymbol?,
+        consumerAssemblyName string? = nil,
+        hasExplicitConsumerAssemblyName bool = false
     ) bool {
         property = nil
         declaringType = nil
@@ -856,8 +858,16 @@ shared class TypeMemberModel {
                 continue
             }
             var clrCurrent Type? = importedBase.ClrType
+            let effectiveConsumer = if hasExplicitConsumerAssemblyName {
+                consumerAssemblyName
+            } else {
+                consumerAssemblyName ?? references?.CurrentAssemblyName
+            }
             while clrCurrent != nil {
-                let includeInternal = references != nil && references.CanAccessInternalMembers(clrCurrent.Assembly)
+                let includeInternal = references != nil && references.CanAccessInternalMembers(
+                    clrCurrent.Assembly,
+                    effectiveConsumer
+                )
                 let declaredFlags = System.Reflection.BindingFlags.Instance |
                 System.Reflection.BindingFlags.Public |
                 System.Reflection.BindingFlags.NonPublic |

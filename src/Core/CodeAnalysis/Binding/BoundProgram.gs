@@ -396,6 +396,10 @@ class BoundProgram {
         BoundInitializationPlan
     ] = ImmutableDictionary[(Owner Symbol, Static bool), BoundInitializationPlan].Empty
 
+    internal prop ConsumerAssemblyName string?
+
+    internal prop HasExplicitConsumerAssemblyName bool
+
     internal prop Initializers ImmutableDictionary[(Owner Symbol, Static bool), BoundInitializationPlan] {
         get {
             return _initializers

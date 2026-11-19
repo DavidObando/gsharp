@@ -251,7 +251,7 @@ internal partial class DeclarationBinder {
         argSyntax((int32) -> ExpressionSyntax)? = nil
     ) BaseConstructorInitializer? {
         let visibleConstructors = List[ConstructorInfo]()
-        let includeInternal = binderCtx.References.CanAccessInternalMembers(clrBase.Assembly)
+        let includeInternal = binderCtx.CanAccessInternalMembers(clrBase.Assembly)
         for constructor in ClrTypeUtilities.SafeGetConstructors(
             clrBase,
             BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance

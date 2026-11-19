@@ -2519,7 +2519,7 @@ internal class LambdaBinder {
             return TypeSymbol.Error
         }
         if element == TypeSymbol.Void {
-            if Scope.References!!.TryResolveType(wrapperName, out var taskType) {
+            if Scope.TryResolveType(wrapperName, out var taskType) {
                 return ImportedTypeSymbol.GetWithoutNullability(taskType, NullabilityFreeReason.TypeLiteral)
             }
             return element
@@ -2528,7 +2528,7 @@ internal class LambdaBinder {
         // predicate as TupleTypeSymbol. This includes type parameters,
         // same-compilation user types, and nullable-reference annotations
         // whose information cannot be recovered from a CLR Type.
-        if TypeSymbol.RequiresSymbolicProjection(element) && Scope.References!!.TryResolveType(
+        if TypeSymbol.RequiresSymbolicProjection(element) && Scope.TryResolveType(
             wrapperOpenName,
             out var symbolicTaskOpen
         ) {
@@ -2545,7 +2545,7 @@ internal class LambdaBinder {
         if clr == nil {
             return element
         }
-        if Scope.References!!.TryResolveType(wrapperOpenName, out var taskOpen) {
+        if Scope.TryResolveType(wrapperOpenName, out var taskOpen) {
             // Route the element CLR type through the SAME resolver as Task`1.
             // Under the SDK build path the references are loaded via a
             // MetadataLoadContext, and MakeGenericType requires the type

@@ -2697,7 +2697,7 @@ internal partial class ExpressionBinder {
     /// @param clrType The declaring CLR type.
     /// @returns `true` when friend internals are visible.
     private func CanAccessInternalsOf(clrType Type?) bool -> clrType?.Assembly is {} assembly &&
-        $scope.References!!.CanAccessInternalMembers(assembly)
+        $scope.CanAccessInternalMembers(assembly)
 
     /// Issue #3705: the property's getter when this compilation may call it —
     /// public, or `internal` in a friend assembly. Member-lookup gates
@@ -6967,10 +6967,7 @@ internal partial class ExpressionBinder {
                 return false
             }
             let canAccessInternals = (clrType Type?) -> clrType?.Assembly is {} assembly &&
-                binderCtx
-                .RootScope
-                .References
-                ?.CanAccessInternalMembers(assembly) == true
+                binderCtx.CanAccessInternalMembers(assembly)
             member = ClrTypeUtilities.SafeGetInheritedInstanceProperty(clrBase, name, canAccessInternals)
             member ??= ClrTypeUtilities.SafeGetInheritedInstanceField(clrBase, name, canAccessInternals)
             if member == nil {

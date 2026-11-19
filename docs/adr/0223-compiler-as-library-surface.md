@@ -62,7 +62,7 @@ Add explicit factories to `ReferenceResolver`:
 
 Replace the `internal` static `SdkToolsDirectory` with an explicit option. `ReferenceResolver` factories take an optional `runtimeDirectory` argument, and `ResolveDriverReferencePaths` takes the same argument. The search order is: the argument, then the folder beside the application, then `GSHARP_SDK_TOOLS_DIR`. A process-wide setter is not added, because two hosts in one process can need different SDK versions.
 
-### D5. Thread-safety contract (stress test added; item 1 not supported, see #6070)
+### D5. Thread-safety contract (implemented, #6068, #6070)
 Implementation notes:
 
 - `Default(runtimeDirectory)`, `ForReferencePack(targetFramework, packRoot, runtimeDirectory)`, and `ResolveDriverReferencePaths(referencePaths, runtimeDirectory)` take the argument. `Default()` and the one-argument `ResolveDriverReferencePaths` stay, and use no runtime directory. `WithReferences` and `WithRuntimeReferences` take explicit paths and do not add bundled runtimes, so a host gives them the result of `ResolveDriverReferencePaths`.
@@ -83,9 +83,7 @@ The proposed contract is:
 2. A host must not call `ReferenceResolver.Dispose()` while any compilation in the process runs, because it clears process-wide caches.
 3. A host must not change process-wide state (`GSHARP_SDK_TOOLS_DIR`, and `SdkToolsDirectory` until D4) while a compilation runs.
 
-Item 1 is not yet verified. Before the documentation calls it supported, add a stress test that binds and emits many compilations in parallel against one resolver and compares each result with a serial run. Until then, hosts must serialize compilations that share a resolver, as Oats does.
-
-Result (#6068): `Adr0223SharedResolverStressTests` binds and emits each repository sample three times on parallel workers against one new resolver, then compares each result with a serial run. The compilations use one assembly name. The test passed in 40 of 40 separate test processes. The same work found #6070: `ReferenceResolver.CurrentAssemblyName` is state of the resolver, and each `Compilation` writes its assembly name to it. When compilations with different assembly names share a resolver, a compilation can bind its bodies with the name of another compilation, and its `InternalsVisibleTo` results are wrong. This occurs on one thread when the steps of two compilations interleave. Item 1 is therefore not supported. The resolver's semantic aggregate cache is keyed by the CLR type only, but the aggregate depends on the consumer assembly name (#6070, not verified). Until #6070 is fixed, a host uses one resolver for each assembly name, and it serializes the compilations that share a resolver: it runs each compilation from construction to its last query before it creates the next compilation. A host that needs concurrent compilations uses one resolver for each compilation.
+Result (#6068, #6070): `Compilation` passes its consumer assembly name explicitly into binding and emit rather than mutating `ReferenceResolver.CurrentAssemblyName`. `ReferenceResolver.semanticAggregateCache` is keyed by `(Type, ConsumerAssemblyName)`, `ReferenceResolver.resolveCache` stores raw entries without overwriting them per consumer, and `visibleResolveCache` caches consumer-scoped external-visibility fallbacks. `Adr0223SharedResolverStressTests` verifies both uniform-name repository samples (40 of 40 processes) and multi-assembly-name `InternalsVisibleTo` / semantic-aggregate / override / duplicate-type concurrent compilations against serial runs (20 of 20 separate test processes). Item 1 is therefore supported: concurrent `Compilation` objects (including with different `AssemblyName` values) can share one `ReferenceResolver`, provided items 2 and 3 hold.
 
 ### D6. Diagnostics that a host sees once
 

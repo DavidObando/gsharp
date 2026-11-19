@@ -537,7 +537,7 @@ internal partial class ExpressionBinder {
                 } else if aliasedType is InterfaceSymbol foundAliasInterface {
                     userInterfaceSymbol = foundAliasInterface
                 } else if aliasedType.ClrType != nil {
-                    classSymbol = ImportedClassSymbol(aliasedType.ClrType, leftName, references: $scope.References)
+                    classSymbol = $scope.CreateImportedClassSymbol(aliasedType.ClrType!!, leftName)
                 } else {
                     Diagnostics.ReportUnableToFindType(leftName.Location, name)
                     return BoundErrorExpression(nil)
@@ -569,7 +569,7 @@ internal partial class ExpressionBinder {
                     Diagnostics.ReportByteStringRuntime(leftName.Location)
                     return BoundErrorExpression(syntax)
                 }
-                classSymbol = ImportedClassSymbol(byteStringType, leftName, references: $scope.References)
+                classSymbol = $scope.CreateImportedClassSymbol(byteStringType, leftName)
             } else if TryResolvePredefinedTypeReceiver(name, leftName, out var predefinedClass) {
                 // Issue #919: a lowercase predefined primitive type alias used as
                 // the receiver of a static member access (e.g. `string.Empty`,
@@ -845,10 +845,10 @@ internal partial class ExpressionBinder {
     private func CreateInheritedImportedClassSymbol(
         importedType TypeSymbol,
         syntax ExpressionSyntax
-    ) ImportedClassSymbol -> ImportedClassSymbol(
+    ) ImportedClassSymbol -> $scope
+        .CreateImportedClassSymbol(
         Invariant.Required(importedType.ClrType, "an imported base has a CLR type", expression: "importedType.ClrType"),
         syntax,
-        references: $scope.References,
         constructedReceiver: MemberLookup.GetProjectionReceiverImportedType(importedType)
     )
 
@@ -882,7 +882,7 @@ internal partial class ExpressionBinder {
             } else {
                 symbolicNested
             }
-            return ImportedClassSymbol(closedType, syntax, symbolicNested, $scope.References, constructedNested)
+            return $scope.CreateImportedClassSymbol(closedType, syntax, symbolicNested, constructedNested)
         } catch (ArgumentException) {
             return nested
         }
@@ -1434,7 +1434,7 @@ internal partial class ExpressionBinder {
         if !$scope.References!!.TryGetMemberLookupType(predefinedClrType, out var receiverType) {
             return false
         }
-        classSymbol = ImportedClassSymbol(receiverType, declaration, references: $scope.References)
+        classSymbol = $scope.CreateImportedClassSymbol(receiverType, declaration)
         return true
     }
 
@@ -1629,8 +1629,8 @@ internal partial class ExpressionBinder {
         // first and leave the right part unconsumed so the caller binds it as the
         // member access on the aliased type. (A plain namespace import target does
         // not resolve as a type, so the segment-walk below still owns that case.)
-        if $scope.References!!.TryResolveType(currentPath, out var aliasTargetType) {
-            importedClass = ImportedClassSymbol(aliasTargetType, rightPart, references: $scope.References)
+        if $scope.TryResolveType(currentPath, out var aliasTargetType) {
+            importedClass = $scope.CreateImportedClassSymbol(aliasTargetType, rightPart)
             return true
         }
         return TryWalkQualifiedClrTypePath(currentPath, &rightPart, out importedClass)
@@ -1739,7 +1739,7 @@ internal partial class ExpressionBinder {
                 out var genericArity
             ) {
                 let mangledName = currentPath + "." + genericIdentifier.ValueText + "`" + genericArity.ToString()
-                if $scope.References!!.TryResolveType(mangledName, out var openGenericType) {
+                if $scope.TryResolveType(mangledName, out var openGenericType) {
                     let diagnosticCount = Diagnostics.Count
                     if !TryBindGenericImportSegmentTypeArguments(
                         genericSegment.LeftPart,
@@ -1795,7 +1795,7 @@ internal partial class ExpressionBinder {
                     }
                     return false
                 }
-                if $scope.References!!.TryResolveType(currentPath + "." + genericIdentifier.ValueText, out _) ||
+                if $scope.TryResolveType(currentPath + "." + genericIdentifier.ValueText, out _) ||
                     $scope
                     .TryLookupSourceTypeInPackage(currentPath, genericIdentifier.ValueText, preferredArity: 0, out _) {
                     invalidGenericType = genericIdentifier
@@ -1839,8 +1839,8 @@ internal partial class ExpressionBinder {
                 }
             }
             let fullTypeName = currentPath + "." + typeNameSyntax.IdentifierToken.ValueText
-            if $scope.References!!.TryResolveType(fullTypeName, out var type) {
-                importedClass = ImportedClassSymbol(type, typeNameSyntax, references: $scope.References)
+            if $scope.TryResolveType(fullTypeName, out var type) {
+                importedClass = $scope.CreateImportedClassSymbol(type, typeNameSyntax)
                 rightPart = remainder
                 return true
             }
@@ -1952,7 +1952,7 @@ internal partial class ExpressionBinder {
         }
         let clrType = lookupType(name)
         if clrType?.ClrType != nil && !object.ReferenceEquals(clrType, TypeSymbol.Void) {
-            importedClassSymbol = ImportedClassSymbol(clrType!!.ClrType!!, leftName, references: $scope.References)
+            importedClassSymbol = $scope.CreateImportedClassSymbol(clrType!!.ClrType!!, leftName)
             return true
         }
         if $scope.TryLookupImportedClass(name, leftName, out var importedClass, out var ambiguity) {
@@ -3002,7 +3002,7 @@ internal partial class ExpressionBinder {
             if bindTypeClause(clause) is not ImportedTypeSymbol spanType {
                 return false
             }
-            constructedImported = ImportedClassSymbol(spanType.Type, index, spanType, $scope.References)
+            constructedImported = $scope.CreateImportedClassSymbol(spanType.Type, index, spanType)
             return true
         }
         if resolvedType == nil && name == "slice" && binderCtx.CanUseNativeBufferAlias(
@@ -3199,7 +3199,7 @@ internal partial class ExpressionBinder {
             if bindTypeClause(clause) is not ImportedTypeSymbol managedType {
                 return false
             }
-            constructedImported = ImportedClassSymbol(managedType.Type, generic, managedType, $scope.References)
+            constructedImported = $scope.CreateImportedClassSymbol(managedType.Type, generic, managedType)
             return true
         }
         if resolvedType == nil &&
@@ -3230,7 +3230,7 @@ internal partial class ExpressionBinder {
             if bindTypeClause(clause) is not ImportedTypeSymbol spanType {
                 return false
             }
-            constructedImported = ImportedClassSymbol(spanType.Type, generic, spanType, $scope.References)
+            constructedImported = $scope.CreateImportedClassSymbol(spanType.Type, generic, spanType)
             return true
         }
         if resolvedType == nil &&
@@ -3260,7 +3260,7 @@ internal partial class ExpressionBinder {
             if nativeType is not ImportedTypeSymbol native {
                 return false
             }
-            constructedImported = ImportedClassSymbol(native.Type, generic, native, $scope.References)
+            constructedImported = $scope.CreateImportedClassSymbol(native.Type, generic, native)
             return true
         }
         // A value-named receiver is genuine element access, never a type.
@@ -3812,11 +3812,10 @@ internal partial class ExpressionBinder {
             } else {
                 default(ImportedTypeSymbol?)
             }
-            constructedImported = ImportedClassSymbol(
+            constructedImported = $scope.CreateImportedClassSymbol(
                 closed,
                 receiverSyntax,
                 symbolicReceiver,
-                $scope.References,
                 constructedReceiver
             )
             return true
@@ -3948,7 +3947,7 @@ internal partial class ExpressionBinder {
             return true
         }
         if clrMatch != nil {
-            let classSymbol = ImportedClassSymbol(clrMatch, syntax, references: $scope.References)
+            let classSymbol = $scope.CreateImportedClassSymbol(clrMatch, syntax)
             result = BindAccessorStep(receiver: nil, classSymbol, syntax)
             return true
         }

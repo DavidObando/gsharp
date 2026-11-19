@@ -1872,7 +1872,8 @@ internal partial class DeclarationBinder {
                                 methodIsAsyncVoid,
                                 returnTypeIsValueTask,
                                 methodSyntax.IsSuspend,
-                                binderCtx.References
+                                binderCtx.References,
+                                binderCtx.RootScope.ConsumerAssemblyName
                             )
                             if externalMatch.Member != nil {
                                 externalOverriddenMethod = externalMatch.Member
@@ -2199,7 +2200,9 @@ internal partial class DeclarationBinder {
                         parameter,
                         binderCtx.References,
                         out var inheritedProperty,
-                        out var inheritedDeclaringType
+                        out var inheritedDeclaringType,
+                        binderCtx.RootScope.ConsumerAssemblyName,
+                        binderCtx.RootScope.HasExplicitConsumerAssemblyName
                     ) {
                         if inheritedProperty is {} resolvedInheritedProperty {
                             if !TypeMemberModel.PositionalTypeSatisfiedByInheritedGetter(
@@ -2569,7 +2572,8 @@ internal partial class DeclarationBinder {
                             getterAccessibility,
                             setterAccessibility,
                             binderCtx.References,
-                            propReturnRefKind
+                            propReturnRefKind,
+                            binderCtx.RootScope.ConsumerAssemblyName
                         )
                         if externalMatch.Member != nil {
                             externalOverriddenProperty = externalMatch.Member
@@ -2839,7 +2843,8 @@ internal partial class DeclarationBinder {
                             eventName,
                             handlerType,
                             eventAccessibility,
-                            binderCtx.References
+                            binderCtx.References,
+                            binderCtx.RootScope.ConsumerAssemblyName
                         )
                         if externalMatch.Member != nil {
                             externalOverriddenEvent = externalMatch.Member

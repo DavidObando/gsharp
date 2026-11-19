@@ -1067,7 +1067,7 @@ internal partial class ExpressionBinder {
                     let friendInternals = clrBaseProperty
                         .DeclaringType
                         ?.Assembly is {} declaringAssembly &&
-                        $scope.References!!.CanAccessInternalMembers(declaringAssembly)
+                        $scope.CanAccessInternalMembers(declaringAssembly)
                     if setter == nil || setter.IsAbstract || !ClrMemberVisibility.IsVisibleFromDerived(
                         setter,
                         friendInternals
@@ -1102,7 +1102,7 @@ internal partial class ExpressionBinder {
         let friendInternals = property
             .DeclaringType
             ?.Assembly is {} declaringAssembly &&
-            $scope.References!!.CanAccessInternalMembers(declaringAssembly)
+            $scope.CanAccessInternalMembers(declaringAssembly)
         let visible MethodInfo? = if IsFamilyAccessibleClrMember(property.DeclaringType, receiver) {
             ClrMemberVisibility.GetDerivedVisibleSetter(property, friendInternals)
         } else {

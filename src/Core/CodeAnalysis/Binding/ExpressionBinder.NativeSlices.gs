@@ -509,7 +509,7 @@ internal partial class ExpressionBinder {
             "native type binding selects the SDK Slice/ReadOnlySlice definition, whose ABI declares public static FromArray",
             expression: "clrType.GetMethod(\"FromArray\", BindingFlags.Public | BindingFlags.Static)"
         )
-        let container = ImportedClassSymbol(clrType, nil, cast[ImportedTypeSymbol](type), $scope.References)
+        let container = $scope.CreateImportedClassSymbol(clrType, nil, cast[ImportedTypeSymbol](type))
         let function = ImportedFunctionSymbol("FromArray", container, method, nil, type)
         return BoundImportedCallExpression(
             syntax,

@@ -1003,9 +1003,7 @@ internal partial class ExpressionBinder {
                 return BoundPropertyAssignmentExpression(nil, receiver: nil, propertyOwner, prop, propConverted)
             }
             if TypeMemberModel.GetNearestImportedBase(userStruct)?.ClrType is Type importedBaseClr {
-                let importedBase = WithFamilyAccess(
-                    ImportedClassSymbol(importedBaseClr, syntax, references: $scope.References)
-                )
+                let importedBase = WithFamilyAccess($scope.CreateImportedClassSymbol(importedBaseClr, syntax))
                 if importedBase.TryLookupMember(fieldName, ne: nil, out var inheritedStaticMember) &&
                     TryGetWritableClrMember(
                     inheritedStaticMember,
@@ -3500,7 +3498,7 @@ internal partial class ExpressionBinder {
         symbolicContainerType ImportedTypeSymbol? = nil
     ) BoundExpression? {
         let importedClass = WithFamilyAccess(
-            ImportedClassSymbol(clrReceiverType, memberNameSyntax, symbolicContainerType, $scope.References)
+            $scope.CreateImportedClassSymbol(clrReceiverType, memberNameSyntax, symbolicContainerType)
         )
         if !importedClass.TryLookupMember(memberName, ne: nil, out var staticMember) {
             return nil

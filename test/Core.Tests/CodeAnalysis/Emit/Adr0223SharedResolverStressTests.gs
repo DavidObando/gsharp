@@ -24,11 +24,9 @@ import System.Threading
 import Xunit
 
 /// ADR-0223 D5: concurrent (cref:Compilation) objects that share one (cref:ReferenceResolver).
-/// The test binds and emits many compilations in parallel against one resolver, and compares
-/// each result with a serial run. The inputs are the repository samples in a fixed order, so the
-/// expected results are deterministic. All compilations use one assembly name. Compilations with
-/// different assembly names do not share a resolver safely (#6070), so this test does not make the
-/// shared-resolver contract supported.
+/// The tests bind and emit many compilations in parallel against one resolver, and compare
+/// each result with a serial run across both uniform and distinct (cref:Compilation.AssemblyName)
+/// values (#6068, #6070).
 @Collection("Adr0223SharedResolverStress")
 open class Adr0223SharedResolverStressTests {
     /// Each parallel result (diagnostic IDs, spans, and messages, and the emitted image) is
@@ -84,6 +82,142 @@ open class Adr0223SharedResolverStressTests {
         Assert.True(
             mismatches.Count == 0,
             "${mismatches.Count} of ${jobs.Count} parallel compilations (workers: $workerCount) differ from the serial run:\n" +
+                string.Join("\n", mismatches.Take(10))
+        )
+    }
+
+    /// ADR-0223 D5 + #6070: concurrent compilations with different assembly names sharing one
+    /// (cref:ReferenceResolver) produce exact serial diagnostics and deterministic emitted images
+    /// across `InternalsVisibleTo` boundaries, semantic aggregates, extension holders, and duplicate
+    /// internal/public type names.
+    @Fact
+    func SharedResolver_ParallelMultiAssemblyNameIvtBindAndEmit_MatchesSerialRun() {
+        using let internalLib = CSharpFixture(`using System.Runtime.CompilerServices;
+[assembly: InternalsVisibleTo("Friend")]
+namespace StressLib {
+    internal static class SecretType {
+        internal static int Value() => 50;
+    }
+    public class Bag {
+        internal int HiddenField = 30;
+        internal int HiddenProp => 20;
+        internal int HiddenMethod() => 10;
+    }
+    public static class Api {
+        public static Bag Create() => new Bag();
+        internal static int Secret() => 42;
+    }
+    public static class BagExtensions {
+        internal static int HiddenExt(this Bag bag) => 40;
+    }
+    public record SecretRecord(int PublicVal) {
+        internal int SecretProp => 42;
+        internal int SecretMethod() => 99;
+    }
+    public class BaseType {
+        internal virtual int Compute() => 1;
+    }
+    internal static class SharedName {
+        internal static int Pick() => 11;
+    }
+}`, assemblyName: "StressInternal")
+        using let publicLib = CSharpFixture(`namespace StressLib {
+    public static class SharedName {
+        public static int Pick() => 22;
+    }
+}`, assemblyName: "StressPublic")
+        let cases = []KeyValuePair[string, string]{KeyValuePair[string, string]("Friend", `package Probe
+import StressLib
+class Derived : BaseType {
+    internal override func Compute() int32 -> 2
+}
+func Use() int32 {
+    let bag = Api.Create()
+    let r = SecretRecord{PublicVal: 7}
+    return Api.Secret() + bag.HiddenMethod() + bag.HiddenProp + bag.HiddenField + bag.HiddenExt() + SecretType.Value() + r.PublicVal + r.SecretProp + r.SecretMethod() + Derived().Compute()
+}`), KeyValuePair[string, string]("Stranger", `package Probe
+import StressLib
+class Derived : BaseType {
+    internal override func Compute() int32 -> 2
+}
+func Use() int32 {
+    let bag = Api.Create()
+    let r = SecretRecord{PublicVal: 7}
+    return Api.Secret() + bag.HiddenMethod() + bag.HiddenProp + bag.HiddenField + bag.HiddenExt() + SecretType.Value() + r.PublicVal + r.SecretProp + r.SecretMethod() + Derived().Compute()
+}`), KeyValuePair[string, string]("Friend", `package Probe
+import StressLib
+func Use() int32 -> SharedName.Pick()`), KeyValuePair[string, string]("Stranger", `package Probe
+import StressLib
+func Use() int32 -> SharedName.Pick()`), KeyValuePair[string, string]("Stranger", `package Probe
+import StressLib
+func Use() int32 {
+    let r = SecretRecord{PublicVal: 7}
+    return r.PublicVal
+}`)}
+        let jobs = List[int32]()
+        for var round = 0; round < 12; round++ {
+            for var index = 0; index < cases.Count; index++ {
+                jobs.Add(index)
+            }
+        }
+        let random = Random(6068)
+        for var i = jobs.Count - 1; i > 0; i-- {
+            let j = random.Next(i + 1)
+            let swap = jobs[i]
+            jobs[i] = jobs[j]
+            jobs[j] = swap
+        }
+        let serialResults = [cases.Count]string
+        for var index = 0; index < cases.Count; index++ {
+            using let serialResolver = ReferenceResolver.WithReferences(
+                []string{internalLib.AssemblyPath, publicLib.AssemblyPath}
+            )
+            serialResults[index] = CompileAndDescribe(
+                "case$index.gs",
+                cases[index].Value,
+                serialResolver,
+                cases[index].Key
+            )
+        }
+        Assert.Contains(serialResults, (result string) -> result.StartsWith("emitted ", StringComparison.Ordinal))
+        Assert.Contains(serialResults, (result string) -> result.StartsWith("failed ", StringComparison.Ordinal))
+        let parallelResults = [jobs.Count]string
+        let workerCount = Math.Max(MinimumWorkers, Environment.ProcessorCount)
+        using let shared = ReferenceResolver.WithReferences([]string{internalLib.AssemblyPath, publicLib.AssemblyPath})
+        let queue = ConcurrentQueue[int32](Enumerable.Range(0, jobs.Count))
+        using let start = Barrier(workerCount)
+        let workers = List[Thread]()
+        for var w = 0; w < workerCount; w++ {
+            let worker = Thread(
+                () -> {
+                    start.SignalAndWait()
+                    while queue.TryDequeue(out var slot) {
+                        let caseIndex = jobs[slot]
+                        let entry = cases[caseIndex]
+                        parallelResults[slot] = CompileAndDescribe("case$caseIndex.gs", entry.Value, shared, entry.Key)
+                    }
+                },
+                WorkerStackSize
+            )
+            worker.IsBackground = true
+            workers.Add(worker)
+            worker.Start()
+        }
+        for worker in workers {
+            worker.Join()
+        }
+        let mismatches = List[string]()
+        for var slot = 0; slot < jobs.Count; slot++ {
+            let expected = serialResults[jobs[slot]]
+            let actual = parallelResults[slot]
+            if !string.Equals(expected, actual, StringComparison.Ordinal) {
+                let entry = cases[jobs[slot]]
+                mismatches.Add("slot $slot (${entry.Key}):\n  serial:   $expected\n  parallel: $actual")
+            }
+        }
+        Assert.True(
+            mismatches.Count == 0,
+            "${mismatches.Count} of ${jobs.Count} parallel multi-assembly compilations differ from serial:\n" +
                 string.Join("\n", mismatches.Take(10))
         )
     }
@@ -163,11 +297,17 @@ open class Adr0223SharedResolverStressTests {
         // Describes one compilation: the diagnostics in report order, then the image hash or the
         // exception. An exception is a result, so that a crash on one worker is a mismatch. An internal
         // compiler error (GS9998, which Emit makes from an exception) is an exception too.
-        private func CompileAndDescribe(name string, text string, references ReferenceResolver) string {
+        private func CompileAndDescribe(
+            name string,
+            text string,
+            references ReferenceResolver,
+            assemblyName string = "GSharp.Adr0223Stress"
+        ) string {
             let builder = StringBuilder()
             try {
                 let tree = SyntaxTree.Parse(SourceText.From(text, Path.GetFileName(name)))
                 let compilation = Compilation(references, tree){
+                    AssemblyName = assemblyName,
                     DebugInformation = DebugInformationOptions{Deterministic: true}
                 }
                 using let peStream = MemoryStream()
@@ -175,7 +315,7 @@ open class Adr0223SharedResolverStressTests {
                     peStream: peStream,
                     pdbStream: nil,
                     refStream: nil,
-                    assemblyName: "GSharp.Adr0223Stress",
+                    assemblyName: assemblyName,
                     assemblyVersion: "1.0.0.0"
                 )
                 if result.Success {

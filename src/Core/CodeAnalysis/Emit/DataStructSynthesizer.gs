@@ -938,10 +938,7 @@ internal class DataStructSynthesizer {
                     if parameters.Length == 1 &&
                         parameters[0].ParameterType == clrBase &&
                         ClrMemberVisibility
-                        .IsVisibleFromDerived(
-                        constructor,
-                        this.emitCtx.References.CanAccessInternalMembers(clrBase.Assembly)
-                    ) {
+                        .IsVisibleFromDerived(constructor, this.emitCtx.CanAccessInternalMembers(clrBase.Assembly)) {
                         copyConstructorToken = this.resolveImportedConstructorRef(constructor, importedBase)
                         return true
                     }
