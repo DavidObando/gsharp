@@ -2553,6 +2553,11 @@ internal shared class DiagnosticDescriptors {
         DiagnosticSeverity.Error,
         "'{0}' {1}."
     )
+    internal let CodeFixProviderFailure DiagnosticDescriptor = DiagnosticDescriptor(
+        "GS9308",
+        DiagnosticSeverity.Warning,
+        "Code-fix provider '{0}' failed on diagnostic {1} and gives no fix: {2}"
+    )
     internal let SourceGeneratorExecutionFailure DiagnosticDescriptor = DiagnosticDescriptor(
         "GS9996",
         DiagnosticSeverity.Error,
