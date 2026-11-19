@@ -676,6 +676,8 @@ public static class P
     public static void Main()
     {
         int x = 7;
+        int y = 8;
+        bool flag = true;
         Pair pair = default;
         int[] xs = new int[1];
         SameDelegate d = Same;
@@ -690,10 +692,12 @@ public static class P
             d(right: xs[0], left: xs[0]) + "|" +
             d(right: Slot(), left: Slot()) + "|" +
             d(right: SlotProp, left: SlotProp) + "|" +
+            d(right: (flag ? ref x : ref y), left: x) + "|" +
+            d(right: (!flag ? ref y : ref x), left: x) + "|" +
             d(right: x + 1, left: x));
     }
 }
-`, "True|True|True|True|True|False|True|True|True|True|False", (
+`, "True|True|True|True|True|False|True|True|True|True|True|True|False", (
                 translated string
             ) -> {
                 Assert.Contains(

@@ -1399,13 +1399,27 @@ partial class CSharpToGSharpTranslator {
             return result
         }
 
+        private func ResolveOperationArgumentSyntax(argument IArgumentOperation) ArgumentSyntax? {
+            for var current Microsoft
+                .CodeAnalysis
+                .SyntaxNode? = argument.Syntax;
+                current != nil &&
+                current is not BaseArgumentListSyntax;
+                current = current!!.Parent {
+                if current is ArgumentSyntax argSyntax {
+                    return argSyntax
+                }
+            }
+            return nil
+        }
+
         private func RequiresFunctionArgumentReassembly(
             targetMethod IMethodSymbol?,
             operationArguments ImmutableArray[IArgumentOperation]
         ) bool {
             if operationArguments.IsDefaultOrEmpty || !operationArguments.Any(
                 (a IArgumentOperation) -> a.ArgumentKind == ArgumentKind.DefaultValue ||
-                    (a.Syntax is ArgumentSyntax and {NameColon: not nil})
+                    (ResolveOperationArgumentSyntax(a) is {} namedSyntax && namedSyntax.NameColon != nil)
             ) ||
                 !operationArguments
                 .All(
@@ -1413,7 +1427,7 @@ partial class CSharpToGSharpTranslator {
                     (
                     a.ArgumentKind == ArgumentKind.DefaultValue ||
                         IsEmptyParamsArgument(a) ||
-                        (a.ArgumentKind == ArgumentKind.Explicit && a.Syntax is ArgumentSyntax)
+                        (a.ArgumentKind == ArgumentKind.Explicit && ResolveOperationArgumentSyntax(a) != nil)
                 )
             ) {
                 return false
@@ -1512,7 +1526,7 @@ partial class CSharpToGSharpTranslator {
                     )
                     continue
                 }
-                let argumentSyntax = cast[ArgumentSyntax](argumentOperation.Syntax)
+                let argumentSyntax = ResolveOperationArgumentSyntax(argumentOperation)!!
                 let value GExpression? = this.TranslateArgumentValue(argumentSyntax)
                 slots[ordinal] = if permutesExplicitArguments {
                     this.SnapshotPermutedArgument(value, argumentOperation)
@@ -1529,6 +1543,7 @@ partial class CSharpToGSharpTranslator {
             }
             let isReadOnlyParam = argument.Parameter!!.RefKind == RefKind.In ||
                 argument.Parameter!!.RefKind == RefKind.RefReadOnlyParameter
+            let argumentSyntax = ResolveOperationArgumentSyntax(argument)
             // Capture an address, never a copy of its pointee. This also runs
             // an array index/getter and its exceptions in source order.
             if value is UnaryExpression{Operator: "&" or "in "} address {
@@ -1536,16 +1551,11 @@ partial class CSharpToGSharpTranslator {
                     return value
                 }
                 let needsValueTemporary = isReadOnlyParam &&
-                    argument.Syntax is ArgumentSyntax syntax &&
-                    syntax
+                    argumentSyntax != nil &&
+                    argumentSyntax
                     .RefKindKeyword
                     .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.None) &&
-                    (
-                    argument.Value is not ILocalReferenceOperation and
-                        not IParameterReferenceOperation and
-                        not IFieldReferenceOperation and
-                        not IArrayElementReferenceOperation
-                )
+                    !this.IsReadOnlyAddressableStorageOperation(argument.Value)
                 let isReadOnlyAlias = address.Operator == "in " && isReadOnlyParam && !needsValueTemporary
                 let temp = this.NewSpillName()
                 this.state.PendingSpillPrologue!!.Add(
@@ -1575,11 +1585,9 @@ partial class CSharpToGSharpTranslator {
                     value
                 }
             }
-            if isReadOnlyParam &&
-                argument.Syntax is ArgumentSyntax implicitSyntax &&
-                implicitSyntax
-                .RefKindKeyword
-                .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.None) &&
+            if isReadOnlyParam && argumentSyntax != nil && argumentSyntax.RefKindKeyword.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.None
+            ) &&
                 PassesImplicitReadOnlyAliasWithoutConversion(argument) {
                 if value is ThisExpression {
                     return value
@@ -2497,6 +2505,12 @@ partial class CSharpToGSharpTranslator {
                 property
                 .Property
                 .ReturnsByRefReadonly
+            case conditional is IConditionalOperation: conditional.IsRef &&
+                SymbolEqualityComparer
+                .IncludeNullability
+                .Equals(conditional.WhenTrue.Type, conditional.WhenFalse?.Type) &&
+                this.IsReadOnlyAddressableStorageOperation(conditional.WhenTrue) &&
+                this.IsReadOnlyAddressableStorageOperation(conditional.WhenFalse)
             case field is IFieldReferenceOperation: !field
                 .Field
                 .IsConst &&
