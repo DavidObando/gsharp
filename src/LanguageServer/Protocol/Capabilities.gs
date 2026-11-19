@@ -42,6 +42,9 @@ class SignatureHelpOptions {
 class CodeActionOptions {
     @JsonPropertyName("codeActionKinds")
     prop CodeActionKinds IReadOnlyList[CodeActionKind]
+
+    @JsonPropertyName("resolveProvider")
+    prop ResolveProvider bool
 }
 
 class CodeLensOptions {

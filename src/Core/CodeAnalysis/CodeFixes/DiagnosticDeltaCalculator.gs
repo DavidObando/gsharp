@@ -79,7 +79,7 @@ internal shared class DiagnosticDeltaCalculator {
             options
         )
         let syntaxDelta = Match(syntaxBeforeChanged, syntaxAfterChanged, maps)
-        if options.StopOnNewSyntaxError && syntaxDelta.Added.Count > 0 {
+        if options.SyntaxOnly || (options.StopOnNewSyntaxError && syntaxDelta.Added.Count > 0) {
             return DiagnosticDelta(
                 syntaxDelta.Removed.ToImmutableArray(),
                 syntaxDelta.Added.ToImmutableArray(),

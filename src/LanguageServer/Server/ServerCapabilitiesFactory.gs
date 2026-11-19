@@ -47,7 +47,8 @@ shared class ServerCapabilitiesFactory {
             },
             RenameProvider: RenameOptions{PrepareProvider: true},
             CodeActionProvider: CodeActionOptions{
-                CodeActionKinds: []CodeActionKind{CodeActionKind.QuickFix, CodeActionKind.RefactorRewrite}
+                CodeActionKinds: []CodeActionKind{CodeActionKind.QuickFix, CodeActionKind.RefactorRewrite},
+                ResolveProvider: true
             },
             CodeLensProvider: if options.ReferenceCodeLens {
                 CodeLensOptions{ResolveProvider: false}

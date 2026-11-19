@@ -406,7 +406,30 @@ class DocumentHighlight {
 
 class WorkspaceEdit {
     @JsonPropertyName("changes")
-    prop Changes Dictionary[DocumentUri, IEnumerable[TextEdit]]
+    prop Changes Dictionary[DocumentUri, IEnumerable[TextEdit]]?
+
+    @JsonPropertyName("documentChanges")
+    prop DocumentChanges IEnumerable[TextDocumentEdit]?
+}
+
+/// The edits of one document version (ADR-0227 D7). The client rejects the edit when the
+/// document has another version.
+class TextDocumentEdit {
+    @JsonPropertyName("textDocument")
+    prop TextDocument OptionalVersionedTextDocumentIdentifier
+
+    @JsonPropertyName("edits")
+    prop Edits IEnumerable[TextEdit]
+}
+
+class OptionalVersionedTextDocumentIdentifier {
+    @JsonPropertyName("uri")
+    prop Uri DocumentUri
+
+    // LSP: `version` is required, and `null` means "any version".
+    @JsonPropertyName("version")
+    @JsonIgnore(Condition = JsonIgnoreCondition.Never)
+    prop Version int32?
 }
 
 class Command {
@@ -460,8 +483,31 @@ class CodeAction {
     @JsonPropertyName("kind")
     prop Kind CodeActionKind
 
+    @JsonPropertyName("diagnostics")
+    prop Diagnostics IReadOnlyList[Diagnostic]?
+
+    @JsonPropertyName("isPreferred")
+    prop IsPreferred bool?
+
     @JsonPropertyName("edit")
-    prop Edit WorkspaceEdit
+    prop Edit WorkspaceEdit?
+
+    @JsonPropertyName("data")
+    prop Data CodeActionData?
+}
+
+/// The data that `codeAction/resolve` uses to compute the edit of a fix again (ADR-0227 D7).
+class CodeActionData {
+    @JsonPropertyName("uri")
+    prop Uri string
+
+    // The document version that the list request computed against.
+    @JsonPropertyName("version")
+    prop Version int32?
+
+    // Identifies the fix: provider, equivalence key, and the start of the diagnostic.
+    @JsonPropertyName("key")
+    prop Key string
 }
 
 @JsonConverter(typeof(CommandOrCodeActionConverter))
