@@ -8300,8 +8300,8 @@ partial class CSharpToGSharpTranslator {
                 () -> if expression is AssignmentExpressionSyntax coalesceStmt && coalesceStmt.IsKind(
                     SyntaxKind.CoalesceAssignmentExpression
                 ) &&
-                    !this
-                    .CanEmitNativeCoalesceAssignment(coalesceStmt) {
+                    this
+                    .CoalesceAssignmentTargetIsNonNullInGSharp(coalesceStmt) {
                     let statements = List[GStatement]()
                     let target GExpression? = this.MakeDuplicationSafeTarget(
                         this.TranslateAssignmentTarget(coalesceStmt.Left)!!,
