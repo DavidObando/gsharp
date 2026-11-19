@@ -23,6 +23,7 @@ class DeltaOptions {
         copy.Analyzers = Analyzers
         copy.StopOnNewSyntaxError = StopOnNewSyntaxError
         copy.DiagnosticFilter = DiagnosticFilter
+        copy.SyntaxOnly = SyntaxOnly
         return copy
     }
 
