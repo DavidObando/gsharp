@@ -170,9 +170,9 @@ partial class CSharpToGSharpTranslator {
             // ADR-0149: the resolved explicit-interface qualifier clause type
             // for a single-slot explicit indexer implementation, or null otherwise.
             let explicitInterfaceIndexerType GTypeReference? = if usesExplicitInterfaceIndexerClause {
-                this.MapImplementedInterfaceType(
-                    symbol!!.ContainingType,
+                this.typeMapper.Map(
                     symbol!!.ExplicitInterfaceImplementations[0].ContainingType,
+                    this.context,
                     node.GetLocation()
                 )
             } else {
@@ -189,6 +189,13 @@ partial class CSharpToGSharpTranslator {
             // type-checks.
             if symbol != nil {
                 type = this.PromoteIfUsedAsNullable(type, symbol)
+            }
+            if usesExplicitInterfaceIndexerClause &&
+                type != nil &&
+                type.IsNullable &&
+                this
+                .TryGetErasedExplicitInterfacePropertySlotType(symbol!!, node.GetLocation(), out var explicitSlotType) {
+                type = explicitSlotType
             }
             let isPartialIndexerImplementation = symbol is IPropertySymbol{PartialDefinitionPart: not nil}
             var indexParameters = if symbol != nil {
@@ -690,135 +697,9 @@ partial class CSharpToGSharpTranslator {
                 // issue #1006 (`interface B : A, C { ... }`); the printer emits
                 // base interfaces via the same base-clause path as a class, so
                 // a base interface is added to the interface's base list.
-                interfaces.Add(this.MapImplementedInterfaceType(symbol, iface, location)!!)
+                interfaces.Add(this.typeMapper.Map(iface, this.context, location)!!)
             }
             return (baseType, interfaces)
-        }
-
-        private func MapImplementedInterfaceType(
-            containingType INamedTypeSymbol?,
-            iface INamedTypeSymbol,
-            location Location
-        ) GTypeReference? {
-            let projected = if containingType != nil {
-                this.TryProjectErasedInterfaceImplementation(containingType, iface)
-            } else {
-                iface
-            }
-            return this.typeMapper.Map(projected, this.context, location)
-        }
-
-        // ADR-0224: when a source interface declares an unconstrained `T?`
-        // property (erased to `T` in G#), an implementer `C : I<U>` whose
-        // property is `U?` fails GS0504 against `I[U]`; project `I[U]` -> `I[U?]`
-        // when no settable `T` slot on the interface stays non-nullable.
-        private func TryProjectErasedInterfaceImplementation(
-            containingType INamedTypeSymbol,
-            iface INamedTypeSymbol
-        ) INamedTypeSymbol {
-            if containingType.TypeKind == TypeKind.Interface ||
-                !iface.IsGenericType ||
-                iface
-                .TypeArguments
-                .IsDefaultOrEmpty ||
-                this.TargetContractIsFrozenInMetadata(iface) {
-                return iface
-            }
-            let definition = iface.ConstructedFrom
-            let newArgs = iface.TypeArguments.ToArray()
-            let newAnnotations = iface.TypeArgumentNullableAnnotations.ToArray()
-            var changed = false
-            let origDef = iface.OriginalDefinition
-            for var i = 0; i < definition.TypeParameters.Length && i < newArgs.Length; i++ {
-                let tp = definition.TypeParameters[i]
-                if CSharpTypeMapper.HasProvenSourceNullableKind(tp) {
-                    continue
-                }
-                let arg = newArgs[i]
-                if !CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(arg) ||
-                    arg.NullableAnnotation == Microsoft
-                    .CodeAnalysis
-                    .NullableAnnotation
-                    .Annotated {
-                    continue
-                }
-                if !tp.ConstraintTypes.All(
-                    (c ITypeSymbol) -> c.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated
-                ) {
-                    continue
-                }
-                let ifacePairs = List[(Iface INamedTypeSymbol, Tp ITypeParameterSymbol)]{(iface, tp)}
-                if i < origDef.TypeParameters.Length {
-                    let origTp = origDef.TypeParameters[i]
-                    for origBase in origDef.AllInterfaces {
-                        if !origBase.IsGenericType {
-                            continue
-                        }
-                        for var k = 0; k < origBase.TypeArguments.Length; k++ {
-                            if origBase.TypeArguments[k] is ITypeParameterSymbol baseArgTp &&
-                                SymbolEqualityComparer
-                                .Default
-                                .Equals(baseArgTp.OriginalDefinition, origTp.OriginalDefinition) {
-                                let concreteBase = iface.AllInterfaces.FirstOrDefault(
-                                    (candidate INamedTypeSymbol) -> SymbolEqualityComparer.Default.Equals(
-                                        candidate.OriginalDefinition,
-                                        origBase.OriginalDefinition
-                                    )
-                                )
-                                if concreteBase != nil && k < concreteBase.ConstructedFrom.TypeParameters.Length {
-                                    ifacePairs.Add((concreteBase, concreteBase.ConstructedFrom.TypeParameters[k]))
-                                }
-                            }
-                        }
-                    }
-                }
-                var needsUpgrade = false
-                var hasSettableConflict = false
-                for pair in ifacePairs {
-                    for ifaceProp in pair.Iface.GetMembers().OfType[IPropertySymbol]() {
-                        let origProp = ifaceProp.OriginalDefinition
-                        if origProp.Type is not ITypeParameterSymbol propTp || !SymbolEqualityComparer.Default.Equals(
-                            propTp.OriginalDefinition,
-                            pair.Tp.OriginalDefinition
-                        ) {
-                            continue
-                        }
-                        if containingType.FindImplementationForInterfaceMember(ifaceProp) is not IPropertySymbol impl {
-                            continue
-                        }
-                        let implEmitsNullable = (
-                            impl
-                                .Type
-                                .NullableAnnotation == Microsoft
-                                .CodeAnalysis
-                                .NullableAnnotation
-                                .Annotated &&
-                                CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(impl.Type)
-                        ) ||
-                            this.ShouldPromoteToNullableReference(impl)
-                        if origProp
-                            .Type
-                            .NullableAnnotation == Microsoft
-                            .CodeAnalysis
-                            .NullableAnnotation
-                            .Annotated &&
-                            implEmitsNullable {
-                            needsUpgrade = true
-                        } else if ifaceProp.SetMethod != nil && !implEmitsNullable {
-                            hasSettableConflict = true
-                        }
-                    }
-                }
-                if needsUpgrade && !hasSettableConflict {
-                    newArgs[i] = arg.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
-                    newAnnotations[i] = Microsoft.CodeAnalysis.NullableAnnotation.Annotated
-                    changed = true
-                }
-            }
-            if !changed {
-                return iface
-            }
-            return definition.Construct(newArgs.ToImmutableArray(), newAnnotations.ToImmutableArray())
         }
 
         /// Issue #1909: maps a C# `: Base(args)` base-class initializer

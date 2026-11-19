@@ -688,9 +688,9 @@ partial class CSharpToGSharpTranslator {
             // ADR-0149: the resolved explicit-interface qualifier clause type for
             // a single-slot explicit event implementation, or null otherwise.
             let explicitInterfaceEventType GTypeReference? = if usesExplicitInterfaceEventClause {
-                this.MapImplementedInterfaceType(
-                    symbol!!.ContainingType,
+                this.typeMapper.Map(
                     symbol!!.ExplicitInterfaceImplementations[0].ContainingType,
+                    this.context,
                     node.GetLocation()
                 )
             } else {
@@ -1242,9 +1242,9 @@ partial class CSharpToGSharpTranslator {
             let explicitInterfaceType GTypeReference? = if hasClauseCompatibleExplicitInterfaceImpl &&
                 !bridgedExplicitRecordDeconstruct &&
                 !helperExplicitValueTypeDeconstruct {
-                this.MapImplementedInterfaceType(
-                    symbol!!.ContainingType,
+                this.typeMapper.Map(
                     symbol!!.ExplicitInterfaceImplementations[0].ContainingType,
+                    this.context,
                     node.GetLocation()
                 )
             } else {
@@ -2566,9 +2566,9 @@ partial class CSharpToGSharpTranslator {
             // ADR-0149: the resolved explicit-interface qualifier clause type
             // for a single-slot explicit property implementation, or null otherwise.
             let explicitInterfacePropertyType GTypeReference? = if usesExplicitInterfacePropertyClause {
-                this.MapImplementedInterfaceType(
-                    symbol!!.ContainingType,
+                this.typeMapper.Map(
                     symbol!!.ExplicitInterfaceImplementations[0].ContainingType,
+                    this.context,
                     node.GetLocation()
                 )
             } else {
@@ -2593,6 +2593,13 @@ partial class CSharpToGSharpTranslator {
                 // maybe-null ELEMENT renders `[]T?` — `Command.Arguments`,
                 // written `[uri, range.Start]` with `uri` a `string?`.
                 type = this.PromoteArrayElementIfGeneratedNullElement(type, symbol)
+            }
+            if usesExplicitInterfacePropertyClause &&
+                type != nil &&
+                type.IsNullable &&
+                this
+                .TryGetErasedExplicitInterfacePropertySlotType(symbol!!, node.GetLocation(), out var explicitSlotType) {
+                type = explicitSlotType
             }
             // Issue #1907: register a synthesized backing field BEFORE mapping the
             // accessor bodies below, so a `field` reference inside them (bound via

@@ -768,6 +768,16 @@ public interface IDerivedModal<T> : IModal<T>
 {
 }
 
+public interface INotNullModal<T> where T : notnull
+{
+    T? Result { get; }
+}
+
+public interface IMutableBox<T>
+{
+    T? Value { get; set; }
+}
+
 public sealed class ChallengeModal : IModal<string>
 {
     public string? Result { get; private set; }
@@ -787,6 +797,17 @@ public sealed class DerivedModal : IDerivedModal<string>
     public void Set(string? value) => Result = value;
 }
 
+public sealed class NotNullConstraintModal : INotNullModal<string>
+{
+    public string? Result { get; private set; }
+    public void Set(string? value) => Result = value;
+}
+
+public sealed class MutableStringBox : IMutableBox<string>
+{
+    public string? Value { get; set; }
+}
+
 public sealed class NonNullModal : IModal<string>
 {
     public string Result => "always";
@@ -799,28 +820,46 @@ public static class Probe
         var c1 = new ChallengeModal();
         var c2 = new ChallengeModal();
         c2.Accept("ok");
-        IModal<string?> e1 = new ExplicitModal(null);
-        IModal<string?> e2 = new ExplicitModal("exp");
+        IModal<string> cIface1 = c1;
+        IModal<string> cIface2 = c2;
+        IModal<string> e1 = new ExplicitModal(null);
+        IModal<string> e2 = new ExplicitModal("exp");
         var d1 = new DerivedModal();
         d1.Set("drv");
+        IDerivedModal<string> dIface = d1;
+        INotNullModal<string> nnConstraint = new NotNullConstraintModal();
+        var mutable = new MutableStringBox();
+        IMutableBox<string> mutableIface = mutable;
+        mutableIface.Value = "via-iface";
         IModal<string> nn = new NonNullModal();
         return string.Join(
             "|",
             c1.Result ?? "nil",
             c2.Result ?? "nil",
+            cIface1.Result ?? "nil",
+            cIface2.Result ?? "nil",
             e1.Result ?? "nil",
             e2.Result ?? "nil",
-            d1.Result ?? "nil",
+            dIface.Result ?? "nil",
+            nnConstraint.Result ?? "nil",
+            mutable.Value ?? "nil",
+            mutableIface.Value ?? "nil",
             nn.Result);
     }
 }`
         let printed = Translate(source)
-        Assert.Contains("class ChallengeModal : IModal[string?]", printed, StringComparison.Ordinal)
-        Assert.Contains("class ExplicitModal : IModal[string?]", printed, StringComparison.Ordinal)
-        Assert.Contains("prop (IModal[string?]) Result string?", printed, StringComparison.Ordinal)
-        Assert.Contains("class DerivedModal : IDerivedModal[string?]", printed, StringComparison.Ordinal)
+        Assert.Contains("class ChallengeModal : IModal[string]", printed, StringComparison.Ordinal)
+        Assert.Contains("prop (IModal[string]) Result string", printed, StringComparison.Ordinal)
+        Assert.Contains("class ExplicitModal : IModal[string]", printed, StringComparison.Ordinal)
+        Assert.Contains("prop (IModal[string]) Result string", printed, StringComparison.Ordinal)
+        Assert.Contains("class DerivedModal : IDerivedModal[string]", printed, StringComparison.Ordinal)
+        Assert.Contains("class NotNullConstraintModal : INotNullModal[string]", printed, StringComparison.Ordinal)
+        Assert.Contains("class MutableStringBox : IMutableBox[string]", printed, StringComparison.Ordinal)
         Assert.Contains("class NonNullModal : IModal[string]", printed, StringComparison.Ordinal)
-        Assert.Equal("nil|ok|nil|exp|drv|always", CompileAndRun(printed, "Demo.Probe.Run()"))
+        Assert.Equal(
+            "nil|ok|nil|ok|nil|exp|drv|nil|via-iface|via-iface|always",
+            CompileAndRun(printed, "Demo.Probe.Run()")
+        )
     }
 
     shared {

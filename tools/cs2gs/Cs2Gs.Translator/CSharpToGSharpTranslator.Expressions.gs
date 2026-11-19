@@ -856,8 +856,48 @@ partial class CSharpToGSharpTranslator {
             if targetSymbol == nil || this.TargetContractIsFrozenInMetadata(targetSymbol) {
                 return false
             }
+            let effectiveProperty IPropertySymbol? = switch targetSymbol {
+                case property is IPropertySymbol: property
+                case method is IMethodSymbol when method.MethodKind == MethodKind.PropertyGet &&
+                    method.AssociatedSymbol is IPropertySymbol associatedProp: associatedProp
+                default: default(IPropertySymbol?)
+            }
+            if effectiveProperty != nil && this.TryGetErasedExplicitInterfacePropertySlotType(
+                effectiveProperty,
+                location,
+                out var explicitSlotType
+            ) {
+                nonNullType = explicitSlotType
+                return true
+            }
             let originalType ITypeSymbol? = this.TryResolveOriginalDeclarationType(targetSymbol)
             let substituted = this.TryGetSubstitutedNonNullGenericTypeArgument(targetSymbol, originalType)
+            if substituted == nil {
+                return false
+            }
+            let mapped = this.typeMapper.Map(substituted, this.context, location)
+            if mapped == nil || mapped.IsNullable {
+                return false
+            }
+            nonNullType = mapped
+            return true
+        }
+
+        private func TryGetErasedExplicitInterfacePropertySlotType(
+            property IPropertySymbol?,
+            location Location?,
+            out nonNullType GTypeReference?
+        ) bool {
+            nonNullType = nil
+            if property == nil || property.ExplicitInterfaceImplementations.Length != 1 {
+                return false
+            }
+            let explicitSlot = property.ExplicitInterfaceImplementations[0]
+            if this.TargetContractIsFrozenInMetadata(explicitSlot.ContainingType) {
+                return false
+            }
+            let originalType = this.TryResolveOriginalDeclarationType(explicitSlot)
+            let substituted = this.TryGetSubstitutedNonNullGenericTypeArgument(explicitSlot, originalType)
             if substituted == nil {
                 return false
             }
