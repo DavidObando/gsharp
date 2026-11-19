@@ -2524,7 +2524,7 @@ partial class CSharpToGSharpTranslator {
                     field.Instance
                 )
             )
-            default: value != nil && this.IsPointerStorageSyntax(value.Syntax)
+            default: value != nil && value.Kind == OperationKind.None && this.IsPointerStorageSyntax(value.Syntax)
         }
 
         private func IsPointerStorageSyntax(syntax Microsoft.CodeAnalysis.SyntaxNode?) bool {

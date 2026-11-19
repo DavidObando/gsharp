@@ -2601,8 +2601,10 @@ public struct Pair { public int Value; }
 public static class Demo
 {
     delegate bool SameDelegate(ref readonly int left, ref readonly int right);
+    delegate string LongDelegate(in long left, in long right);
     static bool Same(ref readonly int left, ref readonly int right) =>
         Unsafe.AreSame(ref Unsafe.AsRef(in left), ref Unsafe.AsRef(in right));
+    static string FormatLong(in long left, in long right) => left + ":" + right;
     public static unsafe string Run()
     {
         int x = 7;
@@ -2610,13 +2612,17 @@ public static class Demo
         Pair pair = new Pair { Value = 9 };
         Pair* pairPtr = &pair;
         SameDelegate d = Same;
+        LongDelegate dLong = FormatLong;
         return Same(in *p, in *p) + "|" +
             d(right: *p, left: *p) + "|" +
             d(right: in *p, left: in *p) + "|" +
             d(right: pairPtr->Value, left: pairPtr->Value) + "|" +
-            d(right: p[0], left: p[0]);
+            d(right: p[0], left: p[0]) + "|" +
+            dLong(right: *p, left: 0L) + "|" +
+            dLong(right: pairPtr->Value, left: 1L) + "|" +
+            dLong(right: p[0], left: 2L);
     }
-}`, strictIl: false, expectedOutput: "True|True|True|True|True")
+}`, strictIl: false, expectedOutput: "True|True|True|True|True|0:7|1:9|2:7")
         Assert.Contains("in (*p)", printed, StringComparison.Ordinal)
         Assert.Contains("let ref readonly", printed, StringComparison.Ordinal)
     }
