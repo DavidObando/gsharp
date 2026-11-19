@@ -14,6 +14,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ## Unreleased (0.5 line)
 
+- **Diagnostic-delta gate for code fixes** (Part of #6119; ADR-0227 D4). `CodeFixService.ComputeDelta` parses each changed document, stops when the parse adds a syntax diagnostic, and otherwise binds a snapshot compilation (`Compilation.WithReplacedSyntaxTrees`) under the request's own work budget. It compares the diagnostics of the whole compilation before and after the complete edit set by document, ID, severity, message and mapped span, after the host's severity filter. `DeltaPolicy` names the gate rules: `NoNewDiagnostics` (the default), `RemovesTargetNoNewErrors`, `NetImprovement` and `PhaseAware` (for fixes of parse errors only). The host's compilation does not change.
+
 - **Code-fix API and span editor** (Part of #6119; ADR-0227). `GSharp.Core` adds `TextChange`, `SourceText.WithChanges`, `SyntaxEditor`, `SyntaxNode.DescendantTokens` and `SyntaxNode.FindToken`, and the `GSharp.Core.CodeAnalysis.CodeFixes` namespace: `CodeFix` with an equivalence key and an `Applicability`, `GSharpCodeFixProvider`, `CodeFixRegistry` and `CodeFixService`. `GSharpAnalyzerHost.LoadCodeFixProviders` loads `@GSharpCodeFixProvider` types from analyzer assemblies. A provider that throws reports GS9308 and gives no fix.
 
 - **Preserve P/Invoke return marshalling overrides** (#6072). Emit return-target `MarshalAs` descriptors for `DllImport` and both `LibraryImport` methods. Preserve other return attributes, diagnose unsupported return forms, and keep unannotated boolean defaults unchanged.
