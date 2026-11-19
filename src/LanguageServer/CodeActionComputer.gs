@@ -35,8 +35,9 @@ shared class CodeActionComputer {
     // A document without a project uses the built-in providers only.
     private let DefaultRegistry CodeFixRegistry = CodeFixRegistry.CreateDefault()
 
-    // ADR-0227 D7: the analyzer diagnostics of a compilation snapshot. A new snapshot is a new key,
-    // so an edit invalidates the entry.
+    // ADR-0227 D7: the analyzer diagnostics of a compilation snapshot and an analyzer set. Any edit
+    // of the project makes a new snapshot, and a change of the analyzer configuration makes a new
+    // analyzer set, so either one invalidates the entry. The document version alone is not enough.
     private let AnalyzerResults ConditionalWeakTable[Compilation, AnalyzerResult] = ConditionalWeakTable[
         Compilation,
         AnalyzerResult
@@ -301,7 +302,7 @@ shared class CodeActionComputer {
         if !fixable {
             return ImmutableArray[CoreDiagnostic].Empty
         }
-        if AnalyzerResults.TryGetValue(compilation, out var cached) {
+        if AnalyzerResults.TryGetValue(compilation, out var cached) && cached.Analyzers == analyzers {
             return cached.Diagnostics
         }
         let produced = GSharpAnalyzerDriver.Run(
@@ -310,7 +311,7 @@ shared class CodeActionComputer {
             AnalyzerOptions{TimeBudgetMilliseconds: AnalyzerTimeBudgetMilliseconds},
             ct
         )
-        AnalyzerResults.AddOrUpdate(compilation, AnalyzerResult(produced))
+        AnalyzerResults.AddOrUpdate(compilation, AnalyzerResult(analyzers, produced))
         return produced
     }
 
@@ -394,8 +395,14 @@ shared class CodeActionComputer {
     }
 
     private class AnalyzerResult {
-        init(diagnostics ImmutableArray[CoreDiagnostic]) {
+        init(analyzers ImmutableArray[GSharpDiagnosticAnalyzer], diagnostics ImmutableArray[CoreDiagnostic]) {
+            Analyzers = analyzers
             Diagnostics = diagnostics
+        }
+
+        // The analyzer set of the run, compared by reference: ProjectState replaces it on a reload.
+        prop Analyzers ImmutableArray[GSharpDiagnosticAnalyzer] {
+            get;
         }
 
         prop Diagnostics ImmutableArray[CoreDiagnostic] {
