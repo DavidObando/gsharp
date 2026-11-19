@@ -406,7 +406,7 @@ namespace Demo
     /// `T?`-return test above.
     @Fact
     func BareDefault_AssignedToDeclaredNullableField_KeepsNullable() {
-        let printed = TranslateEnabled(("Node.cs", `
+        const source = `
 namespace Demo
 {
     public class Node<T>
@@ -418,7 +418,10 @@ namespace Demo
             slot = default;
         }
     }
-}`))
+}`
+        let unconstrained = TranslateEnabled(("Node.cs", source))
+        Assert.Contains("slot = default(T)", unconstrained[0])
+        let printed = TranslateEnabled(("Node.cs", source.Replace("class Node<T>", "class Node<T> where T : class")))
         Assert.Contains("slot = default(T?)", printed[0])
     }
 

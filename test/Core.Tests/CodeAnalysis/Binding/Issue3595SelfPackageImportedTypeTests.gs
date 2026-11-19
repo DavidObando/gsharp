@@ -26,7 +26,7 @@ open class Issue3595SelfPackageImportedTypeTests {
         let outputDir = Path.Combine(AppContext.BaseDirectory, "Issue3595")
         Directory.CreateDirectory(outputDir)
         let libraryPath = Path.Combine(outputDir, "Issue3595.Library.dll")
-        let library = Compilation(SyntaxTree.Parse(SourceText.From(`package Shared.Loading
+        const librarySource = `package Shared.Loading
 
 open class Doc {
     prop Path string -> "p"
@@ -34,7 +34,11 @@ open class Doc {
 
 open class Doc2[T] {
     prop Value T? -> nil
-}`))){IsLibrary = true}
+}`
+        SourceNullableKindAssertions.Reject(librarySource, "T", 1)
+        let library = Compilation(
+            SyntaxTree.Parse(SourceText.From(librarySource.Replace("Doc2[T]", "Doc2[T class?]")))
+        ){IsLibrary = true}
         {
             using let peStream = File.Create(libraryPath)
             let libraryResult = library.Emit(

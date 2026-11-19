@@ -37,7 +37,16 @@ func MutateText[T IList[object]](p T?) string {
 var values = List[object]{ "one", "two" }
 Console.WriteLine(CountText[List[object]](values))
 Console.WriteLine(MutateText[List[object]](values))`
-        Assert.Equal("2${Environment.NewLine}3:zero${Environment.NewLine}", CompileVerifyAndRun(Source))
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(Source, []string{"T"}, 2)
+        Assert.Equal(
+            "2${Environment.NewLine}3:zero${Environment.NewLine}",
+            CompileVerifyAndRun(
+                Source.Replace("T ICollection[object]", "T ICollection[object] class?").Replace(
+                    "T IList[object]",
+                    "T IList[object] class?"
+                )
+            )
+        )
     }
 
     @Fact

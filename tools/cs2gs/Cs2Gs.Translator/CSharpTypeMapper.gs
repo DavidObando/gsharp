@@ -336,19 +336,14 @@ class CSharpTypeMapper {
             let underlying GTypeReference? = this.Map(nullableValue.TypeArguments[0], context, location)
             return WithNullable(underlying, true)
         }
-        // A `T?`-annotated type also covers an annotated type parameter (`T?`
-        // where `T : IFoo` / unconstrained). Such a parameter reports
-        // `IsReferenceType == false` (an interface/unconstrained type parameter is
-        // not provably a reference type), so it must be recognised explicitly or
-        // the `?` is silently dropped and the nullable return/field no longer
-        // type-checks against `== nil`. A `T : struct` parameter's `T?` is modelled
-        // by Roslyn as `Nullable<T>` and is handled above, so an annotated
-        // ITypeParameterSymbol here is always the nullable-reference-like form.
+        // ADR-0224: source `T?` over an open type parameter requires a proven
+        // reference or non-nullable value kind; unknown-kind `T?` lowers to
+        // bare `T` in G#, matching C#'s runtime representation.
         let nullableReference = type.NullableAnnotation == Microsoft
             .CodeAnalysis
             .NullableAnnotation
             .Annotated &&
-            (type.IsReferenceType || type is ITypeParameterSymbol)
+            CanAnnotateNullableReferenceInGSharp(type)
         // ADR-0169 analyzer mode: a declared INamespaceSymbol renders as G#'s
         // namespace display string, whose honest type is `string?` —
         // `Symbol.ContainingNamespace` is nil for symbols without a containing
@@ -2854,10 +2849,10 @@ class CSharpTypeMapper {
         let declaredReturnType = invoke!!.ReturnType
         var returnType ITypeSymbol? = declaredReturnType
         var isAsync = false
-        // A delegate returning Task / Task<T> maps to the async arrow form
-        // (ADR-0115 §B.8): async () -> void / async () -> T.
+        // Async arrows construct non-null tasks. Nullable task returns retain their explicit envelope.
         if returnType is INamedTypeSymbol returnNamed &&
             returnNamed.Name == "Task" &&
+            !ObliviousNullabilityAnalyzer.ReturnContractIsNullable(context.Compilation, invoke!!) &&
             returnNamed
             .ContainingNamespace
             ?.ToDisplayString() == "System.Threading.Tasks" {
@@ -2873,26 +2868,29 @@ class CSharpTypeMapper {
             var mappedReturn GTypeReference? = this.Map(returnType, context, location)
             // Issue #2504: every structural projection of a source named
             // delegate must consume the same Invoke-return taint as the named
-            // declaration itself. Task<T> arrows expose the unwrapped T result;
-            // ValueTask<T> remains an explicit envelope in the existing mapper,
-            // so promote its inner result in place.
-            if declaredReturnType is INamedTypeSymbol{IsGenericType: true, TypeArguments: {Length: 1}} taskLike &&
-                taskLike.Name == "ValueTask" &&
+            // declaration itself. Explicit task envelopes retain independent root and result contracts.
+            if !isAsync &&
+                declaredReturnType is INamedTypeSymbol{IsGenericType: true, TypeArguments: {Length: 1}} taskLike &&
+                (taskLike.Name == "Task" || taskLike.Name == "ValueTask") &&
                 taskLike
                 .ContainingNamespace
                 ?.ToDisplayString() == "System.Threading.Tasks" &&
-                mappedReturn is NamedTypeReference{TypeArguments: {Count: 1}} valueTaskMapped {
+                mappedReturn is NamedTypeReference{TypeArguments: {Count: 1}} envelopeMapped {
                 let promotedInner GTypeReference? = this.PromoteDelegateReturnPosition(
-                    valueTaskMapped.TypeArguments[0],
+                    envelopeMapped.TypeArguments[0],
                     taskLike.TypeArguments[0],
                     invoke,
                     context,
                     List[int32]()
                 )
-                mappedReturn = if object.ReferenceEquals(promotedInner, valueTaskMapped.TypeArguments[0]) {
+                mappedReturn = if object.ReferenceEquals(promotedInner, envelopeMapped.TypeArguments[0]) {
                     mappedReturn
                 } else {
-                    cast[GTypeReference](NamedTypeReference(valueTaskMapped.Name, []GTypeReference{promotedInner!!}))
+                    cast[GTypeReference](
+                        NamedTypeReference(envelopeMapped.Name, []GTypeReference{promotedInner!!}){
+                            IsNullable = envelopeMapped.IsNullable
+                        }
+                    )
                 }
             } else {
                 mappedReturn = this.PromoteDelegateReturnPosition(
@@ -2902,6 +2900,9 @@ class CSharpTypeMapper {
                     context,
                     List[int32]()
                 )
+            }
+            if !isAsync && ObliviousNullabilityAnalyzer.ReturnContractIsNullable(context.Compilation, invoke!!) {
+                mappedReturn = WithNullable(mappedReturn, true)
             }
             returns.Add(mappedReturn!!)
         }
@@ -2957,7 +2958,7 @@ class CSharpTypeMapper {
         }
         return if tainted &&
             !mapped!!.IsNullable &&
-            (returnType != nil && returnType.IsReferenceType == true) &&
+            CanAnnotateNullableReferenceInGSharp(returnType) &&
             returnType.NullableAnnotation != Microsoft
             .CodeAnalysis
             .NullableAnnotation
@@ -3067,6 +3068,60 @@ class CSharpTypeMapper {
     }
 
     shared {
+        /// ADR-0224: returns `true` when [`typeParameter`](paramref) has a
+        /// proven reference or non-nullable value kind for source `T?`.
+        internal func HasProvenSourceNullableKind(typeParameter ITypeParameterSymbol?) bool {
+            if typeParameter == nil {
+                return false
+            }
+            if typeParameter.HasValueTypeConstraint ||
+                typeParameter.HasUnmanagedTypeConstraint ||
+                typeParameter.HasReferenceTypeConstraint {
+                return true
+            }
+            let chain = List[ITypeParameterSymbol]{typeParameter}
+            let visited = HashSet[ITypeParameterSymbol](SymbolEqualityComparer.Default){typeParameter}
+            for var i = 0; i < chain.Count; i++ {
+                for constraint in chain[i].ConstraintTypes {
+                    if constraint is ITypeParameterSymbol boundParameter {
+                        if visited.Add(boundParameter) {
+                            chain.Add(boundParameter)
+                        }
+                    } else if constraint is INamedTypeSymbol named &&
+                        named.TypeKind == TypeKind.Class &&
+                        !IsUniversalClassConstraint(named) {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+
+        private func IsUniversalClassConstraint(named INamedTypeSymbol) bool {
+            if named.SpecialType == SpecialType.System_Object ||
+                named.SpecialType == SpecialType.System_ValueType ||
+                named.SpecialType == SpecialType.System_Enum {
+                return true
+            }
+            return named.ContainingNamespace is {IsGlobalNamespace: false} ns && ns.ToDisplayString() == "System" &&
+                (named.Name == "Object" || named.Name == "ValueType" || named.Name == "Enum")
+        }
+
+        internal func CanAnnotateNullableReferenceInGSharp(type ITypeSymbol?) bool {
+            if type == nil {
+                return false
+            }
+            if type is ITypeParameterSymbol typeParameter {
+                return HasProvenSourceNullableKind(typeParameter) &&
+                    !typeParameter.HasValueTypeConstraint &&
+                    !typeParameter.HasUnmanagedTypeConstraint
+            }
+            return type.IsReferenceType
+        }
+
+        internal func CanAnnotateTypeParameterNullableInGSharp(type ITypeSymbol?) bool ->
+        type is not ITypeParameterSymbol typeParameter || HasProvenSourceNullableKind(typeParameter)
+
         /// The parseable placeholder type name emitted when a C# type has no
         /// canonical G# form. `object` is the universal upper bound (spec
         /// §Object) so the emitted file always re-parses; the real gap is carried by
@@ -4125,7 +4180,7 @@ class CSharpTypeMapper {
         private func NormalizeAnonymousProjectedStorage(symbol ITypeSymbol?, mapped GTypeReference) GTypeReference {
             if symbol is IArrayTypeSymbol arraySymbol && mapped is ArrayTypeReference array {
                 var element = NormalizeAnonymousProjectedStorage(arraySymbol.ElementType, array.ElementType)
-                if arraySymbol.ElementType.IsReferenceType {
+                if CanAnnotateNullableReferenceInGSharp(arraySymbol.ElementType) {
                     // The self-migrated helper return is promoted, but this storage is non-null.
                     element = WithNullable(element, true)!!
                 }
@@ -4144,7 +4199,7 @@ class CSharpTypeMapper {
                         .Select(
                         (element IFieldSymbol, index int32) -> {
                             let normalized = NormalizeAnonymousProjectedStorage(element.Type, tuple.ElementTypes[index])
-                            return if element.Type.IsReferenceType {
+                            return if CanAnnotateNullableReferenceInGSharp(element.Type) {
                                 WithNullable(normalized, true)!!
                             } else {
                                 normalized
@@ -4175,7 +4230,7 @@ class CSharpTypeMapper {
                         .Select(
                         (argument ITypeSymbol, index int32) -> {
                             let normalized = NormalizeAnonymousProjectedStorage(argument, named.TypeArguments[index])
-                            return if argument.IsReferenceType &&
+                            return if CanAnnotateNullableReferenceInGSharp(argument) &&
                                 (
                                 index >= namedSymbol
                                     .TypeParameters
@@ -4462,10 +4517,13 @@ class CSharpTypeMapper {
 
         private func MergeAnonymousNullability(mapped GTypeReference, symbol ITypeSymbol?) GTypeReference {
             let nullable = mapped.IsNullable ||
+                (
                 symbol!!.NullableAnnotation == Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .Annotated
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated &&
+                    CanAnnotateTypeParameterNullableInGSharp(symbol)
+            )
             var merged GTypeReference
             if symbol is IArrayTypeSymbol arraySymbol && mapped is ArrayTypeReference array {
                 merged = ArrayTypeReference(

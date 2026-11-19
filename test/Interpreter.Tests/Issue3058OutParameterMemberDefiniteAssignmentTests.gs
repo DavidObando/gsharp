@@ -21,6 +21,25 @@ import Xunit
 /// tree-walking evaluator driver retired in ADR-0156 Phase 3c, #3176).
 open class Issue3058OutParameterMemberDefiniteAssignmentTests {
     @Theory
+    @InlineData(Driver.Emit)
+    @InlineData(Driver.Submission)
+    func OriginalUnknownKindIterator_ReportsItsAnnotationWithoutHidingAssignmentError(
+        driver Issue3058OutParameterMemberDefiniteAssignmentTests.Driver
+    ) {
+        let original = DeclarationCases().Single(
+            (sourceCase SourceCase) -> sourceCase.Name == "OahuInterleavedIterator"
+        )
+        let error = Assert.Single(Compile(original.ValidSource, driver))
+        Assert.Equal("GS0641", error.Id)
+        Assert.Equal(original.ValidSource.IndexOf("T?", StringComparison.Ordinal) + 1, error.Location.Span.Start)
+        Assert.Equal(1, error.Location.Span.Length)
+        Assert.Equal(
+            []string{"GS0641", "GS0238"},
+            Compile(original.InvalidSource!!, driver).Select((d Diagnostic) -> d.Id).ToArray()
+        )
+    }
+
+    @Theory
     @MemberData("FalsePositiveMatrix")
     func FalsePositiveCorpus_AssignedOnEveryPath_HasNoDiagnostics(
         name string,
@@ -87,7 +106,7 @@ open class Issue3058OutParameterMemberDefiniteAssignmentTests {
         /// Gets valid programs crossed with source position and driver.
         /// @returns Test rows.
         func FalsePositiveMatrix() sequence[[]object] {
-            for sourceCase in DeclarationCases().Concat(CallCases()) {
+            for sourceCase in KnownKindDeclarationCases().Concat(CallCases()) {
                 for position in Enum.GetValues[SourcePosition]() {
                     for driver in Enum.GetValues[Issue3058OutParameterMemberDefiniteAssignmentTests.Driver]() {
                         yield []object{sourceCase.Name, sourceCase.ValidSource, position, driver}
@@ -99,7 +118,7 @@ open class Issue3058OutParameterMemberDefiniteAssignmentTests {
         /// Gets invalid programs crossed with source position and driver.
         /// @returns Test rows.
         func TruePositiveMatrix() sequence[[]object] {
-            for sourceCase in DeclarationCases() {
+            for sourceCase in KnownKindDeclarationCases() {
                 for position in Enum.GetValues[SourcePosition]() {
                     for driver in Enum.GetValues[Issue3058OutParameterMemberDefiniteAssignmentTests.Driver]() {
                         yield []object{sourceCase.Name, sourceCase.InvalidSource!!, position, driver}
@@ -116,6 +135,22 @@ open class Issue3058OutParameterMemberDefiniteAssignmentTests {
                     for driver in Enum.GetValues[Issue3058OutParameterMemberDefiniteAssignmentTests.Driver]() {
                         yield []object{sourceCase.Name, sourceCase.InvalidSource!!, position, driver}
                     }
+                }
+            }
+        }
+
+        private func KnownKindDeclarationCases() sequence[SourceCase] {
+            for sourceCase in DeclarationCases() {
+                if sourceCase.Name != "OahuInterleavedIterator" {
+                    yield sourceCase
+                    continue
+                }
+                for constraint in[]string{"class?", "struct"} {
+                    yield SourceCase(
+                        sourceCase.Name + "-" + constraint,
+                        sourceCase.ValidSource.Replace("Holder[T]", "Holder[T " + constraint + "]"),
+                        sourceCase.InvalidSource!!.Replace("Holder[T]", "Holder[T " + constraint + "]")
+                    )
                 }
             }
         }

@@ -96,7 +96,10 @@ partial class BoundScope {
     /// Creates a worker boundary over canonical declarations. Synthesis remains coordinator-owned.
     internal func CreateIndependentBodyScope() BoundScope -> BoundScope(this){
         independentBodyRoot = true,
-        bindingServices = BindingServices(){BodyBindingOptions = GetBindingServices().BodyBindingOptions}
+        bindingServices = BindingServices(){
+            BodyBindingOptions = GetBindingServices().BodyBindingOptions,
+            SourceNullableAnnotationErrors = GetBindingServices().SourceNullableAnnotationErrors
+        }
     }
 
     private prop SynthesisParent BoundScope? {
@@ -305,6 +308,26 @@ partial class BoundScope {
         symbols ??= ImmutableDictionary.CreateBuilder[string, Symbol]()
         if !symbols!!.ContainsKey(function.Name) {
             AddSymbol(function.Name, function)
+        }
+        return true
+    }
+
+    internal func TryPublishStagedFunction(function FunctionSymbol) bool {
+        if !Pop().TryDeclareFunction(function) {
+            return false
+        }
+        // Retained body scopes must see the published method once, not once in each scope.
+        if functions is {} stagedFunctions && stagedFunctions.TryGetValue(function.Name, out var overloads) {
+            overloads.Remove(function)
+            if overloads.Count == 0 {
+                stagedFunctions.Remove(function.Name)
+                functionKeys?.Remove(function.Name)
+            }
+        }
+        if symbols is {} stagedSymbols && stagedSymbols.TryGetValue(function.Name, out var symbol) &&
+            object.ReferenceEquals(symbol, function) {
+            stagedSymbols.Remove(function.Name)
+            symbolKeys?.Remove(function.Name)
         }
         return true
     }

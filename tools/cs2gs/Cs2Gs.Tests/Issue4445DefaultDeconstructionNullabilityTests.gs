@@ -6,6 +6,7 @@ package Cs2Gs.Tests
 
 import System
 import System.Linq
+import System.Text.RegularExpressions
 import Cs2Gs.CodeModel.Printing
 import Cs2Gs.Translator
 import Cs2Gs.Translator.Loading
@@ -106,7 +107,11 @@ open class Issue4445DefaultDeconstructionNullabilityTests {
 
     @Fact
     func Translation_CarriesMaybeNullStorageThroughEveryLocalShape() {
-        let printed = Translate()
+        let unconstrained = Translate()
+        Assert.DoesNotContain("let direct T? =", unconstrained, StringComparison.Ordinal)
+        Assert.DoesNotContain("annotated T? =", unconstrained, StringComparison.Ordinal)
+        Assert.Contains("suppressed = default(T)!!", unconstrained, StringComparison.Ordinal)
+        let printed = Translate(KnownReferenceSource)
         for name in[]string{
             "direct",
             "alias",
@@ -202,7 +207,7 @@ open class Issue4445DefaultDeconstructionNullabilityTests {
             "left",
             "right"
         } {
-            Assert.Matches("\\b(let|var) $name T\\? =", printed)
+            Assert.Matches("\\b(let|var) (?:$name T\\? =|\\([^)=\\r\\n]*\\b$name\\b[^)=\\r\\n]*\\) =)", printed)
         }
         Assert.DoesNotMatch("\\b(let|var) (directValue|leftValue|rightValue) int32\\? =", printed)
         Assert.DoesNotContain("suppressed T? =", printed, StringComparison.Ordinal)
@@ -242,13 +247,20 @@ open class Issue4445DefaultDeconstructionNullabilityTests {
         Assert.DoesNotContain("methodRight T? =", printed, StringComparison.Ordinal)
         Assert.DoesNotContain("result T? =", printed, StringComparison.Ordinal)
         Assert.DoesNotMatch("\\b(let|var) lambda [^=\\r\\n]*\\? =", printed)
-        Assert.Contains("suppressed = default(T)!!", printed, StringComparison.Ordinal)
         Assert.Contains("annotated T? = default(T)", printed, StringComparison.Ordinal)
         Assert.DoesNotContain("let _ =", printed, StringComparison.Ordinal)
-        let result = EmittedOracle.Evaluate(printed + Environment.NewLine + "Defaults.Run()")
-        Assert.DoesNotContain(
-            result.Diagnostics,
-            (diagnostic GSharp.Core.CodeAnalysis.Diagnostic) -> diagnostic.IsError
+        let supported = printed
+        let result = EmittedOracle.Evaluate(supported + Environment.NewLine + "Defaults.Run()")
+        Assert.True(
+            !result.Diagnostics.Any((diagnostic GSharp.Core.CodeAnalysis.Diagnostic) -> diagnostic.IsError),
+            string.Join(
+                Environment.NewLine,
+                result.Diagnostics.Select(
+                    (diagnostic GSharp.Core.CodeAnalysis.Diagnostic) -> diagnostic.Id + ": " + diagnostic.ToString()
+                )
+            ) +
+                Environment.NewLine +
+                supported
         )
         Assert.DoesNotContain(
             result.Diagnostics,
@@ -264,7 +276,7 @@ open class Issue4445DefaultDeconstructionNullabilityTests {
 
 public static class TupleElementWrite
 {
-    private static void Fill<T>(ref T? value, T replacement) =>
+    private static void Fill<T>(ref T? value, T replacement) where T : class =>
         value = replacement;
 
     private static void Keep<T>(ref T value)
@@ -292,7 +304,7 @@ public static class TupleElementWrite
         T replacement) =>
         pair = (replacement, replacement);
 
-    private static void M<T>(T replacement)
+    private static void M<T>(T replacement) where T : class
     {
         (T First, T Second) pair = (replacement, replacement);
         pair.First = default;
@@ -463,14 +475,14 @@ public static class TupleElementWrite
 
 public static class ArgumentCapture
 {
-    private static void Fill<T>(ref T? value, T replacement) =>
+    private static void Fill<T>(ref T? value, T replacement) where T : class =>
         value = replacement;
 
     private static void Keep<T>(ref T value)
     {
     }
 
-    private static void M<T>(T replacement)
+    private static void M<T>(T replacement) where T : class
     {
         var pair = (First: replacement, Second: replacement);
         System.Action<T> callback = ignored =>
@@ -493,10 +505,10 @@ public static class ArgumentCapture
 
 public static class JoinStates
 {
-    private static void Fill<T>(ref T? value, T replacement) =>
+    private static void Fill<T>(ref T? value, T replacement) where T : class =>
         value = replacement;
 
-    public static void M<T>(T replacement, bool choose)
+    public static void M<T>(T replacement, bool choose) where T : class
     {
         var pair = (replacement, replacement);
         if (choose)
@@ -527,13 +539,13 @@ public static class LocalFunctionCallbacks
 {
     private static System.Action stored = () => { };
 
-    private static void Fill<T>(ref T? value, T replacement) =>
+    private static void Fill<T>(ref T? value, T replacement) where T : class =>
         value = replacement;
 
     private static void Invoke(System.Action callback) =>
         callback();
 
-    public static void M<T>(T replacement, bool choose)
+    public static void M<T>(T replacement, bool choose) where T : class
     {
         var pair = (replacement, replacement);
         void Local()
@@ -579,10 +591,10 @@ public static class LocalFunctionCallbacks
 
 public static class TupleElementRead
 {
-    private static void Fill<T>(ref T? value, T replacement) =>
+    private static void Fill<T>(ref T? value, T replacement) where T : class =>
         value = replacement;
 
-    private static void M<T>(T replacement)
+    private static void M<T>(T replacement) where T : class
     {
         (T First, T Second) pair = (default(T), replacement);
         var first = pair.First;
@@ -723,7 +735,7 @@ public static class InitializerLambdas
     func Translation_TracksAliasesInExpressionBodiedMembers() {
         const source = `#nullable enable
 
-public class ExpressionBodiedMembers<T>
+public class ExpressionBodiedMembers<T> where T : class
 {
     private static void Fill(ref T? value, T replacement) =>
         value = replacement;
@@ -771,7 +783,7 @@ public class Derived<T>(T replacement)
         var (baseLeft, baseRight) = pair;
         return (baseLeft is null ? 0 : 1)
             + (baseRight is null ? 0 : 1);
-    })
+    }) where T : class
 {
 }`
         let printed = Translate(source)
@@ -813,9 +825,9 @@ public static class Program
 
 public static class Program
 {
-    public static T? Run<T>(bool choose, T replacement)
+    public static T? Run<T>(bool choose, T replacement) where T : class
     {
-        (T, T) pair = (replacement, replacement);
+        (T?, T?) pair = (replacement, replacement);
         T other = replacement;
         (pair, other) = choose
             ? ((default(T), default(T)), replacement)
@@ -827,13 +839,14 @@ public static class Program
         let printed = Translate(source)
         Assert.Matches("\\b(let|var) projectedLeft T\\? =", printed)
         Assert.Matches("\\b(let|var) projectedRight T\\? =", printed)
+        let _ = TranslationTestValidation.AssertBinds(printed)
     }
 
     @Fact
     func Translation_TracksEventDelegateStorage() {
         const source = `#nullable enable
 
-public sealed class EventStorage<T>
+public sealed class EventStorage<T> where T : class
 {
     public event System.Action? Changed;
 
@@ -880,7 +893,7 @@ public sealed class EventStorage<T>
     func Translation_TreatsDelegateValuedPropertiesAsOpaqueStorage() {
         const source = `#nullable enable
 
-public sealed class PropertyStorage<T>
+public sealed class PropertyStorage<T> where T : class
 {
     private System.Action? stored;
 
@@ -981,7 +994,7 @@ public static class RemovedDelegate
     {
     }
 
-    private static void M<T>(T replacement)
+    private static void M<T>(T replacement) where T : class
     {
         var pair = (replacement, replacement);
         System.Action first = () =>
@@ -1011,7 +1024,7 @@ public static class RemovedDelegate
     func Translation_DuplicateFieldDelegateSurvivesOneRemoval() {
         const source = `#nullable enable
 
-public sealed class DuplicateFieldDelegate<T>
+public sealed class DuplicateFieldDelegate<T> where T : class
 {
     private System.Action callback = () => { };
 
@@ -1053,10 +1066,10 @@ public sealed class DuplicateFieldDelegate<T>
 
 public static class LocalFunctionInvocations
 {
-    private static void Fill<T>(ref T? value, T replacement) =>
+    private static void Fill<T>(ref T? value, T replacement) where T : class =>
         value = replacement;
 
-    public static int M<T>(T replacement)
+    public static int M<T>(T replacement) where T : class
     {
         var genericPair = (replacement, replacement);
         int Generic<TIgnored>()
@@ -1098,7 +1111,7 @@ public static class ReachingStorage
         new System.Action[2];
     private static int fieldIndex;
 
-    private static void Fill<T>(ref T? value, T replacement) =>
+    private static void Fill<T>(ref T? value, T replacement) where T : class =>
         value = replacement;
 
     private static void Keep<T>(ref T value)
@@ -1204,7 +1217,7 @@ public static class ReachingStorage
         fieldReceiver[fieldIndex]();
     }
 
-    private static void CompoundFieldStorage<T>(T replacement)
+    private static void CompoundFieldStorage<T>(T replacement) where T : class
     {
         fieldReceiver = new System.Action[1];
         fieldIndex = 0;
@@ -1220,7 +1233,7 @@ public static class ReachingStorage
         fieldReceiver[fieldIndex]();
     }
 
-    public static void M<T>(T replacement, bool flag)
+    public static void M<T>(T replacement, bool flag) where T : class
     {
         var directTupleMember = default((T, T)).Item1;
         Fill(ref directTupleMember, replacement);
@@ -1424,7 +1437,7 @@ public static class OutDelegate
     {
     }
 
-    private static void Fill<T>(ref T? value, T replacement) =>
+    private static void Fill<T>(ref T? value, T replacement) where T : class =>
         value = replacement;
 
     private static void Overwrite(out System.Action callback) =>
@@ -1446,7 +1459,7 @@ public static class OutDelegate
     private static void InvokeFirst(System.Action callback) =>
         callback.GetInvocationList()[0].DynamicInvoke();
 
-    public static void M<T>(T replacement)
+    public static void M<T>(T replacement) where T : class
     {
         var pair = (replacement, replacement);
         System.Action callback = () =>
@@ -1506,7 +1519,7 @@ public static class OutDelegate
     func Translation_TreatsVirtualDelegateCalleeAsEscape() {
         const source = `#nullable enable
 
-public class VirtualDelegateCallee<T>
+public class VirtualDelegateCallee<T> where T : class
 {
     private static void Fill(ref T? value, T replacement) =>
         value = replacement;
@@ -1537,7 +1550,7 @@ public class VirtualDelegateCallee<T>
 
 public static class CallbackShapes
 {
-    private static void Fill<T>(ref T? value, T replacement) =>
+    private static void Fill<T>(ref T? value, T replacement) where T : class =>
         value = replacement;
 
     private static void Keep<T>(ref T value)
@@ -1550,7 +1563,7 @@ public static class CallbackShapes
         Run();
     }
 
-    public static void M<T>(T replacement, bool choose)
+    public static void M<T>(T replacement, bool choose) where T : class
     {
         var wrappedPair = (replacement, replacement);
         System.Action wrapped = () =>
@@ -1620,7 +1633,7 @@ public static class CallbackShapes
     func LocalFunctionDelegateStorage_TracksFieldOverwriteAndEventUnsubscribeBeforeDefaultWrite() {
         let source = `#nullable enable
 
-public sealed class Probe<T>
+public sealed class Probe<T> where T : class
 {
     private System.Action? callback;
     private event System.Action? Happened;
@@ -2339,7 +2352,7 @@ public sealed class Probe<T>
     }
 }
 
-public class VirtualClearBase<T>
+public class VirtualClearBase<T> where T : class
 {
     protected System.Action? callback;
     protected System.Action? saved;
@@ -2414,7 +2427,7 @@ public class VirtualClearBase<T>
     }
 }
 
-public sealed class VirtualClearDerived<T> : VirtualClearBase<T>
+public sealed class VirtualClearDerived<T> : VirtualClearBase<T> where T : class
 {
     protected override void Clear()
     {
@@ -2479,7 +2492,7 @@ public sealed class VirtualClearDerived<T> : VirtualClearBase<T>
         Assert.Matches("\\b(let|var) repeatedRestoreLeft T\\? =", printed)
 
         let part1 = `#nullable enable
-public sealed partial class SplitProbe<T>
+public sealed partial class SplitProbe<T> where T : class
 {
     private System.Action? callback;
     private static void Keep(ref T value) { }
@@ -2515,7 +2528,7 @@ public sealed partial class SplitProbe<T>
     }
 }`
         let part2 = `#nullable enable
-public sealed partial class SplitProbe<T>
+public sealed partial class SplitProbe<T> where T : class
 {
     private System.Action? unusedCb;
     private static void Noop(ref T value) { }
@@ -3175,6 +3188,47 @@ public static class Defaults
 
         private func Translate() string {
             return Translate(Source)
+        }
+
+        private prop KnownReferenceSource string -> NullableReferenceStorage(Source)
+            .Replace(
+            "Fill<T>(ref T? value, T replacement) =>",
+            "Fill<T>(ref T? value, T replacement) where T : class =>"
+        )
+            .Replace("NullablePair<T>() =>", "NullablePair<T>() where T : class =>")
+            .Replace("class FieldCallbacks<T>", "class FieldCallbacks<T> where T : class")
+            .Replace("class ReceiverContainer<T>", "class ReceiverContainer<T> where T : class")
+            .Replace(
+            "Unconstrained<T>(T replacement, bool choose)",
+            "Unconstrained<T>(T replacement, bool choose) where T : class"
+        )
+            .Replace("IncrementorControl<T>(T replacement)", "IncrementorControl<T>(T replacement) where T : class")
+            .Replace(
+            "NestedFunctionControls<T>(T replacement)",
+            "NestedFunctionControls<T>(T replacement) where T : class"
+        )
+            .Replace(
+            "private static int Controls<T>(T replacement)",
+            "private static int Controls<T>(T replacement) where T : class"
+        )
+
+        private func NullableReferenceStorage(source string) string {
+            // Mutable reference slots that receive default(T) must permit nil in the constrained neighbor.
+            return Regex
+                .Replace(
+                source,
+                "\\bvar (\\w+) = \\(replacement, replacement\\)",
+                "(T?, T?) $1 = (replacement, replacement)"
+            )
+                .Replace("T assignmentSource", "T? assignmentSource")
+                .Replace("T initializerless", "T? initializerless")
+                .Replace("T repeatedSource", "T? repeatedSource")
+                .Replace("T conditionalCycleSource", "T? conditionalCycleSource")
+                .Replace("T switchCycleSource", "T? switchCycleSource")
+                .Replace("default((T, T))", "default((T?, T?))")
+                .Replace("default(((T, T), T))", "default(((T?, T?), T?))")
+                .Replace("((T, T))(default(T), default(T))", "((T?, T?))(default(T), default(T))")
+                .Replace("(T, T)? nullablePair", "(T?, T?)? nullablePair")
         }
 
         private func Translate(source string, outputKind OutputKind = OutputKind.DynamicallyLinkedLibrary) string {

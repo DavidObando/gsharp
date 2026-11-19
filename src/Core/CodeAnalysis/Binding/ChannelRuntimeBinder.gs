@@ -1231,17 +1231,19 @@ internal class ChannelRuntimeBinder {
             if !TryAppendImportedContext(call.Method, call.Arguments, context, out var arguments) {
                 return call
             }
-            return BoundImportedInstanceCallExpression(
-                call.Syntax,
-                call.Receiver,
-                call.Method,
-                call.Type,
-                arguments,
-                call.ArgumentRefKinds,
-                call.TypeArgumentSymbols,
-                call.ConstrainedReceiverTypeParameter,
-                call.ConstrainedInterfaceType,
-                call.IsNonVirtualBaseCall
+            return call.CopySignatureReturnTypeTo(
+                BoundImportedInstanceCallExpression(
+                    call.Syntax,
+                    call.Receiver,
+                    call.Method,
+                    call.Type,
+                    arguments,
+                    call.ArgumentRefKinds,
+                    call.TypeArgumentSymbols,
+                    call.ConstrainedReceiverTypeParameter,
+                    call.ConstrainedInterfaceType,
+                    call.IsNonVirtualBaseCall
+                )
             )
         }
 

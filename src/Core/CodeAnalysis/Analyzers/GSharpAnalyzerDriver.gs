@@ -250,7 +250,7 @@ class GSharpAnalyzerDriver {
         }
     )
 
-    private func Guarded[T](owner GSharpDiagnosticAnalyzer, action() -> T) T? {
+    private func Guarded[T class?](owner GSharpDiagnosticAnalyzer, action() -> T) T? {
         if disabled.Contains(owner) {
             return default(T?)
         }

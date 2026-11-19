@@ -50,7 +50,8 @@ class Issue3420NativeVarPatternTranslationTests {
     @Fact
     func ReassignedSwitchVarPatterns_MaterializeMutableArmLocals() {
         let printed = Translate(ReassignedSwitchSource)
-        Assert.Contains("case var stableValue:", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("case var stableValue:", printed, StringComparison.Ordinal)
+        Assert.Contains("var stableValue int32 = ", printed, StringComparison.Ordinal)
         Assert.DoesNotContain("case var exprValue:", printed, StringComparison.Ordinal)
         Assert.Contains("var exprValue int32 = pattern", printed, StringComparison.Ordinal)
         Assert.Contains("var stmtValue int32 = pattern_2", printed, StringComparison.Ordinal)
@@ -60,6 +61,20 @@ class Issue3420NativeVarPatternTranslationTests {
         Assert.DoesNotContain("__pattern", printed, StringComparison.Ordinal)
         Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal)
         LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Console.WriteLine(C.Run(6))", "7,8,9,10,11,6")
+    }
+
+    @Fact
+    func UnaddressedSwitchVarPattern_RemainsNative() {
+        let printed = Translate(`namespace Demo {
+    public static class C {
+        public static int Run(int input) => input switch {
+            var value => value + 1,
+        };
+    }
+}`)
+        Assert.Contains("case var value:", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("var value int32 =", printed, StringComparison.Ordinal)
+        LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Console.WriteLine(C.Run(6))", "7")
     }
 
     @Fact

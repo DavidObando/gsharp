@@ -957,7 +957,9 @@ public class Probe {
         Assert.Empty(context.Diagnostics)
         Assert.Contains("rest[0]!!.Borrow()", text, StringComparison.Ordinal)
         Assert.Contains("__spill0 = buffer[1..]", text, StringComparison.Ordinal)
-        Assert.Contains("__spill0[0]!!.Borrow()", text, StringComparison.Ordinal)
+        Assert.Contains("var bufferRest Span[managed[int32]?]", text, StringComparison.Ordinal)
+        Assert.Contains("bufferRest = __spill0", text, StringComparison.Ordinal)
+        Assert.Contains("bufferRest[0]!!.Borrow()", text, StringComparison.Ordinal)
         let result = EmittedOracle.Evaluate(
             text + "\nProbe.Run()",
             []string{typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location}
@@ -1270,20 +1272,39 @@ public class Probe {
         let references = List[MetadataReference](
             CSharpProjectLoader.RuntimeReferences()
         ){MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location)}
-        let project = CSharpProjectLoader.LoadInMemory(
-            [](string, source string){("ManagedArraySwitchPositionalRecordAndDeconstruct.cs", source)},
-            references
-        )
-        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
-        let document = Assert.Single(project.Documents)
-        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
-        let text = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
-        Assert.Empty(context.Diagnostics)
+        let Translate = func (input string) string {
+            let project = CSharpProjectLoader.LoadInMemory(
+                [](string, source string){("ManagedArraySwitchPositionalRecordAndDeconstruct.cs", input)},
+                references
+            )
+            Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+            let document = Assert.Single(project.Documents)
+            let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+            let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+            Assert.Empty(context.Diagnostics)
+            return printed
+        }
+        let text = Translate(source)
         Assert.Contains("recordItem!!.Borrow()", text, StringComparison.Ordinal)
         Assert.Contains("boxItem!!.Borrow()", text, StringComparison.Ordinal)
-        Assert.Contains("nullableItem!!.Borrow()", text, StringComparison.Ordinal)
-        let result = EmittedOracle.Evaluate(
+        Assert.Contains("nullableItem.Borrow()", text, StringComparison.Ordinal)
+        Assert.DoesNotContain("nullableItem!!.Borrow()", text, StringComparison.Ordinal)
+        let unconstrainedResult = EmittedOracle.Evaluate(
             text + "\nProbe.Run()",
+            []string{typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location}
+        )
+        Assert.Empty(unconstrainedResult.Diagnostics)
+        Assert.Null(unconstrainedResult.UnhandledException)
+        Assert.Equal(42, unconstrainedResult.Value)
+        let supported = Translate(
+            source.Replace(
+                "record NullableHolder<T>(T? First, int Second);",
+                "record NullableHolder<T>(T? First, int Second) where T : class;"
+            )
+        )
+        Assert.Contains("nullableItem!!.Borrow()", supported, StringComparison.Ordinal)
+        let result = EmittedOracle.Evaluate(
+            supported + "\nProbe.Run()",
             []string{typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location}
         )
         Assert.Empty(result.Diagnostics)

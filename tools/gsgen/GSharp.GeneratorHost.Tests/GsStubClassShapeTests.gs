@@ -26,6 +26,23 @@ import GSharp.GeneratorHost
 /// (`INamedTypeSymbol.IsAbstract` / `IsStatic`), or it can produce different
 /// output than for the real type.
 open class GsStubClassShapeTests {
+    @Fact
+    func UnconstrainedNullableCopyConstructor_ReportsSourceKindDiagnostic() {
+        const firstPart = "open class Base {}\nopen partial data class Target[T] : Base { public init() {} }"
+        const secondPart = "open partial data class Target[T] { protected init(other Target[T?]) {} }"
+        let trees = []string{firstPart, secondPart}.Select(
+            (source string) -> GsSyntaxTree.Parse(SourceText.From("package App\n" + source))
+        )
+            .ToArray()
+        let error = Assert.Single(
+            Compilation(trees).GetDiagnostics().Where((d GSharp.Core.CodeAnalysis.Diagnostic) -> d.IsError)
+        )
+        Assert.Equal("GS0641", error.Id)
+        Assert.Same(trees[1].Text, error.Location.Text)
+        Assert.Equal(("package App\n" + secondPart).IndexOf("?", StringComparison.Ordinal), error.Location.Span.Start)
+        Assert.Equal(1, error.Location.Span.Length)
+    }
+
     @Theory
     @InlineData("open partial class Target { open func Visit() int32; }", "", true, false, MethodAttributes(6), false)
     @InlineData(
@@ -492,8 +509,8 @@ class Plain {
         "Protected(Target);Public()"
     )
     @InlineData(
-        "open class Base {}\nopen partial data class Target[T] : Base { public init() {} }",
-        "open partial data class Target[T] { protected init(other Target[T?]) {} }",
+        "open class Base {}\nopen partial data class Target[T class?] : Base { public init() {} }",
+        "open partial data class Target[T class?] { protected init(other Target[T?]) {} }",
         "App.Target`1",
         "Protected(Base);Public()",
         "Protected(Target);Public()"

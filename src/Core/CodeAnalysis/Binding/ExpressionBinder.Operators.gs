@@ -907,6 +907,18 @@ internal partial class ExpressionBinder {
             whenFalse = UnwrapSynthesizedRefDelegateBranch(whenFalse)
         }
         var resultType TypeSymbol? = ComputeConditionalResultType(whenTrue.Type, whenFalse.Type, targetType)
+        if !binderCtx.ValidateSourceNullableResult(
+            resultType,
+            syntax.QuestionToken.Location,
+            []TypeSymbol{whenTrue.Type, whenFalse.Type, targetType ?? TypeSymbol.Error}
+        ) {
+            if deferOnFailure {
+                Diagnostics.TruncateTo(diagMark)
+                Diagnostics.RestoreSuppressionsTo(suppressionMark)
+                return BoundErrorExpression(syntax)
+            }
+            return BoundErrorExpression(nil)
+        }
         if targetType == nil {
             resultType = MaterializeSynthesizedRefDelegateResultType(resultType, []BoundExpression{whenTrue, whenFalse})
         }
@@ -1107,6 +1119,18 @@ internal partial class ExpressionBinder {
             whenFalse = UnwrapSynthesizedRefDelegateBranch(whenFalse)
         }
         var resultType TypeSymbol? = ComputeConditionalResultType(whenTrue.Type, whenFalse.Type, targetType)
+        if !binderCtx.ValidateSourceNullableResult(
+            resultType,
+            syntax.IfKeyword.Location,
+            []TypeSymbol{whenTrue.Type, whenFalse.Type, targetType ?? TypeSymbol.Error}
+        ) {
+            if deferOnFailure {
+                Diagnostics.TruncateTo(diagMark)
+                Diagnostics.RestoreSuppressionsTo(suppressionMark)
+                return BoundErrorExpression(syntax)
+            }
+            return BoundErrorExpression(nil)
+        }
         if targetType == nil {
             resultType = MaterializeSynthesizedRefDelegateResultType(resultType, []BoundExpression{whenTrue, whenFalse})
         }
@@ -2193,6 +2217,16 @@ internal partial class ExpressionBinder {
             boundLeft.Type is TupleTypeSymbol &&
             boundRight.Type is TupleTypeSymbol {
             return BindTupleEquality(syntax, operatorKind, operatorLocation, operatorText, boundLeft, boundRight)
+        }
+        if operatorKind == SyntaxKind.QuestionQuestionToken &&
+            boundRight.Type == TypeSymbol.Null &&
+            !binderCtx
+            .ValidateSourceNullableResult(
+            boundLeft.Type,
+            operatorLocation,
+            []TypeSymbol{boundLeft.Type, boundRight.Type}
+        ) {
+            return BoundErrorExpression(nil)
         }
         var boundOperator BoundBinaryOperator? = BindBinaryOperatorWithNumericAdaptation(
             operatorKind,
@@ -3750,6 +3784,9 @@ internal partial class ExpressionBinder {
             }
             if type is TupleTypeSymbol tuple {
                 return NullableTypeSymbol.Get(TupleTypeSymbol.ResolveNilElements(tuple))
+            }
+            if type is TypeParameterSymbol {
+                return NullableTypeSymbol.Get(type)
             }
             if !TypeSymbol.IsByRefLike(type) &&
                 (

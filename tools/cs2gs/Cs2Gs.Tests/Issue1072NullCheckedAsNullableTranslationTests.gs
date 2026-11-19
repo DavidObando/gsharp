@@ -9,6 +9,7 @@ import Cs2Gs.CodeModel.Printing
 import Cs2Gs.CodeModel.RoundTrip
 import Cs2Gs.Translator
 import Cs2Gs.Translator.Loading
+import GSharp.Tests
 import System
 import System.Linq
 import Xunit
@@ -244,12 +245,7 @@ namespace Demo
 
     @Fact
     func NullableTypeParameterReturn_RendersNullableType() {
-        // A `T?` return on a method whose type parameter is interface-constrained
-        // (`where T : IBox`) reports `IsReferenceType == false` in Roslyn, so the
-        // `?` must be honoured via the type-parameter path or it is silently
-        // dropped and `let x = GetChild<T>()` infers a non-nullable `T`, breaking
-        // the subsequent `x == nil` guard at the call site (issue #1072 cascade).
-        let printed = TranslateUnit(`
+        const source = `
 namespace Demo
 {
     public interface IBox { }
@@ -257,8 +253,11 @@ namespace Demo
     {
         public T? GetChild<T>() where T : IBox => default;
     }
-}`)
-        Assert.Contains("GetChild[T IBox]() T?", printed)
+}`
+        let printed = TranslateUnit(source)
+        Assert.Contains("GetChild[T IBox]() T", printed)
+        let supported = TranslateUnit(source.Replace("where T : IBox", "where T : class, IBox"))
+        Assert.Contains("() T?", supported, StringComparison.Ordinal)
     }
 
     @Fact
@@ -344,15 +343,7 @@ namespace Demo
 
     shared {
         private func TranslateUnit(source string) string {
-            let project = CSharpProjectLoader.LoadInMemory([](string, source string){("Snippet.cs", source)})
-            Assert.True(
-                project.BoundWithoutErrors,
-                "Snippet should bind with no C# errors: " + string.Join(Environment.NewLine, project.ErrorDiagnostics)
-            )
-            let document = Assert.Single(project.Documents)
-            let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
-            let unit = CSharpToGSharpTranslator().TranslateDocument(document, context)
-            let printed = GSharpPrinter.Print(unit)
+            let printed = TranslateUnitSource(source)
             let result RoundTripResult? = TranslationTestValidation.AssertBinds(printed)
             Assert.True(
                 result!!.Success,
@@ -362,6 +353,18 @@ Printed:
 ` + printed
             )
             return printed
+        }
+
+        private func TranslateUnitSource(source string) string {
+            let project = CSharpProjectLoader.LoadInMemory([](string, source string){("Snippet.cs", source)})
+            Assert.True(
+                project.BoundWithoutErrors,
+                "Snippet should bind with no C# errors: " + string.Join(Environment.NewLine, project.ErrorDiagnostics)
+            )
+            let document = Assert.Single(project.Documents)
+            let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+            let unit = CSharpToGSharpTranslator().TranslateDocument(document, context)
+            return GSharpPrinter.Print(unit)
         }
     }
 }

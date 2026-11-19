@@ -543,17 +543,17 @@ class Holder {
             driver
         )
         Assert.True(invalidCode == 1, invalidOutput)
-        let column = if asynchronous {
-            "39"
-        } else {
-            "33"
-        }
         let endColumn = if asynchronous {
             "41"
         } else {
             "35"
         }
-        Assert.Equal([]string{"GS0508@3," + column + ",3," + endColumn}, DiagnosticLocations(invalidOutput))
+        let questionColumn = if asynchronous {
+            "40"
+        } else {
+            "34"
+        }
+        Assert.Equal([]string{"GS0641@3," + questionColumn + ",3," + endColumn}, DiagnosticLocations(invalidOutput))
         Assert.False(File.Exists(invalidDll))
     }
 

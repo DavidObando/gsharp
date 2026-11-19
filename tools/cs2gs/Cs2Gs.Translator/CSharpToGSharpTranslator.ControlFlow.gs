@@ -383,11 +383,9 @@ partial class CSharpToGSharpTranslator {
                     this.typeMapper.MapExplicitType(binderSymbolType, this.context, clause.GetLocation()),
                     mainBinder
                 )
-                if binderType != nil &&
-                    !binderType.IsNullable &&
-                    mainBinder
-                    .Type
-                    .IsReferenceType &&
+                if binderType != nil && !binderType.IsNullable && CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(
+                    mainBinder.Type
+                ) &&
                     (
                     (
                         deferScrutineeCapture &&
@@ -467,11 +465,9 @@ partial class CSharpToGSharpTranslator {
                     this.typeMapper.MapExplicitType(nestedSymbolType, this.context, clause.GetLocation()),
                     nestedBinder
                 )
-                if nestedType != nil &&
-                    !nestedType.IsNullable &&
-                    nestedBinder
-                    .Type
-                    .IsReferenceType &&
+                if nestedType != nil && !nestedType.IsNullable && CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(
+                    nestedBinder.Type
+                ) &&
                     (
                     (
                         wholeValueBinders.Contains(nestedBinder) &&
@@ -985,6 +981,9 @@ partial class CSharpToGSharpTranslator {
                 out var sharedInitializer,
                 out var requiresNotNullConditional
             )
+            if !isSharedNode && !CSharpTypeMapper.CanAnnotateTypeParameterNullableInGSharp(targetSymbol) {
+                return false
+            }
             let targetType GTypeReference? = if isSharedNode {
                 sharedTargetType
             } else {
@@ -1254,6 +1253,7 @@ partial class CSharpToGSharpTranslator {
             var hoistInitializer GExpression?
             var targetType GTypeReference?
             var negatedRequiresNullConditionalGuard = false
+            var canAnnotateHoistType = true
             if typeSyntax != nil {
                 // The hoisted `as T` + `== nil` guard is only valid when T is a
                 // reference type (or nullable value type); a non-nullable value-type
@@ -1273,6 +1273,9 @@ partial class CSharpToGSharpTranslator {
                     out var sharedInitializer,
                     out negatedRequiresNullConditionalGuard
                 )
+                if !isSharedNode && !CSharpTypeMapper.CanAnnotateTypeParameterNullableInGSharp(targetSymbol) {
+                    return false
+                }
                 targetType = if isSharedNode {
                     sharedTargetType
                 } else {
@@ -1311,6 +1314,7 @@ partial class CSharpToGSharpTranslator {
                     return false
                 }
                 let nonNullTarget ITypeSymbol? = UnwrapNullable(receiverType)
+                canAnnotateHoistType = CSharpTypeMapper.CanAnnotateTypeParameterNullableInGSharp(nonNullTarget)
                 targetType = this.typeMapper.Map(nonNullTarget, this.context, isPattern!!.Expression.GetLocation())
                 hoistInitializer = receiver
             }
@@ -1327,7 +1331,12 @@ partial class CSharpToGSharpTranslator {
             } else {
                 BindingKind.Let
             }
-            let hoist = LocalDeclarationStatement(binding, localName, MakeNullable(targetType), hoistInitializer)
+            let hoistType = if canAnnotateHoistType {
+                MakeNullable(targetType)
+            } else {
+                targetType
+            }
+            let hoist = LocalDeclarationStatement(binding, localName, hoistType, hoistInitializer)
             this.RecordEmittedLocalNullability(designationSymbol as ILocalSymbol, hoist.Type, nil, nil)
             // `if t == nil { <then> }` reproduces the negated guard: when the cast
             // fails the local is nil, so the original then-block runs.
@@ -1605,6 +1614,7 @@ partial class CSharpToGSharpTranslator {
                 var initializer GExpression?
                 var targetType GTypeReference?
                 var requiresNullConditionalGuard = false
+                var canAnnotateHoistType = true
                 if typeSyntax != nil {
                     let targetSymbol ITypeSymbol? = this.context.GetTypeInfo(typeSyntax).Type
                     if targetSymbol == nil {
@@ -1618,6 +1628,9 @@ partial class CSharpToGSharpTranslator {
                         out var sharedInitializer,
                         out requiresNullConditionalGuard
                     )
+                    if !isSharedNode && !CSharpTypeMapper.CanAnnotateTypeParameterNullableInGSharp(targetSymbol) {
+                        return false
+                    }
                     targetType = if isSharedNode {
                         sharedTargetType
                     } else {
@@ -1650,11 +1663,9 @@ partial class CSharpToGSharpTranslator {
                     if receiverType == nil {
                         return false
                     }
-                    targetType = this.typeMapper.Map(
-                        UnwrapNullable(receiverType),
-                        this.context,
-                        isPattern!!.Expression.GetLocation()
-                    )
+                    let nonNullTarget ITypeSymbol? = UnwrapNullable(receiverType)
+                    canAnnotateHoistType = CSharpTypeMapper.CanAnnotateTypeParameterNullableInGSharp(nonNullTarget)
+                    targetType = this.typeMapper.Map(nonNullTarget, this.context, isPattern!!.Expression.GetLocation())
                     initializer = receiver
                 }
                 let designationSymbol ISymbol? = this.context.GetDeclaredSymbol(single)
@@ -1666,7 +1677,11 @@ partial class CSharpToGSharpTranslator {
                 } else {
                     BindingKind.Let
                 }
-                let localType = MakeNullable(targetType)
+                let localType = if canAnnotateHoistType {
+                    MakeNullable(targetType)
+                } else {
+                    targetType
+                }
                 this.RecordEmittedLocalNullability(designationSymbol as ILocalSymbol, localType, nil, nil)
                 statements.Add(LocalDeclarationStatement(binding, localName, localType, initializer))
                 var guard_ GExpression = BinaryExpression(
@@ -2201,6 +2216,35 @@ partial class CSharpToGSharpTranslator {
             return this.IsSymbolReassigned(local, this.state.CurrentBodyScope)
         }
 
+        private func PatternBindingNeedsStorage(local ILocalSymbol) bool ->
+        this.IsClosureAssignedVariable(local) || this.GetStorageRefKind(
+            local,
+            this.state.CurrentBodyScope ?? local.DeclaringSyntaxReferences[0].SyntaxTree.GetRoot()
+        ) != RefKind.None
+
+        private func GetStorageRefKind(symbol ISymbol, scope_ SyntaxNode) RefKind -> if this.IsSymbolReassigned(
+            symbol,
+            scope_
+        ) {
+            RefKind.Ref
+        } else if this.GetScopeWriteIndex(scope_).ReadonlyAddresses.ContainsKey(symbol) {
+            RefKind.In
+        } else {
+            RefKind.None
+        }
+
+        private func PatternBindingStorageType(local ILocalSymbol) ITypeSymbol ->
+        if this
+            .state
+            .ManagedReferenceArrayNullable
+            .ManagedReferenceArrayProjectedLocalType
+            .TryGetValue(local, out var projectedType) &&
+            projectedType != nil {
+            projectedType
+        } else {
+            local.Type
+        }
+
         private func BindsTo(expression ExpressionSyntax?, target ISymbol?) bool -> CSharpToGSharpTranslator.BindsTo(
             expression,
             target,
@@ -2246,6 +2290,9 @@ partial class CSharpToGSharpTranslator {
                 StringComparer.Ordinal
             )
             public let AddressNames Dictionary[ISymbol, List[SyntaxNode]] = Dictionary[ISymbol, List[SyntaxNode]](
+                SymbolEqualityComparer.Default
+            )
+            public let ReadonlyAddresses Dictionary[ISymbol, List[SyntaxNode]] = Dictionary[ISymbol, List[SyntaxNode]](
                 SymbolEqualityComparer.Default
             )
         }
@@ -2304,6 +2351,9 @@ partial class CSharpToGSharpTranslator {
                     default: default(ExpressionSyntax?)
                 }
                 if addressOperand != nil {
+                    if node is RefExpressionSyntax reference && this.IsReadOnlyReference(reference) {
+                        this.IndexScopeWriteTarget(index.ReadonlyAddresses, bindings, node, addressOperand)
+                    }
                     // Keep every operand name, including indices, as CollectAddressTakenNames does.
                     for operandNode in addressOperand.DescendantNodesAndSelf() {
                         CompilationMeasurements.Count("translation.scope_address_node_visits")
@@ -2320,9 +2370,60 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
             }
+            this.IndexReadonlyScopeStorage(scope_, index, bindings)
             this.scopeWriteCandidates.Add(key, index)
             CompilationMeasurements.Count("translation.scope_write_indexes")
             return index
+        }
+
+        private func IndexReadonlyScopeStorage(
+            scope_ SyntaxNode,
+            index ScopeWriteIndex,
+            bindings Dictionary[ExpressionSyntax, ISymbol?]
+        ) {
+            let syntax = Stack[SyntaxNode]()
+            let operations = Stack[IOperation]()
+            syntax.Push(scope_)
+            while syntax.Count > 0 {
+                let node = syntax.Pop()
+                if this.context.SemanticModel.GetOperation(node) is {} operation {
+                    operations.Push(operation)
+                } else {
+                    for child in node.ChildNodes() {
+                        syntax.Push(child)
+                    }
+                }
+            }
+            while operations.Count > 0 {
+                let operation = operations.Pop()
+                if operation is IArgumentOperation{Parameter: {} parameter, Value: {} value} argument &&
+                    (parameter.RefKind == RefKind.In || parameter.RefKind == RefKind.RefReadOnlyParameter) &&
+                    (
+                    argument.Syntax is ArgumentSyntax explicitArgument && explicitArgument.RefKindKeyword.IsKind(
+                        SyntaxKind.InKeyword
+                    ) ||
+                        this.PassesInArgumentWithoutConversion(argument)
+                ) &&
+                    value.Syntax is ExpressionSyntax operand {
+                    this.IndexScopeWriteTarget(index.ReadonlyAddresses, bindings, operation.Syntax, operand)
+                }
+                let receiver IOperation? = switch operation {
+                    case invocation is IInvocationOperation when invocation.TargetMethod.IsReadOnly: invocation.Instance
+                    case property is IPropertyReferenceOperation when property.Property.GetMethod?.IsReadOnly == true:
+                    property.Instance
+                    default: default(IOperation?)
+                }
+                if receiver
+                    ?.Type
+                    ?.IsValueType == true &&
+                    IsVariableStorageOperation(receiver) &&
+                    receiver.Syntax is ExpressionSyntax operand {
+                    this.IndexScopeWriteTarget(index.ReadonlyAddresses, bindings, operation.Syntax, operand)
+                }
+                for child in operation.ChildOperations {
+                    operations.Push(child)
+                }
+            }
         }
 
         private func ScopeBoundSymbol(

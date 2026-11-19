@@ -1746,6 +1746,21 @@ internal partial class MethodBodyEmitter {
         let end = this.il.DefineLabel()
         let nonNull = this.il.DefineLabel()
         this.EmitNullConditionalReceiverProbe(nc, nonNull)
+        if nc.ResultSlot != nil &&
+            nc.Type is NullableTypeSymbol referenceResult &&
+            !NullableLifting
+            .IsAnyValueTypeNullable(referenceResult) {
+            let slot = this.locals[nc.ResultSlot]
+            this.il.LoadLocalAddress(slot)
+            this.il.OpCode(ILOpCode.Initobj)
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(nc.Type))
+            this.il.LoadLocal(slot)
+            this.il.Branch(ILOpCode.Br, end)
+            this.il.MarkLabel(nonNull)
+            this.EmitExpression(nc.WhenNotNull)
+            this.il.MarkLabel(end)
+            return
+        }
         if nc.ResultSlot != nil {
             // P2-7 / Issue #421: value-type access result. The bound type
             // is Nullable<T> but the access sub-tree pushes a raw T. The

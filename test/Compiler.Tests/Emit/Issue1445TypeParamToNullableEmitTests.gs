@@ -53,7 +53,11 @@ func Main() {
     l.Add(Thing1445Call())
     Console.WriteLine(Pick[Thing1445Call](l) != nil)
 }`
-        Assert.Equal("True${Environment.NewLine}", CompileAndRun(source))
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(source, []string{"T"}, 1)
+        Assert.Equal(
+            "True${Environment.NewLine}",
+            CompileAndRun(source.Replace("[T IThing1445Call]", "[T IThing1445Call class?]"))
+        )
     }
 
     @Fact
@@ -77,7 +81,11 @@ func Main() {
     l.Add(Thing1445Local())
     Console.WriteLine(Pick[Thing1445Local](l) != nil)
 }`
-        Assert.Equal("True${Environment.NewLine}", CompileAndRun(source))
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(source, []string{"T"}, 1)
+        Assert.Equal(
+            "True${Environment.NewLine}",
+            CompileAndRun(source.Replace("[T IThing1445Local]", "[T IThing1445Local class?]"))
+        )
     }
 
     @Fact
@@ -103,7 +111,11 @@ func Main() {
     l.Add(Thing1445Switch())
     Console.WriteLine(Pick[Thing1445Switch](l) != nil)
 }`
-        Assert.Equal("True${Environment.NewLine}", CompileAndRun(source))
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(source, []string{"T"}, 1)
+        Assert.Equal(
+            "True${Environment.NewLine}",
+            CompileAndRun(source.Replace("[T IThing1445Switch]", "[T IThing1445Switch class?]"))
+        )
     }
 
     @Fact
@@ -135,7 +147,11 @@ func Main() {
     Console.WriteLine(b.GetChild() != nil)
     Console.WriteLine(b.GetChildDirect() != nil)
 }`
-        Assert.Equal("True${Environment.NewLine}True${Environment.NewLine}", CompileAndRun(source))
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(source, []string{"T"}, 2)
+        Assert.Equal(
+            "True${Environment.NewLine}True${Environment.NewLine}",
+            CompileAndRun(source.Replace("[T INode1445]", "[T INode1445 class?]"))
+        )
     }
 
     @Fact
@@ -176,7 +192,11 @@ func Id[T IThing1445Param](x T) T? { return x }
 func Main() {
     Console.WriteLine(Id[Thing1445Param](Thing1445Param()) != nil)
 }`
-        Assert.Equal("True${Environment.NewLine}", CompileAndRun(source))
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(source, []string{"T"}, 1)
+        Assert.Equal(
+            "True${Environment.NewLine}",
+            CompileAndRun(source.Replace("[T IThing1445Param]", "[T IThing1445Param class?]"))
+        )
     }
 
     shared {

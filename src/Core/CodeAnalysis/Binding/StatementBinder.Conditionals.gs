@@ -578,6 +578,7 @@ internal partial class StatementBinder {
             default(((IfLetBindingClauseSyntax, BoundExpression) -> void)?)
         }
         let bound = IfLetBindingSupport.BindBindingClause(
+            binderCtx,
             binding,
             Diagnostics,
             conversions,
@@ -3619,12 +3620,14 @@ internal partial class StatementBinder {
                             default(BoundExpression?)
                         }
                     }
-                    return BoundImportedInstanceCallExpression(
-                        importedInstanceCall.Syntax,
-                        BoundLiteralExpression(nil, 0, importedInstanceCall.Receiver.Type),
-                        importedInstanceCall.Method,
-                        importedInstanceCall.Type,
-                        filtered
+                    return importedInstanceCall.CopySignatureReturnTypeTo(
+                        BoundImportedInstanceCallExpression(
+                            importedInstanceCall.Syntax,
+                            BoundLiteralExpression(nil, 0, importedInstanceCall.Receiver.Type),
+                            importedInstanceCall.Method,
+                            importedInstanceCall.Type,
+                            filtered
+                        )
                     )
                 }
                 default {

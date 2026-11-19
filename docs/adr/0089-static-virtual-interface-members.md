@@ -27,6 +27,11 @@ The body of this ADR below has been updated to reflect the `shared`-block surfac
 **Further revision (issue #2945): nullable erasure for static-virtual properties.** Static-virtual property matching now uses the same CLR slot rule as instance interface properties. Reference-nullable wrappers, including `T?` over an unconstrained or class-constrained type parameter, are erased from the declared interface slot before generic substitution; therefore a get-only `T?` slot may be implemented by `T`. A concrete nullable value type (`int32?`) and `T?` where `T : struct` retain `System.Nullable<T>` and cannot be implemented by `T`. Settable properties remain invariant. Static accessor `MethodImpl` rows use that declared-slot projection. Constrained reads preserve substituted source nullability for subsequent member binding while their emitted call still targets the erased CLR slot; value-type substitutions that require erasure continue to use the slot type.
 
 
+**Source restriction (ADR-0224).** New explicit source `T?` requires a proven reference or nonnullable value kind.
+This supersedes the unrestricted source case in the nullable-erasure revision above.
+Imported CLR annotated slots retain their existing projection and matching rules.
+See [ADR-0224](0224-source-nullable-type-parameter-kind-constraints.md).
+
 ## Context
 
 ADR-0085 landed instance-virtual default-interface methods (DIM) and explicitly deferred *static* interface members ("static abstracts", C# 11). Issue #755 asks for that follow-up. The motivating use case is the .NET generic-math / generic-parser / generic-builder pattern: `INumber<T>`, `IParsable<T>`, `IAdditionOperators<TLeft, TRight, TResult>`, and the dozens of sibling interfaces in `System.Numerics`. These interfaces are how the .NET runtime expresses "type-classes by another name" — a constraint that requires the type argument itself to provide a static operation, dispatched through a generic constraint at the call site.

@@ -84,6 +84,122 @@ internal class BinderContext {
     /// Instance access is unavailable until the selected constructor has run.
     var ConstructorInitializerDepth int32
 
+    internal var SourceNullableConstraintDepth int32
+    internal let PendingSourceNullableAnnotations List[
+        (Location TextLocation, Parameter TypeParameterSymbol, CanonicalParameter TypeParameterSymbol, IsOperator bool)
+    ] = List[(TextLocation, TypeParameterSymbol, TypeParameterSymbol, bool)]()
+    private let sourceNullableAnnotationErrors HashSet[TypeParameterSymbol] = HashSet[TypeParameterSymbol](
+        ReferenceEqualityComparer.Instance
+    )
+
+    internal prop SourceNullableAnnotationErrors ImmutableHashSet[TypeParameterSymbol] ->
+    ImmutableHashSet.CreateRange[TypeParameterSymbol](
+        ReferenceEqualityComparer.Instance,
+        sourceNullableAnnotationErrors
+    )
+
+    internal func BindSourceNullable(type TypeSymbol, location TextLocation, isOperator bool = false) TypeSymbol {
+        let nullable = NullableTypeSymbol.Get(type)
+        if nullable.UnderlyingType is TypeParameterSymbol parameter {
+            if SourceNullableConstraintDepth > 0 {
+                PendingSourceNullableAnnotations.Add((location, parameter, parameter, isOperator))
+            } else {
+                if !ValidateSourceNullable(location, parameter, isOperator) && isOperator {
+                    return TypeSymbol.Error
+                }
+            }
+        }
+        return nullable
+    }
+
+    internal func CompleteSourceNullableConstraints() {
+        SourceNullableConstraintDepth--
+        if SourceNullableConstraintDepth != 0 {
+            return
+        }
+        for (location, parameter, canonicalParameter, isOperator) in PendingSourceNullableAnnotations {
+            ValidateSourceNullable(location, parameter, isOperator, canonicalParameter)
+        }
+        PendingSourceNullableAnnotations.Clear()
+    }
+
+    private func ValidateSourceNullable(
+        location TextLocation,
+        parameter TypeParameterSymbol,
+        isOperator bool = false,
+        canonicalParameter TypeParameterSymbol? = nil
+    ) bool {
+        if !parameter.HasKnownSourceNullableKind {
+            if !isOperator ||
+                (
+                !sourceNullableAnnotationErrors.Contains(parameter) &&
+                    !Services
+                    .SourceNullableAnnotationErrors
+                    .Contains(parameter)
+            ) {
+                Diagnostics.ReportNullableTypeParameterRequiresKind(location, parameter.Name)
+            }
+            if !isOperator {
+                sourceNullableAnnotationErrors.Add(canonicalParameter ?? parameter)
+            }
+            return false
+        }
+        return true
+    }
+
+    internal func ValidateSourceNullableResult(
+        type TypeSymbol?,
+        location TextLocation,
+        inputs IEnumerable[TypeSymbol]? = nil
+    ) bool {
+        if type == nil {
+            return true
+        }
+        if type is NullableTypeSymbol{UnderlyingType: TypeParameterSymbol} nullable {
+            let parameter = cast[TypeParameterSymbol](nullable.UnderlyingType)
+            if inputs != nil && !inputs.Contains(TypeSymbol.Null) && inputs.Any(
+                (input TypeSymbol) -> ContainsNullableParameter(input, parameter)
+            ) {
+                return true
+            }
+            return ValidateSourceNullable(location, parameter, isOperator: true)
+        }
+        if type is NullableTypeSymbol nullableResult {
+            return ValidateSourceNullableResult(
+                nullableResult.UnderlyingType,
+                location,
+                inputs?.Where((input TypeSymbol) -> input != TypeSymbol.Null).Select(
+                    (input TypeSymbol) -> if input is NullableTypeSymbol existing {
+                        existing.UnderlyingType
+                    } else {
+                        input
+                    }
+                )
+            )
+        }
+        if type is not TupleTypeSymbol tuple {
+            return true
+        }
+        for var i = 0; i < tuple.ElementTypes.Length; i++ {
+            let ordinal = i
+            let elements = inputs
+                ?.OfType[TupleTypeSymbol]()
+                .Where((input TupleTypeSymbol) -> input.Arity == tuple.Arity)
+                .Select((input TupleTypeSymbol) -> input.ElementTypes[ordinal])
+            if !ValidateSourceNullableResult(tuple.ElementTypes[i], location, elements) {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func ContainsNullableParameter(type TypeSymbol, parameter TypeParameterSymbol) bool {
+        if type is NullableTypeSymbol nullable && object.ReferenceEquals(nullable.UnderlyingType, parameter) {
+            return true
+        }
+        return TypeSymbol.GetWrappedTypes(type).Any((inner TypeSymbol) -> ContainsNullableParameter(inner, parameter))
+    }
+
     /// Issue #4383: the member-name syntax node currently permitted to decay a
     /// movable fixed-size buffer field (`fixed p *T = buf` or `buf[i]`).
     var AllowedMovableFixedBufferSyntax SyntaxNode?
@@ -194,9 +310,6 @@ internal class BinderContext {
 
     /// Gets a value indicating whether constructor-initializer arguments are being bound.
     prop InConstructorInitializer bool -> ConstructorInitializerDepth > 0
-
-    /// Gets or sets the iterator return clause allowed to carry an unconstrained nullable sequence element.
-    prop UnconstrainedNullableSequenceElementReturn TypeClauseSyntax?
 
     /// Gets a value indicating whether the current `checked`/`unchecked`
     /// arithmetic context is checked (issue #1881): `true` inside
@@ -341,6 +454,70 @@ internal class BinderContext {
         saved Dictionary[LambdaBinder.RetriedFunctionLiteralKey, LambdaBinder.RetriedFunctionLiteralEntry]?
     ) {
         RetriedFunctionLiterals = saved
+    }
+
+    private let retriedBindingUndo List[Action] = List[Action]()
+    private var retriedBindingTransactionDepth int32
+
+    internal func SetRetriedBinding[K, V](cache Dictionary[K, V], key K, value V) {
+        if retriedBindingTransactionDepth > 0 {
+            let existed = cache.TryGetValue(key, out var previous)
+            retriedBindingUndo.Add(
+                func () void {
+                    if existed {
+                        cache[key] = previous
+                    } else {
+                        cache.Remove(key)
+                    }
+                }
+            )
+        }
+        cache[key] = value
+    }
+
+    internal func BeginRetriedBindingsTransaction() RetriedBindingsTransaction {
+        retriedBindingTransactionDepth++
+        return RetriedBindingsTransaction(this, retriedBindingUndo.Count)
+    }
+
+    private func FinishRetriedBindingsTransaction(mark int32, rollback bool) {
+        if rollback {
+            for var index = retriedBindingUndo.Count - 1; index >= mark; index-- {
+                retriedBindingUndo[index].Invoke()
+            }
+            retriedBindingUndo.RemoveRange(mark, retriedBindingUndo.Count - mark)
+        }
+        // Keep committed inner writes available to an enclosing rollback.
+        retriedBindingTransactionDepth--
+        if retriedBindingTransactionDepth == 0 {
+            retriedBindingUndo.Clear()
+        }
+    }
+
+    internal sealed class RetriedBindingsTransaction : IDisposable {
+        private let owner BinderContext
+        private let mark int32
+        private var finished bool
+
+        init(owner BinderContext, mark int32) {
+            this.owner = owner
+            this.mark = mark
+        }
+
+        func Commit() {
+            Finish(rollback: false)
+        }
+
+        func Dispose() {
+            Finish(rollback: true)
+        }
+
+        private func Finish(rollback bool) {
+            if !finished {
+                owner.FinishRetriedBindingsTransaction(mark, rollback)
+                finished = true
+            }
+        }
     }
 
     /// Gets or sets a value indicating whether the current function, lambda, or

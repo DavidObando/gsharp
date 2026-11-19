@@ -613,8 +613,11 @@ class SdkCompileRunner {
             if !Directory.Exists(canonicalSourceRoot) {
                 throw DirectoryNotFoundException("Stage-4 source root does not exist: '$canonicalSourceRoot'.")
             }
+            // Issue #6096: a fixed glibc mmap threshold maps each native block of 128 KB or more separately.
+            // A free then returns the block to the OS, so freed Roslyn images do not stay in malloc arenas.
             let environment = Dictionary[string, string](IsolatedNugetEnvironment(artifactRoot)){
-                [GsharpTestProjectRunner.SourceRootEnvironmentVariable] = canonicalSourceRoot
+                [GsharpTestProjectRunner.SourceRootEnvironmentVariable] = canonicalSourceRoot,
+                ["MALLOC_MMAP_THRESHOLD_"] = "131072"
             }
             return environment
         }

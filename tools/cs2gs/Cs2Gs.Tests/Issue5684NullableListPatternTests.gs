@@ -4,7 +4,11 @@
 
 package Cs2Gs.Tests
 
+import Cs2Gs.CodeModel.Printing
+import Cs2Gs.Translator
+import Cs2Gs.Translator.Loading
 import System
+import System.Linq
 import Xunit
 
 /// Issue #5684: lowered list tests guard nullable inputs, and receiver reads use the emitted test's narrowing.
@@ -170,7 +174,7 @@ namespace Demo
 
     @Fact
     func NullableGenericListInputs_AreGuardedInBooleanAndSwitchTests() {
-        AssertRuns(`
+        const source = `
 #nullable enable
 using System.Collections.Generic;
 namespace Demo
@@ -183,7 +187,10 @@ namespace Demo
             Positive<List<int>>(new List<int> { 1 }) + " " + Positive<List<int>>(null) + " " +
             Arm<List<int>>(new List<int> { 1 }) + " " + Arm<List<int>>(null);
     }
-}`, "1 0 1 0")
+}`
+        let printed = AssertRuns(source, "1 0 1 0")
+        Assert.Contains("Positive[T IReadOnlyList[int32]](current T)", printed, StringComparison.Ordinal)
+        AssertRuns(source.Replace("where T : IReadOnlyList<int>", "where T : class, IReadOnlyList<int>"), "1 0 1 0")
     }
 
     @Fact

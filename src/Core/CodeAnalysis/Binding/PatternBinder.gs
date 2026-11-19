@@ -1306,7 +1306,11 @@ internal class PatternBinder {
             LocalVariableSymbol(name, isReadOnly: true, type, declaringSyntax)
         }
         if declaringSyntax != nil && retriedVariables != nil {
-            retriedVariables[declaringSyntax] = created
+            binderCtx.SetRetriedBinding(
+                retriedVariables,
+                cast[SyntaxNode](declaringSyntax),
+                cast[VariableSymbol](created)
+            )
         }
         return created
     }

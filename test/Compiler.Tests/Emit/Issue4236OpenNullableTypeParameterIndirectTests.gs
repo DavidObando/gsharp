@@ -12,23 +12,11 @@ import GSharp.Tests
 import Xunit
 import GSharp.Compiler.Tests
 
-/// Issue #4236: `EmitStoreIndirect`/`EmitLoadIndirect` fell through to
-/// `stind.ref`/`ldind.ref` for a `T?` pointee whose underlying
-/// type is an OPEN, unconstrained type parameter (no `struct`/`class`
-/// constraint) — a shape neither the "provably a value type" arm nor the bare
-/// `TypeParameterSymbol` arm recognised. `stind.ref`/`ldind.ref`
-/// treat the pointee as an object reference; once T is JIT-instantiated as a
-/// real (non-primitive) value type this is invalid IL that ILVerify's
-/// abstract-over-open-T checking does not catch but the runtime rejects with
-/// (cref:InvalidProgramException) — exactly the self-hosted
-/// `Gsharp.Concurrency.Chan<T>.ReceiveOrPark` / `ReceiveValueAsync`
-/// failure this issue reduces (its `out T? value` parameter). A CoreLib
-/// primitive element type (`int32`, etc.) never exercises the faulty arm —
-/// only a non-primitive struct does, which is why this needs a user struct, not
-/// just `int32`, to fail before the fix.
+/// Nullable by-reference storage requires a known type-parameter kind (ADR-0224).
+/// The value-kind control checks both primitive and user-defined struct storage.
 open class Issue4236OpenNullableTypeParameterIndirectTests {
     @Fact
-    func OutAndRefOpenNullableTypeParameter_UserStruct_LoadsVerifiesAndRuns() {
+    func OutAndRefNullableTypeParameter_RequiresKindAndPreservesStructStorage() {
         const Source = `package Issue4236
 import System
 
@@ -63,11 +51,19 @@ let intBox = Box[int32]()
 Console.WriteLine(intBox.RoundTripOut(9))
 Console.WriteLine(pairBox.RoundTripRef(Pair(11), Pair(12)).Value)
 Console.WriteLine(intBox.RoundTripRef(13, 14))`
-        AssertRuns(Source, "OutAndRefOpenNullableTypeParameter_UserStruct_LoadsVerifiesAndRuns", `7
+        Issue6040GenericNullableReturnDriverTests.CheckRejected(
+            Source,
+            []string{"GS0641@7,37,7,38", "GS0641@12,30,12,31", "GS0641@24,20,24,21"}
+        )
+        AssertRuns(
+            Source.Replace("class Box[T] {", "class Box[T struct] {"),
+            "OutAndRefNullableTypeParameter_RequiresKindAndPreservesStructStorage",
+            `7
 9
 11
 13
-`)
+`
+        )
     }
 
     shared {

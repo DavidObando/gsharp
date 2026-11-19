@@ -921,6 +921,7 @@ internal partial class StatementBinder {
         isFinalBeforeGuard bool = false
     )(Variable VariableSymbol?, Underlying TypeSymbol?, Declaration BoundStatement) {
         let bound = IfLetBindingSupport.BindBindingClause(
+            binderCtx,
             binding,
             Diagnostics,
             conversions,

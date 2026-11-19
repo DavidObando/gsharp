@@ -4588,28 +4588,6 @@ partial class Binder {
             if elementType == nil {
                 return nil
             }
-            if !object.ReferenceEquals(syntax, binderCtx.UnconstrainedNullableSequenceElementReturn) &&
-                elementType is NullableTypeSymbol{UnderlyingType: TypeParameterSymbol typeParameter} {
-                let location = Invariant.Required(
-                    syntax.SequenceElementType,
-                    "IsSequence implies the parser set SequenceElementType",
-                    expression: "syntax.SequenceElementType"
-                )
-                    .Location
-                if $scope.IsDeferringUserGenericConstraintChecks() {
-                    $scope.GetPendingUserGenericConstraintChecks().Add(
-                        PendingUserGenericConstraintCheck(
-                            Diagnostics,
-                            ImmutableArray[TypeParameterSymbol].Empty,
-                            ImmutableArray.Create[TypeSymbol](typeParameter),
-                            location,
-                            () -> ReportUnconstrainedNullableSequenceElement(typeParameter, location)
-                        )
-                    )
-                } else {
-                    ReportUnconstrainedNullableSequenceElement(typeParameter, location)
-                }
-            }
             if syntax.IsAsyncSequence {
                 return AsyncSequenceTypeSymbol.Get(elementType)
             }
@@ -5020,7 +4998,7 @@ partial class Binder {
         // `[]!string`); only the array itself, as the slot's top level, is
         // made platform by BindTypeClause.
         if syntax.IsNullable {
-            element = NullableTypeSymbol.Get(element)
+            element = binderCtx.BindSourceNullable(element, syntax.QuestionToken!!.Location)
         }
         if syntax.IsSlice {
             return SliceTypeSymbol.Get(element)
@@ -5044,19 +5022,6 @@ partial class Binder {
             return nil
         }
         return ArrayTypeSymbol.Get(element, length)
-    }
-
-    private func ReportUnconstrainedNullableSequenceElement(
-        typeParameter TypeParameterSymbol,
-        location TextLocation
-    ) bool {
-        if typeParameter.HasValueTypeConstraint ||
-            typeParameter.HasReferenceTypeConstraint ||
-            typeParameter.ClassConstraint != nil {
-            return false
-        }
-        Diagnostics.ReportUnconstrainedNullableSequenceElement(location, typeParameter.Name)
-        return true
     }
 
     private func ReportIllegalUnmanagedPointee(pointeeType TypeSymbol, location TextLocation) bool {
@@ -5154,7 +5119,7 @@ partial class Binder {
                     bound
                 }
             } else if syntax.IsNullable {
-                bound = NullableTypeSymbol.Get(bound)
+                bound = binderCtx.BindSourceNullable(bound, syntax.QuestionToken!!.Location)
             }
             // Issue #3315 / ADR-0159 addendum: the `?` after the closing `)` of a
             // parenthesized type clause marks the WHOLE inner type nullable —
@@ -5162,7 +5127,7 @@ partial class Binder {
             // already-nullable guard makes redundant spellings like `(int32?)?`
             // collapse instead of double-wrapping.
             if syntax.IsParenthesizedNullable && !(bound is NullableTypeSymbol) {
-                bound = NullableTypeSymbol.Get(bound!!)
+                bound = binderCtx.BindSourceNullable(bound!!, syntax.ParenthesizedQuestionToken!!.Location)
             }
             // ADR-0186 §9: inside an oblivious scope (`--nullability=oblivious`
             // or an enclosing `@Oblivious`), an unadorned reference type
@@ -7082,6 +7047,7 @@ partial class Binder {
             let parentScope = CreateRootScope(references, preprocessorSymbols)
             configureRoot?(parentScope)
             let binder = Binder(parentScope, function: nil)
+            binder.binderCtx.SourceNullableConstraintDepth++
             binder.$scope.GetStructuralAdapterRegistry().ProtocolCoverage = nativeCoverage
             binder.ImportNativeProtocols(syntaxTrees.FirstOrDefault()?.Root.Location ?? default(TextLocation))
             binder.ValidateFixedArrayImports(syntaxTrees.FirstOrDefault()?.Root.Location ?? default(TextLocation))
@@ -7673,6 +7639,7 @@ partial class Binder {
             // Issue #4453: top-level statements do not pass through
             // AnalyzeFunctionBody either; check their member accesses too.
             ProtectedReceiverDiagnostics.Report(topLevelBlock, synthesizedEntryPoint, binder.Diagnostics)
+            binder.binderCtx.CompleteSourceNullableConstraints()
             let diagnostics = binder.Diagnostics.ToImmutableArray()
             // Issue #3501 A2: synthesized ref-kind delegates (see
             // SynthesizedRefDelegateCache) join the declared named delegates so
@@ -7698,6 +7665,7 @@ partial class Binder {
                 statements.ToImmutable()
             )
             result.References = references ?? binder.$scope.References
+            result.SourceNullableAnnotationErrors = binder.binderCtx.SourceNullableAnnotationErrors
             result.PreprocessorSymbols = preprocessorSymbols ?? ImmutableHashSet[string].Empty
             result.DeclaredTypeAliases = declaredTypeAliases.ToImmutable()
             result.AliasDeclaringPackages = binder.$scope.GetAliasDeclaringPackages()
@@ -7751,6 +7719,7 @@ partial class Binder {
                     statements.ToImmutable()
                 ){
                     References = result.References,
+                    SourceNullableAnnotationErrors = result.SourceNullableAnnotationErrors,
                     PreprocessorSymbols = result.PreprocessorSymbols,
                     DeclaredTypeAliases = result.DeclaredTypeAliases,
                     AliasDeclaringPackages = result.AliasDeclaringPackages,
@@ -11977,6 +11946,7 @@ partial class Binder {
             preserveLatestImportSyntaxTrees bool
         ) BoundScope {
             let parent = CreateRootScope(references ?? globalScope?.References, preprocessorSymbols)
+            parent.GetBindingServices().SourceNullableAnnotationErrors = globalScope.SourceNullableAnnotationErrors
             CopyPriorCellImports(globalScope, parent)
             let scope_ = BoundScope(parent)
             for package_ in globalScope.Packages {

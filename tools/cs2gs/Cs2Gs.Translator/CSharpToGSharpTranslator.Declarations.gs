@@ -1811,6 +1811,13 @@ partial class CSharpToGSharpTranslator {
                         .ToList()
                 )
             }
+            if symbol != nil &&
+                symbol.TypeKind != TypeKind.Interface &&
+                !isStaticClass &&
+                this
+                .ShouldAttachOwnedExtensions(node, symbol) {
+                this.AddErasedGenericInterfacePropertyBridges(symbol, members, node.GetLocation())
+            }
             // ADR-0145 (§C/§D) / issue #3410: default preserve mode carries the
             // C# `partial` modifier onto each standalone G# part. Legacy merge
             // mode drops it from the single merged type (issue #1910), unless
@@ -1874,6 +1881,152 @@ partial class CSharpToGSharpTranslator {
                 return true
             }
             return parts[0].SyntaxTree == node.SyntaxTree && parts[0].Span == node.Span
+        }
+
+        // ADR-0224: when a source interface erases unconstrained `T?` to `T`
+        // (e.g. `IModal<T>.Result` -> `IModal[string].Result : string`), an
+        // implicit implementation with `U?` (`string? Result`) triggers GS0504
+        // while keeping `IModal[string]` assignable for callers. Synthesize a
+        // private explicit-interface bridge (`private prop (IModal[string]) Result string`)
+        // forwarding `this.Result ?? default(string)` so both contracts hold.
+        private func AddErasedGenericInterfacePropertyBridges(
+            symbol INamedTypeSymbol,
+            members List[GMember],
+            location Location
+        ) {
+            let directInterfaces = HashSet[INamedTypeSymbol](symbol.Interfaces, SymbolEqualityComparer.Default)
+            let baseTypeSymbol = symbol.BaseType
+            let baseInterfaces = if baseTypeSymbol != nil {
+                HashSet[INamedTypeSymbol](baseTypeSymbol.AllInterfaces, SymbolEqualityComparer.Default)
+            } else {
+                HashSet[INamedTypeSymbol](SymbolEqualityComparer.Default)
+            }
+            let orderedInterfaces = symbol
+                .AllInterfaces
+                .OrderBy((iface INamedTypeSymbol) -> iface.ToDisplayString(), StringComparer.Ordinal)
+                .ToList()
+            let seenBridges = HashSet[string](StringComparer.Ordinal)
+            for iface in orderedInterfaces {
+                if !iface.IsGenericType || this.TargetContractIsFrozenInMetadata(iface) ||
+                    (baseInterfaces.Contains(iface) && !directInterfaces.Contains(iface)) {
+                    continue
+                }
+                for ifaceProp in iface.GetMembers().OfType[IPropertySymbol]() {
+                    if ifaceProp.IsStatic {
+                        continue
+                    }
+                    let origType = ifaceProp.OriginalDefinition.Type
+                    let nonNullSlotSymbol = this.TryGetSubstitutedNonNullGenericTypeArgument(ifaceProp, origType)
+                    if nonNullSlotSymbol == nil {
+                        continue
+                    }
+                    let slotType = this.typeMapper.Map(nonNullSlotSymbol, this.context, location)
+                    if slotType == nil || slotType.IsNullable {
+                        continue
+                    }
+                    if symbol.FindImplementationForInterfaceMember(ifaceProp) is not IPropertySymbol impl ||
+                        !impl
+                        .ExplicitInterfaceImplementations
+                        .IsDefaultOrEmpty {
+                        continue
+                    }
+                    let implEmitsNullable = (
+                        impl
+                            .Type
+                            .NullableAnnotation == Microsoft
+                            .CodeAnalysis
+                            .NullableAnnotation
+                            .Annotated &&
+                            CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(impl.Type)
+                    ) ||
+                        this.ShouldPromoteToNullableReference(impl)
+                    if !implEmitsNullable {
+                        continue
+                    }
+                    let explicitIfaceType = this.typeMapper.Map(iface, this.context, location)
+                    if explicitIfaceType == nil {
+                        continue
+                    }
+                    let implName = this.EmittedName(impl, impl.Name)
+                    let indexerParams = if ifaceProp.IsIndexer {
+                        ifaceProp.Parameters.Select((p IParameterSymbol) -> this.MapParameter(p, nil)).ToList()
+                    } else {
+                        List[Parameter]()
+                    }
+                    let paramKey = string.Join(
+                        ",",
+                        indexerParams.Select(
+                            (p Parameter) -> "${p.RefKind}:${GSharpPrinter.RenderTypeReference(p.Type)}"
+                        )
+                    )
+                    let key = "${GSharpPrinter.RenderTypeReference(explicitIfaceType)}:${ifaceProp.Name}($paramKey)"
+                    if !seenBridges.Add(key) {
+                        continue
+                    }
+                    let targetAccess GExpression = if ifaceProp.IsIndexer {
+                        let args = indexerParams.Select(
+                            (p Parameter) -> cast[GExpression](IdentifierExpression(p.Name))
+                        )
+                            .ToList()
+                        cast[GExpression](IndexExpression(ThisExpression(), args))
+                    } else {
+                        cast[GExpression](MemberAccessExpression(ThisExpression(), implName))
+                    }
+                    let readExpr = BinaryExpression(targetAccess, "??", DefaultValueExpression(slotType))
+                    let setter = ifaceProp.SetMethod
+                    if setter == nil {
+                        members.Add(
+                            PropertyDeclaration(
+                                ifaceProp.Name,
+                                slotType,
+                                visibility: Visibility.Private,
+                                indexerParameters: indexerParams,
+                                expressionBody: ReturnStatement(readExpr),
+                                explicitInterfaceType: explicitIfaceType
+                            )
+                        )
+                    } else {
+                        let accessors = List[Cs2Gs.CodeModel.Ast.PropertyAccessor]()
+                        if ifaceProp.GetMethod != nil {
+                            accessors.Add(
+                                Cs2Gs
+                                    .CodeModel
+                                    .Ast
+                                    .PropertyAccessor(
+                                    Cs2Gs.CodeModel.Ast.AccessorKind.Get,
+                                    BlockStatement(List[GStatement]{ReturnStatement(readExpr)})
+                                )
+                            )
+                        }
+                        let setKind = if setter.IsInitOnly {
+                            Cs2Gs.CodeModel.Ast.AccessorKind.Init
+                        } else {
+                            Cs2Gs.CodeModel.Ast.AccessorKind.Set
+                        }
+                        accessors.Add(
+                            Cs2Gs
+                                .CodeModel
+                                .Ast
+                                .PropertyAccessor(
+                                setKind,
+                                BlockStatement(
+                                    List[GStatement]{AssignmentStatement(targetAccess, IdentifierExpression("value"))}
+                                )
+                            )
+                        )
+                        members.Add(
+                            PropertyDeclaration(
+                                ifaceProp.Name,
+                                slotType,
+                                accessors: accessors,
+                                visibility: Visibility.Private,
+                                indexerParameters: indexerParams,
+                                explicitInterfaceType: explicitIfaceType
+                            )
+                        )
+                    }
+                }
+            }
         }
 
         /// Analyzes a type's single instance constructor to decide the canonical
@@ -2534,7 +2687,8 @@ partial class CSharpToGSharpTranslator {
             // Issue #4350: whether `node` (a simple name, or the member access that
             // carries it) is written: an assignment's left side, an increment or
             // decrement operand, or an element of a deconstruction target.
-            private func IsWriteTarget(node Microsoft.CodeAnalysis.SyntaxNode?) bool {
+            // Address operands also need storage, not a narrowed read, when includeAddress is true.
+            private func IsWriteTarget(node Microsoft.CodeAnalysis.SyntaxNode?, includeAddress bool = false) bool {
                 var current Microsoft
                     .CodeAnalysis
                     .SyntaxNode? = if node!!.Parent is MemberAccessExpressionSyntax memberAccess &&
@@ -2543,11 +2697,25 @@ partial class CSharpToGSharpTranslator {
                 } else {
                     node
                 }
-                while current!!.Parent is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax {
-                    current = current!!.Parent
-                }
-                while current!!.Parent is ArgumentSyntax{Parent: TupleExpressionSyntax tuple} {
-                    current = tuple
+                while true {
+                    if current!!.Parent is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ParenthesizedExpressionSyntax ||
+                        (
+                        includeAddress &&
+                            current!!.Parent is PostfixUnaryExpressionSyntax suppression &&
+                            suppression.IsKind(
+                            Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression
+                        )
+                    ) {
+                        current = current!!.Parent
+                    } else if current!!.Parent is ArgumentSyntax{Parent: TupleExpressionSyntax tuple} {
+                        current = tuple
+                    } else {
+                        break
+                    }
                 }
                 return switch current!!.Parent {
                     case assignment is Microsoft
@@ -2558,11 +2726,20 @@ partial class CSharpToGSharpTranslator {
                     case prefix is PrefixUnaryExpressionSyntax: prefix.IsKind(
                         Microsoft.CodeAnalysis.CSharp.SyntaxKind.PreIncrementExpression
                     ) ||
-                        prefix.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.PreDecrementExpression)
+                        prefix.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.PreDecrementExpression) ||
+                        (includeAddress && prefix.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AddressOfExpression))
                     case postfix is PostfixUnaryExpressionSyntax: postfix.IsKind(
                         Microsoft.CodeAnalysis.CSharp.SyntaxKind.PostIncrementExpression
                     ) ||
                         postfix.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.PostDecrementExpression)
+                    case RefExpressionSyntax: includeAddress
+                    case argument is ArgumentSyntax: includeAddress &&
+                        (
+                        argument.RefKindKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.RefKeyword) ||
+                            argument
+                            .RefKindKeyword
+                            .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.OutKeyword)
+                    )
                     default: false
                 }
             }

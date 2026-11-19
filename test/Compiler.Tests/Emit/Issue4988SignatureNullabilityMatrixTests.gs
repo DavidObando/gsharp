@@ -653,7 +653,20 @@ open class Issue4988SignatureNullabilityMatrixTests {
             )
             let closureSrcPath = Path.Combine(tempDir, "closure_order.gs")
             let closureDllPath = Path.Combine(tempDir, "ClosureOrder.dll")
-            File.WriteAllText(closureSrcPath, ValidInterfaceClosureOrderConsumerSource)
+            Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(
+                OriginalInterfaceClosureOrderConsumerSource,
+                []string{"A"},
+                1,
+                isLibrary: true,
+                references: []string{libraryPath}
+            )
+            File.WriteAllText(
+                closureSrcPath,
+                OriginalInterfaceClosureOrderConsumerSource.Replace(
+                    "GenericForwardBase[A]",
+                    "GenericForwardBase[A class?]"
+                )
+            )
             let (closureExit, closureOut) = RunDriver(
                 List[string]{
                     "/out:" + closureDllPath,
@@ -2851,7 +2864,7 @@ func UseComparable() string? {
 }
 `
 
-        private const ValidInterfaceClosureOrderConsumerSource string = `package Consumer
+        private const OriginalInterfaceClosureOrderConsumerSource string = `package Consumer
 
 import RelContract
 import System

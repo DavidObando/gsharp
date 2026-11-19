@@ -11,26 +11,12 @@ import System.Diagnostics
 import System.IO
 import Xunit
 
-/// Issue #1471 — a bare `default` whose target type is `T?` for an
-/// unconstrained open type parameter `T`, flowing as an argument to a
-/// generic method instantiated with `T?` (e.g.
-/// `Task.FromResult[T?](default)`), used to lower to a
-/// `BoundDefaultExpression(object)` because the method type-argument erased
-/// to the reference-context `object` placeholder. That emitted `ldnull`
-/// against the bare type parameter `!T` the callee expects, which is
-/// unverifiable (`StackUnexpected: found Nullobjref, expected value 'T'`)
-/// and throws `InvalidProgramException` at runtime for a value-type
-/// instantiation. The binder now recovers the symbolic parameter type from the
-/// method's type-argument vector so the default emits the verifiable
-/// `ldloca; initobj; ldloc` slot shape for both reference and value
-/// instantiations.
-/// - Facet A — the minimal repro instantiated with a VALUE type (`int32`): `default(int32)` = `0`.
-/// - Facet B — instantiated with a REFERENCE type (`string`): `default(string)` = `null`.
-/// - Facet C — a default argument to a user generic function other than `Task.FromResult`, proving the
-/// fix is general.
+/// Contextual defaults retain symbolic nullable arguments for known-kind parameters.
+/// Original mixed-kind sources require GS0641 under ADR-0224.
+/// Nullable value defaults are absent; reference defaults are null.
 open class Issue1471TypeParamNullableDefaultEmitTests {
     @Fact
-    func EndToEnd_FacetA_TaskFromResultDefaultValueTypeInstantiation_RunsAndPrintsZero() {
+    func EndToEnd_FacetA_TaskFromResultDefaultValueTypeInstantiation_RunsAndPrintsAbsence() {
         let source = `package Probe1471a
 import System
 import System.Threading.Tasks
@@ -42,8 +28,13 @@ class Box1471A[T] {
 func Main() {
     Console.WriteLine(Box1471A[int32]().Make().Result)
 }`
-        let output = CompileAndRun(source)
-        Assert.Equal("0${Environment.NewLine}", output)
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(source, []string{"T"}, 2)
+        let supported = source.Replace("Box1471A[T]", "Box1471A[T struct]").Replace(
+            "Console.WriteLine(Box1471A[int32]().Make().Result)",
+            "Console.WriteLine(Box1471A[int32]().Make().Result == nil)"
+        )
+        let output = CompileAndRun(supported)
+        Assert.Equal("True${Environment.NewLine}", output)
     }
 
     @Fact
@@ -60,7 +51,8 @@ func Main() {
     let result = Box1471B[string]().Make().Result
     Console.WriteLine("[" + (result ?? "null") + "]")
 }`
-        let output = CompileAndRun(source)
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(source, []string{"T"}, 2)
+        let output = CompileAndRun(source.Replace("Box1471B[T]", "Box1471B[T class?]"))
         Assert.Equal("[null]${Environment.NewLine}", output)
     }
 
@@ -79,7 +71,10 @@ func Main() {
     let result = Box1471C[string]().Make()
     Console.WriteLine("[" + (result ?? "null") + "]")
 }`
-        let output = CompileAndRun(source)
+        Issue6040GenericNullableReturnDriverTests.CheckRejectedAnnotations(source, []string{"T", "U"}, 3)
+        let output = CompileAndRun(
+            source.Replace("Identity1471C[U]", "Identity1471C[U class?]").Replace("Box1471C[T]", "Box1471C[T class?]")
+        )
         Assert.Equal("[null]${Environment.NewLine}", output)
     }
 

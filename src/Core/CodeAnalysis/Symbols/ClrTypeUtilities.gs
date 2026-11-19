@@ -267,41 +267,15 @@ shared class ClrTypeUtilities {
     func IsAssignableByName(target Type?, source Type?) bool ->
     IsAssignableByName(target, source, inProgress: nil)
 
-    internal func IsReferenceTypeForVariance(type Type?) bool ->
-    IsReferenceTypeForVariance(type, visited: nil)
-
-    private func IsReferenceTypeForVariance(type Type?, visited HashSet[Type]?) bool {
-        if type == nil || type.IsValueType || type.IsPointer || type.IsByRef || type.IsFunctionPointer {
+    internal func IsReferenceTypeForVariance(type Type?) bool {
+        if type == nil || type.IsByRef {
             return false
         }
-        if !type.IsGenericParameter {
-            return true
-        }
         try {
-            let attributes = type.GenericParameterAttributes
-            if (attributes & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0 {
-                return false
-            }
-            if (attributes & GenericParameterAttributes.ReferenceTypeConstraint) != 0 {
-                return true
-            }
-            for constraint in type.GetGenericParameterConstraints() {
-                if constraint.IsGenericParameter {
-                    let active = visited ?? HashSet[Type](ReferenceEqualityComparer.Instance){type}
-                    if active.Add(constraint) && IsReferenceTypeForVariance(constraint, active) {
-                        return true
-                    }
-                    continue
-                }
-                if (constraint.IsClass || constraint.IsArray) &&
-                    constraint.FullName is not("System.Object" or "System.ValueType" or "System.Enum") {
-                    return true
-                }
-            }
+            return NullabilityImportRule.ClassifyArgument(type) == TypeArgumentKind.Reference
         } catch (ex Exception) when IsMetadataLoadFailure(ex) {
             return false
         }
-        return false
     }
 
     private func IsAssignableByName(target Type?, source Type?, inProgress List[(Type, Type)]?) bool {

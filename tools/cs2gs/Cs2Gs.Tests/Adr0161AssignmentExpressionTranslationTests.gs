@@ -126,7 +126,7 @@ public sealed class C
     /// conditional assignment when the emitted target is non-nullable in G#.
     @Fact
     func CoalesceAssignment_KeepsExistingLowering() {
-        let (printed, context) = Translate(`
+        const source = `
 #nullable enable
 public sealed class Token
 {
@@ -179,7 +179,8 @@ public sealed class C
         _ = (cache ??= nullableFallback)!.CompareTo(0);
         return (cache ??= fallback)!.CompareTo(0);
     }
-}`)
+}`
+        let (printed, context) = Translate(source)
         Assert.Contains("(this._name = \"fallback\")", printed, StringComparison.Ordinal)
         Assert.DoesNotContain("this._name ??= \"fallback\"", printed, StringComparison.Ordinal)
         Assert.Contains("t ??= s", printed, StringComparison.Ordinal)
@@ -192,9 +193,14 @@ public sealed class C
         Assert.Contains("return (s ??= \"fallback\")", printed, StringComparison.Ordinal)
         Assert.Contains("if s == nil {", printed, StringComparison.Ordinal)
         Assert.Contains("info.CurrencySymbol = \"USD\"", printed, StringComparison.Ordinal)
-        Assert.Contains("(cache ??= nullableFallback)!!.CompareTo(0)", printed, StringComparison.Ordinal)
-        Assert.Contains("(cache ??= fallback)!!.CompareTo(0)", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("cache ??= nullableFallback", printed, StringComparison.Ordinal)
         AssertNoUnsupported(context, printed)
+        let (supported, supportedContext) = Translate(
+            source.Replace("where T : IComparable<int>", "where T : class, IComparable<int>")
+        )
+        Assert.Contains("(cache ??= nullableFallback)!!.CompareTo(0)", supported, StringComparison.Ordinal)
+        Assert.Contains("(cache ??= fallback).CompareTo(0)", supported, StringComparison.Ordinal)
+        AssertNoUnsupported(supportedContext, supported)
     }
 
     @Fact
