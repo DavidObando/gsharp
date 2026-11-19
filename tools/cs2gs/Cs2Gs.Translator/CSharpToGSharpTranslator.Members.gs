@@ -688,9 +688,9 @@ partial class CSharpToGSharpTranslator {
             // ADR-0149: the resolved explicit-interface qualifier clause type for
             // a single-slot explicit event implementation, or null otherwise.
             let explicitInterfaceEventType GTypeReference? = if usesExplicitInterfaceEventClause {
-                this.typeMapper.Map(
+                this.MapImplementedInterfaceType(
+                    symbol!!.ContainingType,
                     symbol!!.ExplicitInterfaceImplementations[0].ContainingType,
-                    this.context,
                     node.GetLocation()
                 )
             } else {
@@ -1242,9 +1242,9 @@ partial class CSharpToGSharpTranslator {
             let explicitInterfaceType GTypeReference? = if hasClauseCompatibleExplicitInterfaceImpl &&
                 !bridgedExplicitRecordDeconstruct &&
                 !helperExplicitValueTypeDeconstruct {
-                this.typeMapper.Map(
+                this.MapImplementedInterfaceType(
+                    symbol!!.ContainingType,
                     symbol!!.ExplicitInterfaceImplementations[0].ContainingType,
-                    this.context,
                     node.GetLocation()
                 )
             } else {
@@ -2566,9 +2566,9 @@ partial class CSharpToGSharpTranslator {
             // ADR-0149: the resolved explicit-interface qualifier clause type
             // for a single-slot explicit property implementation, or null otherwise.
             let explicitInterfacePropertyType GTypeReference? = if usesExplicitInterfacePropertyClause {
-                this.typeMapper.Map(
+                this.MapImplementedInterfaceType(
+                    symbol!!.ContainingType,
                     symbol!!.ExplicitInterfaceImplementations[0].ContainingType,
-                    this.context,
                     node.GetLocation()
                 )
             } else {

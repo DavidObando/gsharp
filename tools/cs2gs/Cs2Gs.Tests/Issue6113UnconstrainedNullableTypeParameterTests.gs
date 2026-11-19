@@ -752,6 +752,77 @@ public static class Probe
         )
     }
 
+    @Fact
+    func InterfaceWithErasedNullablePropertyImplementedAsNullableReference_CompilesAndRuns() {
+        const source = `#nullable enable
+using System;
+
+namespace Demo;
+
+public interface IModal<T>
+{
+    T? Result { get; }
+}
+
+public interface IDerivedModal<T> : IModal<T>
+{
+}
+
+public sealed class ChallengeModal : IModal<string>
+{
+    public string? Result { get; private set; }
+    public void Accept(string value) => Result = value;
+}
+
+public sealed class ExplicitModal : IModal<string>
+{
+    private readonly string? stored;
+    public ExplicitModal(string? stored) => this.stored = stored;
+    string? IModal<string>.Result => stored;
+}
+
+public sealed class DerivedModal : IDerivedModal<string>
+{
+    public string? Result { get; private set; }
+    public void Set(string? value) => Result = value;
+}
+
+public sealed class NonNullModal : IModal<string>
+{
+    public string Result => "always";
+}
+
+public static class Probe
+{
+    public static string Run()
+    {
+        var c1 = new ChallengeModal();
+        var c2 = new ChallengeModal();
+        c2.Accept("ok");
+        IModal<string?> e1 = new ExplicitModal(null);
+        IModal<string?> e2 = new ExplicitModal("exp");
+        var d1 = new DerivedModal();
+        d1.Set("drv");
+        IModal<string> nn = new NonNullModal();
+        return string.Join(
+            "|",
+            c1.Result ?? "nil",
+            c2.Result ?? "nil",
+            e1.Result ?? "nil",
+            e2.Result ?? "nil",
+            d1.Result ?? "nil",
+            nn.Result);
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("class ChallengeModal : IModal[string?]", printed, StringComparison.Ordinal)
+        Assert.Contains("class ExplicitModal : IModal[string?]", printed, StringComparison.Ordinal)
+        Assert.Contains("prop (IModal[string?]) Result string?", printed, StringComparison.Ordinal)
+        Assert.Contains("class DerivedModal : IDerivedModal[string?]", printed, StringComparison.Ordinal)
+        Assert.Contains("class NonNullModal : IModal[string]", printed, StringComparison.Ordinal)
+        Assert.Equal("nil|ok|nil|exp|drv|always", CompileAndRun(printed, "Demo.Probe.Run()"))
+    }
+
     shared {
         private func Translate(source string) string {
             let project = CSharpProjectLoader.LoadInMemory([](string, string){("Snippet.cs", source)})
