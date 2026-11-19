@@ -5348,7 +5348,12 @@ partial class CSharpToGSharpTranslator {
                 statements,
                 assignment.Left
             )
-            let current GExpression? = this.SpillOperand(target!!, statements)
+            let isUnqualifiedProperty = target is IdentifierExpression &&
+                this
+                .context
+                .GetSymbolInfo(Unparenthesize(assignment.Left))
+                .Symbol is IPropertySymbol
+            let current GExpression? = this.SpillOperand(target!!, statements, forceNonTrivial: isUnqualifiedProperty)
             let value = IfExpression(
                 BinaryExpression(current, "==", LiteralExpression.Null()),
                 AssignmentExpression(target, this.TranslateAssignmentValue(assignment)),

@@ -4871,7 +4871,7 @@ partial class CSharpToGSharpTranslator {
                         let forceSnapshot = safeReceiver is IdentifierExpression &&
                             (receiverSymbol is ILocalSymbol || receiverSymbol is IParameterSymbol) &&
                             (
-                            receiverSymbol is IParameterSymbol{RefKind: not RefKind.None} || this.IsSymbolReassigned(
+                            this.IsByReferenceVariable(receiverSymbol) || this.IsSymbolReassigned(
                                 receiverSymbol,
                                 this.state.CurrentBodyScope ?? receiverSyntax!!.SyntaxTree.GetRoot()
                             )

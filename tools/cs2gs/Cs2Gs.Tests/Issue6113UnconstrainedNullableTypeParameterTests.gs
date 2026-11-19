@@ -657,6 +657,21 @@ public sealed class MutatingBox<T>
     }
 }
 
+public sealed class ChangingPropertyBox<T>
+{
+    private int reads;
+    private readonly T first;
+    private readonly T second;
+    public ChangingPropertyBox(T first, T second) { this.first = first; this.second = second; }
+    public T? Value
+    {
+        get { reads++; return reads == 1 ? first : second; }
+        set { }
+    }
+    public T? Read(T fallback) => Value ??= fallback;
+    public int Reads => reads;
+}
+
 public static class Probe
 {
     public static string Missing<T>(Slot<T?> slot) => slot.Value?.ToString() ?? "nil";
@@ -714,14 +729,25 @@ public static class Probe
         var exprVal = exprCurrent.Value ??= "expr";
         var exprBoxes = (exprVal ?? "nil") + ":" + (thirdBox.Value ?? "nil") + ":" + (fourthBox.Value ?? "nil");
 
-        return string.Join("|", s1, s2, s3, oi, o1, o2, f1, f2, f3, reordered, structVal, stmtBoxes, exprBoxes);
+        var boxes = new MutatingBox<string>[2];
+        boxes[0] = new MutatingBox<string>(() => { boxes[0] = boxes[1]; });
+        boxes[1] = new MutatingBox<string>(() => { });
+        var origBox = boxes[0];
+        ref MutatingBox<string> alias = ref boxes[0];
+        alias.Value ??= "refLocal";
+        var refLocalRes = (origBox.Value ?? "nil") + ":" + (boxes[1].Value ?? "nil");
+
+        var cpb = new ChangingPropertyBox<string>("first", "second");
+        var propRead = (cpb.Read("fb") ?? "nil") + ":" + cpb.Reads;
+
+        return string.Join("|", s1, s2, s3, oi, o1, o2, f1, f2, f3, reordered, structVal, stmtBoxes, exprBoxes, refLocalRes, propRead);
     }
 }`
         let printed = Translate(source)
         Assert.DoesNotContain("Slot[string?]", printed, StringComparison.Ordinal)
         Assert.Contains("Slot[string](default(string))", printed, StringComparison.Ordinal)
         Assert.Equal(
-            "nil|nil|ok|nil:nil|False:False|True:False|x|nil|nil|True|set|stmt:nil|expr:expr:nil",
+            "nil|nil|ok|nil:nil|False:False|True:False|x|nil|nil|True|set|stmt:nil|expr:expr:nil|refLocal:nil|first:1",
             CompileAndRun(printed, "Demo.Probe.Run()")
         )
     }
