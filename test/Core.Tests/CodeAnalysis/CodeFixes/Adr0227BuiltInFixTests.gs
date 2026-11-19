@@ -166,6 +166,55 @@ open class Adr0227BuiltInFixTests {
     }
 
     @Fact
+    func LetFieldThroughAReceiver_DoesNotChangeTheReceiver() {
+        const source = "package P\n\nclass C {\n    let N int32 = 0\n}\n\nfunc F() {\n    let c = C()\n    c.N = 1\n}\n"
+        let tree = SyntaxTree.Parse(source)
+        let compilation = Compilation(tree)
+        let target = compilation.GetDiagnostics().First((d Diagnostic) -> d.Id == "GS0127")
+        let service = CodeFixService(CodeFixRegistry.CreateDefault())
+        for fix in service.GetFixes(compilation, target) {
+            Assert.DoesNotContain("var c = C()", Assert.Single(service.Apply(fix)).Text.ToString())
+        }
+    }
+
+    @Fact
+    func LogicalWords_WithoutOperands_HaveNoFix() {
+        for source in[]string{
+            "package P\n\nfunc F() bool {\n    return or\n}\n",
+            "package P\n\nfunc G(x bool) bool -> x\n\nfunc F() bool {\n    return G(or)\n}\n",
+            "package P\n\nfunc F(a bool) bool {\n    return a and\n}\n"
+        } {
+            let tree = SyntaxTree.Parse(source)
+            let compilation = Compilation(tree)
+            let service = CodeFixService(CodeFixRegistry.CreateDefault())
+            let words = compilation.GetDiagnostics().Where((d Diagnostic) -> d.Id == "GS0125").ToList()
+            Assert.NotEmpty(words)
+            for word in words {
+                Assert.Empty(
+                    service.GetFixes(compilation, word).Where(
+                        (f CodeFix) -> f.ProviderId == "GSharp.CodeFixes.LogicalWord"
+                    )
+                )
+            }
+        }
+    }
+
+    @Fact
+    func NullAssertion_OnACompoundExpression_IsParenthesized() {
+        const source = "package P\n\nfunc F(a int32?, b int32?) int32 {\n    return a + b\n}\n"
+        let tree = SyntaxTree.Parse(source)
+        let compilation = Compilation(tree)
+        let diagnostic = compilation.GetDiagnostics().First((d Diagnostic) -> d.Id == "GS0155" || d.Id == "GS0156")
+        let service = CodeFixService(CodeFixRegistry.CreateDefault())
+        let assertion = service.GetFixes(compilation, diagnostic).Single(
+            (f CodeFix) -> f.Title == "Assert non-nil with '!!'"
+        )
+        let changed = Assert.Single(service.Apply(assertion))
+        Assert.Contains("return ((a + b)!!)", changed.Text.ToString())
+        Assert.True(DeltaPolicy.NoNewDiagnostics.Accepts(service.ComputeDelta(compilation, assertion)))
+    }
+
+    @Fact
     func CompilerDiagnostics_KeepDescriptorAndMessageArguments() {
         let compilation = Compilation(
             SyntaxTree.Parse("package P\n\nfunc F() int32 {\n    let x = 1\n    x = 2\n    return missing\n}\n")

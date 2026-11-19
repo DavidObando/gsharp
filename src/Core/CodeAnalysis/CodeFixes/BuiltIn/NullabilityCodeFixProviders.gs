@@ -107,8 +107,19 @@ internal class NullableValueCodeFixProvider : GSharpCodeFixProvider {
             NullAssertionTitle,
             "GS0154.NullAssertion",
             Applicability.MaybeIncorrect,
-            (editor SyntaxEditor) -> editor.ReplaceNode(target, "(${editor.OriginalText(target)}!!)")
+            (editor SyntaxEditor) -> editor.ReplaceNode(target, "(${Operand(editor.OriginalText(target), target)}!!)")
         )
+    }
+
+    // `!!` binds tighter than a binary operator: `a + b!!` asserts only `b`, so a compound
+    // expression is parenthesized first.
+    private func Operand(text string, node SyntaxNode) string -> switch node {
+        case n is NameExpressionSyntax: text
+        case a is AccessorExpressionSyntax: text
+        case c is CallExpressionSyntax: text
+        case l is LiteralExpressionSyntax: text
+        case p is ParenthesizedExpressionSyntax: text
+        default: "(${text})"
     }
 
     // Reads the nullable source type and the target type from the message arguments, or from the

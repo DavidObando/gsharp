@@ -34,8 +34,11 @@ internal class LogicalWordCodeFixProvider : GSharpCodeFixProvider {
                 if context.Diagnostic.Id != "GS0125" {
                     return
                 }
+                // A binary operator needs an operand on each side, on the line.
                 let previous SyntaxToken? = FixSyntax.PreviousRealToken(tree, token)
-                if previous == nil || !FixSyntax.SameLine(tree.Text, previous.Span.Start, token.Span.Start) {
+                if previous == nil || !FixSyntax.SameLine(tree.Text, previous.Span.Start, token.Span.Start) ||
+                    !EndsOperand(previous) ||
+                    !StartsOperand(next) {
                     return
                 }
                 let replacement = if token.Text == "or" {
@@ -51,6 +54,15 @@ internal class LogicalWordCodeFixProvider : GSharpCodeFixProvider {
                 )
             }
             case "not" {
+                // A prefix operator needs an operand after it, and no operand before it.
+                let before SyntaxToken? = FixSyntax.PreviousRealToken(tree, token)
+                if !StartsOperand(next) ||
+                    (
+                    before != nil && FixSyntax.SameLine(tree.Text, before.Span.Start, token.Span.Start) &&
+                        EndsOperand(before)
+                ) {
+                    return
+                }
                 let following = next
                 context.RegisterFix(
                     "Use '!'",
@@ -63,5 +75,30 @@ internal class LogicalWordCodeFixProvider : GSharpCodeFixProvider {
                 )
             }
         }
+    }
+
+    private func EndsOperand(token SyntaxToken) bool -> switch token.Kind {
+        case SyntaxKind.IdentifierToken: token.Text != "return" &&
+            token.Text != "or" &&
+            token.Text != "and" &&
+            token.Text != "not"
+        case SyntaxKind.NumberToken,
+        SyntaxKind.StringToken,
+        SyntaxKind.CharacterToken,
+        SyntaxKind.InterpolatedStringToken: true
+        case SyntaxKind.CloseParenthesisToken, SyntaxKind.CloseSquareBracketToken: true
+        case SyntaxKind.TrueKeyword, SyntaxKind.FalseKeyword, SyntaxKind.NilKeyword: true
+        default: false
+    }
+
+    private func StartsOperand(token SyntaxToken) bool -> switch token.Kind {
+        case SyntaxKind.IdentifierToken: token.Text != "or" && token.Text != "and"
+        case SyntaxKind.NumberToken,
+        SyntaxKind.StringToken,
+        SyntaxKind.CharacterToken,
+        SyntaxKind.InterpolatedStringToken: true
+        case SyntaxKind.OpenParenthesisToken, SyntaxKind.BangToken, SyntaxKind.MinusToken: true
+        case SyntaxKind.TrueKeyword, SyntaxKind.FalseKeyword, SyntaxKind.NilKeyword: true
+        default: false
     }
 }

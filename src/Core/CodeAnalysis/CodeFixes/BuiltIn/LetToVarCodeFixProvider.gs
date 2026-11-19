@@ -32,7 +32,10 @@ internal class LetToVarCodeFixProvider : GSharpCodeFixProvider {
             return
         }
         let symbol Symbol? = TargetSymbol(context.SemanticModel, assignment, context)
-        if symbol == nil {
+        // GS0127 names the read-only variable. A symbol with another name is the receiver of a
+        // member assignment (`c.N = 1`), not the variable to change.
+        let arguments = context.Diagnostic.MessageArguments
+        if symbol == nil || arguments.IsEmpty || symbol.Name != arguments[0] {
             return
         }
         var keyword SyntaxToken? = nil
