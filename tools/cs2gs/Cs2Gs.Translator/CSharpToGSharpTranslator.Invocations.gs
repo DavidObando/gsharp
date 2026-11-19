@@ -1628,7 +1628,10 @@ partial class CSharpToGSharpTranslator {
                         .NullableAnnotation
                         .Annotated
                     if legitimateNull &&
-                        (nonNullableValueType || mappedType is not{IsNullable: true}) &&
+                        (
+                        nonNullableValueType ||
+                            (parameter.Type is ITypeParameterSymbol && mappedType is not{IsNullable: true})
+                    ) &&
                         mappedType != nil {
                         cast[GExpression](DefaultValueExpression(mappedType))
                     } else {
@@ -1715,6 +1718,36 @@ partial class CSharpToGSharpTranslator {
         /// so the statement carries the same suppression as a dropped `!`.
         /// @param argument The C# argument.
         /// @returns `true` when the statement must suppress GS0612.
+        private func ByRefErasedGenericSlotNeedsSuppression(argument ArgumentSyntax) bool {
+            let boundParameter IParameterSymbol? = this.GetArgumentParameter(argument)
+            if boundParameter == nil || !this.TryGetEmittedNonNullGenericSlotType(
+                boundParameter,
+                argument.Expression.GetLocation(),
+                out _
+            ) {
+                return false
+            }
+            let operand = Unparenthesize(argument.Expression)
+            let symbol ISymbol? = this.context.GetSymbolInfo(operand).Symbol
+            let storageType ITypeSymbol? = switch symbol {
+                case local is ILocalSymbol: local.Type
+                case parameter is IParameterSymbol: parameter.Type
+                case field is IFieldSymbol: field.Type
+                case property is IPropertySymbol: property.Type
+                default: (this.context.SemanticModel.GetOperation(operand) as IArrayElementReferenceOperation)?.Type ??
+                    this
+                    .context
+                    .GetTypeInfo(operand)
+                    .Type
+            }
+            return storageType != nil &&
+                (
+                storageType.NullableAnnotation == NullableAnnotation.Annotated || this.IsTranslatorWidenedDeclaration(
+                    symbol
+                )
+            )
+        }
+
         private func FlowProvenByRefArgumentNeedsSuppression(argument ArgumentSyntax) bool {
             if !argument.RefKindKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.RefKeyword) &&
                 !argument
@@ -1954,7 +1987,8 @@ partial class CSharpToGSharpTranslator {
                 (
                 this.DropsByRefNullabilitySuppression(argument) || this.FlowProvenByRefArgumentNeedsSuppression(
                     argument
-                )
+                ) ||
+                    this.ByRefErasedGenericSlotNeedsSuppression(argument)
             ) {
                 // Issues #4422 and #6036: carry a dropped `!`, or a csc flow proof that
                 // gsc does not narrow, across as a statement-scoped suppression of GS0612.
@@ -2463,6 +2497,9 @@ partial class CSharpToGSharpTranslator {
             ) {
                 targetType = paramsElementType
             }
+            if parameter != nil {
+                targetType = this.TryProjectErasedGenericDelegateType(parameter, targetType) ?? targetType
+            }
             invoke = GetDelegateInvokeMethod(targetType)
             return invoke != nil
         }
@@ -2726,6 +2763,13 @@ partial class CSharpToGSharpTranslator {
             }
             return GetLambdaResultExpressions(lambda).Any(
                 (result Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax) -> {
+                    if IsNullOrDefaultLiteral(result) && this.TryGetEmittedNonNullLambdaReturnSlotType(
+                        lambda,
+                        result.GetLocation(),
+                        out _
+                    ) {
+                        return true
+                    }
                     let resultType ITypeSymbol? = this.context.GetTypeInfo(result).Type
                     return resultType != nil &&
                         (

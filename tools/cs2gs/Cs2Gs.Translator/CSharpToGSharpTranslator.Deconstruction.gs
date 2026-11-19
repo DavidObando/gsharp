@@ -4857,14 +4857,19 @@ partial class CSharpToGSharpTranslator {
         ) GExpression {
             switch target {
                 case member is MemberAccessExpression {
-                    return MemberAccessExpression(
-                        this.MakeDuplicationSafeTarget(
-                            member.Target,
-                            prologue,
-                            (syntax as MemberAccessExpressionSyntax)?.Expression
-                        ),
-                        member.MemberName
-                    )
+                    let receiverSyntax = (syntax as MemberAccessExpressionSyntax)?.Expression
+                    let safeReceiver = this.MakeDuplicationSafeTarget(member.Target, prologue, receiverSyntax)
+                    let spilledReceiver = if receiverSyntax == nil ||
+                        this
+                        .context
+                        .GetTypeInfo(receiverSyntax)
+                        .Type
+                        ?.IsValueType != true {
+                        this.SpillOperand(safeReceiver, prologue)
+                    } else {
+                        safeReceiver
+                    }
+                    return MemberAccessExpression(spilledReceiver, member.MemberName)
                 }
                 case index is IndexExpression {
                     // `^n` is contextual index syntax: spilling the whole expression

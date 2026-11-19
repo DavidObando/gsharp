@@ -7902,20 +7902,15 @@ partial class CSharpToGSharpTranslator {
                     assignment.Left,
                     this.context.GetSymbolInfo(assignment.Left).Symbol
                 )
-                if this.TryGetEmittedNonNullGenericSlotType(
-                    coalesceTarget,
-                    assignment.Right.GetLocation(),
-                    out var nonNullSlotType
-                ) {
-                    if IsNullOrSuppressedNull(assignment.Right) {
-                        if value is not DefaultValueExpression {
-                            value = DefaultValueExpression(nonNullSlotType)
-                        }
-                    } else if !this.GSharpExpressionIsStaticallyNonNull(assignment.Right, value) {
-                        value = ParenthesizedExpression(
-                            BinaryExpression(value, "??", DefaultValueExpression(nonNullSlotType))
-                        )
-                    }
+                let coalesceTargetType ITypeSymbol? = this.GetAssignmentTargetType(assignment.Left, coalesceTarget)
+                if this.TryGetEmittedNonNullGenericSlotType(coalesceTarget, assignment.Right.GetLocation(), out _) {
+                    return this.ForgiveNullableReferenceValue(
+                        assignment.Right,
+                        value,
+                        coalesceTargetType,
+                        coalesceTarget,
+                        includePromotedValue: true
+                    )
                 }
                 return value
             }

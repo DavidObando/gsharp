@@ -490,6 +490,122 @@ public static class Probe
         Assert.Equal("True|True|null|True|2|nil|val|val|True", CompileAndRun(printed, "Demo.Probe.Run()"))
     }
 
+    @Fact
+    func LambdaCallbackDeconstructCollisionConvertedCoalesceReceiverOnceAndByRef_CompileAndRun() {
+        const source = `#nullable enable
+using System;
+
+namespace Demo;
+
+public sealed class Input
+{
+    public static int OperatorCalls;
+    public string? Tag;
+    public Input(string? tag) => Tag = tag;
+}
+
+public sealed class Result
+{
+    public string Label;
+    public Result(string label) => Label = label;
+
+    public static implicit operator Result?(Input x)
+    {
+        Input.OperatorCalls++;
+        return x.Tag is null ? null : new Result(x.Tag);
+    }
+}
+
+public sealed class Box<T>
+{
+    public T? Value;
+}
+
+public sealed class Owner
+{
+    public int GetterCalls;
+    public Box<string> First = new Box<string>();
+    public Box<string> Second = new Box<string>();
+    public Box<string> Current
+    {
+        get
+        {
+            GetterCalls++;
+            return GetterCalls == 1 ? First : Second;
+        }
+    }
+}
+
+public sealed class CollidingDeconstruct<T>
+{
+    public T? First { get; }
+    public int Second { get; }
+    public CollidingDeconstruct(T? first, int second) { First = first; Second = second; }
+    public void Deconstruct(out string? First, out int Second)
+    {
+        First = null;
+        Second = this.Second;
+    }
+}
+
+public static class Probe
+{
+    public static T? Call<T>(Func<T?> f) => f();
+    public static void Clear<T>(ref T? value) => value = default;
+
+    public static string Run()
+    {
+        string? maybeNull = null;
+        var c1 = Call<string>(() => null);
+        var c2 = Call<string>(() => maybeNull);
+        var c3 = Call<string>(() => { if (maybeNull is null) return null; return "x"; });
+
+        Input.OperatorCalls = 0;
+        var rb = new Box<Result>();
+        _ = rb.Value ??= new Input(null);
+        var rAfterNull = rb.Value is null;
+        _ = rb.Value ??= new Input("ok");
+        var rAfterOk = rb.Value?.Label ?? "nil";
+        var opCalls = Input.OperatorCalls;
+
+        var owner = new Owner();
+        owner.Current.Value ??= "set";
+        var getterResult = owner.GetterCalls + ":" + (owner.First.Value ?? "nil") + ":" + (owner.Second.Value ?? "nil");
+
+        var dc = new CollidingDeconstruct<string>(null, 1);
+        int len = -1;
+        try
+        {
+            len = dc switch { (var captured, _) => captured!.Length };
+        }
+        catch (NullReferenceException)
+        {
+            len = -99;
+        }
+        var (deconstructed, _) = dc;
+        int dlen = -1;
+        try
+        {
+            dlen = deconstructed!.Length;
+        }
+        catch (NullReferenceException)
+        {
+            dlen = -88;
+        }
+
+        string? s = "init";
+        Clear<string>(ref s);
+
+        return string.Join("|", c1 ?? "nil", c2 ?? "nil", c3 ?? "nil", rAfterNull, rAfterOk, opCalls, getterResult, len, dlen, s ?? "nil");
+    }
+}`
+        let printed = Translate(source)
+        Assert.DoesNotContain("maybeNull!!", printed, StringComparison.Ordinal)
+        Assert.Contains("captured!!.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("deconstructed!!.Length", printed, StringComparison.Ordinal)
+        Assert.Equal("nil|nil|nil|True|ok|2|1:set:nil|-99|-88|nil", CompileAndRun(printed, "Demo.Probe.Run()"))
+    }
+
     shared {
         private func Translate(source string) string {
             let project = CSharpProjectLoader.LoadInMemory([](string, string){("Snippet.cs", source)})

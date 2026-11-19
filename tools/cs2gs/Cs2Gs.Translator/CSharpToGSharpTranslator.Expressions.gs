@@ -528,7 +528,8 @@ partial class CSharpToGSharpTranslator {
             if slot.Symbol != nil && this.TryGetEmittedNonNullGenericSlotType(
                 slot.Symbol,
                 literal.GetLocation(),
-                out var nonNullGenericSlotType
+                out var nonNullGenericSlotType,
+                literal
             ) {
                 return DefaultValueExpression(nonNullGenericSlotType)
             }
@@ -557,31 +558,42 @@ partial class CSharpToGSharpTranslator {
         // type parameter emits as bare `T`. When closed over a non-nullable
         // reference type argument `U`, G# requires `default(U)` / `expr ?? default(U)`
         // instead of bare `nil` / `U?` (without throwing `!!`).
-        private func TryGetEmittedNonNullGenericSlotType(
+        private func TryResolveOriginalDeclarationType(targetSymbol ISymbol?) ITypeSymbol? -> switch targetSymbol {
+            case parameter is IParameterSymbol: parameter.OriginalDefinition.Type
+            case field is IFieldSymbol: field.OriginalDefinition.Type
+            case property is IPropertySymbol: property.OriginalDefinition.Type
+            case method is IMethodSymbol when method.MethodKind != MethodKind.Constructor: method
+                .OriginalDefinition
+                .ReturnType
+            default: default(ITypeSymbol?)
+        }
+
+        private func TryGetSubstitutedNonNullGenericTypeArgument(
             targetSymbol ISymbol?,
-            location Location?,
-            out nonNullType GTypeReference?
-        ) bool {
-            nonNullType = nil
-            if targetSymbol == nil || this.TargetContractIsFrozenInMetadata(targetSymbol) {
-                return false
+            originalLeaf ITypeSymbol?
+        ) ITypeSymbol? {
+            if targetSymbol == nil || originalLeaf == nil {
+                return nil
             }
-            let originalType ITypeSymbol? = switch targetSymbol {
-                case parameter is IParameterSymbol: parameter.OriginalDefinition.Type
-                case field is IFieldSymbol: field.OriginalDefinition.Type
-                case property is IPropertySymbol: property.OriginalDefinition.Type
-                case method is IMethodSymbol when method.MethodKind != MethodKind.Constructor: method
-                    .OriginalDefinition
-                    .ReturnType
-                default: default(ITypeSymbol?)
+            if originalLeaf is INamedTypeSymbol{IsGenericType: true, TypeArguments: {Length: 1}} taskLike &&
+                taskLike
+                .ContainingNamespace
+                ?.ToDisplayString() == "System.Threading.Tasks" && (taskLike.Name is "Task" or "ValueTask") {
+                if this.TryGetSubstitutedNonNullGenericTypeArgument(
+                    targetSymbol,
+                    taskLike.TypeArguments[0]
+                ) is {} innerNonNull {
+                    return taskLike.OriginalDefinition.Construct(innerNonNull)
+                }
+                return nil
             }
-            if originalType is not ITypeParameterSymbol originalTp ||
+            if originalLeaf is not ITypeParameterSymbol originalTp ||
                 originalTp.NullableAnnotation != Microsoft
                 .CodeAnalysis
                 .NullableAnnotation
                 .Annotated ||
                 CSharpTypeMapper.HasProvenSourceNullableKind(originalTp) {
-                return false
+                return nil
             }
             var substituted ITypeSymbol? = nil
             if originalTp.TypeParameterKind == TypeParameterKind.Method {
@@ -613,6 +625,113 @@ partial class CSharpToGSharpTranslator {
                 .CodeAnalysis
                 .NullableAnnotation
                 .Annotated {
+                return nil
+            }
+            return substituted.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated)
+        }
+
+        private func TryProjectErasedGenericDelegateType(
+            sinkSymbol ISymbol?,
+            substitutedType ITypeSymbol?
+        ) INamedTypeSymbol? {
+            if sinkSymbol == nil || this.TargetContractIsFrozenInMetadata(sinkSymbol) {
+                return nil
+            }
+            if substitutedType is not INamedTypeSymbol{TypeKind: TypeKind.Delegate, IsGenericType: true} subDelegate {
+                return nil
+            }
+            let originalType = this.TryResolveOriginalDeclarationType(sinkSymbol)
+            if originalType is not INamedTypeSymbol{TypeKind: TypeKind.Delegate, IsGenericType: true} origDelegate ||
+                origDelegate
+                .TypeArguments
+                .Length != subDelegate
+                .TypeArguments
+                .Length {
+                return nil
+            }
+            var changed = false
+            let newArgs = [subDelegate.TypeArguments.Length]ITypeSymbol
+            for var i = 0; i < subDelegate.TypeArguments.Length; i++ {
+                if this.TryGetSubstitutedNonNullGenericTypeArgument(
+                    sinkSymbol,
+                    origDelegate.TypeArguments[i]
+                ) is {} projectedArg {
+                    newArgs[i] = projectedArg
+                    changed = true
+                } else {
+                    newArgs[i] = subDelegate.TypeArguments[i]
+                }
+            }
+            return if changed {
+                subDelegate.ConstructedFrom.Construct(newArgs)
+            } else {
+                default(INamedTypeSymbol?)
+            }
+        }
+
+        private func TryGetEmittedNonNullLambdaReturnSlotType(
+            lambda AnonymousFunctionExpressionSyntax,
+            location Location?,
+            out nonNullType GTypeReference?
+        ) bool {
+            nonNullType = nil
+            let sinkSymbol = this.ResolveValueSink(lambda)
+            let rawDelegate = this.GetProjectedMethodGroupDestinationType(lambda) ??
+                this
+                .context
+                .GetTypeInfo(lambda)
+                .ConvertedType
+            let projectedDelegate = this.TryProjectErasedGenericDelegateType(sinkSymbol, rawDelegate)
+            if projectedDelegate == nil {
+                return false
+            }
+            let isAsync = lambda.AsyncKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AsyncKeyword)
+            let rawReturn = GetEffectiveReturnType(
+                (rawDelegate as INamedTypeSymbol)?.DelegateInvokeMethod?.ReturnType,
+                isAsync
+            )
+            let projectedReturn = GetEffectiveReturnType(projectedDelegate.DelegateInvokeMethod?.ReturnType, isAsync)
+            if rawReturn == nil ||
+                projectedReturn == nil ||
+                rawReturn.NullableAnnotation != Microsoft
+                .CodeAnalysis
+                .NullableAnnotation
+                .Annotated ||
+                !CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(projectedReturn) ||
+                projectedReturn.NullableAnnotation == Microsoft
+                .CodeAnalysis
+                .NullableAnnotation
+                .Annotated {
+                return false
+            }
+            let mapped = this.typeMapper.Map(projectedReturn, this.context, location)
+            if mapped == nil || mapped.IsNullable {
+                return false
+            }
+            nonNullType = mapped
+            return true
+        }
+
+        private func TryGetEmittedNonNullGenericSlotType(
+            targetSymbol ISymbol?,
+            location Location?,
+            out nonNullType GTypeReference?,
+            valueSyntax Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = nil
+        ) bool {
+            nonNullType = nil
+            if valueSyntax != nil && targetSymbol is IMethodSymbol methodTarget && this.ResultLambda(
+                methodTarget,
+                valueSyntax
+            ) is {} resultLambda &&
+                this.TryGetEmittedNonNullLambdaReturnSlotType(resultLambda, location, out nonNullType) {
+                return true
+            }
+            if targetSymbol == nil || this.TargetContractIsFrozenInMetadata(targetSymbol) {
+                return false
+            }
+            let originalType ITypeSymbol? = this.TryResolveOriginalDeclarationType(targetSymbol)
+            let substituted = this.TryGetSubstitutedNonNullGenericTypeArgument(targetSymbol, originalType)
+            if substituted == nil {
                 return false
             }
             let mapped = this.typeMapper.Map(substituted, this.context, location)
@@ -3905,7 +4024,14 @@ partial class CSharpToGSharpTranslator {
                 isTupleElement && targetType?.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated
             ) &&
                 !this.IsActivePatternBinding(value) && !this.LambdaResultFeedsNullableObservedInvocation(value) &&
-                !this.IsNilableOnlyInEmittedGSharp(value) && this.ReceiverNeedsNullForgiveness(value) {
+                !this.IsNilableOnlyInEmittedGSharp(value) && !this.TryGetEmittedNonNullGenericSlotType(
+                targetSymbol,
+                value?.GetLocation(),
+                out _,
+                value
+            ) &&
+                this
+                .ReceiverNeedsNullForgiveness(value) {
                 return this.BridgeWidenedImplicitArrayConsumer(
                     value,
                     this.ReportStoreBridge(value, translated, EnsureNonNullAssertion(translated), targetSymbol),
@@ -10673,7 +10799,8 @@ partial class CSharpToGSharpTranslator {
             if !operatorInput && value != nil && this.TryGetEmittedNonNullGenericSlotType(
                 targetSymbol,
                 value.GetLocation(),
-                out var nonNullSlotType
+                out var nonNullSlotType,
+                value
             ) {
                 if IsNullOrSuppressedNull(value) {
                     return if translated is DefaultValueExpression {
@@ -14321,7 +14448,11 @@ partial class CSharpToGSharpTranslator {
                     .Parameters
                     .Length {
                     let param = deconstruct.Parameters[index]
-                    let prop = recordType.GetMembers(param.Name).OfType[IPropertySymbol]().FirstOrDefault()
+                    let prop = if recordType.IsRecord && deconstruct.IsImplicitlyDeclared {
+                        recordType.GetMembers(param.Name).OfType[IPropertySymbol]().FirstOrDefault()
+                    } else {
+                        default(IPropertySymbol?)
+                    }
                     let target ISymbol = if prop != nil {
                         cast[ISymbol](prop)
                     } else {
@@ -25443,6 +25574,7 @@ partial class CSharpToGSharpTranslator {
                 this.IsGSharpFlowNarrowedLocal(use) || !this.IsObliviousCompilation() ||
                 this.IsWithinExpressionTreeLambda(use) || this.LambdaResultFeedsNullableObservedInvocation(use) ||
                 this.FindResultLambda(use) is not{} lambda || this.LambdaResultFlowsToNullableSink(lambda) ||
+                this.TryGetEmittedNonNullLambdaReturnSlotType(lambda, use?.GetLocation(), out _) ||
                 this.LambdaResultFeedsUnobservedTaskRun(use) ||
                 !(this.GetLambdaTargetDelegateType(lambda) is {DelegateInvokeMethod: {} invoke}) ||
                 GetEffectiveReturnType(
@@ -26024,7 +26156,7 @@ partial class CSharpToGSharpTranslator {
                 return nil
             }
             if converted.TypeKind == TypeKind.Delegate {
-                return converted
+                return this.TryProjectErasedGenericDelegateType(this.ResolveValueSink(lambda), converted) ?? converted
             }
             return if this.IsExpressionTreeLambda(lambda) {
                 converted.TypeArguments[0] as INamedTypeSymbol
