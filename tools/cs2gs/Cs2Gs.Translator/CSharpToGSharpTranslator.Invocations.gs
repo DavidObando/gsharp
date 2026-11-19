@@ -1178,7 +1178,7 @@ partial class CSharpToGSharpTranslator {
                 case creationOp is IObjectCreationOperation: creationOp.Arguments
                 default: default(ImmutableArray[IArgumentOperation])
             }
-            if targetMethod?.MethodKind == MethodKind.ReducedExtension &&
+            if targetMethod?.IsExtensionMethod == true &&
                 !operationArguments.IsDefaultOrEmpty &&
                 operationArguments[0].Syntax is not ArgumentSyntax {
                 operationArguments = operationArguments.RemoveAt(0)
@@ -2482,6 +2482,18 @@ partial class CSharpToGSharpTranslator {
             case _ is IParameterReferenceOperation or
                 _ is IArrayElementReferenceOperation or
                 _ is IInstanceReferenceOperation: true
+            case invocation is IInvocationOperation: invocation
+                .TargetMethod
+                .ReturnsByRef ||
+                invocation
+                .TargetMethod
+                .ReturnsByRefReadonly
+            case property is IPropertyReferenceOperation: property
+                .Property
+                .ReturnsByRef ||
+                property
+                .Property
+                .ReturnsByRefReadonly
             case field is IFieldReferenceOperation: !field
                 .Field
                 .IsConst &&

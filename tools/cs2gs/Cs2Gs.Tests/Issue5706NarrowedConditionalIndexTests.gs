@@ -2555,14 +2555,16 @@ public static class Demo
         int other = 10;
         counters[0].Swap(ref other);
         counters[0].AddExternal(5);
-        return direct + "|" + counters[0] + ":" + other + "|" + other.SameInt(in other) + "|" + other.Who() + "|" + other.ReadA() + ":" + other.ReadB();
+        return direct + "|" + counters[0] + ":" + other + "|" + other.SameInt(in other) + "|" + other.Who() + "|" + other.ReadA() + ":" + other.ReadB() + "|" + counters[0].Total() + ":" + counters[0].Total(2, 3);
     }
 }`, `
+using System.Collections.Generic;
 namespace ExternalRefExt6063
 {
     public static class ExternalIntExtensions
     {
         public static void AddExternal(this ref int value, int delta) { value += delta; }
+        public static int Total(this ref int value, params List<int> rest) { int sum = value; foreach (var item in rest) sum += item; return sum; }
     }
 }
 namespace A
@@ -2578,7 +2580,7 @@ namespace B
     {
         public static int ReadB(this in int value) => value + 2;
     }
-}`, strictIl: true, rejectConditionalIndexWarnings: true, expectedOutput: "1:a:1|15:4|True|Run:4|5:6")
+}`, strictIl: true, rejectConditionalIndexWarnings: true, expectedOutput: "1:a:1|15:4|True|Run:4|5:6|15:20")
         Assert.Contains("func Bump(ref value int32)", printed, StringComparison.Ordinal)
         Assert.Contains("private func PrivateBump(ref value int32)", printed, StringComparison.Ordinal)
         Assert.Contains("IntExt.Bump(&counters[0])", printed, StringComparison.Ordinal)

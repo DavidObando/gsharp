@@ -668,6 +668,9 @@ public struct Pair { public int Value; }
 public static class P
 {
     delegate bool SameDelegate(ref readonly int left, ref readonly int right);
+    static int slotValue = 11;
+    static ref int Slot() => ref slotValue;
+    static ref readonly int SlotProp => ref slotValue;
     static bool Same(ref readonly int left, ref readonly int right) =>
         Unsafe.AreSame(ref Unsafe.AsRef(in left), ref Unsafe.AsRef(in right));
     public static void Main()
@@ -685,10 +688,12 @@ public static class P
             Same(x + 1, x) + "|" +
             d(right: pair.Value, left: pair.Value) + "|" +
             d(right: xs[0], left: xs[0]) + "|" +
+            d(right: Slot(), left: Slot()) + "|" +
+            d(right: SlotProp, left: SlotProp) + "|" +
             d(right: x + 1, left: x));
     }
 }
-`, "True|True|True|True|True|False|True|True|False", (
+`, "True|True|True|True|True|False|True|True|True|True|False", (
                 translated string
             ) -> {
                 Assert.Contains(
