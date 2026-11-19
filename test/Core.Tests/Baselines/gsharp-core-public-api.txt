@@ -3336,6 +3336,7 @@ type sealed class GSharp.Core.CodeAnalysis.CodeFixes.CodeFixContext : System.Obj
   method public System.Threading.CancellationToken get_CancellationToken()
   method public Void RegisterFix(GSharp.Core.CodeAnalysis.CodeFixes.CodeFix fix)
   method public Void RegisterFix(String title, String equivalenceKey, GSharp.Core.CodeAnalysis.CodeFixes.Applicability applicability, System.Action`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxEditor> compute)
+  method public Void RegisterMultiDocumentFix(String title, String equivalenceKey, GSharp.Core.CodeAnalysis.CodeFixes.Applicability applicability, System.Action`1<GSharp.Core.CodeAnalysis.CodeFixes.MultiDocumentEditor> compute)
   property public GSharp.Core.CodeAnalysis.Compilation.Compilation Compilation { get; }
   property public GSharp.Core.CodeAnalysis.Diagnostic Diagnostic { get; }
   property public GSharp.Core.CodeAnalysis.SemanticModel SemanticModel { get; }
@@ -3479,6 +3480,10 @@ type sealed class GSharp.Core.CodeAnalysis.CodeFixes.FixChanges : System.Object
   property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.CodeFixes.DocumentChanges> Documents { get; }
 type sealed class GSharp.Core.CodeAnalysis.CodeFixes.GSharpCodeFixProviderAttribute : System.Attribute
   method public Void .ctor()
+type sealed class GSharp.Core.CodeAnalysis.CodeFixes.MultiDocumentEditor : System.Object
+  method public GSharp.Core.CodeAnalysis.Compilation.Compilation get_Compilation()
+  method public GSharp.Core.CodeAnalysis.Syntax.SyntaxEditor EditorFor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree tree)
+  property public GSharp.Core.CodeAnalysis.Compilation.Compilation Compilation { get; }
 type sealed class GSharp.Core.CodeAnalysis.Compilation.CompilationMeasurements : System.Object, System.IDisposable
   method public Int64 GetCounter(String name)
   method public String get_Tool()

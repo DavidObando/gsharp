@@ -317,6 +317,48 @@ open class Adr0227BuiltInFixTests {
     }
 
     @Fact
+    func NarrowingNumericConversion_IsWrapped() {
+        VerifyFix(
+            "package P\n\nfunc F(n int64) int32 {\n    let m int32 = n // keep\n    return m\n}\n",
+            "GS0156",
+            "Convert to 'int32'",
+            Applicability.MaybeIncorrect,
+            "package P\n\nfunc F(n int64) int32 {\n    let m int32 = int32(n) // keep\n    return m\n}\n"
+        )
+    }
+
+    @Fact
+    func LetField_BareAssignmentInTheSameClass_BecomesVar() {
+        // `N = 2` has an implicit receiver; GetSymbolInfo answers `this` (#6126), so the provider
+        // looks the field up by the name that GS0127 gives.
+        VerifyFix(
+            "package P\n\nclass C {\n    let N int32 = 1\n\n    func Set() {\n        N = 2\n    }\n}\n",
+            "GS0127",
+            "Change 'let' to 'var'",
+            Applicability.MaybeIncorrect,
+            "package P\n\nclass C {\n    var N int32 = 1\n\n    func Set() {\n        N = 2\n    }\n}\n"
+        )
+    }
+
+    @Fact
+    func LetField_InAnotherFile_BecomesVar_WithAMultiDocumentFix() {
+        let a = SyntaxTree.Parse(SourceText.From("package P\n\npartial class C {\n    let N int32 = 1\n}\n", "a.gs"))
+        let b = SyntaxTree.Parse(
+            SourceText.From("package P\n\npartial class C {\n    func Set() {\n        N = 2\n    }\n}\n", "b.gs")
+        )
+        let compilation = Compilation(a, b)
+        let target = compilation.GetDiagnostics().Single((d Diagnostic) -> d.Id == "GS0127")
+        Assert.Same(b.Text, target.Location.Text)
+        let service = CodeFixService(CodeFixRegistry.CreateDefault())
+        let fix = Assert.Single(service.GetFixes(compilation, target))
+        Assert.Equal(Applicability.MaybeIncorrect, fix.Applicability)
+        let document = Assert.Single(fix.GetChanges().Documents)
+        Assert.Same(a, document.Tree)
+        Assert.Equal("package P\n\npartial class C {\n    var N int32 = 1\n}\n", document.GetChangedText().ToString())
+        Assert.True(DeltaPolicy.NoNewDiagnostics.Accepts(service.ComputeDelta(compilation, fix)))
+    }
+
+    @Fact
     func CompilerDiagnostics_KeepDescriptorAndMessageArguments() {
         let compilation = Compilation(
             SyntaxTree.Parse("package P\n\nfunc F() int32 {\n    let x = 1\n    x = 2\n    return missing\n}\n")
