@@ -55,7 +55,7 @@ internal partial class ExpressionBinder {
         }
         var boundOperand = BindExpression(syntax.Operand)
         if boundOperand.Type == TypeSymbol.Error {
-            ReportUnresolvedBareDefaults(boundOperand)
+            ReportUnresolvedTargetlessValues(boundOperand)
             return BoundErrorExpression(nil)
         }
         // Issue #2616 / ECMA-334 §14.2.6.1: char participates in unary numeric
@@ -429,7 +429,7 @@ internal partial class ExpressionBinder {
             }
         }
         let operand = BindExpression(syntax.Operand)
-        if operand is BoundErrorExpression || ReportUnresolvedBareDefaults(operand) {
+        if operand is BoundErrorExpression || ReportUnresolvedTargetlessValues(operand) {
             return BoundErrorExpression(nil)
         }
         // ADR-0122 / issue #1014: inside an unsafe context, `*<type>(expr)`
@@ -667,7 +667,7 @@ internal partial class ExpressionBinder {
     /// existing rule ((cref:StatementBinder)).
     private func BindThrowExpression(syntax ThrowExpressionSyntax) BoundExpression {
         let expression = BindExpression(syntax.Expression)
-        if expression is BoundErrorExpression || ReportUnresolvedBareDefaults(expression) {
+        if expression is BoundErrorExpression || ReportUnresolvedTargetlessValues(expression) {
             return BoundErrorExpression(nil)
         }
         let exceptionType TypeSymbol? = ResolveExceptionType()
@@ -897,6 +897,8 @@ internal partial class ExpressionBinder {
             falseExitNarrowing ?? postConditionNarrowing
         )
         if condition is BoundErrorExpression || whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression {
+            let _ = ReportUnresolvedTargetlessValues(whenTrue)
+            let _ = ReportUnresolvedTargetlessValues(whenFalse)
             return BoundErrorExpression(nil)
         }
         let thenCompletes = whenTrue.Type != TypeSymbol.Never
@@ -1100,6 +1102,8 @@ internal partial class ExpressionBinder {
         JoinConditionalBranchExpressionNarrowingFrames(thenExit, falseExit, thenCompletes, falseCompletes)
         JoinBranchNarrowingSnapshots(whenTrue.Type, trueExitNarrowing, whenFalse.Type, falseExitNarrowing)
         if condition is BoundErrorExpression || whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression {
+            let _ = ReportUnresolvedTargetlessValues(whenTrue)
+            let _ = ReportUnresolvedTargetlessValues(whenFalse)
             return BoundErrorExpression(nil)
         }
         if elseSyntax == nil || IsVoidInDiscardedPosition(canBeVoid, []BoundExpression{whenTrue, whenFalse}) {
@@ -1230,41 +1234,10 @@ internal partial class ExpressionBinder {
         type != TypeSymbol.Void &&
         !TypeSymbol.ContainsNeverType(type)
 
-    /// Issue #4966 (ADR-0202): reports GS0362 for each unresolved bare
-    /// `default` placeholder that [`value`](paramref) yields — the value itself,
-    /// a block expression's tail, a conditional's branch or a switch arm, recursively.
-    /// @param value The value of a discarded position.
-    /// @returns `true` when any was reported.
-    private func ReportUnresolvedBareDefaults(value BoundExpression?) bool {
-        switch value {
-            case BoundDefaultExpression{
-                Type: var defaultType,
-                Syntax: DefaultExpressionSyntax bareDefault
-            } when defaultType ==
-            TypeSymbol.Error && bareDefault.TypeClause == nil {
-                Diagnostics.ReportBareDefaultNoTargetType(bareDefault.Location)
-                return true
-            }
-            case block is BoundBlockExpression {
-                return ReportUnresolvedBareDefaults(block.Expression)
-            }
-            case conditional is BoundConditionalExpression {
-                let inTrue = ReportUnresolvedBareDefaults(conditional.WhenTrue)
-                let inFalse = ReportUnresolvedBareDefaults(conditional.WhenFalse)
-                return inTrue || inFalse
-            }
-            case switchExpression is BoundSwitchExpression {
-                var reported = false
-                for arm in switchExpression.Arms {
-                    reported = ReportUnresolvedBareDefaults(arm.Result) || reported
-                }
-                return reported
-            }
-            default {
-                return false
-            }
-        }
-    }
+    private func ReportUnresolvedTargetlessValues(
+        value BoundExpression?,
+        fallbackLocation TextLocation = default(TextLocation)
+    ) bool -> ReportUnresolvedTargetlessValues(Diagnostics, value, fallbackLocation)
 
     /// Issue #4966 (ADR-0202): turns [`value`](paramref) into a void
     /// expression for a position whose value is discarded (the void `if`, a
@@ -1276,7 +1249,7 @@ internal partial class ExpressionBinder {
         // position has none: report it rather than leave the untyped
         // placeholder to the emitter (GS0362, as for any targetless `default`),
         // also when it is the tail of a block or a branch inside the value.
-        if ReportUnresolvedBareDefaults(value) {
+        if ReportUnresolvedTargetlessValues(value) {
             return BoundErrorExpression(nil)
         }
         if value.Type == TypeSymbol.Void || value.Type == TypeSymbol.Never || value.Type == TypeSymbol.Error {
@@ -1463,7 +1436,7 @@ internal partial class ExpressionBinder {
             var value = bindValue()
             // Cleanup replaces a tail with a result-local read. Diagnose an
             // unresolved value before that replacement hides its defaults.
-            if value.Type == TypeSymbol.Error && ReportUnresolvedBareDefaults(value) {
+            if value.Type == TypeSymbol.Error && ReportUnresolvedTargetlessValues(value) {
                 value = BoundErrorExpression(nil)
             }
             if value.Type != TypeSymbol.Never && TypeSymbol.ContainsNeverType(
@@ -1780,7 +1753,7 @@ internal partial class ExpressionBinder {
         // exception. The operand may be any channel-shaped handle (D2's matrix);
         // a send-only `out chan[T]` cannot be received from (GS0550).
         var operand = BindExpression(syntax.Operand)
-        if operand is BoundErrorExpression || ReportUnresolvedBareDefaults(operand) {
+        if operand is BoundErrorExpression || ReportUnresolvedTargetlessValues(operand) {
             return BoundErrorExpression(nil)
         }
         // ADR-0186 §4: a receive requires a non-null channel, so a platform
@@ -2066,8 +2039,8 @@ internal partial class ExpressionBinder {
                 Diagnostics.TruncateTo(coalesceDiagMark)
                 return BoundErrorExpression(syntax)
             }
-            ReportUnresolvedBareDefaults(boundLeft)
-            ReportUnresolvedBareDefaults(boundRight)
+            let _ = ReportUnresolvedTargetlessValues(boundLeft)
+            let _ = ReportUnresolvedTargetlessValues(boundRight)
             return BoundErrorExpression.WithFailedOperands(boundLeft, boundRight)
         }
         let nativeEqualityLeftType = if boundLeft.Type is NullableTypeSymbol nullableNativeLeft {
@@ -3997,6 +3970,60 @@ internal partial class ExpressionBinder {
         ) bool -> expression is BoundMethodGroupExpression ||
             expression is BoundClrMethodGroupExpression &&
             expression.ResolvedMethod == nil
+
+        /// Issue #4966 / #6077: reports GS0362 for unresolved bare `default`
+        /// placeholders and GS0582 for targetless method groups that [`value`](paramref)
+        /// yields — directly or through a block tail, conditional branch, or switch arm.
+        /// @param diagnostics The diagnostic bag.
+        /// @param value The bound expression to inspect.
+        /// @param fallbackLocation Location used when an unresolved method group carries no syntax.
+        /// @returns `true` when any diagnostic was reported.
+        internal func ReportUnresolvedTargetlessValues(
+            diagnostics DiagnosticBag,
+            value BoundExpression?,
+            fallbackLocation TextLocation = default(TextLocation)
+        ) bool {
+            if value == nil {
+                return false
+            }
+            switch value {
+                case BoundDefaultExpression{
+                    Type: var defaultType,
+                    Syntax: DefaultExpressionSyntax bareDefault
+                } when defaultType ==
+                TypeSymbol.Error && bareDefault.TypeClause == nil {
+                    diagnostics.ReportBareDefaultNoTargetType(bareDefault.Location)
+                    return true
+                }
+                case _ when MethodGroupDiagnostics.RequiresTarget(value) {
+                    let _ = MethodGroupDiagnostics.ReportRequiresTarget(
+                        diagnostics,
+                        value,
+                        value.Syntax?.Location ?? fallbackLocation
+                    )
+                    return true
+                }
+                case block is BoundBlockExpression {
+                    return ReportUnresolvedTargetlessValues(diagnostics, block.Expression, fallbackLocation)
+                }
+                case conditional is BoundConditionalExpression {
+                    let inTrue = ReportUnresolvedTargetlessValues(diagnostics, conditional.WhenTrue, fallbackLocation)
+                    let inFalse = ReportUnresolvedTargetlessValues(diagnostics, conditional.WhenFalse, fallbackLocation)
+                    return inTrue || inFalse
+                }
+                case switchExpression is BoundSwitchExpression {
+                    var reported = false
+                    for arm in switchExpression.Arms {
+                        reported = ReportUnresolvedTargetlessValues(diagnostics, arm.Result, fallbackLocation) ||
+                            reported
+                    }
+                    return reported
+                }
+                default {
+                    return false
+                }
+            }
+        }
 
         /// Issue #3684: whether a unary minus applies directly to the decimal literal `2147483648`, which the lexer
         /// types as `uint32`; together they are `int32.MinValue`, as in C#. Also read by the #5520 literal

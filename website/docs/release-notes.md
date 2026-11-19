@@ -36,6 +36,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Report targetless method groups (`GS0582`) and inapplicable nullable-receiver member reads (`GS0158`) instead of discarding them to `BoundErrorExpression` across operators, indexers, switches, and assignments, avoiding silent `?`-typed locals and `GS9998` crashes in emit. (Fixes #6077)
+
 - Convert capturing forward-recursive local functions to function values and compatible delegates. Preserve callback identity and shared capture cells across direct calls, escaped callbacks, and loop iterations. (Fixes #6105)
 
 - Report `GS0325` at the declaration for bodyless top-level functions, extension functions, receiver-clause operators, and conversion operators without `@DllImport` or `@LibraryImport`, and skip body binding when `Body` is absent so `gsc` exits with diagnostics instead of `GS9998` or emitting an empty method. (Fixes #6116)

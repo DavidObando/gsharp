@@ -3602,6 +3602,7 @@ internal partial class ExpressionBinder {
         ApplySubExpressionNarrowingEffects(memberNameSyntax, leftRead)
         let boundRhs = BindExpression(syntax.Value)
         if leftRead is BoundErrorExpression || boundRhs.Type == TypeSymbol.Error {
+            let _ = ReportUnresolvedTargetlessValues(boundRhs)
             return BoundErrorExpression(nil)
         }
         let targetType = leftRead.Type
@@ -3850,6 +3851,7 @@ internal partial class ExpressionBinder {
         )
         let rhsBound = BindExpression(syntax.Value)
         if rhsBound is BoundErrorExpression || rhsBound.Type == TypeSymbol.Error {
+            let _ = ReportUnresolvedTargetlessValues(rhsBound)
             return BoundErrorExpression(nil)
         }
         if pointer is BoundAddressOfExpression && AsyncBoundTreeQueries.HasAwait(rhsBound) {
@@ -4502,6 +4504,9 @@ internal partial class ExpressionBinder {
         if syntax.Target.Indices.Count > 1 {
             let target = BindExpression(syntax.Target.Target)
             ApplySubExpressionNarrowingEffects(syntax.Target.Target, target)
+            if ReportUnresolvedTargetlessValues(target, syntax.Target.Target.Location) {
+                return BoundErrorExpression(syntax)
+            }
             let rectangular RectangularArrayTypeSymbol? = GetRectangularArrayTypeForBinding(target.Type)
             // ADR-0187 / issue #4350: a multi-parameter user indexer write.
             if rectangular == nil &&
@@ -5574,6 +5579,9 @@ internal partial class ExpressionBinder {
     ) BoundExpression {
         let target = BindExpression(syntax.Target.Target)
         ApplySubExpressionNarrowingEffects(syntax.Target.Target, target)
+        if ReportUnresolvedTargetlessValues(target, syntax.Target.Target.Location) {
+            return BoundErrorExpression(syntax)
+        }
         let rectangular RectangularArrayTypeSymbol? = GetRectangularArrayTypeForBinding(target.Type)
         // ADR-0187 / issue #4350: `t[a, b] op= v` over a multi-parameter user
         // indexer reads and writes the same selected indexer, evaluating the
@@ -5590,6 +5598,7 @@ internal partial class ExpressionBinder {
                     let current = readCurrent()
                     let rhs = BindExpression(syntax.Value)
                     if rhs is BoundErrorExpression || rhs.Type == TypeSymbol.Error {
+                        let _ = ReportUnresolvedTargetlessValues(rhs)
                         return BoundErrorExpression(syntax)
                     }
                     let combined BoundExpression? = TryBindCompoundBinaryOperation(
@@ -5661,6 +5670,7 @@ internal partial class ExpressionBinder {
         )
         let rhs = BindExpression(syntax.Value)
         if rhs is BoundErrorExpression || rhs.Type == TypeSymbol.Error {
+            let _ = ReportUnresolvedTargetlessValues(rhs)
             return BoundErrorExpression(syntax)
         }
         let userCompound BoundExpression? = TryBindUserCompoundAssignmentOperator(

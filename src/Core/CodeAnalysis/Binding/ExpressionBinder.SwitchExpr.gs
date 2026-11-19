@@ -78,7 +78,7 @@ internal partial class ExpressionBinder {
         }
         let switchType = discriminant.Type
         if switchType == TypeSymbol.Error {
-            ReportUnresolvedBareDefaults(discriminant)
+            let _ = ReportUnresolvedTargetlessValues(discriminant)
             return BoundErrorExpression(nil)
         }
         if TypeSymbol.ContainsNeverType(switchType) {

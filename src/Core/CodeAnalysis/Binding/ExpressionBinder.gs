@@ -3916,7 +3916,7 @@ internal partial class ExpressionBinder {
 
     private func BindIsExpression(syntax IsExpressionSyntax) BoundExpression {
         var expression = BindExpression(syntax.Expression)
-        if ReportUnresolvedBareDefaults(expression) {
+        if ReportUnresolvedTargetlessValues(expression) {
             return BoundErrorExpression(syntax)
         }
         if expression.Type is TupleTypeSymbol{HasNilElement: true} unresolvedTuple {
