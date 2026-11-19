@@ -824,6 +824,9 @@ partial class CSharpToGSharpTranslator {
                 .OriginalDefinition
                 .Type is ITypeParameterSymbol ctorTp &&
                 ctorTp.TypeParameterKind == TypeParameterKind.Type &&
+                SymbolEqualityComparer
+                .Default
+                .Equals(ctorTp.ContainingType?.OriginalDefinition, ctor.ContainingType.OriginalDefinition) &&
                 ctorTp.Ordinal >= 0 &&
                 ctorTp.Ordinal < projectedCtorOwner
                 .TypeArguments

@@ -618,6 +618,15 @@ public sealed class Slot<U>(U value)
     public U Value => value;
 }
 
+public sealed class OuterGeneric<A>
+{
+    public sealed class InnerSlot<B>(A outerVal, B innerVal)
+    {
+        public A OuterVal => outerVal;
+        public B InnerVal => innerVal;
+    }
+}
+
 public delegate T? Factory<T>();
 public delegate bool Check2<T>(int tag, T? value);
 
@@ -651,6 +660,8 @@ public sealed class MutatingBox<T>
 public static class Probe
 {
     public static string Missing<T>(Slot<T?> slot) => slot.Value?.ToString() ?? "nil";
+    public static string TakeOuterInner<T>(OuterGeneric<int?>.InnerSlot<T?> slot) =>
+        (slot.OuterVal?.ToString() ?? "nil") + ":" + (slot.InnerVal?.ToString() ?? "nil");
 
     public static string Outer<T>(T value)
     {
@@ -670,6 +681,7 @@ public static class Probe
         var s1 = Missing<string>(new Slot<string?>(null));
         var s2 = Missing<string>(new(null));
         var s3 = Missing<string>(new Slot<string?>("ok"));
+        var oi = TakeOuterInner<string>(new OuterGeneric<int?>.InnerSlot<string?>(null, null));
 
         var o1 = Outer<int>(5);
         var o2 = Outer<string>("hi");
@@ -702,14 +714,14 @@ public static class Probe
         var exprVal = exprCurrent.Value ??= "expr";
         var exprBoxes = (exprVal ?? "nil") + ":" + (thirdBox.Value ?? "nil") + ":" + (fourthBox.Value ?? "nil");
 
-        return string.Join("|", s1, s2, s3, o1, o2, f1, f2, f3, reordered, structVal, stmtBoxes, exprBoxes);
+        return string.Join("|", s1, s2, s3, oi, o1, o2, f1, f2, f3, reordered, structVal, stmtBoxes, exprBoxes);
     }
 }`
         let printed = Translate(source)
         Assert.DoesNotContain("Slot[string?]", printed, StringComparison.Ordinal)
         Assert.Contains("Slot[string](default(string))", printed, StringComparison.Ordinal)
         Assert.Equal(
-            "nil|nil|ok|False:False|True:False|x|nil|nil|True|set|stmt:nil|expr:expr:nil",
+            "nil|nil|ok|nil:nil|False:False|True:False|x|nil|nil|True|set|stmt:nil|expr:expr:nil",
             CompileAndRun(printed, "Demo.Probe.Run()")
         )
     }
