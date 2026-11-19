@@ -36,6 +36,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Normalize `nint` and `nuint` optional parameter default values to `int32` and `uint32` CLR Constant metadata, rejecting out-of-range defaults with GS0265 and converting omitted call-site arguments to native-width integers. (Fixes #6073)
+
 - Reify synthesized anonymous object types over referenced generic type parameters from generic local functions, methods, classes, and nested generic scopes. Preserve deterministic parameter ordering, same-shape deduplication, `data object` value semantics, and rich anonymous object enclosing-scope mappings. (Fixes #6109)
 
 - Convert capturing forward-recursive local functions to function values and compatible delegates. Preserve callback identity and shared capture cells across direct calls, escaped callbacks, and loop iterations. (Fixes #6105)
