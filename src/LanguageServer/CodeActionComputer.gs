@@ -137,7 +137,7 @@ shared class CodeActionComputer {
         }
         if entry.ProjectCompilation != nil && !object.ReferenceEquals(
             entry.ProjectCompilation,
-            CompilationFor(content)
+            content.Project?.GetCompilation()
         ) {
             return action
         }
@@ -197,6 +197,9 @@ shared class CodeActionComputer {
         let gateOptions = DeltaOptions()
         gateOptions.SyntaxOnly = true
         let baseline = DeltaBaseline.Create(compilation, gateOptions, ct)
+        // First the fixes that survive the gate, their computation and the edit; then the actions,
+        // so that the preferred fix is chosen among the fixes that the client gets.
+        let survivors = List[Candidate]()
         for fix in fixes {
             ct.ThrowIfCancellationRequested()
             // A provider's deferred computation can throw. That fix is dropped; the others stay.
@@ -212,14 +215,21 @@ shared class CodeActionComputer {
                 continue
             }
             let edit WorkspaceEdit? = BuildEdit(uri, content, changes, client, out var otherVersions)
-            if edit == nil {
-                continue
+            if edit != nil {
+                survivors.Add(Candidate(fix, edit, otherVersions))
             }
+        }
+        let offered = survivors.Select((c Candidate) -> c.Fix).ToImmutableArray()
+        // The project's compilation is the snapshot of the other files; a one-tree snapshot of an
+        // open buffer is created per call and has no stable identity.
+        let projectCompilation Compilation? = content.Project?.GetCompilation()
+        for candidate in survivors {
+            let fix = candidate.Fix
             let action = CodeAction{
                 Title: fix.Title,
                 Kind: CodeActionKind.QuickFix,
                 Diagnostics: fix.Diagnostics.Select((d CoreDiagnostic) -> ToProtocolDiagnostic(d, tree.Text)).ToList(),
-                IsPreferred: if IsPreferred(fix, fixes) {
+                IsPreferred: if IsPreferred(fix, offered) {
                     true
                 } else {
                     default(bool?)
@@ -227,21 +237,11 @@ shared class CodeActionComputer {
             }
             if client.SupportsResolveEdit {
                 let id = Remember(
-                    ResolveEntry(
-                        edit,
-                        content.Version,
-                        tree,
-                        if content.Project != nil {
-                            compilation
-                        } else {
-                            default(Compilation?)
-                        },
-                        otherVersions
-                    )
+                    ResolveEntry(candidate.Edit, content.Version, tree, projectCompilation, candidate.OtherVersions)
                 )
                 action.Data = CodeActionData{Uri: uri.ToString(), Version: content.Version, Key: id}
             } else {
-                action.Edit = edit
+                action.Edit = candidate.Edit
             }
             yield action
         }
@@ -500,6 +500,26 @@ shared class CodeActionComputer {
         let start = SemanticLookup.ToOffset(content, $range.Start)
         let end = SemanticLookup.ToOffset(content, $range.End)
         return TextSpan.FromBounds(Math.Min(start, end), Math.Max(start, end))
+    }
+
+    private class Candidate {
+        init(fix CodeFix, edit WorkspaceEdit, otherVersions Dictionary[string, int32?]) {
+            Fix = fix
+            Edit = edit
+            OtherVersions = otherVersions
+        }
+
+        prop Fix CodeFix {
+            get;
+        }
+
+        prop Edit WorkspaceEdit {
+            get;
+        }
+
+        prop OtherVersions Dictionary[string, int32?] {
+            get;
+        }
     }
 
     private class ResolveEntry {

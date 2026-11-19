@@ -304,8 +304,96 @@ open class Adr0227CodeActionTests {
         override func Initialize(context GSharp.Core.CodeAnalysis.Analyzers.AnalysisContext) { }
     }
 
+    @Fact
+    func OpenDocument_IsFoundUnderAnEquivalentUri() {
+        let service = DocumentContentService()
+        let path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "adr0227a.gs")
+        let stored = LanguageServerTestHelpers.Content(Source).WithVersion(4)
+        service.AddOrUpdate(DocumentUri.FromFileSystemPath(path)!!.ToString(), stored)
+        let encoded = DocumentUri.From(
+            DocumentUri.FromFileSystemPath(path)!!.ToString().Replace("adr0227a.gs", "adr0227%61.gs")
+        )!!
+        Assert.Same(stored, GSharp.LanguageServer.Server.LspServer.FindOpenDocument(service, encoded))
+        Assert.Null(
+            GSharp
+                .LanguageServer
+                .Server
+                .LspServer
+                .FindOpenDocument(service, DocumentUri.FromFileSystemPath(path + ".other")!!)
+        )
+    }
+
+    @Fact
+    func Resolve_ForAnOpenBufferOfAProject_UsesTheProjectSnapshot() {
+        let directory = System.IO.Directory.CreateTempSubdirectory("gs-ls-codefix-resolve")
+        try {
+            let path = System.IO.Path.Combine(directory.FullName, "main.gs")
+            System.IO.File.WriteAllText(path, Source)
+            let project = ProjectState(System.IO.Path.Combine(directory.FullName, "App.gsproj"))
+            project.UpdateFile(path, Source)
+            // The buffer's tree is not the project's tree, as after a watcher refresh.
+            let buffer = SyntaxTree.Parse(GSharp.Core.CodeAnalysis.Text.SourceText.From(Source, path))
+            let lines = List[int32]()
+            for var i = 0; i < Source.Length; i++ {
+                if Source[i] == '\n' {
+                    lines.Add(i)
+                }
+            }
+            let content = DocumentContent(buffer, lines, project, nil, 2)
+            let uri = DocumentUri.FromFileSystemPath(path)!!
+            let at = LanguageServerTestHelpers.PositionOf(Source, "null")
+            let client = CodeActionClientOptions{SupportsResolveEdit: true}
+            let listed = CodeActionComputer
+                .ComputeCodeActions(uri, content, Range(at, at), nil, client)
+                .Single((a CommandOrCodeAction) -> a.CodeAction.Title == "Use 'nil'")
+                .CodeAction
+            Assert.NotNull(CodeActionComputer.ResolveCodeAction(listed, content, client).Edit)
+        } finally {
+            directory.Delete(true)
+        }
+    }
+
+    @Fact
+    func PreferredFix_IsChosenAmongTheOfferedFixes() {
+        let content = LanguageServerTestHelpers.Content(Source)
+        let uri = DocumentUri.From("file:///a.gs")!!
+        let at = LanguageServerTestHelpers.PositionOf(Source, "null")
+        let registry = GSharp.Core.CodeAnalysis.CodeFixes.CodeFixRegistry.CreateDefault()
+        registry.Add(ThrowingComputeProvider(GSharp.Core.CodeAnalysis.CodeFixes.Applicability.MachineApplicable))
+        let fix = CodeActionComputer
+            .ComputeCodeActions(
+            uri,
+            content,
+            Range(at, at),
+            nil,
+            CodeActionClientOptions(),
+            registry,
+            default(System.Threading.CancellationToken)
+        )
+            .Single((a CommandOrCodeAction) -> a.CodeAction.Title == "Use 'nil'")
+            .CodeAction
+        Assert.True(fix.IsPreferred)
+    }
+
     // A fix whose deferred computation throws.
     private class ThrowingComputeProvider : GSharp.Core.CodeAnalysis.CodeFixes.GSharpCodeFixProvider {
+        private let applicability GSharp.Core.CodeAnalysis.CodeFixes.Applicability
+
+        init(
+            applicability GSharp
+                .Core
+                .CodeAnalysis
+                .CodeFixes
+                .Applicability = GSharp
+                .Core
+                .CodeAnalysis
+                .CodeFixes
+                .Applicability
+                .MaybeIncorrect
+        ) {
+            this.applicability = applicability
+        }
+
         override prop FixableDiagnosticIds System
             .Collections
             .Immutable
@@ -319,7 +407,7 @@ open class Adr0227CodeActionTests {
             context.RegisterFix(
                 "Throws later",
                 "test.throws",
-                GSharp.Core.CodeAnalysis.CodeFixes.Applicability.MaybeIncorrect,
+                applicability,
                 (editor SyntaxEditor) -> {
                     throw InvalidOperationException("broken provider")
                 }

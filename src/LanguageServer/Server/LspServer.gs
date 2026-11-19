@@ -85,14 +85,10 @@ class LspServer {
         this.workspaceState = workspaceState
         this.logger = logger ?? NullLogger.Instance
         // ADR-0227 D7: an edit of another open document carries that document's client version.
-        this.codeActionClientOptions.DocumentOf = (uri DocumentUri) -> if documentContentService.TryGet(
-            uri.ToString(),
-            out var content
-        ) {
-            content
-        } else {
-            default(DocumentContent?)
-        }
+        this.codeActionClientOptions.DocumentOf = (uri DocumentUri) -> LspServer.FindOpenDocument(
+            documentContentService,
+            uri
+        )
     }
 
     /// Gets a task that completes when the client sends the `exit` notification.
@@ -1839,6 +1835,26 @@ class LspServer {
     }
 
     shared {
+        // The stored content of an open document. The key is the client's URI text; an equivalent URI
+        // (another encoding of the same path) is matched by its file path, so an open buffer is never
+        // taken for a closed one (ADR-0227 D7).
+        internal func FindOpenDocument(service DocumentContentService, uri DocumentUri) DocumentContent? {
+            if service.TryGet(uri.ToString(), out var content) {
+                return content
+            }
+            let path = uri.GetFileSystemPath()
+            if string.IsNullOrEmpty(path) {
+                return nil
+            }
+            for pair in service.AllDocuments {
+                let other DocumentUri? = DocumentUri.From(pair.Key)
+                if other != nil && ServerPathIdentity.AreSame(other.GetFileSystemPath(), path) {
+                    return pair.Value
+                }
+            }
+            return nil
+        }
+
         // Builds the Test Explorer tree: a top-level grouping node per project, labelled
         // "<project-name> (<tfm>)" (matching the C# Dev Kit presentation), whose children are
         // the class/function items discovered in that project's sources. Loose files that
