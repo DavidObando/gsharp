@@ -606,6 +606,114 @@ public static class Probe
         Assert.Equal("nil|nil|nil|True|ok|2|1:set:nil|-99|-88|nil", CompileAndRun(printed, "Demo.Probe.Run()"))
     }
 
+    @Fact
+    func NestedSlotLocalMethodSourceDelegateReorderedAndStructReceiverCoalesce_CompileAndRun() {
+        const source = `#nullable enable
+using System;
+
+namespace Demo;
+
+public sealed class Slot<U>(U value)
+{
+    public U Value => value;
+}
+
+public delegate T? Factory<T>();
+public delegate bool Check2<T>(int tag, T? value);
+
+public interface IHasValue
+{
+    string? Value { get; set; }
+}
+
+public struct StructBox : IHasValue
+{
+    public string? Value { get; set; }
+}
+
+public sealed class Holder<T> where T : IHasValue
+{
+    public T Item;
+}
+
+public sealed class MutatingBox<T>
+{
+    private readonly Action onRead;
+    private T? val;
+    public MutatingBox(Action onRead) => this.onRead = onRead;
+    public T? Value
+    {
+        get { onRead(); return val; }
+        set => val = value;
+    }
+}
+
+public static class Probe
+{
+    public static string Missing<T>(Slot<T?> slot) => slot.Value?.ToString() ?? "nil";
+
+    public static string Outer<T>(T value)
+    {
+        bool Inner<U>(T? x) => x is null;
+        return Inner<string>(default) + ":" + Inner<string>(value);
+    }
+
+    public static string Use(Factory<string> f) => f() ?? "nil";
+
+    public static void SetStruct<T>(Holder<T> holder) where T : IHasValue
+    {
+        holder.Item.Value ??= "set";
+    }
+
+    public static string Run()
+    {
+        var s1 = Missing<string>(new Slot<string?>(null));
+        var s2 = Missing<string>(new(null));
+        var s3 = Missing<string>(new Slot<string?>("ok"));
+
+        var o1 = Outer<int>(5);
+        var o2 = Outer<string>("hi");
+
+        string? maybeNull = null;
+        var f1 = Use(() => "x");
+        var f2 = Use(() => null);
+        var f3 = Use(() => maybeNull);
+
+        Check2<string> check2 = (tag, value) => tag == 1 && value is null;
+        var reordered = check2(value: null, tag: 1);
+
+        var holder = new Holder<StructBox> { Item = new StructBox { Value = null } };
+        SetStruct(holder);
+        var structVal = holder.Item.Value ?? "nil";
+
+        var firstBox = default(MutatingBox<string>);
+        var secondBox = new MutatingBox<string>(() => { });
+        MutatingBox<string>? current = null;
+        firstBox = new MutatingBox<string>(() => { current = secondBox; });
+        current = firstBox;
+        current.Value ??= "stmt";
+        var stmtBoxes = (firstBox.Value ?? "nil") + ":" + (secondBox.Value ?? "nil");
+
+        var thirdBox = new MutatingBox<string>(() => { });
+        var fourthBox = new MutatingBox<string>(() => { });
+        MutatingBox<string>? exprCurrent = null;
+        thirdBox = new MutatingBox<string>(() => { exprCurrent = fourthBox; });
+        exprCurrent = thirdBox;
+        var exprVal = exprCurrent.Value ??= "expr";
+        var exprBoxes = (exprVal ?? "nil") + ":" + (thirdBox.Value ?? "nil") + ":" + (fourthBox.Value ?? "nil");
+
+        return string.Join("|", s1, s2, s3, o1, o2, f1, f2, f3, reordered, structVal, stmtBoxes, exprBoxes);
+    }
+}`
+        let printed = Translate(source)
+        Assert.DoesNotContain("Slot[string?]", printed, StringComparison.Ordinal)
+        Assert.Contains("Slot[string](default(string))", printed, StringComparison.Ordinal)
+        Assert.Equal(
+            "nil|nil|ok|False:False|True:False|x|nil|nil|True|set|stmt:nil|expr:expr:nil",
+            CompileAndRun(printed, "Demo.Probe.Run()")
+        )
+    }
+
     shared {
         private func Translate(source string) string {
             let project = CSharpProjectLoader.LoadInMemory([](string, string){("Snippet.cs", source)})

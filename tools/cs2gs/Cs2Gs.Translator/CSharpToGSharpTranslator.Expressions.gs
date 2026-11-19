@@ -596,11 +596,29 @@ partial class CSharpToGSharpTranslator {
                 return nil
             }
             var substituted ITypeSymbol? = nil
-            if originalTp.TypeParameterKind == TypeParameterKind.Method {
-                let method IMethodSymbol? = (targetSymbol as IParameterSymbol)?.ContainingSymbol as IMethodSymbol ??
-                    (targetSymbol as IMethodSymbol)
-                if method != nil && originalTp.Ordinal >= 0 && originalTp.Ordinal < method.TypeArguments.Length {
-                    substituted = method.TypeArguments[originalTp.Ordinal]
+            if originalTp.TypeParameterKind == TypeParameterKind.Method &&
+                originalTp.ContainingSymbol is IMethodSymbol declaringMethod {
+                for var curMethod IMethodSymbol? = (
+                    targetSymbol as IParameterSymbol
+                )?.ContainingSymbol as IMethodSymbol ??
+                    (targetSymbol as IMethodSymbol);
+                    curMethod != nil;
+                    curMethod = curMethod!!.ContainingSymbol as IMethodSymbol {
+                    if SymbolEqualityComparer.Default.Equals(
+                        curMethod.OriginalDefinition,
+                        declaringMethod.OriginalDefinition
+                    ) ||
+                        (
+                        curMethod.ReducedFrom is {} reduced && SymbolEqualityComparer.Default.Equals(
+                            reduced.OriginalDefinition,
+                            declaringMethod.OriginalDefinition
+                        )
+                    ) {
+                        if originalTp.Ordinal >= 0 && originalTp.Ordinal < curMethod.TypeArguments.Length {
+                            substituted = curMethod.TypeArguments[originalTp.Ordinal]
+                        }
+                        break
+                    }
                 }
             } else if originalTp.TypeParameterKind == TypeParameterKind.Type &&
                 originalTp.ContainingType is INamedTypeSymbol declaringType {
@@ -630,43 +648,108 @@ partial class CSharpToGSharpTranslator {
             return substituted.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated)
         }
 
+        private func TryProjectErasedGenericType(sinkSymbol ISymbol?, substitutedType ITypeSymbol?) INamedTypeSymbol? {
+            if substitutedType is not INamedTypeSymbol{IsGenericType: true} subNamed {
+                return nil
+            }
+            if subNamed.TypeKind != TypeKind.Delegate && this.TargetContractIsFrozenInMetadata(subNamed) {
+                return nil
+            }
+            var changed = false
+            let newArgs = [subNamed.TypeArguments.Length]ITypeSymbol
+            for var i = 0; i < subNamed.TypeArguments.Length; i++ {
+                newArgs[i] = subNamed.TypeArguments[i]
+            }
+            if sinkSymbol != nil && !this.TargetContractIsFrozenInMetadata(sinkSymbol) {
+                let originalType = this.TryResolveOriginalDeclarationType(sinkSymbol)
+                if originalType is INamedTypeSymbol{IsGenericType: true} origNamed &&
+                    SymbolEqualityComparer
+                    .Default
+                    .Equals(origNamed.OriginalDefinition, subNamed.OriginalDefinition) &&
+                    origNamed
+                    .TypeArguments
+                    .Length == subNamed
+                    .TypeArguments
+                    .Length {
+                    for var i = 0; i < subNamed.TypeArguments.Length; i++ {
+                        if this.TryGetSubstitutedNonNullGenericTypeArgument(
+                            sinkSymbol,
+                            origNamed.TypeArguments[i]
+                        ) is {} projectedArg {
+                            newArgs[i] = projectedArg
+                            changed = true
+                        }
+                    }
+                }
+            }
+            if subNamed.TypeKind == TypeKind.Delegate && !this.TargetContractIsFrozenInMetadata(subNamed) &&
+                subNamed.DelegateInvokeMethod is {} invoke {
+                let origInvoke = invoke.OriginalDefinition
+                let typeParams = subNamed.OriginalDefinition.TypeParameters
+                for var p = 0; p < origInvoke.Parameters.Length; p++ {
+                    if origInvoke
+                        .Parameters[p]
+                        .Type is ITypeParameterSymbol paramTp &&
+                        paramTp.TypeParameterKind == TypeParameterKind.Type &&
+                        paramTp.NullableAnnotation == Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated &&
+                        !CSharpTypeMapper.HasProvenSourceNullableKind(paramTp) &&
+                        paramTp.Ordinal >= 0 &&
+                        paramTp.Ordinal < typeParams.Length &&
+                        SymbolEqualityComparer
+                        .Default
+                        .Equals(paramTp.OriginalDefinition, typeParams[paramTp.Ordinal]) &&
+                        CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(newArgs[paramTp.Ordinal]) &&
+                        newArgs[paramTp.Ordinal].NullableAnnotation != Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated {
+                        newArgs[paramTp.Ordinal] = newArgs[paramTp.Ordinal].WithNullableAnnotation(
+                            Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated
+                        )
+                        changed = true
+                    }
+                }
+                if origInvoke.ReturnType is ITypeParameterSymbol retTp &&
+                    retTp.TypeParameterKind == TypeParameterKind.Type &&
+                    retTp.NullableAnnotation == Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated &&
+                    !CSharpTypeMapper.HasProvenSourceNullableKind(retTp) &&
+                    retTp.Ordinal >= 0 &&
+                    retTp.Ordinal < typeParams.Length &&
+                    SymbolEqualityComparer
+                    .Default
+                    .Equals(retTp.OriginalDefinition, typeParams[retTp.Ordinal]) &&
+                    CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(newArgs[retTp.Ordinal]) &&
+                    newArgs[retTp.Ordinal].NullableAnnotation != Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated {
+                    newArgs[retTp.Ordinal] = newArgs[retTp.Ordinal].WithNullableAnnotation(
+                        Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated
+                    )
+                    changed = true
+                }
+            }
+            return if changed {
+                subNamed.ConstructedFrom.Construct(newArgs)
+            } else {
+                default(INamedTypeSymbol?)
+            }
+        }
+
         private func TryProjectErasedGenericDelegateType(
             sinkSymbol ISymbol?,
             substitutedType ITypeSymbol?
         ) INamedTypeSymbol? {
-            if sinkSymbol == nil || this.TargetContractIsFrozenInMetadata(sinkSymbol) {
+            if substitutedType is not INamedTypeSymbol{TypeKind: TypeKind.Delegate, IsGenericType: true} {
                 return nil
             }
-            if substitutedType is not INamedTypeSymbol{TypeKind: TypeKind.Delegate, IsGenericType: true} subDelegate {
-                return nil
-            }
-            let originalType = this.TryResolveOriginalDeclarationType(sinkSymbol)
-            if originalType is not INamedTypeSymbol{TypeKind: TypeKind.Delegate, IsGenericType: true} origDelegate ||
-                origDelegate
-                .TypeArguments
-                .Length != subDelegate
-                .TypeArguments
-                .Length {
-                return nil
-            }
-            var changed = false
-            let newArgs = [subDelegate.TypeArguments.Length]ITypeSymbol
-            for var i = 0; i < subDelegate.TypeArguments.Length; i++ {
-                if this.TryGetSubstitutedNonNullGenericTypeArgument(
-                    sinkSymbol,
-                    origDelegate.TypeArguments[i]
-                ) is {} projectedArg {
-                    newArgs[i] = projectedArg
-                    changed = true
-                } else {
-                    newArgs[i] = subDelegate.TypeArguments[i]
-                }
-            }
-            return if changed {
-                subDelegate.ConstructedFrom.Construct(newArgs)
-            } else {
-                default(INamedTypeSymbol?)
-            }
+            return this.TryProjectErasedGenericType(sinkSymbol, substitutedType)
         }
 
         private func TryGetEmittedNonNullLambdaReturnSlotType(
@@ -725,6 +808,47 @@ partial class CSharpToGSharpTranslator {
             ) is {} resultLambda &&
                 this.TryGetEmittedNonNullLambdaReturnSlotType(resultLambda, location, out nonNullType) {
                 return true
+            }
+            if valueSyntax != nil &&
+                targetSymbol is IParameterSymbol ctorParam &&
+                ctorParam.ContainingSymbol is IMethodSymbol{MethodKind: MethodKind.Constructor} ctor &&
+                valueSyntax
+                .Ancestors()
+                .OfType[BaseObjectCreationExpressionSyntax]()
+                .FirstOrDefault() is {} creation &&
+                this.TryProjectErasedGenericType(
+                this.ResolveValueSink(creation),
+                ctor.ContainingType
+            ) is {} projectedCtorOwner &&
+                ctorParam
+                .OriginalDefinition
+                .Type is ITypeParameterSymbol ctorTp &&
+                ctorTp.TypeParameterKind == TypeParameterKind.Type &&
+                ctorTp.Ordinal >= 0 &&
+                ctorTp.Ordinal < projectedCtorOwner
+                .TypeArguments
+                .Length &&
+                ctorTp.Ordinal < ctor
+                .ContainingType
+                .TypeArguments
+                .Length {
+                let origCtorArg = ctor.ContainingType.TypeArguments[ctorTp.Ordinal]
+                let projectedCtorArg = projectedCtorOwner.TypeArguments[ctorTp.Ordinal]
+                if origCtorArg.NullableAnnotation == Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated &&
+                    CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(projectedCtorArg) &&
+                    projectedCtorArg.NullableAnnotation != Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated {
+                    let mappedCtorArg = this.typeMapper.Map(projectedCtorArg, this.context, location)
+                    if mappedCtorArg != nil && !mappedCtorArg.IsNullable {
+                        nonNullType = mappedCtorArg
+                        return true
+                    }
+                }
             }
             if targetSymbol == nil || this.TargetContractIsFrozenInMetadata(targetSymbol) {
                 return false

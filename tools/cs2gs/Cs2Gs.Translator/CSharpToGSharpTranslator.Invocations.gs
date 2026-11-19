@@ -1558,14 +1558,16 @@ partial class CSharpToGSharpTranslator {
             if (argument.Value is IConversionOperation or IDelegateCreationOperation) ||
                 value is DefaultValueExpression {
                 let temp = this.NewSpillName()
-                this.state.PendingSpillPrologue!!.Add(
-                    LocalDeclarationStatement(
-                        BindingKind.Let,
-                        temp,
-                        this.typeMapper.Map(argument.Parameter!!.Type, this.context, argument.Syntax.GetLocation()),
-                        value
-                    )
-                )
+                let tempType = if this.TryGetEmittedNonNullGenericSlotType(
+                    argument.Parameter,
+                    argument.Syntax.GetLocation(),
+                    out var nonNullSlotType
+                ) {
+                    nonNullSlotType
+                } else {
+                    this.typeMapper.Map(argument.Parameter!!.Type, this.context, argument.Syntax.GetLocation())
+                }
+                this.state.PendingSpillPrologue!!.Add(LocalDeclarationStatement(BindingKind.Let, temp, tempType, value))
                 return IdentifierExpression(temp)
             }
             return this.SpillOperand(value!!, forceNonTrivial: true)
@@ -2243,7 +2245,8 @@ partial class CSharpToGSharpTranslator {
                 if this.TryGetEmittedNonNullGenericSlotType(
                     nullableTargetParam,
                     argument.Expression.GetLocation(),
-                    out var nonNullGenericSlotType
+                    out var nonNullGenericSlotType,
+                    argument.Expression
                 ) {
                     if IsNullOrSuppressedNull(argument.Expression) {
                         if translated is not DefaultValueExpression {
@@ -3145,6 +3148,7 @@ partial class CSharpToGSharpTranslator {
             if this.TryGetManagedReferenceArrayProjectedMethod(creation, out var projectedConstructor) {
                 typeSymbol = projectedConstructor!!.ContainingType
             }
+            typeSymbol = this.TryProjectErasedGenericType(this.ResolveValueSink(creation), typeSymbol) ?? typeSymbol
             var type GTypeReference? = if typeSymbol != nil {
                 this.typeMapper.Map(typeSymbol, this.context, creation.GetLocation())
             } else {

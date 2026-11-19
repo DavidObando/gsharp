@@ -638,6 +638,7 @@ partial class CSharpToGSharpTranslator {
             if this.TryGetManagedReferenceArrayProjectedMethod(creation, out var projectedConstructor) {
                 typeSymbol = projectedConstructor!!.ContainingType
             }
+            typeSymbol = this.TryProjectErasedGenericType(this.ResolveValueSink(creation), typeSymbol) ?? typeSymbol
             var type GTypeReference? = if typeSymbol != nil {
                 this.typeMapper.Map(typeSymbol, this.context, creation.GetLocation())
             } else {

@@ -4859,13 +4859,24 @@ partial class CSharpToGSharpTranslator {
                 case member is MemberAccessExpression {
                     let receiverSyntax = (syntax as MemberAccessExpressionSyntax)?.Expression
                     let safeReceiver = this.MakeDuplicationSafeTarget(member.Target, prologue, receiverSyntax)
-                    let spilledReceiver = if receiverSyntax == nil ||
-                        this
-                        .context
-                        .GetTypeInfo(receiverSyntax)
-                        .Type
-                        ?.IsValueType != true {
-                        this.SpillOperand(safeReceiver, prologue)
+                    let receiverType = if receiverSyntax != nil {
+                        this.context.GetTypeInfo(receiverSyntax).Type
+                    } else {
+                        default(ITypeSymbol?)
+                    }
+                    let spilledReceiver = if receiverType != nil &&
+                        CSharpTypeMapper
+                        .CanAnnotateNullableReferenceInGSharp(receiverType) {
+                        let receiverSymbol = this.context.GetSymbolInfo(receiverSyntax).Symbol
+                        let forceSnapshot = safeReceiver is IdentifierExpression &&
+                            (receiverSymbol is ILocalSymbol || receiverSymbol is IParameterSymbol) &&
+                            (
+                            (receiverSymbol as IParameterSymbol)?.RefKind != RefKind.None || this.IsSymbolReassigned(
+                                receiverSymbol,
+                                this.state.CurrentBodyScope ?? receiverSyntax!!.SyntaxTree.GetRoot()
+                            )
+                        )
+                        this.SpillOperand(safeReceiver, prologue, forceNonTrivial: forceSnapshot)
                     } else {
                         safeReceiver
                     }
