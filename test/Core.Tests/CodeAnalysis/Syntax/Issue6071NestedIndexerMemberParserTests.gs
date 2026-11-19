@@ -163,6 +163,18 @@ func F() int32 {
         let multiArgAccessor = Assert.IsType[AccessorExpressionSyntax](multiArgReturn.Expression)
         let multiArgGeneric = Assert.IsType[GenericNameExpressionSyntax](multiArgAccessor.LeftPart)
         Assert.Equal(2, multiArgGeneric.TypeArgumentList.Arguments.Count)
+
+        const groupedArraySource = `
+package p
+func F() int32 {
+    return Box[[](int32)].Create()
+}
+`
+        let groupedArrayTree = SyntaxTree.Parse(groupedArraySource)
+        Assert.Empty(groupedArrayTree.Diagnostics)
+        let groupedArrayReturn = Descendants(groupedArrayTree.Root).OfType[ReturnStatementSyntax]().Single()
+        let groupedArrayAccessor = Assert.IsType[AccessorExpressionSyntax](groupedArrayReturn.Expression)
+        Assert.IsType[GenericNameExpressionSyntax](groupedArrayAccessor.LeftPart)
     }
 
     shared {

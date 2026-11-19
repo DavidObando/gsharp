@@ -1172,8 +1172,8 @@ open partial class Parser {
             // Issue #6071: a parenthesized single name/index `(x)` or `(a[b])`
             // without `,`, `->`, element name, or `?` is syntactically
             // ambiguous with a parenthesized index expression unless its inner
-            // clause is unambiguously a type.
-            isComplex = isEmpty ||
+            // clause (or an earlier prefix such as `[]`) is unambiguously a type.
+            isComplex |= isEmpty ||
                 isArrowFunction ||
                 sawComma ||
                 sawEllipsis ||

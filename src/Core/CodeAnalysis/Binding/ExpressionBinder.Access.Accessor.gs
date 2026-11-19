@@ -5170,11 +5170,12 @@ internal partial class ExpressionBinder {
             }
             // Issue #3658 / #6071: a type argument written as a dotted name or
             // nested generic (`List[int32]`, `Outer.Inner[int32]`,
-            // `Outer[int32].Inner`) reaches the binder as an accessor/index
-            // chain when syntactically indistinguishable from indexing. Flatten
-            // the chain into the type clause's qualifier/argument tokens so it
-            // binds identically to type position.
-            if expr is IndexExpressionSyntax or AccessorExpressionSyntax {
+            // `Outer[int32].Inner`, `Outer[int32, string].Inner`) reaches the
+            // binder as an accessor/index/generic-name chain when syntactically
+            // indistinguishable from indexing. Flatten the chain into the type
+            // clause's qualifier/argument tokens so it binds identically to
+            // type position.
+            if expr is IndexExpressionSyntax or AccessorExpressionSyntax or GenericNameExpressionSyntax {
                 return TryBuildQualifiedTypeClauseFromExpression(expr, out typeClause)
             }
             return false
@@ -5321,6 +5322,22 @@ internal partial class ExpressionBinder {
                             nil,
                             default(GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[TypeClauseSyntax]?),
                             nil
+                        )
+                    )
+                    return true
+                }
+                case generic is GenericNameExpressionSyntax when !generic
+                    .Identifier
+                    .IsMissing &&
+                    generic.ReadOnlySliceModifier == nil &&
+                    generic.ReadOnlySpanModifier == nil &&
+                    generic.ReadOnlyManagedModifier == nil {
+                    segments.Add(
+                        (
+                            generic.Identifier,
+                            generic.TypeArgumentList.OpenBracketToken,
+                            generic.TypeArgumentList.Arguments,
+                            generic.TypeArgumentList.CloseBracketToken
                         )
                     )
                     return true

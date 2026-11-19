@@ -103,15 +103,23 @@ class Outer[T] {
     }
 }
 
+class OuterPair[T, U] {
+    class Inner {
+        shared { let Value int32 = 9 }
+    }
+}
+
 func Main() {
     let created = Box[List[int32]].Create()
     let emptyCount = ImmutableDictionary[string, List[int32]].Empty.Count
     let nested = Foo[Bar[int32]].Nested.Baz
     let perSeg = Box[Outer[int32].Inner].Create()
-    Console.WriteLine("${created}:${emptyCount}:${nested}:${perSeg}")
+    let mixedPerSeg = Box[OuterPair[int32, string].Inner].Create()
+    let groupedArray = Box[[](int32)].Create()
+    Console.WriteLine("${created}:${emptyCount}:${nested}:${perSeg}:${mixedPerSeg}:${groupedArray}")
 }`
         let output = CompileAndRun(source)
-        Assert.Equal("7:0:19:7${Environment.NewLine}", output)
+        Assert.Equal("7:0:19:7:7:7${Environment.NewLine}", output)
     }
 
     shared {
