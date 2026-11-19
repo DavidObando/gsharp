@@ -13,6 +13,7 @@ import GSharp.Core.CodeAnalysis.Text
 import GSharp.LanguageServer.Protocol
 import Range = GSharp.LanguageServer.Protocol.Range
 import System
+import System.Collections.Concurrent
 import System.Collections.Generic
 import System.Collections.Immutable
 import System.Linq
@@ -26,6 +27,10 @@ class CodeActionClientOptions {
 
     /// Gets or sets a value that tells whether the client resolves the `edit` of an action lazily.
     prop SupportsResolveEdit bool
+
+    /// Gets or sets the client's version of an open document, or `null` when the document is not
+    /// open. The server sets it; an edit of another open document carries that version.
+    prop VersionOf Func[DocumentUri, int32?]?
 }
 
 /// Computes `textDocument/codeAction` and `codeAction/resolve` results (ADR-0227 D7). The fixes
@@ -76,6 +81,17 @@ shared class CodeActionComputer {
         context CodeActionContext?,
         client CodeActionClientOptions,
         ct CancellationToken = default(CancellationToken)
+    ) CommandOrCodeActionContainer -> ComputeCodeActions(uri, content, $range, context, client, nil, ct)
+
+    // Tests give the registry; the server uses the project's.
+    internal func ComputeCodeActions(
+        uri DocumentUri,
+        content DocumentContent,
+        $range Range,
+        context CodeActionContext?,
+        client CodeActionClientOptions,
+        registryOverride CodeFixRegistry?,
+        ct CancellationToken
     ) CommandOrCodeActionContainer {
         let only IReadOnlyList[CodeActionKind]? = context?.Only
         let actions = List[CommandOrCodeAction]()
@@ -86,7 +102,7 @@ shared class CodeActionComputer {
             }
         }
         if KindRequested(CodeActionKind.QuickFix, only) {
-            for action in ComputeQuickFixes(uri, content, RangeToSpan(content, $range), client, nil, ct) {
+            for action in ComputeQuickFixes(uri, content, RangeToSpan(content, $range), client, registryOverride, ct) {
                 actions.Add(CommandOrCodeAction(action))
             }
         }
@@ -107,26 +123,57 @@ shared class CodeActionComputer {
         ct CancellationToken = default(CancellationToken)
     ) CodeAction {
         let data CodeActionData? = action.Data
-        if data == nil || action.Edit != nil || data.Version != content.Version {
+        if data == nil || action.Edit != nil {
             return action
         }
-        let uri DocumentUri? = DocumentUri.From(data.Uri)
-        if uri == nil {
+        // ADR-0227 D7: resolve returns the edit that the list request computed and gated, never a
+        // recomputed one. It returns no edit when a snapshot that the edit depends on changed.
+        if !ResolveCache.TryGetValue(data.Key, out var entry) {
             return action
         }
-        let separator = data.Key.LastIndexOf('@')
-        if separator < 0 || !int32.TryParse(data.Key.Substring(separator + 1), out var start) {
+        if entry.Version != content.Version || !object.ReferenceEquals(entry.Tree, content.SyntaxTree) {
             return action
         }
-        let eager = CodeActionClientOptions{
-            SupportsDocumentChanges: client.SupportsDocumentChanges,
-            SupportsResolveEdit: false
-        }
-        for candidate in ComputeQuickFixes(uri, content, TextSpan(start, 0), eager, data.Key, ct) {
-            action.Edit = candidate.Edit
+        if entry.ProjectCompilation != nil && !object.ReferenceEquals(
+            entry.ProjectCompilation,
+            CompilationFor(content)
+        ) {
             return action
         }
+        let versionOf = client.VersionOf
+        for pair in entry.OtherVersions {
+            let other DocumentUri? = DocumentUri.From(pair.Key)
+            let current int32? = if other == nil || versionOf == nil {
+                default(int32?)
+            } else {
+                versionOf(other)
+            }
+            if current != pair.Value {
+                return action
+            }
+        }
+        action.Edit = entry.Edit
         return action
+    }
+
+    // The gated edits that a lazy client resolves later, by an opaque ID (ADR-0227 D7). The cache
+    // keeps the newest entries only.
+    private let ResolveCache ConcurrentDictionary[string, ResolveEntry] = ConcurrentDictionary[string, ResolveEntry](
+        StringComparer.Ordinal
+    )
+
+    private let ResolveOrder ConcurrentQueue[string] = ConcurrentQueue[string]()
+
+    private const ResolveCacheCapacity int32 = 512
+
+    private func Remember(entry ResolveEntry) string {
+        let id = Guid.NewGuid().ToString("N")
+        ResolveCache[id] = entry
+        ResolveOrder.Enqueue(id)
+        while ResolveOrder.Count > ResolveCacheCapacity && ResolveOrder.TryDequeue(out var oldest) {
+            ResolveCache.TryRemove(oldest, out _)
+        }
+        return id
     }
 
     private func ComputeQuickFixes(
@@ -134,12 +181,12 @@ shared class CodeActionComputer {
         content DocumentContent,
         span TextSpan,
         client CodeActionClientOptions,
-        onlyKey string?,
+        registryOverride CodeFixRegistry?,
         ct CancellationToken
     ) sequence[CodeAction] {
         let tree = content.SyntaxTree
         let compilation = CompilationFor(content)
-        let registry = content.Project?.GetCodeFixRegistry() ?? DefaultRegistry
+        let registry = registryOverride ?? content.Project?.GetCodeFixRegistry() ?? DefaultRegistry
         let service = CodeFixService(registry)
         let fixes = service.GetFixes(
             compilation,
@@ -156,27 +203,21 @@ shared class CodeActionComputer {
         let gateOptions = DeltaOptions()
         gateOptions.SyntaxOnly = true
         let baseline = DeltaBaseline.Create(compilation, gateOptions, ct)
-        let ordinals = Dictionary[string, int32](StringComparer.Ordinal)
         for fix in fixes {
             ct.ThrowIfCancellationRequested()
-            let start = if fix.Diagnostics.IsEmpty {
-                0
-            } else {
-                fix.Diagnostics[0].Location.Span.Start
-            }
-            let baseKey = "${fix.ProviderId}|${fix.EquivalenceKey}|${start}"
-            var ordinal = 0
-            if ordinals.TryGetValue(baseKey, out var seen) {
-                ordinal = seen + 1
-            }
-            ordinals[baseKey] = ordinal
-            let key = "${baseKey}#${ordinal}@${start}"
-            if onlyKey != nil && key != onlyKey {
+            // A provider's deferred computation can throw. That fix is dropped; the others stay.
+            var changes FixChanges? = nil
+            try {
+                if !service.ComputeDelta(baseline, fix, ct).AddedSyntax.IsEmpty {
+                    continue
+                }
+                changes = fix.GetChanges(ct)
+            } catch (ex OperationCanceledException) when ct.IsCancellationRequested {
+                rethrow
+            } catch (ex Exception) when !(ex is OutOfMemoryException) && !(ex is StackOverflowException) {
                 continue
             }
-            if !service.ComputeDelta(baseline, fix, ct).AddedSyntax.IsEmpty {
-                continue
-            }
+            let edit = BuildEdit(uri, content, changes, client)
             let action = CodeAction{
                 Title: fix.Title,
                 Kind: CodeActionKind.QuickFix,
@@ -188,12 +229,45 @@ shared class CodeActionComputer {
                 }
             }
             if client.SupportsResolveEdit {
-                action.Data = CodeActionData{Uri: uri.ToString(), Version: content.Version, Key: key}
+                let id = Remember(
+                    ResolveEntry(
+                        edit,
+                        content.Version,
+                        tree,
+                        if content.Project != nil {
+                            compilation
+                        } else {
+                            default(Compilation?)
+                        },
+                        OtherVersions(uri, content, changes, client)
+                    )
+                )
+                action.Data = CodeActionData{Uri: uri.ToString(), Version: content.Version, Key: id}
             } else {
-                action.Edit = BuildEdit(uri, content, fix.GetChanges(ct), client)
+                action.Edit = edit
             }
             yield action
         }
+    }
+
+    // The client versions of the other documents that an edit changes, by URI.
+    private func OtherVersions(
+        uri DocumentUri,
+        content DocumentContent,
+        changes FixChanges,
+        client CodeActionClientOptions
+    ) Dictionary[string, int32?] {
+        let result = Dictionary[string, int32?](StringComparer.Ordinal)
+        for document in changes.Documents {
+            if object.ReferenceEquals(document.Tree, content.SyntaxTree) {
+                continue
+            }
+            let other DocumentUri? = DocumentUri.FromFileSystemPath(document.Tree.Text.FileName)
+            if other != nil {
+                result[other.ToString()] = client.VersionOf?(other)
+            }
+        }
+        return result
     }
 
     // ADR-0227 D5: the one machine-applicable fix of a diagnostic is the preferred action.
@@ -209,7 +283,7 @@ shared class CodeActionComputer {
         ) == 1
     }
 
-    private func BuildEdit(
+    internal func BuildEdit(
         uri DocumentUri,
         content DocumentContent,
         changes FixChanges,
@@ -242,7 +316,7 @@ shared class CodeActionComputer {
                         Version: if own {
                             content.Version
                         } else {
-                            default(int32?)
+                            client.VersionOf?(documentUri)
                         }
                     },
                     Edits: edits
@@ -392,6 +466,42 @@ shared class CodeActionComputer {
         let start = SemanticLookup.ToOffset(content, $range.Start)
         let end = SemanticLookup.ToOffset(content, $range.End)
         return TextSpan.FromBounds(Math.Min(start, end), Math.Max(start, end))
+    }
+
+    private class ResolveEntry {
+        init(
+            edit WorkspaceEdit,
+            version int32?,
+            tree SyntaxTree,
+            projectCompilation Compilation?,
+            otherVersions Dictionary[string, int32?]
+        ) {
+            Edit = edit
+            Version = version
+            Tree = tree
+            ProjectCompilation = projectCompilation
+            OtherVersions = otherVersions
+        }
+
+        prop Edit WorkspaceEdit {
+            get;
+        }
+
+        prop Version int32? {
+            get;
+        }
+
+        prop Tree SyntaxTree {
+            get;
+        }
+
+        prop ProjectCompilation Compilation? {
+            get;
+        }
+
+        prop OtherVersions Dictionary[string, int32?] {
+            get;
+        }
     }
 
     private class AnalyzerResult {

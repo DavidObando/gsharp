@@ -342,6 +342,10 @@ open class ProjectState {
         lock compilationLock {
             let rspPath = referenceSourcePath
             if string.IsNullOrEmpty(rspPath) || !File.Exists(rspPath) {
+                // No analyzer configuration: forget the providers of the removed assemblies, and
+                // reload when the response file comes back.
+                cachedCodeFixRegistry = nil
+                gsAnalyzerSourceMtimeUtc = DateTime.MinValue
                 loadDiagnostics = ImmutableArray[GSharp.Core.CodeAnalysis.Diagnostic].Empty
                 return ImmutableArray[GSharpDiagnosticAnalyzer].Empty
             }
@@ -354,10 +358,17 @@ open class ProjectState {
             }
             if mtime != gsAnalyzerSourceMtimeUtc {
                 let paths = ProjectDiscovery.ParseGsAnalyzersFromResponseFile(rspPath)
-                cachedGsAnalyzers = GSharpAnalyzerHost.Load(paths, out gsAnalyzerLoadDiagnostics)
-                let registry = CodeFixRegistry.CreateDefault()
-                registry.AddRange(GSharpAnalyzerHost.LoadCodeFixProviders(paths, out _))
-                cachedCodeFixRegistry = registry
+                cachedGsAnalyzers = GSharpAnalyzerHost.Load(paths, out var analyzerDiagnostics)
+                // A rejected code-fix provider is reported with the load diagnostics; it does not
+                // stop the analyzers or the other providers.
+                cachedCodeFixRegistry = GSharpAnalyzerHost.LoadCodeFixRegistry(paths, out var fixDiagnostics)
+                gsAnalyzerLoadDiagnostics = analyzerDiagnostics.AddRange(
+                    fixDiagnostics.Where(
+                        (d GSharp.Core.CodeAnalysis.Diagnostic) -> !analyzerDiagnostics.Any(
+                            (a GSharp.Core.CodeAnalysis.Diagnostic) -> a.Message == d.Message
+                        )
+                    )
+                )
                 gsAnalyzerSourceMtimeUtc = mtime
             }
             loadDiagnostics = gsAnalyzerLoadDiagnostics

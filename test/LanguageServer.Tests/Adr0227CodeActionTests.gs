@@ -112,6 +112,164 @@ open class Adr0227CodeActionTests {
         AssertOffered("package P\n\nfunc F(a bool, b bool) bool {\n    return a or b\n}\n", "or", "Use '||'", "||")
     }
 
+    @Fact
+    func Resolve_ReturnsTheListedEdit_AndNothingForAnotherSnapshotOrAnUnknownId() {
+        let content = LanguageServerTestHelpers.Content(Source).WithVersion(5)
+        let uri = DocumentUri.From("file:///a.gs")!!
+        let at = LanguageServerTestHelpers.PositionOf(Source, "null")
+        let client = CodeActionClientOptions{SupportsResolveEdit: true}
+        let listed = CodeActionComputer
+            .ComputeCodeActions(uri, content, Range(at, at), nil, client)
+            .Single((a CommandOrCodeAction) -> a.CodeAction.Title == "Use 'nil'")
+            .CodeAction
+        Assert.Equal(
+            "nil",
+            Assert.Single(CodeActionComputer.ResolveCodeAction(listed, content, client).Edit!!.Changes!![uri]).NewText
+        )
+        // The same version of a text that was parsed again is another snapshot.
+        let reparsed = LanguageServerTestHelpers.Content(Source).WithVersion(5)
+        let again = CodeActionComputer
+            .ComputeCodeActions(uri, content, Range(at, at), nil, client)
+            .Single((a CommandOrCodeAction) -> a.CodeAction.Title == "Use 'nil'")
+            .CodeAction
+        Assert.Null(CodeActionComputer.ResolveCodeAction(again, reparsed, client).Edit)
+        let unknown = CodeAction{
+            Title: "Use 'nil'",
+            Kind: CodeActionKind.QuickFix,
+            Data: CodeActionData{Uri: uri.ToString(), Version: 5, Key: "missing"}
+        }
+        Assert.Null(CodeActionComputer.ResolveCodeAction(unknown, content, client).Edit)
+    }
+
+    @Fact
+    func EditOfAnotherOpenDocument_CarriesItsClientVersion() {
+        let content = LanguageServerTestHelpers.Content(Source).WithVersion(1)
+        let uri = DocumentUri.From("file:///a.gs")!!
+        let otherPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "adr0227-other.gs")
+        let otherUri = DocumentUri.FromFileSystemPath(otherPath)!!
+        let other = SyntaxTree.Parse(GSharp.Core.CodeAnalysis.Text.SourceText.From("package P\n", otherPath))
+        let changes = GSharp
+            .Core
+            .CodeAnalysis
+            .CodeFixes
+            .FixChanges(
+            System
+                .Collections
+                .Immutable
+                .ImmutableArray
+                .Create(
+                GSharp
+                    .Core
+                    .CodeAnalysis
+                    .CodeFixes
+                    .DocumentChanges(
+                    other,
+                    System
+                        .Collections
+                        .Immutable
+                        .ImmutableArray
+                        .Create(
+                        GSharp.Core.CodeAnalysis.Text.TextChange(GSharp.Core.CodeAnalysis.Text.TextSpan(0, 0), "// x\n")
+                    ),
+                    System.Collections.Immutable.ImmutableArray[GSharp.Core.CodeAnalysis.Text.TextSpan].Empty
+                )
+            )
+        )
+        let client = CodeActionClientOptions{
+            SupportsDocumentChanges: true,
+            VersionOf: (u DocumentUri) -> if u.ToString() == otherUri.ToString() {
+                9
+            } else {
+                default(int32?)
+            }
+        }
+        let edit = CodeActionComputer.BuildEdit(uri, content, changes, client)
+        let documentEdit = Assert.Single(edit.DocumentChanges!!)
+        Assert.Equal(otherUri.ToString(), documentEdit.TextDocument.Uri.ToString())
+        Assert.Equal(9, documentEdit.TextDocument.Version)
+    }
+
+    @Fact
+    func ProviderThatThrowsWhenComputing_LosesOnlyItsFix() {
+        const source = "package P\n\nimport Zeta\nimport Alpha\n\nfunc F() string? {\n    return null\n}\n"
+        let content = LanguageServerTestHelpers.Content(source)
+        let uri = DocumentUri.From("file:///a.gs")!!
+        let at = LanguageServerTestHelpers.PositionOf(source, "null")
+        let registry = GSharp.Core.CodeAnalysis.CodeFixes.CodeFixRegistry.CreateDefault()
+        registry.Add(ThrowingComputeProvider())
+        let titles = CodeActionComputer
+            .ComputeCodeActions(
+            uri,
+            content,
+            Range(at, at),
+            nil,
+            CodeActionClientOptions(),
+            registry,
+            default(System.Threading.CancellationToken)
+        )
+            .Select((a CommandOrCodeAction) -> a.CodeAction.Title)
+            .ToList()
+        Assert.Contains("Use 'nil'", titles)
+        Assert.Contains("Sort imports", titles)
+        Assert.DoesNotContain("Throws later", titles)
+    }
+
+    @Fact
+    func ContextDiagnostic_WithAnIntegerCode_Deserializes() {
+        const json = `{"textDocument":{"uri":"file:///a.gs"},"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}},"context":{"diagnostics":[{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}},"code":123,"message":"m"}]}}`
+        let request = System.Text.Json.JsonSerializer.Deserialize[CodeActionParams](json, LspJson.Options)
+        Assert.Equal("123", Assert.Single(request.Context!!.Diagnostics!!).Code!!.ToString())
+    }
+
+    @Fact
+    func ProjectRegistry_ForgetsAnalyzerProviders_WhenTheConfigurationIsRemoved() {
+        let directory = System.IO.Directory.CreateTempSubdirectory("gs-ls-codefix-tests")
+        try {
+            let rsp = System.IO.Path.Combine(directory.FullName, "App.rsp")
+            System
+                .IO
+                .File
+                .WriteAllLines(rsp, []string{"/gsanalyzer:" + typeof(Adr0227ProbeFixProvider).Assembly.Location})
+            let project = ProjectState(System.IO.Path.Combine(directory.FullName, "App.gsproj")){
+                ReferenceSourcePath = rsp
+            }
+            let builtIns = GSharp.Core.CodeAnalysis.CodeFixes.CodeFixRegistry.CreateDefault().Providers.Length
+            Assert.Contains(
+                project.GetCodeFixRegistry().Providers,
+                // The host loads the assembly in its own load context, so the type is compared by name.
+                (p GSharp.Core.CodeAnalysis.CodeFixes.GSharpCodeFixProvider) -> p.GetType()
+                    .FullName == typeof(Adr0227ProbeFixProvider).FullName
+            )
+            System.IO.File.Delete(rsp)
+            Assert.Equal(builtIns, project.GetCodeFixRegistry().Providers.Length)
+        } finally {
+            directory.Delete(true)
+        }
+    }
+
+    // A fix whose deferred computation throws.
+    private class ThrowingComputeProvider : GSharp.Core.CodeAnalysis.CodeFixes.GSharpCodeFixProvider {
+        override prop FixableDiagnosticIds System
+            .Collections
+            .Immutable
+            .ImmutableArray[string] -> System
+            .Collections
+            .Immutable
+            .ImmutableArray
+            .Create("GS0273")
+
+        override func RegisterCodeFixes(context GSharp.Core.CodeAnalysis.CodeFixes.CodeFixContext) {
+            context.RegisterFix(
+                "Throws later",
+                "test.throws",
+                GSharp.Core.CodeAnalysis.CodeFixes.Applicability.MaybeIncorrect,
+                (editor SyntaxEditor) -> {
+                    throw InvalidOperationException("broken provider")
+                }
+            )
+        }
+    }
+
     private func AssertOffered(source string, at string, title string, newText string) {
         let content = LanguageServerTestHelpers.Content(source)
         let uri = DocumentUri.From("file:///a.gs")!!
@@ -122,4 +280,19 @@ open class Adr0227CodeActionTests {
             .CodeAction
         Assert.Equal(newText, Assert.Single(action.Edit!!.Changes!![uri]).NewText)
     }
+}
+
+/// A provider that the analyzer host discovers in this test assembly (ADR-0227 D2).
+@GSharp.Core.CodeAnalysis.CodeFixes.GSharpCodeFixProvider
+class Adr0227ProbeFixProvider : GSharp.Core.CodeAnalysis.CodeFixes.GSharpCodeFixProvider {
+    override prop FixableDiagnosticIds System
+        .Collections
+        .Immutable
+        .ImmutableArray[string] -> System
+        .Collections
+        .Immutable
+        .ImmutableArray
+        .Create("TEST0229")
+
+    override func RegisterCodeFixes(context GSharp.Core.CodeAnalysis.CodeFixes.CodeFixContext) { }
 }

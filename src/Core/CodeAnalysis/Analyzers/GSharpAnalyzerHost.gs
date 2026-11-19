@@ -135,6 +135,38 @@ shared class GSharpAnalyzerHost {
         return providers.ToImmutable()
     }
 
+    /// Builds a registry of the built-in providers and the providers of [`analyzerPaths`](paramref)
+    /// (ADR-0227 D2). A provider that the registry rejects (no fixable ID, or a getter that throws)
+    /// is left out and reported as GS9301; the other providers stay.
+    /// @param analyzerPaths Analyzer assembly paths.
+    /// @param hostDiagnostics GS9301/GS9303 diagnostics produced while loading and registering.
+    /// @returns The registry.
+    func LoadCodeFixRegistry(
+        analyzerPaths IReadOnlyList[string],
+        out hostDiagnostics ImmutableArray[Diagnostic]
+    ) CodeFixRegistry {
+        let registry = CodeFixRegistry.CreateDefault()
+        let diagnostics = ImmutableArray.CreateBuilder[Diagnostic]()
+        let providers = LoadCodeFixProviders(analyzerPaths, out var loadDiagnostics)
+        diagnostics.AddRange(loadDiagnostics)
+        for provider in providers {
+            try {
+                registry.Add(provider)
+            } catch (ex Exception) when !(ex is OutOfMemoryException) && !(ex is StackOverflowException) {
+                diagnostics.Add(
+                    Diagnostic.Create(
+                        DiagnosticDescriptors.AnalyzerAssemblyLoadFailure,
+                        default(TextLocation),
+                        provider.GetType().Assembly.Location,
+                        "the code-fix provider '${provider.GetType().FullName}' was rejected: ${ex.Message}"
+                    )
+                )
+            }
+        }
+        hostDiagnostics = diagnostics.ToImmutable()
+        return registry
+    }
+
     /// Loads the analyzers in [`analyzerPaths`](paramref) and runs them
     /// over [`compilation`](paramref).
     /// @param compilation The bound compilation to analyze.

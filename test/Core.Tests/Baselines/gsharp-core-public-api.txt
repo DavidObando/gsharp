@@ -8287,6 +8287,7 @@ type sealed class GSharp.Core.Resx.ResxEntry : System.Object
   property public String TypeName { get; }
   property public String Value { get; }
 type static class GSharp.Core.CodeAnalysis.Analyzers.GSharpAnalyzerHost : System.Object
+  method public static GSharp.Core.CodeAnalysis.CodeFixes.CodeFixRegistry LoadCodeFixRegistry(System.Collections.Generic.IReadOnlyList`1<String> analyzerPaths, out System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> hostDiagnostics)
   method public static System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Analyzers.GSharpDiagnosticAnalyzer> Load(System.Collections.Generic.IReadOnlyList`1<String> analyzerPaths, out System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> hostDiagnostics)
   method public static System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.CodeFixes.GSharpCodeFixProvider> LoadCodeFixProviders(System.Collections.Generic.IReadOnlyList`1<String> analyzerPaths, out System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> hostDiagnostics)
   method public static System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> Run(GSharp.Core.CodeAnalysis.Compilation.Compilation compilation, System.Collections.Generic.IReadOnlyList`1<String> analyzerPaths, GSharp.Core.CodeAnalysis.Analyzers.AnalyzerOptions options = null, System.Threading.CancellationToken cancellationToken = null)

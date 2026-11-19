@@ -84,6 +84,15 @@ class LspServer {
         this.documentContentService = documentContentService
         this.workspaceState = workspaceState
         this.logger = logger ?? NullLogger.Instance
+        // ADR-0227 D7: an edit of another open document carries that document's client version.
+        this.codeActionClientOptions.VersionOf = (uri DocumentUri) -> if documentContentService.TryGet(
+            uri.ToString(),
+            out var content
+        ) {
+            content.Version
+        } else {
+            default(int32?)
+        }
     }
 
     /// Gets a task that completes when the client sends the `exit` notification.
