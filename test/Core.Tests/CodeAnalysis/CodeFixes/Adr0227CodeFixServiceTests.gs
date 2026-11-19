@@ -171,6 +171,14 @@ open class Adr0227CodeFixServiceTests {
     }
 
     @Fact
+    func AnalyzerHost_ProviderOnlyAssembly_IsNotAZeroDiscoveryFailure() {
+        Assert.True(
+            GSharpAnalyzerHost.ContainsCodeFixProviders(typeof(Adr0227CodeFixServiceTests).Assembly.GetExportedTypes())
+        )
+        Assert.False(GSharpAnalyzerHost.ContainsCodeFixProviders(typeof(CodeFixService).Assembly.GetExportedTypes()))
+    }
+
+    @Fact
     func AnalyzerHost_Registry_LeavesOutARejectedProvider_AndKeepsTheOthers() {
         let path = typeof(Adr0227CodeFixServiceTests).Assembly.Location
         let registry = GSharpAnalyzerHost.LoadCodeFixRegistry([]string{path}, out var diagnostics)

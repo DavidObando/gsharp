@@ -208,7 +208,8 @@ shared class GSharpAnalyzerHost {
                 analyzers.Add(cast[GSharpDiagnosticAnalyzer](Activator.CreateInstance(type)!!))
                 found++
             }
-            if found == 0 {
+            // ADR-0227 D2: an assembly of code-fix providers only is not an analyzer load failure.
+            if found == 0 && !ContainsCodeFixProviders(exportedTypes) {
                 // Issue #3617: a zero-discovery result has three very
                 // different causes — wrong bytes at the path (e.g. a stale
                 // Roslyn-era assembly), a type-identity split (the analyzer's
@@ -328,6 +329,12 @@ shared class GSharpAnalyzerHost {
         }
         return nil
     }
+
+    // Whether the exported types include an attributed code-fix provider.
+    internal func ContainsCodeFixProviders(exportedTypes[]Type) bool -> exportedTypes.Any(
+        (type Type) -> !type.IsAbstract && typeof(GSharpCodeFixProvider).IsAssignableFrom(type) &&
+            type.GetCustomAttribute[GSharpCodeFixProviderAttribute]() != nil
+    )
 
     /// Issue #3617: a load exception's Message alone hid every actionable
     /// detail (two CI runs produced no data). Surface the exception chain and

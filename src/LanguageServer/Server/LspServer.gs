@@ -85,13 +85,13 @@ class LspServer {
         this.workspaceState = workspaceState
         this.logger = logger ?? NullLogger.Instance
         // ADR-0227 D7: an edit of another open document carries that document's client version.
-        this.codeActionClientOptions.VersionOf = (uri DocumentUri) -> if documentContentService.TryGet(
+        this.codeActionClientOptions.DocumentOf = (uri DocumentUri) -> if documentContentService.TryGet(
             uri.ToString(),
             out var content
         ) {
-            content.Version
+            content
         } else {
-            default(int32?)
+            default(DocumentContent?)
         }
     }
 

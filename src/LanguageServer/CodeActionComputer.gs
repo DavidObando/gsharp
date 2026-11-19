@@ -28,9 +28,10 @@ class CodeActionClientOptions {
     /// Gets or sets a value that tells whether the client resolves the `edit` of an action lazily.
     prop SupportsResolveEdit bool
 
-    /// Gets or sets the client's version of an open document, or `null` when the document is not
-    /// open. The server sets it; an edit of another open document carries that version.
-    prop VersionOf Func[DocumentUri, int32?]?
+    /// Gets or sets the stored content of an open document (its tree and client version, captured
+    /// together), or `null` when the document is not open. The server sets it; an edit of another
+    /// open document carries that version.
+    prop DocumentOf Func[DocumentUri, DocumentContent?]?
 }
 
 /// Computes `textDocument/codeAction` and `codeAction/resolve` results (ADR-0227 D7). The fixes
@@ -140,15 +141,8 @@ shared class CodeActionComputer {
         ) {
             return action
         }
-        let versionOf = client.VersionOf
         for pair in entry.OtherVersions {
-            let other DocumentUri? = DocumentUri.From(pair.Key)
-            let current int32? = if other == nil || versionOf == nil {
-                default(int32?)
-            } else {
-                versionOf(other)
-            }
-            if current != pair.Value {
+            if CurrentVersion(client, pair.Key) != pair.Value {
                 return action
             }
         }
@@ -217,7 +211,10 @@ shared class CodeActionComputer {
             } catch (ex Exception) when !(ex is OutOfMemoryException) && !(ex is StackOverflowException) {
                 continue
             }
-            let edit = BuildEdit(uri, content, changes, client)
+            let edit WorkspaceEdit? = BuildEdit(uri, content, changes, client, out var otherVersions)
+            if edit == nil {
+                continue
+            }
             let action = CodeAction{
                 Title: fix.Title,
                 Kind: CodeActionKind.QuickFix,
@@ -239,7 +236,7 @@ shared class CodeActionComputer {
                         } else {
                             default(Compilation?)
                         },
-                        OtherVersions(uri, content, changes, client)
+                        otherVersions
                     )
                 )
                 action.Data = CodeActionData{Uri: uri.ToString(), Version: content.Version, Key: id}
@@ -248,26 +245,6 @@ shared class CodeActionComputer {
             }
             yield action
         }
-    }
-
-    // The client versions of the other documents that an edit changes, by URI.
-    private func OtherVersions(
-        uri DocumentUri,
-        content DocumentContent,
-        changes FixChanges,
-        client CodeActionClientOptions
-    ) Dictionary[string, int32?] {
-        let result = Dictionary[string, int32?](StringComparer.Ordinal)
-        for document in changes.Documents {
-            if object.ReferenceEquals(document.Tree, content.SyntaxTree) {
-                continue
-            }
-            let other DocumentUri? = DocumentUri.FromFileSystemPath(document.Tree.Text.FileName)
-            if other != nil {
-                result[other.ToString()] = client.VersionOf?(other)
-            }
-        }
-        return result
     }
 
     // ADR-0227 D5: the one machine-applicable fix of a diagnostic is the preferred action.
@@ -288,7 +265,19 @@ shared class CodeActionComputer {
         content DocumentContent,
         changes FixChanges,
         client CodeActionClientOptions
-    ) WorkspaceEdit {
+    ) WorkspaceEdit? -> BuildEdit(uri, content, changes, client, out _)
+
+    // Builds the edit. An edit of another open document uses the version that was stored with that
+    // document's tree. When the open document's tree is not the tree that the fix edited (the
+    // document changed after the compilation was built), the ranges would be stale, so there is no edit.
+    internal func BuildEdit(
+        uri DocumentUri,
+        content DocumentContent,
+        changes FixChanges,
+        client CodeActionClientOptions,
+        out otherVersions Dictionary[string, int32?]
+    ) WorkspaceEdit? {
+        otherVersions = Dictionary[string, int32?](StringComparer.Ordinal)
         let documentEdits = List[TextDocumentEdit]()
         for document in changes.Documents {
             let own = object.ReferenceEquals(document.Tree, content.SyntaxTree)
@@ -299,6 +288,25 @@ shared class CodeActionComputer {
             }
             if documentUri == nil {
                 continue
+            }
+            var version int32? = content.Version
+            if !own {
+                version = nil
+                let openDocument DocumentContent? = client.DocumentOf?(documentUri)
+                if openDocument != nil {
+                    if !object.ReferenceEquals(openDocument.SyntaxTree, document.Tree) &&
+                        openDocument
+                        .SyntaxTree
+                        .Text
+                        .ToString() != document
+                        .Tree
+                        .Text
+                        .ToString() {
+                        return nil
+                    }
+                    version = openDocument.Version
+                }
+                otherVersions[documentUri.ToString()] = version
             }
             let edits = document
                 .Changes
@@ -311,14 +319,7 @@ shared class CodeActionComputer {
                 .ToList()
             documentEdits.Add(
                 TextDocumentEdit{
-                    TextDocument: OptionalVersionedTextDocumentIdentifier{
-                        Uri: documentUri,
-                        Version: if own {
-                            content.Version
-                        } else {
-                            client.VersionOf?(documentUri)
-                        }
-                    },
+                    TextDocument: OptionalVersionedTextDocumentIdentifier{Uri: documentUri, Version: version},
                     Edits: edits
                 }
             )
@@ -331,6 +332,19 @@ shared class CodeActionComputer {
             byUri[d.TextDocument.Uri] = d.Edits
         }
         return WorkspaceEdit{Changes: byUri}
+    }
+
+    // The current client version of an open document, or null.
+    private func CurrentVersion(client CodeActionClientOptions, key string) int32? {
+        let other DocumentUri? = DocumentUri.From(key)
+        if other == nil {
+            return nil
+        }
+        let openDocument DocumentContent? = client.DocumentOf?(other)
+        if openDocument == nil {
+            return nil
+        }
+        return openDocument.Version
     }
 
     // The compilation that holds the document's tree: the project's, else a one-tree compilation.
@@ -368,11 +382,7 @@ shared class CodeActionComputer {
         if analyzers.IsEmpty {
             return ImmutableArray[CoreDiagnostic].Empty
         }
-        let fixable = analyzers.Any(
-            (a GSharpDiagnosticAnalyzer) -> a.SupportedDiagnostics.Any(
-                (d GSharp.Core.CodeAnalysis.DiagnosticDescriptor) -> !registry.GetProviders(d.Id).IsEmpty
-            )
-        )
+        let fixable = AnyFixable(analyzers, registry, ct)
         if !fixable {
             return ImmutableArray[CoreDiagnostic].Empty
         }
@@ -387,6 +397,29 @@ shared class CodeActionComputer {
         )
         AnalyzerResults.AddOrUpdate(compilation, AnalyzerResult(analyzers, produced))
         return produced
+    }
+
+    // Whether a provider fixes an ID that one of the analyzers reports. A failing metadata getter
+    // skips that analyzer only; the driver guards the same read.
+    internal func AnyFixable(
+        analyzers ImmutableArray[GSharpDiagnosticAnalyzer],
+        registry CodeFixRegistry,
+        ct CancellationToken
+    ) bool {
+        for analyzer in analyzers {
+            try {
+                if analyzer.SupportedDiagnostics.Any(
+                    (d GSharp.Core.CodeAnalysis.DiagnosticDescriptor) -> !registry.GetProviders(d.Id).IsEmpty
+                ) {
+                    return true
+                }
+            } catch (ex OperationCanceledException) when ct.IsCancellationRequested {
+                rethrow
+            } catch (ex Exception) when !(ex is OutOfMemoryException) && !(ex is StackOverflowException) {
+                continue
+            }
+        }
+        return false
     }
 
     private func KindRequested(kind CodeActionKind, only IReadOnlyList[CodeActionKind]?) bool {
@@ -455,7 +488,8 @@ shared class CodeActionComputer {
         return CodeAction{
             Title: "Sort imports",
             Kind: CodeActionKind.RefactorRewrite,
-            Edit: BuildEdit(uri, content, changes, client)
+            // Only the requested document changes, so the edit always exists.
+            Edit: BuildEdit(uri, content, changes, client)!!
         }
     }
 

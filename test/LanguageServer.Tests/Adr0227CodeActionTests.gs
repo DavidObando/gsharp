@@ -175,18 +175,29 @@ open class Adr0227CodeActionTests {
                 )
             )
         )
+        let stored = DocumentContent(other, List[int32](), nil, nil, 9)
         let client = CodeActionClientOptions{
             SupportsDocumentChanges: true,
-            VersionOf: (u DocumentUri) -> if u.ToString() == otherUri.ToString() {
-                9
+            DocumentOf: (u DocumentUri) -> if u.ToString() == otherUri.ToString() {
+                stored
             } else {
-                default(int32?)
+                default(DocumentContent?)
             }
         }
-        let edit = CodeActionComputer.BuildEdit(uri, content, changes, client)
+        let edit = CodeActionComputer.BuildEdit(uri, content, changes, client)!!
         let documentEdit = Assert.Single(edit.DocumentChanges!!)
         Assert.Equal(otherUri.ToString(), documentEdit.TextDocument.Uri.ToString())
         Assert.Equal(9, documentEdit.TextDocument.Version)
+        // The open document changed after the fix was computed: its ranges are stale, so no edit.
+        let changed = DocumentContent(
+            SyntaxTree.Parse(GSharp.Core.CodeAnalysis.Text.SourceText.From("package Q\n", otherPath)),
+            List[int32](),
+            nil,
+            nil,
+            10
+        )
+        let staleClient = CodeActionClientOptions{SupportsDocumentChanges: true, DocumentOf: (u DocumentUri) -> changed}
+        Assert.Null(CodeActionComputer.BuildEdit(uri, content, changes, staleClient))
     }
 
     @Fact
@@ -245,6 +256,52 @@ open class Adr0227CodeActionTests {
         } finally {
             directory.Delete(true)
         }
+    }
+
+    @Fact
+    func AnalyzerWithAThrowingMetadataGetter_IsSkipped() {
+        let registry = GSharp.Core.CodeAnalysis.CodeFixes.CodeFixRegistry()
+        registry.Add(Adr0227ProbeFixProvider())
+        let analyzers = System
+            .Collections
+            .Immutable
+            .ImmutableArray
+            .Create[GSharp.Core.CodeAnalysis.Analyzers.GSharpDiagnosticAnalyzer](
+            ThrowingMetadataAnalyzer(),
+            ProbeIdAnalyzer()
+        )
+        Assert.True(CodeActionComputer.AnyFixable(analyzers, registry, default(System.Threading.CancellationToken)))
+    }
+
+    private class ThrowingMetadataAnalyzer : GSharp.Core.CodeAnalysis.Analyzers.GSharpDiagnosticAnalyzer {
+        override prop SupportedDiagnostics System
+            .Collections
+            .Immutable
+            .ImmutableArray[GSharp.Core.CodeAnalysis.DiagnosticDescriptor] {
+            get {
+                throw InvalidOperationException("broken metadata")
+            }
+        }
+
+        override func Initialize(context GSharp.Core.CodeAnalysis.Analyzers.AnalysisContext) { }
+    }
+
+    private class ProbeIdAnalyzer : GSharp.Core.CodeAnalysis.Analyzers.GSharpDiagnosticAnalyzer {
+        override prop SupportedDiagnostics System
+            .Collections
+            .Immutable
+            .ImmutableArray[GSharp.Core.CodeAnalysis.DiagnosticDescriptor] -> System
+            .Collections
+            .Immutable
+            .ImmutableArray
+            .Create(
+            GSharp
+                .Core
+                .CodeAnalysis
+                .DiagnosticDescriptor("TEST0229", GSharp.Core.CodeAnalysis.DiagnosticSeverity.Warning, "probe")
+        )
+
+        override func Initialize(context GSharp.Core.CodeAnalysis.Analyzers.AnalysisContext) { }
     }
 
     // A fix whose deferred computation throws.
