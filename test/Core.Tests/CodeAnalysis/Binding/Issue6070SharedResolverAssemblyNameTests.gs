@@ -632,6 +632,79 @@ public func Use(m Mutator) int32 {
         }
     }
 
+    @Fact
+    func RenamedSuccessor_AfterIncrementalReplace_DoesNotRetainFriendPermissions() {
+        using let fixture = CSharpFixture(SharedLibrarySource)
+        let unchangedTree = SyntaxTree.Parse(SourceText.From(`package Probe
+import Lib
+public func UnchangedSecret() int32 -> Api.Secret()
+`, "unchanged.gs"))
+        let editedTreeV1 = SyntaxTree.Parse(SourceText.From(`package Probe
+import Lib
+public func EditedSecret() int32 {
+    return Api.Secret()
+}
+`, "edited.gs"))
+        let editedTreeV2 = SyntaxTree.Parse(SourceText.From(`package Probe
+import Lib
+public func EditedSecret() int32 {
+    return Api.Secret() + 1
+}
+`, "edited.gs"))
+        using let shared = ReferenceResolver.WithReferences([]string{fixture.AssemblyPath})
+        let predecessor = Compilation(shared, unchangedTree, editedTreeV1){
+            AssemblyName = "Friend",
+            IncrementalBodyReuse = true
+        }
+        Assert.Empty(predecessor.GetDiagnostics().Where((d Diagnostic) -> d.IsError))
+
+        // Control: keeping AssemblyName = "Friend" on a body-only successor succeeds and executes.
+        let friendPredecessor = Compilation(shared, unchangedTree, editedTreeV1){
+            AssemblyName = "Friend",
+            IncrementalBodyReuse = true
+        }
+        Assert.Empty(friendPredecessor.GetDiagnostics().Where((d Diagnostic) -> d.IsError))
+        let friendSuccessor = friendPredecessor.ReplaceSyntaxTree(editedTreeV1, editedTreeV2)
+        using let friendPe = MemoryStream()
+        let friendEmit = friendSuccessor.Emit(friendPe, nil, nil, assemblyName: "Friend")
+        Assert.True(friendEmit.Success, Describe(friendEmit.Diagnostics))
+        Assert.Equal(
+            42 + 43,
+            InvokeRunMethod(friendPe.ToArray(), fixture.AssemblyPath, "Probe.<Program>", "UnchangedSecret") +
+                InvokeRunMethod(friendPe.ToArray(), fixture.AssemblyPath, "Probe.<Program>", "EditedSecret")
+        )
+
+        // Renaming the successor after ReplaceSyntaxTree must drop ReusedGlobalScope and cached bodies.
+        let renamedSuccessor = predecessor.ReplaceSyntaxTree(editedTreeV1, editedTreeV2)
+        renamedSuccessor.AssemblyName = "Stranger"
+        let errors = renamedSuccessor.GetDiagnostics().Where((d Diagnostic) -> d.IsError).ToArray()
+        Assert.Equal(2, errors.Length)
+        Assert.All(errors, (d Diagnostic) -> Assert.Equal("GS0159", d.Id))
+        using let renamedPe = MemoryStream()
+        let renamedEmit = renamedSuccessor.Emit(renamedPe, nil, nil, assemblyName: "Stranger")
+        Assert.False(renamedEmit.Success)
+    }
+
+    @Fact
+    func RenamingCompilation_AfterGlobalScopeBind_InvalidatesStaleFriendAccess() {
+        using let fixture = CSharpFixture(SharedLibrarySource)
+        let source = `package Probe
+import Lib
+public func Use() int32 -> Api.Secret()
+`
+        using let shared = ReferenceResolver.WithReferences([]string{fixture.AssemblyPath})
+        let compilation = Compilation(shared, SyntaxTree.Parse(SourceText.From(source, "probe.gs"))){
+            AssemblyName = "Friend"
+        }
+        Assert.Empty(compilation.GetDiagnostics().Where((d Diagnostic) -> d.IsError))
+
+        using let strangerPe = MemoryStream()
+        let emitResult = compilation.Emit(strangerPe, nil, nil, assemblyName: "Stranger")
+        Assert.False(emitResult.Success)
+        let errors = emitResult.Diagnostics.Where((d Diagnostic) -> d.IsError).ToArray()
+        Assert.Contains(errors, (d Diagnostic) -> d.Id == "GS0159")
+    }
+
     shared {
         private const SharedLibrarySource string = `using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("Friend")]

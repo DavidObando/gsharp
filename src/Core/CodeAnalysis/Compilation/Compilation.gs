@@ -266,10 +266,38 @@ open class Compilation {
     /// (cref:GlobalScope) or (cref:Diagnostics).
     prop AssemblyName string? {
         get -> assemblyName
-        set -> assemblyName = value
+        set {
+            if string.Equals(assemblyName, value, StringComparison.Ordinal) {
+                return
+            }
+            buildGate.Wait()
+            try {
+                assemblyName = value
+                ResetConsumerBindingState_Locked()
+            } finally {
+                buildGate.Release()
+            }
+        }
     }
 
     internal prop EffectiveConsumerAssemblyName string? -> assemblyName ?? References?.CurrentAssemblyName
+
+    private func ResetConsumerBindingState_Locked() {
+        globalScope = nil
+        boundProgram = nil
+        ReusedGlobalScope = nil
+        DirtyBodyTrees = nil
+        declarationDiagnostics = nil
+        bodyDiagnostics = nil
+        allDiagnostics = nil
+        FailedCalls.Clear()
+        semanticModels.Clear()
+        bodyCache = if incrementalBodyReuse {
+            BoundBodyCache()
+        } else {
+            default(BoundBodyCache?)
+        }
+    }
 
     /// Gets or sets the interactive submission options (ADR-0156 Phase 2).
     /// When set, the compilation binds as one REPL submission: prior
@@ -393,10 +421,27 @@ open class Compilation {
             return globalScope!!
         }
         ThrowIfCannotBuild_Locked()
-        let reused = if ReusedGlobalScope is {} candidate && !candidate.HasNativeProtocols {
+        let reused = if ReusedGlobalScope is {} candidate &&
+            !candidate.HasNativeProtocols &&
+            (
+            !candidate.HasExplicitConsumerAssemblyName || string.Equals(
+                candidate.ConsumerAssemblyName,
+                EffectiveConsumerAssemblyName,
+                StringComparison.Ordinal
+            )
+        ) {
             candidate
         } else {
             default(BoundGlobalScope?)
+        }
+        if ReusedGlobalScope != nil && reused == nil {
+            ReusedGlobalScope = nil
+            DirtyBodyTrees = nil
+            bodyCache = if incrementalBodyReuse {
+                BoundBodyCache()
+            } else {
+                default(BoundBodyCache?)
+            }
         }
         using let measurement = CompilationMeasurements.BeginPhase("declarations", reused == nil)
         if reused != nil {
