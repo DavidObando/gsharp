@@ -3444,6 +3444,7 @@ type sealed class GSharp.Core.CodeAnalysis.Diagnostic : System.Object
   method public String get_Id()
   method public String get_Message()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Text.TextLocation> get_AdditionalLocations()
+  method public System.Collections.Immutable.ImmutableArray`1<String> get_MessageArguments()
   method public System.Collections.Immutable.ImmutableDictionary`2<String, String> get_Properties()
   method public Void .ctor(GSharp.Core.CodeAnalysis.Text.TextLocation location, String id, GSharp.Core.CodeAnalysis.DiagnosticSeverity severity, String message)
   method public Void .ctor(GSharp.Core.CodeAnalysis.Text.TextLocation location, String message)
@@ -3457,6 +3458,7 @@ type sealed class GSharp.Core.CodeAnalysis.Diagnostic : System.Object
   property public String Id { get; }
   property public String Message { get; }
   property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Text.TextLocation> AdditionalLocations { get; }
+  property public System.Collections.Immutable.ImmutableArray`1<String> MessageArguments { get; }
   property public System.Collections.Immutable.ImmutableDictionary`2<String, String> Properties { get; }
 type sealed class GSharp.Core.CodeAnalysis.DiagnosticBag : System.Object, System.Collections.Generic.IEnumerable`1<GSharp.Core.CodeAnalysis.Diagnostic>, System.Collections.IEnumerable
   method public Int32 get_Count()
