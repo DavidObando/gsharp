@@ -74,6 +74,7 @@ public class Probe {
         let source = `
 #nullable enable
 using System;
+using System.Collections.Generic;
 
 public enum State {
     None,
@@ -110,6 +111,14 @@ public class Probe {
     }
 
     private static bool OutWithArrayReadNilGuard(string? a, bool[] flags, out string? p) {
+        p = a;
+        if (p == null || flags[0]) {
+            return false;
+        }
+        return p.EndsWith("?", StringComparison.Ordinal);
+    }
+
+    private static bool OutWithListIndexerNilGuard(string? a, List<bool> flags, out string? p) {
         p = a;
         if (p == null || flags[0]) {
             return false;
@@ -156,6 +165,27 @@ public class Probe {
         return p.EndsWith("?", StringComparison.Ordinal);
     }
 
+    private static bool RefWithCoalesce(ref string? p, bool? flag) {
+        if (p == null || (flag ?? false)) {
+            return false;
+        }
+        return p.EndsWith("?", StringComparison.Ordinal);
+    }
+
+    private static bool RefWithIsNotEmptyBraces(ref string? p) {
+        if (p is not {}) {
+            return false;
+        }
+        return p.EndsWith("?", StringComparison.Ordinal);
+    }
+
+    private static bool RefWithObjectTypeTest(ref string? p, object o) {
+        if (p == null || o is string) {
+            return false;
+        }
+        return p.EndsWith("?", StringComparison.Ordinal);
+    }
+
     public static void Main() {
         var probe = new Probe();
         string? refVal = "enum?";
@@ -164,11 +194,15 @@ public class Probe {
             OutInElseBranch("int?", out _) + "|" +
             OutWithCallFreeNilGuard("bool?", out _) + "|" +
             OutWithArrayReadNilGuard("char?", new[] { false }, out _) + "|" +
+            OutWithListIndexerNilGuard("sbyte?", new List<bool> { false }, out _) + "|" +
             probe.OutWithQualifiedAutoProp("byte?", out _) + "|" +
             probe.OutWithUnqualifiedAutoProp("short?", out _) + "|" +
             OutWithNullableHasValue("long?", null, out _) + "|" +
             OutWithStaticSourceField("float?", out _) + "|" +
-            RefWithEnumCompare(ref refVal, State.None));
+            RefWithEnumCompare(ref refVal, State.None) + "|" +
+            RefWithCoalesce(ref refVal, null) + "|" +
+            RefWithIsNotEmptyBraces(ref refVal) + "|" +
+            RefWithObjectTypeTest(ref refVal, 1));
     }
 }
 `
@@ -181,7 +215,7 @@ public class Probe {
             verifyAssembly: (assembly string) -> {
                 Issue5585ReadonlyNullArgumentTests.VerifyStrictIL(assembly)
             },
-            expectedOutput: "True|True|True|True|True|True|True|True|True"
+            expectedOutput: "True|True|True|True|True|True|True|True|True|True|True|True|True"
         )
     }
 

@@ -16994,99 +16994,118 @@ partial class CSharpToGSharpTranslator {
             return nil
         }
 
-        // Mirrors gsc's RestrictConditionalExit (#6124): exclude call-free array, tuple, enum, and pure-property reads.
+        // Mirrors gsc's RestrictConditionalExit (#6124): true for writes, static init, calls, and non-pure accessors.
         private func ExitedIfConditionNodeMayMutate(node Microsoft.CodeAnalysis.SyntaxNode, symbol ISymbol?) bool {
+            if this.IsUnevaluatedNameOfOperand(node) || this.IsErasedNameOf(node) {
+                return false
+            }
             if this.NodeRunsStaticTypeInitializer(node) || this.NodeMayWriteReferenceStorage(
                 node,
                 this.ReferenceStorageType(symbol)
             ) {
                 return true
             }
-            if this.IsKnownCallFreeNode(node) ||
-                node is Microsoft
-                .CodeAnalysis
-                .CSharp
-                .Syntax
-                .BracketedArgumentListSyntax {
-                return false
-            }
-            if node is SimpleNameSyntax name &&
-                (
-                (name.Parent is MemberAccessExpressionSyntax member && member.Name == name) ||
-                    name.Parent is Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .MemberBindingExpressionSyntax ||
-                    (
-                    name.Parent is Microsoft
-                        .CodeAnalysis
-                        .CSharp
-                        .Syntax
-                        .QualifiedNameSyntax qualified &&
-                        qualified.Right == name
-                )
-            ) {
-                return false
-            }
             if node is Microsoft
                 .CodeAnalysis
                 .CSharp
                 .Syntax
-                .ElementAccessExpressionSyntax elementAccess &&
+                .ExpressionSyntax expr &&
                 this
                 .context
                 .SemanticModel
-                .GetOperation(elementAccess) is IArrayElementReferenceOperation {
-                return false
+                .GetConversion(expr)
+                .IsUserDefined {
+                return true
             }
-            if node is MemberAccessExpressionSyntax or IdentifierNameSyntax {
-                if this
+            return switch node {
+                case _ is InvocationExpressionSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .BaseObjectCreationExpressionSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .AnonymousObjectCreationExpressionSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .CollectionExpressionSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .InterpolatedStringExpressionSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .WithExpressionSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .AwaitExpressionSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .RangeExpressionSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .SwitchExpressionSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .QueryExpressionSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ThrowExpressionSyntax: true
+                case binary is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax: this.IsLoweredToCall(binary)
+                case _ is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .PrefixUnaryExpressionSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .PostfixUnaryExpressionSyntax: this
                     .context
                     .GetSymbolInfo(node)
-                    .Symbol is IFieldSymbol field &&
-                    (field.ContainingType?.IsTupleType == true || this.IsSourceSymbol(field)) {
-                    return false
-                }
-                if this
+                    .Symbol is IMethodSymbol{MethodKind: MethodKind.UserDefinedOperator}
+                case constant is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ConstantPatternSyntax: this.ConstantPatternMayCallEquals(constant)
+                case elementAccess is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ElementAccessExpressionSyntax: this
                     .context
                     .SemanticModel
-                    .GetOperation(node) is IPropertyReferenceOperation propertyReference &&
-                    !this.AccessorRunsUserCode(propertyReference.Property, propertyReference.Instance?.Type) {
-                    return false
-                }
+                    .GetOperation(elementAccess) is not(
+                    IArrayElementReferenceOperation or IPropertyReferenceOperation or IImplicitIndexerReferenceOperation
+                )
+                case member is MemberAccessExpressionSyntax: this
+                    .context
+                    .GetTypeInfo(member)
+                    .Type
+                    ?.TypeKind == TypeKind.Dynamic
+                default: false
             }
-            if node is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax binary && !this.IsLoweredToCall(
-                binary
-            ) &&
-                (
-                IsNullOrSuppressedNull(binary.Left) ||
-                    IsNullOrSuppressedNull(binary.Right) ||
-                    (this.IsBuiltInPrimitiveOrEnum(binary.Left) && this.IsBuiltInPrimitiveOrEnum(binary.Right))
-            ) {
-                return false
-            }
-            if node is Microsoft
-                .CodeAnalysis
-                .CSharp
-                .Syntax
-                .PrefixUnaryExpressionSyntax prefix &&
-                this.IsBuiltInPrimitiveOrEnum(prefix.Operand) {
-                return false
-            }
-            if node is Microsoft
-                .CodeAnalysis
-                .CSharp
-                .Syntax
-                .PostfixUnaryExpressionSyntax postfix &&
-                this.IsBuiltInPrimitiveOrEnum(postfix.Operand) {
-                return false
-            }
-            return true
         }
-
-        private func IsBuiltInPrimitiveOrEnum(expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax) bool ->
-        this.IsBuiltInPrimitive(expression) || this.context.GetTypeInfo(expression).Type?.TypeKind == TypeKind.Enum
 
         // Mirrors gsc's HasMemberStorageWrite (#6124): separate source field and auto-property writes keep facts.
         private func SiblingOperandHasMemberStorageWrite(node Microsoft.CodeAnalysis.SyntaxNode) bool {
