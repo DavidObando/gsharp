@@ -3358,13 +3358,16 @@ type sealed class GSharp.Core.CodeAnalysis.CodeFixes.DeltaBaseline : System.Obje
   property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> Diagnostics { get; }
 type sealed class GSharp.Core.CodeAnalysis.CodeFixes.DeltaOptions : System.Object
   method public Boolean get_StopOnNewSyntaxError()
+  method public Boolean get_SyntaxOnly()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Analyzers.GSharpDiagnosticAnalyzer> get_Analyzers()
   method public System.Func`2<GSharp.Core.CodeAnalysis.Diagnostic, GSharp.Core.CodeAnalysis.Diagnostic> get_DiagnosticFilter()
   method public Void .ctor()
   method public Void set_Analyzers(System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Analyzers.GSharpDiagnosticAnalyzer> value)
   method public Void set_DiagnosticFilter(System.Func`2<GSharp.Core.CodeAnalysis.Diagnostic, GSharp.Core.CodeAnalysis.Diagnostic> value)
   method public Void set_StopOnNewSyntaxError(Boolean value)
+  method public Void set_SyntaxOnly(Boolean value)
   property public Boolean StopOnNewSyntaxError { get; set; }
+  property public Boolean SyntaxOnly { get; set; }
   property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Analyzers.GSharpDiagnosticAnalyzer> Analyzers { get; set; }
   property public System.Func`2<GSharp.Core.CodeAnalysis.Diagnostic, GSharp.Core.CodeAnalysis.Diagnostic> DiagnosticFilter { get; set; }
 type sealed class GSharp.Core.CodeAnalysis.CodeFixes.DeltaPolicy : System.Object

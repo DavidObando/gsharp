@@ -43,6 +43,11 @@ class DeltaOptions {
         set -> stopOnNewSyntaxError = value
     }
 
+    /// Gets or sets a value that tells whether the check stops after the parse in every case: it
+    /// compares only the syntax diagnostics of the changed documents and never binds. An
+    /// interactive host uses it as a cheap gate. The default is `false`.
+    prop SyntaxOnly bool
+
     /// Gets or sets the host's severity policy (`/nowarn`, `/warnaserror`). The service applies it
     /// to every diagnostic before and after. It returns the diagnostic with its effective
     /// severity, or `null` to drop it. `null` keeps every diagnostic as it is.

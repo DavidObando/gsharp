@@ -65,7 +65,7 @@ class DiagnosticDelta {
     }
 
     /// Gets a value that tells whether the check stopped after the parse, because the edit added a
-    /// syntax diagnostic. Then (cref:Removed), (cref:Added) and (cref:Persisting) hold only syntax diagnostics.
+    /// syntax diagnostic or because (cref:DeltaOptions.SyntaxOnly) is set. Then (cref:Removed), (cref:Added) and (cref:Persisting) hold only syntax diagnostics.
     prop ParseOnly bool {
         get;
     }

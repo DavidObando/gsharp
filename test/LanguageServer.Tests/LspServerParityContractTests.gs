@@ -32,7 +32,7 @@ open class LspServerParityContractTests {
   "documentHighlightProvider":true,
   "documentSymbolProvider":true,
   "workspaceSymbolProvider":true,
-  "codeActionProvider":{"codeActionKinds":["quickfix","refactor.rewrite"]},
+  "codeActionProvider":{"codeActionKinds":["quickfix","refactor.rewrite"],"resolveProvider":true},
   "codeLensProvider":{"resolveProvider":false},
   "documentFormattingProvider":true,
   "documentRangeFormattingProvider":true,

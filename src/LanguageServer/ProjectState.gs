@@ -15,6 +15,7 @@ import GSharp.Core.CodeAnalysis.Syntax
 import SystemObject = System.Object
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Analyzers
+import GSharp.Core.CodeAnalysis.CodeFixes
 import GSharp.Core.CodeAnalysis.Text
 import System.Collections.Immutable
 import System.Security.Cryptography
@@ -42,6 +43,9 @@ open class ProjectState {
     private var cachedResolver ReferenceResolver?
     private var resolverReferences IReadOnlyList[string]?
     private var gsAnalyzerSourceMtimeUtc DateTime = DateTime.MinValue
+    // ADR-0227 D2: the built-in code-fix providers and the providers of the project's analyzer
+    // assemblies, loaded with the analyzers.
+    private var cachedCodeFixRegistry CodeFixRegistry?
     private var cachedGsAnalyzers ImmutableArray[GSharpDiagnosticAnalyzer] = ImmutableArray[
         GSharpDiagnosticAnalyzer
     ].Empty
@@ -351,10 +355,26 @@ open class ProjectState {
             if mtime != gsAnalyzerSourceMtimeUtc {
                 let paths = ProjectDiscovery.ParseGsAnalyzersFromResponseFile(rspPath)
                 cachedGsAnalyzers = GSharpAnalyzerHost.Load(paths, out gsAnalyzerLoadDiagnostics)
+                let registry = CodeFixRegistry.CreateDefault()
+                registry.AddRange(GSharpAnalyzerHost.LoadCodeFixProviders(paths, out _))
+                cachedCodeFixRegistry = registry
                 gsAnalyzerSourceMtimeUtc = mtime
             }
             loadDiagnostics = gsAnalyzerLoadDiagnostics
             return cachedGsAnalyzers
+        }
+    }
+
+    /// Gets the code-fix providers of the project: the built-in providers, then the providers of
+    /// its analyzer assemblies (ADR-0227 D2).
+    /// @returns The registry.
+    func GetCodeFixRegistry() CodeFixRegistry {
+        GetGsAnalyzers(out _)
+        lock compilationLock {
+            if cachedCodeFixRegistry == nil {
+                cachedCodeFixRegistry = CodeFixRegistry.CreateDefault()
+            }
+            return cachedCodeFixRegistry!!
         }
     }
 
