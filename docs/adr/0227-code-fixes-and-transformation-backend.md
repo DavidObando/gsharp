@@ -80,6 +80,8 @@ class TextChange {
 partial class SourceText {
     // The changes refer to positions in this text. They must not overlap.
     // Two insertions at one position keep their order in the array.
+    // The new text keeps FileName (the document identity) and has no RawBytes, because the
+    // bytes on disk no longer match it (the PDB emitter checksums RawBytes).
     func WithChanges(changes ImmutableArray[TextChange]) SourceText
 }
 ```
@@ -284,7 +286,7 @@ class DeltaOptions {
 
 **Scope of the comparison.** The delta compares the diagnostics of the **whole compilation** before and after the **complete** edit set of the fix (or of the FixAll result), with every edited tree replaced at once. A declaration change in one file can break a caller in another file, so the edited tree alone is not enough. Diagnostics are matched within the same document. Each edited document has its own span map; an unedited document has the identity map.
 
-**Matching.** A diagnostic before and a diagnostic after match when the ID and the message are equal and the span maps across the changes. A position before the first change keeps its value. A position after a change moves by the length difference of the changes before it. A span that intersects a change has no mapped span; it matches a diagnostic after with the same ID and message whose span intersects the changed region. Each diagnostic matches at most one other, in position order. The result is a fact. The consumer decides the policy.
+**Matching.** A diagnostic before and a diagnostic after match when the ID, the effective severity and the message are equal and the span maps across the changes. A severity change (for example a warning that `/warnaserror` promotes) is a removal plus an addition. A position before the first change keeps its value. A position after a change moves by the length difference of the changes before it. A span that intersects a change has no mapped span; it matches a diagnostic after with the same ID, severity and message whose span intersects the changed region. Each diagnostic matches at most one other, in position order. The result is a fact. The consumer decides the policy.
 
 **Computation.**
 
@@ -294,6 +296,8 @@ class DeltaOptions {
 4. If `Analyzers` is not empty, run the analyzer driver with those analyzers on both compilations.
 
 The "before" diagnostics come from the host's compilation and are computed once for each request, not once for each candidate.
+
+**Cancellation.** The token of a `GetDiagnostics` call cancels only the caller's wait, and a successor compilation does not inherit `WorkBudget`. So the service gives each snapshot compilation its own `CompilationWorkBudget` whose token is the request token, before its first query. The service binds the candidate on the calling thread and waits for it, so a cancelled request leaves no candidate bind running. Cancellation never reaches the host's compilation.
 
 **Cost.** Step 3 is a full bind of a new compilation. For an Oats single-file program this is one warm check (2–8 ms). In a large project it is the cost of binding the project. Phase 2 adds a body-local speculative bind: when all changes are in one function body, bind only that body against the existing global scope, without re-pointing symbols. This is the `GetSpeculativeStatementDiagnostics` follow-up of ADR-0225 D6.7, generalized to a body. It applies only when the changes are inside one body and the signature of the enclosing member is unchanged, so no other body can see the change. Otherwise it falls back to step 3.
 
@@ -336,7 +340,7 @@ Use in the language server:
 class TransformationProgram {
     prop Id string                      // stable; also the equivalence key
     prop Version string                 // content hash of the canonical JSON form
-    prop Trigger ProgramTrigger         // diagnostic IDs (and optional message-argument match), or a syntax kind for a refactoring
+    prop Trigger ProgramTrigger         // diagnostic IDs, and an optional message-argument match
     prop Pattern SyntaxPattern          // a tree pattern with named captures
     prop Guard ImmutableArray[GuardPredicate]   // all must hold
     prop Edits ImmutableArray[EditOperation]
@@ -345,6 +349,7 @@ class TransformationProgram {
 }
 ```
 
+- **Trigger.** Programs are code fixes: each has at least one diagnostic ID, and the pattern is anchored at the diagnostic. Refactorings without a diagnostic are out of scope for programs. They need a refactoring registration with a syntax anchor, which a later ADR can add.
 - **Pattern.** A node kind with child constraints, and a capture name on any sub-pattern. A token constraint matches kind and text. A wildcard matches any node. A pattern is anchored at the node or token that the trigger diagnostic covers, so the matcher does not walk the whole tree.
 - **Guard.** Predicates over captures. Syntax facts: kind, token text, missing token, parent kind, same line. Semantic facts through public `SemanticModel` queries only: the symbol kind of a name, a local declared with `let`, the type of an expression (`GetTypeInfo`, `GetSpeculativeTypeInfo`), whether a name resolves to a type, a reference type or a value type. The list is closed. A predicate that a program names but the backend does not know makes the program invalid at load time.
 - **Edit operations.** `ReplaceToken(capture, text)`, `Replace(capture, template)`, `Delete(capture)`, `InsertBefore(capture, template)`, `InsertAfter(capture, template)`. A template is text with `${capture}` slots, which take the `OriginalText` of the capture. A move is a delete and an insert. These are the update, delete, insert and move operations of Refazer's edit language, on G# nodes.
