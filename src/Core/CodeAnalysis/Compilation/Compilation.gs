@@ -417,7 +417,12 @@ open class Compilation {
             var recordedFailedCalls = ImmutableArray[BoundErrorExpression].Empty
             try {
                 bound = Binder.BindGlobalScopeForCompilation(
-                    EmbeddedAttributeSource.AddEmbeddedAttributes(SyntaxTrees, References),
+                    EmbeddedAttributeSource.AddEmbeddedAttributes(
+                        SyntaxTrees,
+                        References,
+                        EffectiveConsumerAssemblyName,
+                        hasExplicitConsumerAssemblyName: true
+                    ),
                     References,
                     ImplicitSystemImport,
                     PreprocessorSymbols,

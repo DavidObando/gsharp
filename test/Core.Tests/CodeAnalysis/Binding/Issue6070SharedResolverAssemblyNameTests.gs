@@ -437,6 +437,68 @@ func Use(cb (Item) -> string) string {
         )
     }
 
+    @Fact
+    func DownlevelEmbeddedNullableAttributes_UseCompilationAssemblyNameOverResolverName() {
+        let refDir = typeof(Issue6070SharedResolverAssemblyNameTests)
+            .Assembly
+            .GetCustomAttributes[AssemblyMetadataAttribute]()
+            .Single((attribute AssemblyMetadataAttribute) -> attribute.Key == "NetStandard20ReferenceDirectory")
+            .Value!!
+        Assert.True(Directory.Exists(refDir))
+        using let internalNullables = CSharpFixture(`using System;
+using System.Runtime.CompilerServices;
+[assembly: InternalsVisibleTo("Friend")]
+namespace System.Runtime.CompilerServices {
+    [AttributeUsage(AttributeTargets.Class | AttributeTargets.Property | AttributeTargets.Field | AttributeTargets.Event | AttributeTargets.Parameter | AttributeTargets.ReturnValue | AttributeTargets.GenericParameter, AllowMultiple = false, Inherited = false)]
+    internal sealed class NullableAttribute : Attribute {
+        public NullableAttribute(byte flag) {}
+        public NullableAttribute(byte[] flags) {}
+    }
+    [AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct | AttributeTargets.Method | AttributeTargets.Interface | AttributeTargets.Delegate, AllowMultiple = false, Inherited = false)]
+    internal sealed class NullableContextAttribute : Attribute {
+        public NullableContextAttribute(byte flag) {}
+    }
+}`, assemblyName: "FriendOnlyNullables")
+        let paths = Directory.EnumerateFiles(refDir, "*.dll").Prepend(internalNullables.AssemblyPath).ToArray()
+        using let resolver = ReferenceResolver.WithReferences(paths)
+        resolver.CurrentAssemblyName = "Friend"
+        let source = `package Probe
+public func Echo(x string?) string? -> x
+`
+        let stranger = Compilation(resolver, SyntaxTree.Parse(SourceText.From(source, "stranger.gs"))){
+            AssemblyName = "Stranger"
+        }
+        using let pe = MemoryStream()
+        let emitResult = stranger.Emit(pe)
+        Assert.True(emitResult.Success, Describe(emitResult.Diagnostics))
+        pe.Position = 0
+        using let reader = PEReader(pe)
+        let md = reader.GetMetadataReader()
+        let embeddedTypeNames = md
+            .TypeDefinitions
+            .Select((h TypeDefinitionHandle) -> md.GetString(md.GetTypeDefinition(h).Name))
+            .ToArray()
+        Assert.Contains("NullableAttribute", embeddedTypeNames)
+        Assert.Contains("NullableContextAttribute", embeddedTypeNames)
+        let echoMethod = md
+            .MethodDefinitions
+            .Select((h MethodDefinitionHandle) -> md.GetMethodDefinition(h))
+            .Single((m MethodDefinition) -> md.GetString(m.Name) == "Echo")
+        let hasEchoNullableAttr = echoMethod.GetCustomAttributes().Any(
+            (h CustomAttributeHandle) -> {
+                let ctor = md.GetCustomAttribute(h).Constructor
+                if ctor.Kind != HandleKind.MethodDefinition {
+                    return false
+                }
+                let td = md.GetTypeDefinition(
+                    md.GetMethodDefinition(cast[MethodDefinitionHandle](ctor)).GetDeclaringType()
+                )
+                return md.GetString(td.Name) == "NullableContextAttribute"
+            }
+        )
+        Assert.True(hasEchoNullableAttr)
+    }
+
     shared {
         private const SharedLibrarySource string = `using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("Friend")]
