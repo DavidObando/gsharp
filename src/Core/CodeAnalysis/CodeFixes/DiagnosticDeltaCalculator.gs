@@ -377,18 +377,14 @@ internal class DocumentMap {
         get;
     }
 
-    /// Maps a span of the old text. It fails when a change replaces part of the span or inserts
-    /// strictly inside it.
+    /// Maps a span of the old text. It fails when a change overlaps or touches the span, as
+    /// (cref:TouchesNewRegion) does for the new text: an edit at a boundary (`foo` → `foox`, a
+    /// newline before a report at position 0) leaves the span to the touched-region match.
     func TryMapSpan(span TextSpan, out mapped TextSpan) bool {
         var shift = 0
         for change in changes {
             let c = change.Span
-            let intersects = if c.Length == 0 {
-                span.Start < c.Start && c.Start < span.End
-            } else {
-                c.Start < span.End && span.Start < c.End
-            }
-            if intersects {
+            if c.Start <= span.End && span.Start <= c.End {
                 mapped = span
                 return false
             }

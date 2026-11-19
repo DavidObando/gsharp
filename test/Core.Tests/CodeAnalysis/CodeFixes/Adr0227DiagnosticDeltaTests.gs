@@ -365,6 +365,35 @@ open class Adr0227DiagnosticDeltaTests {
         Assert.NotNull(missing)
     }
 
+    @Fact
+    func EditAtTheBoundaryOfAReport_KeepsItPersisting() {
+        const source = "package P\n\nfunc F() string? {\n    let foo = 1\n    return null\n}\n"
+        let tree = SyntaxTree.Parse(source)
+        let compilation = Compilation(tree)
+        let target = compilation.GetDiagnostics().Single((d Diagnostic) -> d.Id == "GS0273")
+        let options = DeltaOptions()
+        options.Analyzers = ImmutableArray.Create[GSharp.Core.CodeAnalysis.Analyzers.GSharpDiagnosticAnalyzer](
+            FixedMessageAnalyzer(true),
+            FixedMessageAnalyzer(false)
+        )
+        let editor = SyntaxEditor(tree)
+        editor.ReplaceToken(tree.Root.DescendantTokens().First((t SyntaxToken) -> t.Text == "null"), "nil")
+        // `foo` becomes `foox`, and a newline goes before the report at position 0.
+        editor.InsertAfter(tree.Root.DescendantTokens().First((t SyntaxToken) -> t.Text == "foo"), "x")
+        editor.InsertBefore(tree.Root.GetFirstToken(), "\n")
+        let changes = FixChanges(
+            ImmutableArray.Create(DocumentChanges(tree, editor.GetChanges(), ImmutableArray[TextSpan].Empty))
+        )
+        let delta = service().ComputeDelta(
+            DeltaBaseline.Create(compilation, options),
+            changes,
+            ImmutableArray.Create(target)
+        )
+        Assert.Empty(delta.Added)
+        Assert.Equal(2, delta.Persisting.Count((d Diagnostic) -> d.Id == "TEST0228"))
+        Assert.True(DeltaPolicy.NoNewDiagnostics.Accepts(delta))
+    }
+
     private func service() CodeFixService -> CodeFixService(CodeFixRegistry())
 
     @Fact
@@ -423,6 +452,35 @@ open class Adr0227DiagnosticDeltaTests {
                     if !c.Tree.Text.ToString().Contains("null") {
                         c.ReportDiagnostic(d)
                     }
+                }
+            )
+        }
+    }
+
+    // Reports a fixed message on the first identifier that starts with `foo`, or at position 0.
+    private class FixedMessageAnalyzer : GSharp.Core.CodeAnalysis.Analyzers.GSharpDiagnosticAnalyzer {
+        private let Rule DiagnosticDescriptor = DiagnosticDescriptor("TEST0228", DiagnosticSeverity.Warning, "fixed")
+        private let onFoo bool
+
+        init(onFoo bool) {
+            this.onFoo = onFoo
+        }
+
+        override prop SupportedDiagnostics ImmutableArray[DiagnosticDescriptor] -> ImmutableArray.Create(Rule)
+
+        override func Initialize(context GSharp.Core.CodeAnalysis.Analyzers.AnalysisContext) {
+            context.RegisterSyntaxTreeAction(
+                (c GSharp.Core.CodeAnalysis.Analyzers.SyntaxTreeAnalysisContext) -> {
+                    var span = TextSpan(0, 0)
+                    if onFoo {
+                        let token = c
+                            .Tree
+                            .Root
+                            .DescendantTokens()
+                            .First((t SyntaxToken) -> t.Text.StartsWith("foo", StringComparison.Ordinal))
+                        span = token.Span
+                    }
+                    c.ReportDiagnostic(Diagnostic.Create(Rule, TextLocation(c.Tree.Text, span)))
                 }
             )
         }
