@@ -12787,7 +12787,7 @@ internal shared class ObliviousNullabilityAnalyzer {
     }
 
     // Explicit or unresolved layout cannot prove that readonly storage is separate.
-    private func MayHaveOverlappingFields(type INamedTypeSymbol?) bool -> type == nil || type.GetAttributes().Any(
+    internal func MayHaveOverlappingFields(type INamedTypeSymbol?) bool -> type == nil || type.GetAttributes().Any(
         (attribute AttributeData) -> attribute.AttributeClass == nil ||
             attribute
             .AttributeClass
