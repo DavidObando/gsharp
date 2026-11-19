@@ -136,6 +136,46 @@ abstract class SyntaxNode {
         }
     }
 
+    /// Enumerates the tokens of this node in child order, synthesized and missing tokens included
+    /// (ADR-0227 D1).
+    /// @returns The tokens.
+    func DescendantTokens() sequence[SyntaxToken] {
+        let pending = Stack[SyntaxNode]()
+        pending.Push(this)
+        while pending.Count > 0 {
+            let node = pending.Pop()
+            if node is SyntaxToken token {
+                yield token
+                continue
+            }
+            let count = node.ChildCount
+            for var i = count - 1; i >= 0; i-- {
+                pending.Push(node.GetChild(i))
+            }
+        }
+    }
+
+    /// Finds the real token whose span starts at [`position`](paramref), or else the real token
+    /// whose span contains it (ADR-0227 D1). A real token has source text: it is not missing and
+    /// not synthesized.
+    /// @param position A position in the text of the tree.
+    /// @returns The token, or `null` when no real token covers the position.
+    func FindToken(position int32) SyntaxToken? {
+        var containing SyntaxToken? = nil
+        for token in DescendantTokens() {
+            if token.IsMissing || token.IsSynthesized || token.Span.Length == 0 {
+                continue
+            }
+            if token.Span.Start == position {
+                return token
+            }
+            if containing == nil && token.Span.Start < position && position < token.Span.End {
+                containing = token
+            }
+        }
+        return containing
+    }
+
     /// Gets the number of children of this syntax node. Every concrete node class overrides this
     /// in `SyntaxNode.Children.g.gs`, which `build/generate-syntax-children.py` writes (issue #5136).
     /// A class that the generator did not see, or a subclass of a generated open class, uses the
