@@ -2,9 +2,77 @@
 
 package GSharp.Compiler.Tests
 
+import System
+import System.Text.RegularExpressions
 import Xunit
 
 class Issue6105CapturingRecursiveDelegateTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func CapturingLocalFunctionPointers_ReportSourceDiagnostic(forward bool) {
+        let declarations = if forward {
+            `    let first = func(n int32) int32 {
+        let pointer = &second
+        return pointer(n)
+    }
+    let second = func(n int32) int32 { return n == 0 ? outer : first(n - 1) }
+    return first(1)`
+        } else {
+            `    let first = func(n int32) int32 { return n == 0 ? outer : second(n - 1) }
+    let second = func(n int32) int32 { return first(n) }
+    let pointer = &first
+    return pointer(1)`
+        }
+        let source = "package CapturingFunctionPointer\nunsafe func Run() int32 {\n    var outer = 41\n" +
+            declarations +
+            "\n}"
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile(source, "CapturingFunctionPointer", executable: false)
+        Assert.NotEqual(0, code)
+        let error = Assert.Single(Regex.Matches(output, `\((\d+),(\d+),(\d+),(\d+)\): error (GS\d+):`))
+        Assert.Equal("GS0405", error.Groups[5].Value)
+        let before = source.Substring(0, source.IndexOf("&", StringComparison.Ordinal)).Split('\n')
+        Assert.Equal(before.Length.ToString(), error.Groups[1].Value)
+        Assert.Equal((before[before.Length - 1].Length + 1).ToString(), error.Groups[2].Value)
+        Assert.Equal(error.Groups[1].Value, error.Groups[3].Value)
+        Assert.Equal((before[before.Length - 1].Length + 2).ToString(), error.Groups[4].Value)
+    }
+
+    @Theory
+    @InlineData("System.Delegate", false)
+    @InlineData("System.Delegate", true)
+    @InlineData("System.MulticastDelegate", false)
+    @InlineData("System.MulticastDelegate", true)
+    func RefDelegateValues_UpcastToDelegateBasesWithoutChangingIdentity(baseType string, nullable bool) {
+        const source = `func Run(choose bool) string {
+    var outer = 40
+    let first = func(ref value int32, n int32) int32 {
+        if n == 0 {
+            outer++
+            value++
+            return outer + value
+        }
+        return second(ref value, n - 1)
+    }
+    let second = func(ref value int32, n int32) int32 { return first(ref value, n) }
+    let maybe = __SELECTION__
+    let erased __BASE__ = maybe
+    let alias __BASE__ = maybe
+    var value = 1
+    return "${System.Object.ReferenceEquals(erased, alias)},${erased == nil},${first(ref value, 1)},${value}"
+}
+System.Console.Write("${Run(true)}|${Run(false)}")`
+        Issue5392ConstructedInterfaceMethodDriverTests.CompileVerifyAndRun(
+            source.Replace("__BASE__", baseType + (nullable ? "?" : "")).Replace(
+                "__SELECTION__",
+                nullable ? "choose ? first : nil" : "first"
+            ),
+            nullable ? "True,False,43,2|True,True,43,2" : "True,False,43,2|True,False,43,2",
+            "6105"
+        )
+    }
+
     @Theory
     @InlineData("choose ? first : second")
     @InlineData("(() -> first)()")

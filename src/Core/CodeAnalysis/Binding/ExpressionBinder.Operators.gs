@@ -288,7 +288,7 @@ internal partial class ExpressionBinder {
                 fpParamTypes.MoveToImmutable(),
                 target.Type ?? TypeSymbol.Void
             )
-            return BoundFunctionPointerFromMethodExpression(nil, target, fpType)
+            return BoundFunctionPointerFromMethodExpression(syntax, target, fpType)
         }
         // GS9005: cannot take address of a constant binding. General block
         // expressions preserve the trailing lvalue's mutability contract.

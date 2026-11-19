@@ -12,8 +12,32 @@ import System.Collections.Immutable
 import System.Linq
 import System.Reflection
 
-/// Reports method groups that escaped without a delegate target.
+/// Reports unresolved method groups and unsupported function-pointer targets.
 internal shared class MethodGroupDiagnostics {
+    private class FunctionPointerWalker : BoundTreeWalker {
+        private let diagnostics DiagnosticBag
+
+        init(diagnostics DiagnosticBag) {
+            this.diagnostics = diagnostics
+        }
+
+        override func VisitExpression(node BoundExpression?) {
+            if node is BoundFunctionPointerFromMethodExpression pointer &&
+                pointer
+                .Method
+                .HasCaptures &&
+                pointer.Syntax is UnaryExpressionSyntax syntax {
+                diagnostics.ReportFunctionPointerAddressOfMismatch(
+                    syntax.OperatorToken.Location,
+                    "a capturing local function requires a closure instance"
+                )
+            } else if node is BoundFunctionLiteralExpression literal {
+                VisitStatement(literal.Body)
+            }
+            base.VisitExpression(node)
+        }
+    }
+
     private class Walker : BoundTreeWalker {
         private let diagnostics DiagnosticBag
         private var callArgumentDepth int32
@@ -162,8 +186,11 @@ internal shared class MethodGroupDiagnostics {
         return BoundErrorExpression(nil)
     }
 
-    func ReportUnresolved(root BoundNode, diagnostics DiagnosticBag) -> MethodGroupDiagnostics.Walker(diagnostics)
-        .Visit(root)
+    func ReportUnresolved(root BoundNode, diagnostics DiagnosticBag) {
+        MethodGroupDiagnostics.Walker(diagnostics).Visit(root)
+        // Forward targets have final capture sets only after their declaration region has bound.
+        MethodGroupDiagnostics.FunctionPointerWalker(diagnostics).Visit(root)
+    }
 
     private func Describe(expression BoundExpression)(Kind string, Name string) {
         if expression is BoundClrMethodGroupExpression clrGroup {

@@ -253,6 +253,7 @@ internal partial class MethodBodyEmitter {
             delegateSourceType,
             delegateTargetType
         ) &&
+            !IsSystemDelegateHostType(delegateTargetType.ClrType) &&
             (delegateTargetType is DelegateTypeSymbol || ClrTypeUtilities.IsDelegateType(delegateTargetType.ClrType)) {
             let ctor = if delegateTargetType is DelegateTypeSymbol namedTarget {
                 this.outer.userTokens.ResolveDelegateCtorToken(namedTarget)

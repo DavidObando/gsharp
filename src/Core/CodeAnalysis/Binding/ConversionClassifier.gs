@@ -7093,6 +7093,9 @@ internal class ConversionClassifier {
                 (bareTarget?.ClrType is not Type targetClrType || !ClrTypeUtilities.IsDelegateType(targetClrType)) {
                 return false
             }
+            if !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(bareTarget, out _) {
+                return false
+            }
             if !DelegateRefKindUtilities.TryGetSourceParameterRefKinds(expression, out var sourceRefKinds) {
                 return false
             }
