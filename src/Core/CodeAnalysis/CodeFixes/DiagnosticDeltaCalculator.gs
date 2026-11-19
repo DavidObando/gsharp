@@ -27,6 +27,7 @@ internal shared class DiagnosticDeltaCalculator {
         targets ImmutableArray[Diagnostic],
         cancellationToken CancellationToken
     ) DiagnosticDelta {
+        cancellationToken.ThrowIfCancellationRequested()
         let stopwatch = Stopwatch.StartNew()
         let compilation = baseline.Compilation
         let options = baseline.Options
@@ -37,23 +38,46 @@ internal shared class DiagnosticDeltaCalculator {
             if !compilation.SyntaxTrees.Contains(document.Tree) {
                 throw ArgumentException("A changed tree is not part of the compilation.", nameof(changes))
             }
+            // A diagnostic names its document by its SourceText. When two trees share one text, the
+            // delta cannot tell their diagnostics apart, so it refuses the edit instead of mixing them.
+            if compilation.SyntaxTrees.Count((t SyntaxTree) -> object.ReferenceEquals(t.Text, document.Tree.Text)) > 1 {
+                throw ArgumentException(
+                    "Two trees of the compilation share the SourceText of a changed tree; the delta cannot attribute their diagnostics (ADR-0227 D4).",
+                    nameof(changes)
+                )
+            }
             let newTree = SyntaxTree.Parse(document.GetChangedText())
             oldTrees.Add(document.Tree)
             newTrees.Add(newTree)
             maps.Add(document.Tree.Text, DocumentMap(newTree.Text, document.Changes))
         }
-        let targetSet = HashSet[Diagnostic](ReferenceEqualityComparer.Instance)
-        if !targets.IsDefault {
-            for t in targets {
-                targetSet.Add(t)
-            }
+        let targetList = if targets.IsDefault {
+            ImmutableArray[Diagnostic].Empty
+        } else {
+            targets
         }
-        let targetsAreSyntax = targetSet.Count > 0 && targetSet.All(
-            (d Diagnostic) -> IsSyntaxDiagnostic(d, compilation)
+        // PhaseAware relaxes the gate only for parse errors: every target is a syntax diagnostic
+        // and an error at its effective severity.
+        let targetsAreSyntax = targetList.Length > 0 && targetList.All(
+            (d Diagnostic) -> IsSyntaxDiagnostic(d, compilation) && Filter(ImmutableArray.Create(d), options).Any(
+                (e Diagnostic) -> e.IsError
+            )
         )
-        // Stage 1: the parse. Compare the syntax diagnostics of the changed documents only.
-        let syntaxBeforeChanged = Filter(oldTrees.SelectMany((t SyntaxTree) -> t.Diagnostics), options)
-        let syntaxAfterChanged = Filter(newTrees.SelectMany((t SyntaxTree) -> t.Diagnostics), options)
+        // The snapshot is built now and bound only in stage 2. Its suppression scopes come from
+        // the syntax, so stage 1 can apply them without a bind.
+        let snapshot = compilation.WithReplacedSyntaxTrees(oldTrees.ToImmutable(), newTrees.ToImmutable())
+        // Stage 1: the parse. Compare the syntax diagnostics of the changed documents only, with the
+        // source suppressions and the host's filter that the compiler-visible set has.
+        let syntaxBeforeChanged = Filter(
+            compilation.ApplySourceSuppressions(
+                oldTrees.SelectMany((t SyntaxTree) -> t.Diagnostics).ToImmutableArray()
+            ),
+            options
+        )
+        let syntaxAfterChanged = Filter(
+            snapshot.ApplySourceSuppressions(newTrees.SelectMany((t SyntaxTree) -> t.Diagnostics).ToImmutableArray()),
+            options
+        )
         let syntaxDelta = Match(syntaxBeforeChanged, syntaxAfterChanged, maps)
         if options.StopOnNewSyntaxError && syntaxDelta.Added.Count > 0 {
             return DiagnosticDelta(
@@ -61,14 +85,13 @@ internal shared class DiagnosticDeltaCalculator {
                 syntaxDelta.Added.ToImmutableArray(),
                 syntaxDelta.Persisting.ToImmutableArray(),
                 syntaxDelta.Added.ToImmutableArray(),
-                targetSet.Count > 0 && targetSet.All((d Diagnostic) -> syntaxDelta.Removed.Contains(d)),
+                TargetsRemoved(targetList, syntaxDelta.Removed, options),
                 targetsAreSyntax,
                 true,
                 stopwatch.Elapsed
             )
         }
         // Stage 2: the bind of the whole compilation, on this thread, under the request token.
-        let snapshot = compilation.WithReplacedSyntaxTrees(oldTrees.ToImmutable(), newTrees.ToImmutable())
         let budget = compilation.WorkBudget
         snapshot.WorkBudget = CompilationWorkBudget(budget.MaxWorkers, budget.MemoryBudgetMiB, cancellationToken)
         let after = Collect(snapshot, options, cancellationToken)
@@ -85,11 +108,51 @@ internal shared class DiagnosticDeltaCalculator {
             delta.Added.ToImmutableArray(),
             delta.Persisting.ToImmutableArray(),
             addedSyntax,
-            targetSet.Count > 0 && targetSet.All((d Diagnostic) -> delta.Removed.Contains(d)),
+            TargetsRemoved(targetList, delta.Removed, options),
             targetsAreSyntax,
             false,
             stopwatch.Elapsed
         )
+    }
+
+    // Every target is removed: a removed diagnostic has its document, ID, message, span and
+    // effective severity. The comparison is by content, because the analyzers and the host's
+    // filter can produce copies. A target that the host's filter drops does not count.
+    private func TargetsRemoved(
+        targets ImmutableArray[Diagnostic],
+        removed List[Diagnostic],
+        options DeltaOptions
+    ) bool {
+        var any = false
+        for target in targets {
+            for effective in Filter(ImmutableArray.Create(target), options) {
+                any = true
+                let found = removed.Any(
+                    (r Diagnostic) -> object.ReferenceEquals(r.Location.Text, effective.Location.Text) &&
+                        r.Id == effective.Id &&
+                        r.Message == effective.Message &&
+                        r.Severity == effective.Severity &&
+                        r
+                        .Location
+                        .Span
+                        .Start == effective
+                        .Location
+                        .Span
+                        .Start &&
+                        r
+                        .Location
+                        .Span
+                        .Length == effective
+                        .Location
+                        .Span
+                        .Length
+                )
+                if !found {
+                    return false
+                }
+            }
+        }
+        return any
     }
 
     /// Gets the diagnostics of a compilation and of the analyzers, after the host's filter.

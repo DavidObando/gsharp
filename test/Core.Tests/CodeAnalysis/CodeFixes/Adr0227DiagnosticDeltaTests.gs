@@ -199,6 +199,90 @@ open class Adr0227DiagnosticDeltaTests {
     }
 
     @Fact
+    func CancelledRequest_ThrowsOnTheParseOnlyPathToo() {
+        let tree = SyntaxTree.Parse(NullSource)
+        let compilation = Compilation(tree)
+        let target = compilation.GetDiagnostics().Single((d Diagnostic) -> d.Id == "GS0273")
+        let baseline = DeltaBaseline.Create(compilation)
+        let fix = Fix(tree, target, "null", "(nil")
+        fix.GetChanges()
+        let source = CancellationTokenSource()
+        source.Cancel()
+        Assert.ThrowsAny[OperationCanceledException](
+            () -> CodeFixService(CodeFixRegistry()).ComputeDelta(baseline, fix, source.Token)
+        )
+    }
+
+    @Fact
+    func TreesThatShareASourceText_AreRejected() {
+        let text = SourceText.From("package P\n\nfunc F() string? -> null\n", "a.gs")
+        let first = SyntaxTree.Parse(text)
+        let second = SyntaxTree.Parse(text)
+        let compilation = Compilation(first, second)
+        let target = compilation.GetDiagnostics().First((d Diagnostic) -> d.Id == "GS0273")
+        Assert.Throws[ArgumentException](
+            () -> CodeFixService(CodeFixRegistry()).ComputeDelta(compilation, Fix(first, target, "null", "nil"))
+        )
+    }
+
+    @Fact
+    func ParserWarningTarget_IsNotRelaxedByPhaseAware() {
+        const source = "package P\n\nfunc F(n int32) string {\n    return switch n {\n        case 0 -> \"zero\"\n        default: \"other\"\n    }\n}\n"
+        let tree = SyntaxTree.Parse(source)
+        let compilation = Compilation(tree)
+        let target = compilation.GetDiagnostics().Single((d Diagnostic) -> d.Id == "GS0302")
+        Assert.False(target.IsError)
+        let delta = CodeFixService(CodeFixRegistry()).ComputeDelta(
+            compilation,
+            Fix(tree, target, "->", ": undefinedName +")
+        )
+        Assert.False(delta.TargetsAreSyntax)
+        Assert.NotEmpty(delta.Added)
+        Assert.False(DeltaPolicy.PhaseAware.Accepts(delta))
+    }
+
+    @Fact
+    func ParseStage_AppliesSourceSuppressions() {
+        const source = "package P\n\n@SuppressDiagnostic(\"GS0302\")\nfunc F(n int32) string {\n    return switch n {\n        case 0: \"zero\"\n        default: \"other\"\n    }\n}\n\nfunc G() string? -> null\n"
+        let tree = SyntaxTree.Parse(source)
+        let compilation = Compilation(tree)
+        let target = compilation.GetDiagnostics().Single((d Diagnostic) -> d.Id == "GS0273")
+        let editor = SyntaxEditor(tree)
+        editor.ReplaceToken(tree.Root.DescendantTokens().First((t SyntaxToken) -> t.Text == "null"), "nil")
+        editor.ReplaceToken(tree.Root.DescendantTokens().First((t SyntaxToken) -> t.Text == ":"), " ->")
+        let changes = FixChanges(
+            ImmutableArray.Create(DocumentChanges(tree, editor.GetChanges(), ImmutableArray[TextSpan].Empty))
+        )
+        let delta = CodeFixService(CodeFixRegistry()).ComputeDelta(
+            DeltaBaseline.Create(compilation),
+            changes,
+            ImmutableArray.Create(target)
+        )
+        Assert.False(delta.ParseOnly)
+        Assert.Empty(delta.Added)
+        Assert.True(delta.TargetRemoved)
+    }
+
+    @Fact
+    func TargetRemoved_ComparesContent_NotIdentity() {
+        let tree = SyntaxTree.Parse(NullSource)
+        let compilation = Compilation(tree)
+        let target = compilation.GetDiagnostics().Single((d Diagnostic) -> d.Id == "GS0273")
+        let options = DeltaOptions()
+        // A filter that always returns copies: the removed diagnostic is not the target object.
+        options.DiagnosticFilter = (d Diagnostic) -> d.WithSeverity(DiagnosticSeverity.Warning).WithSeverity(
+            DiagnosticSeverity.Error
+        )
+        let delta = CodeFixService(CodeFixRegistry()).ComputeDelta(
+            compilation,
+            Fix(tree, target, "null", "nil"),
+            options
+        )
+        Assert.True(delta.TargetRemoved)
+        Assert.True(DeltaPolicy.RemovesTargetNoNewErrors.Accepts(delta))
+    }
+
+    @Fact
     func WithReplacedSyntaxTrees_RejectsUnknownAndRepeatedTrees() {
         let a = SyntaxTree.Parse("package P\n")
         let compilation = Compilation(a)

@@ -51,13 +51,15 @@ class DiagnosticDelta {
         get;
     }
 
-    /// Gets a value that tells whether the edit removes every target diagnostic.
+    /// Gets a value that tells whether the edit removes every target diagnostic. Targets are
+    /// compared by document, ID, message, span and effective severity.
     prop TargetRemoved bool {
         get;
     }
 
-    /// Gets a value that tells whether every target diagnostic is a syntax diagnostic. It is
-    /// `false` when there is no target.
+    /// Gets a value that tells whether every target diagnostic is a syntax error: a diagnostic of
+    /// the parse whose effective severity, after the host's filter, is an error. A parser warning
+    /// does not count. It is `false` when there is no target.
     prop TargetsAreSyntax bool {
         get;
     }
