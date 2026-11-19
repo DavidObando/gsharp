@@ -926,97 +926,13 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
-        // Whether the slot `literal` flows into is DECLARED as an unannotated
-        // type parameter, in any of the three positions where a declaration
-        // settles it (issue #3676 for returns, #3907 for the other two).
+        // Use the same effective store contract for generic defaults and local storage.
         private func TargetIsBareTypeParameter(
             literal Microsoft.CodeAnalysis.CSharp.Syntax.LiteralExpressionSyntax
         ) bool {
-            return this.ReturnsBareTypeParameter(literal) || this.AssignedToBareTypeParameter(literal) ||
-                this.PassedToBareTypeParameter(literal)
-        }
-
-        // `value = default;` where `value` is declared `T` — most often an
-        // `[MaybeNullWhen(false)] out T`, whose attribute makes Roslyn's flow
-        // state maybe-null while the declared type stays a bare `T`.
-        private func AssignedToBareTypeParameter(
-            literal Microsoft.CodeAnalysis.CSharp.Syntax.LiteralExpressionSyntax
-        ) bool {
-            if literal.Parent is not Microsoft
-                .CodeAnalysis
-                .CSharp
-                .Syntax
-                .AssignmentExpressionSyntax assignment ||
-                !assignment.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleAssignmentExpression) ||
-                assignment.Right != literal {
-                return false
-            }
-            let target ISymbol? = this.context.GetSymbolInfo(assignment.Left).Symbol
-            let declared ITypeSymbol? = switch target {
-                case parameter is IParameterSymbol: parameter.Type
-                case local is ILocalSymbol: local.Type
-                case field is IFieldSymbol: field.Type
-                case property is IPropertySymbol: property.Type
-                default: default(ITypeSymbol?)
-            }
-            return IsBareTypeParameter(declared)
-        }
-
-        // `M(default)` where the parameter is declared `T`. The parameter type
-        // is read off the RESOLVED (substituted) symbol, so an explicitly
-        // nullable type argument — `Same<T?>(default)`, issue #2500 — presents
-        // as annotated and keeps its `?`.
-        private func PassedToBareTypeParameter(
-            literal Microsoft.CodeAnalysis.CSharp.Syntax.LiteralExpressionSyntax
-        ) bool {
-            if literal.Parent is not ArgumentSyntax argument ||
-                argument.Parent is not BaseArgumentListSyntax argumentList ||
-                argument.NameColon != nil {
-                return false
-            }
-            if this.context.GetSymbolInfo(argumentList.Parent).Symbol is not IMethodSymbol method {
-                return false
-            }
-            let index = argumentList.Arguments.IndexOf(argument)
-            if index < 0 || index >= method.Parameters.Length {
-                // A `params` tail, or an argument list this overload does not
-                // line up with positionally; not a slot a declaration settles.
-                return false
-            }
-            return IsBareTypeParameter(method.Parameters[index].Type)
-        }
-
-        // Whether `literal` is the value of a `return` in a method or local
-        // function whose DECLARED result is an unannotated type parameter. An
-        // async method's result is the awaited one (`async Task<T>` declares
-        // `T`), matching what `return default;` is target-typed to.
-        private func ReturnsBareTypeParameter(
-            literal Microsoft.CodeAnalysis.CSharp.Syntax.LiteralExpressionSyntax
-        ) bool {
-            if literal.Parent is not Microsoft.CodeAnalysis.CSharp.Syntax.ReturnStatementSyntax returnStatement {
-                return false
-            }
-            let owner Microsoft.CodeAnalysis.SyntaxNode? = returnStatement.Ancestors().FirstOrDefault(
-                (node Microsoft.CodeAnalysis.SyntaxNode) -> node is BaseMethodDeclarationSyntax ||
-                    node is LocalFunctionStatementSyntax ||
-                    node is AnonymousFunctionExpressionSyntax
-            )
-            if !((owner is BaseMethodDeclarationSyntax || owner is LocalFunctionStatementSyntax)) ||
-                this
-                .context
-                .GetDeclaredSymbol(owner) is not IMethodSymbol method {
-                return false
-            }
-            var declared = method.ReturnType
-            if method.IsAsync &&
-                declared is INamedTypeSymbol{IsGenericType: true, TypeArguments: {Length: 1}} awaitable {
-                declared = awaitable.TypeArguments[0]
-            }
-            return declared is ITypeParameterSymbol &&
-                declared.NullableAnnotation != Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .Annotated
+            let (store, slot) = this.ResolveValueStoreContract(literal)
+            return IsBareTypeParameter(slot) ||
+                (store is ILocalSymbol local && this.state.FixedGenericLocalStorage.Contains(local))
         }
 
         // C# infers the type of a suffix-less integer literal from its value: a
@@ -10391,6 +10307,996 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
+        private func ExpressionKeepsBareTypeParameterContract(
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            targetType ITypeParameterSymbol
+        ) bool {
+            if value == nil {
+                return false
+            }
+            let inProgressLocals = HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
+            return this.ExpressionKeepsBareTypeParameterContractCached(value, targetType, inProgressLocals, out _)
+        }
+
+        private func ExpressionKeepsBareTypeParameterContractCached(
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            targetType ITypeParameterSymbol,
+            inProgressLocals HashSet[ILocalSymbol],
+            out hitCycle bool
+        ) bool {
+            hitCycle = false
+            if value == nil {
+                return false
+            }
+            let canMemoize = this.genericLocalStorageEvaluation == nil
+            if canMemoize &&
+                this
+                .state
+                .BareTypeParameterContractExpressions
+                .TryGetValue(value, out var cachedByTarget) &&
+                cachedByTarget.TryGetValue(targetType, out var cached) {
+                return cached
+            }
+            this.localStorageScanWork++
+            let result = this.ExpressionKeepsBareTypeParameterContractCore(
+                value,
+                targetType,
+                inProgressLocals,
+                out hitCycle
+            )
+            if canMemoize && !hitCycle {
+                if !this.state.BareTypeParameterContractExpressions.TryGetValue(value, out var byTarget) {
+                    byTarget = Dictionary[ITypeParameterSymbol, bool](SymbolEqualityComparer.Default)
+                    this.state.BareTypeParameterContractExpressions.Add(value, byTarget)
+                }
+                byTarget[targetType] = result
+            }
+            return result
+        }
+
+        private func ExpressionKeepsBareTypeParameterContractCore(
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            targetType ITypeParameterSymbol,
+            inProgressLocals HashSet[ILocalSymbol],
+            out hitCycle bool
+        ) bool {
+            hitCycle = false
+            var unwrapped = value
+            while (
+                unwrapped is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ParenthesizedExpressionSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .CheckedExpressionSyntax
+            ) {
+                unwrapped = switch unwrapped {
+                    case parenthesized is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ParenthesizedExpressionSyntax: parenthesized.Expression
+                    case checkedExpression is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .CheckedExpressionSyntax: checkedExpression.Expression
+                    default: unwrapped
+                }
+            }
+            if unwrapped == nil || IsNullOrSuppressedNull(unwrapped) {
+                return false
+            }
+            if this.ComposedValueOperands(unwrapped) is {} operands {
+                if operands.Count == 0 {
+                    return false
+                }
+                for operand in operands {
+                    if !this.ExpressionKeepsBareTypeParameterContractCached(
+                        operand,
+                        targetType,
+                        inProgressLocals,
+                        out var operandCycle
+                    ) {
+                        hitCycle |= operandCycle
+                        return false
+                    }
+                    hitCycle |= operandCycle
+                }
+                return true
+            }
+            if unwrapped is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .AssignmentExpressionSyntax assignment &&
+                assignment
+                .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleAssignmentExpression) {
+                let targetSymbol = this.context.GetSymbolInfo(assignment.Left).Symbol
+                if targetSymbol != nil &&
+                    (
+                    this.ShouldPromoteToNullableReference(targetSymbol) || this.IsTranslatorWidenedDeclaration(
+                        targetSymbol
+                    ) ||
+                        ObliviousNullabilityAnalyzer.IsImportedStatedNullablePosition(
+                        targetSymbol,
+                        this.context.Compilation
+                    )
+                ) {
+                    return false
+                }
+                return this.ExpressionKeepsBareTypeParameterContractCached(
+                    assignment.Right,
+                    targetType,
+                    inProgressLocals,
+                    out hitCycle
+                )
+            }
+            if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.DefaultExpressionSyntax typedDefault {
+                return this
+                    .context
+                    .GetTypeInfo(typedDefault.Type)
+                    .Type is ITypeParameterSymbol defaultParam &&
+                    IsBareTypeParameter(defaultParam) &&
+                    SymbolEqualityComparer
+                    .Default
+                    .Equals(defaultParam, targetType)
+            }
+            if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.LiteralExpressionSyntax literal && literal.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.DefaultLiteralExpression
+            ) {
+                return this.TargetIsBareTypeParameter(literal) && this.GetExpressionInferenceType(
+                    unwrapped
+                ) is ITypeParameterSymbol inferred &&
+                    IsBareTypeParameter(inferred) &&
+                    SymbolEqualityComparer
+                    .Default
+                    .Equals(inferred, targetType)
+            }
+            if this.YieldsValueNilableBeyondItsCSharpType(unwrapped) {
+                return false
+            }
+            let symbol = this.context.GetSymbolInfo(unwrapped).Symbol
+            if symbol is ILocalSymbol local {
+                let canMemoize = this.genericLocalStorageEvaluation == nil
+                if canMemoize &&
+                    this
+                    .state
+                    .BareTypeParameterContractLocals
+                    .TryGetValue(local, out var cachedByTarget) &&
+                    cachedByTarget.TryGetValue(targetType, out var cachedLocal) {
+                    return cachedLocal
+                }
+                this.localStorageScanWork++
+                if !inProgressLocals.Add(local) {
+                    hitCycle = true
+                    return false
+                }
+                var localResult = false
+                try {
+                    if this.TryGetEvaluatingGenericLocalStorage(local, out var nullableStorage) {
+                        localResult = !nullableStorage &&
+                            IsBareTypeParameter(local.Type) &&
+                            SymbolEqualityComparer
+                            .Default
+                            .Equals(local.Type, targetType)
+                    } else if this.state.FixedGenericLocalStorage.Contains(local) {
+                        localResult = SymbolEqualityComparer.Default.Equals(
+                            local.Type.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated),
+                            targetType
+                        )
+                    } else if this.ShouldPromoteToNullableReference(local) || this.IsTranslatorWidenedDeclaration(
+                        local
+                    ) ||
+                        this.LocalHoldsPromotedValue(local) {
+                        localResult = false
+                    } else if IsImplicitlyTypedLocal(local) &&
+                        local
+                        .DeclaringSyntaxReferences
+                        .FirstOrDefault()
+                        ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} initializer}} {
+                        if (
+                            this.state.EmittedLocalStorageAcceptsNil.TryGetValue(local, out var nilLocal) && nilLocal
+                        ) ||
+                            this.InferredLocalDeclarationIsNullable(local) {
+                            localResult = false
+                        } else {
+                            localResult = this.ExpressionKeepsBareTypeParameterContractCached(
+                                initializer,
+                                targetType,
+                                inProgressLocals,
+                                out hitCycle
+                            ) &&
+                                SymbolEqualityComparer
+                                .Default
+                                .Equals(
+                                local.Type.WithNullableAnnotation(
+                                    Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated
+                                ),
+                                targetType
+                            )
+                        }
+                    } else {
+                        localResult = IsBareTypeParameter(local.Type) && SymbolEqualityComparer.Default.Equals(
+                            local.Type,
+                            targetType
+                        )
+                    }
+                } finally {
+                    inProgressLocals.Remove(local)
+                }
+                if canMemoize && !hitCycle {
+                    if !this.state.BareTypeParameterContractLocals.TryGetValue(local, out var byTarget) {
+                        byTarget = Dictionary[ITypeParameterSymbol, bool](SymbolEqualityComparer.Default)
+                        this.state.BareTypeParameterContractLocals.Add(local, byTarget)
+                    }
+                    byTarget[targetType] = localResult
+                }
+                return localResult
+            }
+            if unwrapped is ElementAccessExpressionSyntax elementAccess &&
+                this
+                .context
+                .GetTypeInfo(unwrapped)
+                .Type is ITypeParameterSymbol actualElemType &&
+                SymbolEqualityComparer
+                .Default
+                .Equals(
+                actualElemType.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated),
+                targetType
+            ) {
+                if symbol is IPropertySymbol indexer {
+                    if this.ShouldPromoteToNullableReference(indexer) || this.IsTranslatorWidenedDeclaration(indexer) ||
+                        this.IsImportedObliviousNullableMember(indexer) ||
+                        ObliviousNullabilityAnalyzer.IsImportedStatedNullablePosition(
+                        indexer.OriginalDefinition,
+                        this.context.Compilation
+                    ) ||
+                        indexer
+                        .OriginalDefinition
+                        .Type
+                        .NullableAnnotation == Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated {
+                        return false
+                    }
+                    if indexer
+                        .OriginalDefinition
+                        .Type is ITypeParameterSymbol elemTp &&
+                        elemTp.TypeParameterKind == TypeParameterKind.Type &&
+                        indexer
+                        .OriginalDefinition
+                        .ContainingType is INamedTypeSymbol{IsGenericType: true} containerType {
+                        return this.ExpressionKeepsBareTypeParameterInProjectedResult(
+                            elementAccess.Expression,
+                            containerType,
+                            elemTp,
+                            targetType,
+                            inProgressLocals,
+                            out hitCycle
+                        )
+                    }
+                    return false
+                }
+                if this.context.GetTypeInfo(elementAccess.Expression).Type is IArrayTypeSymbol receiverArray {
+                    let arrayPattern = this.context.Compilation.CreateArrayTypeSymbol(targetType, receiverArray.Rank)
+                    return this.ExpressionKeepsBareTypeParameterInProjectedResult(
+                        elementAccess.Expression,
+                        arrayPattern,
+                        targetType,
+                        targetType,
+                        inProgressLocals,
+                        out hitCycle
+                    )
+                }
+                return false
+            }
+            if unwrapped is MemberAccessExpressionSyntax memberAccess &&
+                symbol is {} memberSymbol &&
+                (memberSymbol is IFieldSymbol or IPropertySymbol) {
+                if this.ShouldPromoteToNullableReference(memberSymbol) || this.IsTranslatorWidenedDeclaration(
+                    memberSymbol
+                ) ||
+                    this.IsImportedObliviousNullableMember(memberSymbol) ||
+                    ObliviousNullabilityAnalyzer
+                    .IsImportedStatedNullablePosition(memberSymbol.OriginalDefinition, this.context.Compilation) {
+                    return false
+                }
+                let memberType = switch memberSymbol {
+                    case field is IFieldSymbol: field.Type
+                    case property is IPropertySymbol: property.Type
+                    default: default(ITypeSymbol?)
+                }
+                let positions = this.GetExpressionNullablePositions(unwrapped)
+                let memberNoNullablePosition = positions == nil ||
+                    (!positions.Nullable.Contains("") && !positions.Platform.Contains(""))
+                if memberNoNullablePosition && IsBareTypeParameter(memberType) && SymbolEqualityComparer.Default.Equals(
+                    memberType,
+                    targetType
+                ) {
+                    return true
+                }
+                if memberType is ITypeParameterSymbol actualMemberTp && SymbolEqualityComparer.Default.Equals(
+                    actualMemberTp.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated),
+                    targetType
+                ) {
+                    if memberSymbol is IFieldSymbol tupleField &&
+                        this
+                        .context
+                        .GetTypeInfo(memberAccess.Expression)
+                        .Type is INamedTypeSymbol{IsTupleType: true} tupleReceiver &&
+                        this
+                        .TryBuildSingleElementTuplePattern(
+                        tupleReceiver,
+                        tupleField,
+                        targetType,
+                        out var tuplePattern
+                    ) {
+                        return this.ExpressionKeepsBareTypeParameterInProjectedResult(
+                            memberAccess.Expression,
+                            tuplePattern!!,
+                            targetType,
+                            targetType,
+                            inProgressLocals,
+                            out hitCycle
+                        )
+                    }
+                    let declaredMemberType = switch memberSymbol {
+                        case field is IFieldSymbol: field.OriginalDefinition.Type
+                        case property is IPropertySymbol: property.OriginalDefinition.Type
+                        default: default(ITypeSymbol?)
+                    }
+                    if declaredMemberType is ITypeParameterSymbol memberTp &&
+                        declaredMemberType.NullableAnnotation != Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated &&
+                        memberTp.TypeParameterKind == TypeParameterKind.Type &&
+                        memberSymbol
+                        .OriginalDefinition
+                        .ContainingType is INamedTypeSymbol{IsGenericType: true} containerType {
+                        return this.ExpressionKeepsBareTypeParameterInProjectedResult(
+                            memberAccess.Expression,
+                            containerType,
+                            memberTp,
+                            targetType,
+                            inProgressLocals,
+                            out hitCycle
+                        )
+                    }
+                }
+                return false
+            }
+            let positions = this.GetExpressionNullablePositions(unwrapped)
+            if positions != nil && (positions.Nullable.Contains("") || positions.Platform.Contains("")) {
+                return false
+            }
+            if symbol is IParameterSymbol parameter {
+                if this.ShouldPromoteToNullableReference(parameter) || this.IsTranslatorWidenedDeclaration(parameter) {
+                    return false
+                }
+                return IsBareTypeParameter(parameter.Type) && SymbolEqualityComparer.Default.Equals(
+                    parameter.Type,
+                    targetType
+                )
+            }
+            if symbol is IFieldSymbol or IPropertySymbol {
+                if this.ShouldPromoteToNullableReference(symbol) || this.IsTranslatorWidenedDeclaration(symbol) ||
+                    this.IsImportedObliviousNullableMember(symbol) ||
+                    ObliviousNullabilityAnalyzer.IsImportedStatedNullablePosition(symbol, this.context.Compilation) {
+                    return false
+                }
+                let memberType = switch symbol {
+                    case field is IFieldSymbol: field.Type
+                    case property is IPropertySymbol: property.Type
+                    default: default(ITypeSymbol?)
+                }
+                return IsBareTypeParameter(memberType) && SymbolEqualityComparer.Default.Equals(memberType, targetType)
+            }
+            if unwrapped is InvocationExpressionSyntax invocation && symbol is IMethodSymbol method {
+                if this.ShouldPromoteToNullableReference(method) || this.IsTranslatorWidenedDeclaration(method) ||
+                    this.IsImportedObliviousNullableMember(method) ||
+                    ObliviousNullabilityAnalyzer.IsImportedStatedNullablePosition(method, this.context.Compilation) ||
+                    this.DeclaredCallResultIsAnnotatedNullable(unwrapped) {
+                    return false
+                }
+                let unreduced = method.ReducedFrom ?? method
+                let declaredReturn = unreduced.OriginalDefinition.ReturnType
+                if !IsBareTypeParameter(declaredReturn) || !SymbolEqualityComparer.Default.Equals(
+                    method.ReturnType.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated),
+                    targetType
+                ) {
+                    return false
+                }
+                let inferredType = this.context.GetTypeInfo(unwrapped).Type
+                if inferredType is not ITypeParameterSymbol actual || !SymbolEqualityComparer.Default.Equals(
+                    actual.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated),
+                    targetType
+                ) {
+                    return false
+                }
+                if HasExplicitTypeArguments(invocation.Expression) {
+                    return IsBareTypeParameter(method.ReturnType) && IsBareTypeParameter(actual)
+                }
+                if declaredReturn is ITypeParameterSymbol returnParam &&
+                    returnParam.TypeParameterKind == TypeParameterKind
+                    .Method {
+                    return this.CallArgumentsKeepBareTypeParameterContract(
+                        invocation,
+                        method,
+                        returnParam,
+                        targetType,
+                        inProgressLocals,
+                        out hitCycle
+                    )
+                }
+                if !method.IsStatic &&
+                    method.ReducedFrom == nil &&
+                    method
+                    .TypeParameters
+                    .Length == 0 &&
+                    declaredReturn is ITypeParameterSymbol typeMemberParam &&
+                    typeMemberParam.TypeParameterKind == TypeParameterKind.Type &&
+                    method
+                    .OriginalDefinition
+                    .ContainingType is INamedTypeSymbol{IsGenericType: true} containerType &&
+                    invocation.Expression is MemberAccessExpressionSyntax methodAccess {
+                    return this.ExpressionKeepsBareTypeParameterInProjectedResult(
+                        methodAccess.Expression,
+                        containerType,
+                        typeMemberParam,
+                        targetType,
+                        inProgressLocals,
+                        out hitCycle
+                    )
+                }
+                return IsBareTypeParameter(method.ReturnType) && IsBareTypeParameter(actual)
+            }
+            return false
+        }
+
+        private func TryBuildSingleElementTuplePattern(
+            tupleType INamedTypeSymbol,
+            tupleField IFieldSymbol,
+            elementPattern ITypeSymbol,
+            out tuplePattern INamedTypeSymbol?
+        ) bool {
+            tuplePattern = nil
+            let matchName = tupleField.CorrespondingTupleField?.Name ?? tupleField.Name
+            var matchedIndex = -1
+            for var i = 0; i < tupleType.TupleElements.Length; i++ {
+                let candidate = tupleType.TupleElements[i]
+                let candidateName = candidate.CorrespondingTupleField?.Name ?? candidate.Name
+                if candidate.Name == tupleField.Name || candidateName == matchName {
+                    matchedIndex = i
+                    break
+                }
+            }
+            if matchedIndex < 0 {
+                return false
+            }
+            let objectType ITypeSymbol = this.context.Compilation.GetSpecialType(SpecialType.System_Object)
+            let elements = ImmutableArray.CreateBuilder[ITypeSymbol](tupleType.TupleElements.Length)
+            for var i = 0; i < tupleType.TupleElements.Length; i++ {
+                elements.Add(
+                    if i == matchedIndex {
+                        elementPattern
+                    } else {
+                        objectType
+                    }
+                )
+            }
+            tuplePattern = this.context.Compilation.CreateTupleTypeSymbol(elements.MoveToImmutable())
+            return true
+        }
+
+        private func CallArgumentsKeepBareTypeParameterContract(
+            invocation InvocationExpressionSyntax,
+            method IMethodSymbol,
+            returnParam ITypeParameterSymbol,
+            targetType ITypeParameterSymbol,
+            inProgressLocals HashSet[ILocalSymbol],
+            out hitCycle bool
+        ) bool {
+            hitCycle = false
+            var matchedAny = false
+            let isReducedExtension = method.ReducedFrom != nil
+            let unreducedMethod = method.ReducedFrom ?? method
+            if isReducedExtension &&
+                unreducedMethod
+                .Parameters
+                .Length > 0 &&
+                invocation.Expression is MemberAccessExpressionSyntax memberAccess {
+                let receiverParam = unreducedMethod.Parameters[0]
+                if MentionsTypeParameter(receiverParam.OriginalDefinition.Type, returnParam) {
+                    matchedAny = true
+                    if !this.ExpressionKeepsBareTypeParameterInProjectedResult(
+                        memberAccess.Expression,
+                        receiverParam.OriginalDefinition.Type,
+                        returnParam,
+                        targetType,
+                        inProgressLocals,
+                        out var receiverCycle
+                    ) {
+                        hitCycle |= receiverCycle
+                        return false
+                    }
+                    hitCycle |= receiverCycle
+                }
+            }
+            for arg in invocation.ArgumentList.Arguments {
+                if this.GetArgumentParameter(arg, unreducedMethod) is {} argParam &&
+                    MentionsTypeParameter(argParam.OriginalDefinition.Type, returnParam) {
+                    matchedAny = true
+                    if !this.ExpressionKeepsBareTypeParameterInProjectedResult(
+                        arg.Expression,
+                        argParam.OriginalDefinition.Type,
+                        returnParam,
+                        targetType,
+                        inProgressLocals,
+                        out var argCycle
+                    ) {
+                        hitCycle |= argCycle
+                        return false
+                    }
+                    hitCycle |= argCycle
+                }
+            }
+            return matchedAny
+        }
+
+        private func ExpressionKeepsBareTypeParameterInProjectedResult(
+            expr Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            declaredPattern ITypeSymbol,
+            targetTp ITypeParameterSymbol,
+            targetType ITypeParameterSymbol,
+            inProgressLocals HashSet[ILocalSymbol],
+            out hitCycle bool
+        ) bool {
+            hitCycle = false
+            var unwrapped = expr
+            while (
+                unwrapped is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ParenthesizedExpressionSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .CheckedExpressionSyntax
+            ) {
+                unwrapped = switch unwrapped {
+                    case parenthesized is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ParenthesizedExpressionSyntax: parenthesized.Expression
+                    case checkedExpression is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .CheckedExpressionSyntax: checkedExpression.Expression
+                    default: unwrapped
+                }
+            }
+            if unwrapped == nil {
+                return false
+            }
+            if declaredPattern is ITypeParameterSymbol {
+                return SymbolEqualityComparer.Default.Equals(declaredPattern, targetTp) &&
+                    this.ExpressionKeepsBareTypeParameterContractCached(
+                    unwrapped,
+                    targetType,
+                    inProgressLocals,
+                    out hitCycle
+                )
+            }
+            if unwrapped is TupleExpressionSyntax tuple &&
+                declaredPattern is INamedTypeSymbol{IsTupleType: true} tuplePattern &&
+                tuple
+                .Arguments
+                .Count == tuplePattern
+                .TupleElements
+                .Length {
+                for var i = 0; i < tuplePattern.TupleElements.Length; i++ {
+                    let elementType = tuplePattern.TupleElements[i].Type
+                    if MentionsTypeParameter(elementType, targetTp) {
+                        if !this.ExpressionKeepsBareTypeParameterInProjectedResult(
+                            tuple.Arguments[i].Expression,
+                            elementType,
+                            targetTp,
+                            targetType,
+                            inProgressLocals,
+                            out var elemCycle
+                        ) {
+                            hitCycle |= elemCycle
+                            return false
+                        }
+                        hitCycle |= elemCycle
+                    }
+                }
+                return true
+            }
+            let unwrappedSymbol = this.context.GetSymbolInfo(unwrapped).Symbol
+            if unwrappedSymbol is ILocalSymbol local {
+                if !IsImplicitlyTypedLocal(local) || this.ShouldPromoteToNullableReference(local) ||
+                    this.IsTranslatorWidenedDeclaration(local) || this.LocalHoldsPromotedValue(local) ||
+                    (this.state.EmittedLocalStorageAcceptsNil.TryGetValue(local, out var nilLocal) && nilLocal) ||
+                    this.InferredLocalDeclarationIsNullable(local) || this.InferredLocalHasNonInitializerWrite(local) {
+                    return false
+                }
+                let initializer = local
+                    .DeclaringSyntaxReferences
+                    .FirstOrDefault()
+                    ?.GetSyntax() as VariableDeclaratorSyntax
+                if initializer?.Initializer?.Value is not{} initExpr {
+                    return false
+                }
+                if !inProgressLocals.Add(local) {
+                    hitCycle = true
+                    return false
+                }
+                try {
+                    return this.ExpressionKeepsBareTypeParameterInProjectedResult(
+                        initExpr,
+                        declaredPattern,
+                        targetTp,
+                        targetType,
+                        inProgressLocals,
+                        out hitCycle
+                    )
+                } finally {
+                    inProgressLocals.Remove(local)
+                }
+            }
+            if unwrapped is ElementAccessExpressionSyntax elementAccess {
+                if unwrappedSymbol is IPropertySymbol indexer {
+                    if this.ShouldPromoteToNullableReference(indexer) || this.IsTranslatorWidenedDeclaration(indexer) ||
+                        this.IsImportedObliviousNullableMember(indexer) ||
+                        ObliviousNullabilityAnalyzer.IsImportedStatedNullablePosition(
+                        indexer.OriginalDefinition,
+                        this.context.Compilation
+                    ) ||
+                        indexer
+                        .OriginalDefinition
+                        .Type
+                        .NullableAnnotation == Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated {
+                        return false
+                    }
+                    if indexer
+                        .OriginalDefinition
+                        .Type is ITypeParameterSymbol elemTp &&
+                        elemTp.TypeParameterKind == TypeParameterKind.Type &&
+                        indexer
+                        .OriginalDefinition
+                        .ContainingType is INamedTypeSymbol{IsGenericType: true} containerType {
+                        let projectedContainer = this.SubstituteTypeParameters(
+                            containerType,
+                            Dictionary[ITypeParameterSymbol, ITypeSymbol](SymbolEqualityComparer.Default){
+                                [elemTp.OriginalDefinition] = declaredPattern
+                            }
+                        )
+                        return this.ExpressionKeepsBareTypeParameterInProjectedResult(
+                            elementAccess.Expression,
+                            projectedContainer,
+                            targetTp,
+                            targetType,
+                            inProgressLocals,
+                            out hitCycle
+                        )
+                    }
+                    return false
+                }
+                if this.context.GetTypeInfo(elementAccess.Expression).Type is IArrayTypeSymbol receiverArray {
+                    let arrayPattern = this
+                        .context
+                        .Compilation
+                        .CreateArrayTypeSymbol(declaredPattern, receiverArray.Rank)
+                    return this.ExpressionKeepsBareTypeParameterInProjectedResult(
+                        elementAccess.Expression,
+                        arrayPattern,
+                        targetTp,
+                        targetType,
+                        inProgressLocals,
+                        out hitCycle
+                    )
+                }
+                return false
+            }
+            if unwrapped is MemberAccessExpressionSyntax memberAccess &&
+                unwrappedSymbol is {} memberSym &&
+                (memberSym is IFieldSymbol or IPropertySymbol) {
+                if this.ShouldPromoteToNullableReference(memberSym) || this.IsTranslatorWidenedDeclaration(memberSym) ||
+                    this.IsImportedObliviousNullableMember(memberSym) ||
+                    ObliviousNullabilityAnalyzer
+                    .IsImportedStatedNullablePosition(memberSym.OriginalDefinition, this.context.Compilation) {
+                    return false
+                }
+                if memberSym is IFieldSymbol tupleField &&
+                    this
+                    .context
+                    .GetTypeInfo(memberAccess.Expression)
+                    .Type is INamedTypeSymbol{IsTupleType: true} tupleReceiver &&
+                    this
+                    .TryBuildSingleElementTuplePattern(
+                    tupleReceiver,
+                    tupleField,
+                    declaredPattern,
+                    out var tuplePattern
+                ) {
+                    return this.ExpressionKeepsBareTypeParameterInProjectedResult(
+                        memberAccess.Expression,
+                        tuplePattern!!,
+                        targetTp,
+                        targetType,
+                        inProgressLocals,
+                        out hitCycle
+                    )
+                }
+                let declaredMemberType = switch memberSym {
+                    case field is IFieldSymbol: field.OriginalDefinition.Type
+                    case property is IPropertySymbol: property.OriginalDefinition.Type
+                    default: default(ITypeSymbol?)
+                }
+                if declaredMemberType is ITypeParameterSymbol memberTp &&
+                    declaredMemberType.NullableAnnotation != Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated &&
+                    memberTp.TypeParameterKind == TypeParameterKind.Type &&
+                    memberSym
+                    .OriginalDefinition
+                    .ContainingType is INamedTypeSymbol{IsGenericType: true} containerType {
+                    let projectedContainer = this.SubstituteTypeParameters(
+                        containerType,
+                        Dictionary[ITypeParameterSymbol, ITypeSymbol](SymbolEqualityComparer.Default){
+                            [memberTp.OriginalDefinition] = declaredPattern
+                        }
+                    )
+                    return this.ExpressionKeepsBareTypeParameterInProjectedResult(
+                        memberAccess.Expression,
+                        projectedContainer,
+                        targetTp,
+                        targetType,
+                        inProgressLocals,
+                        out hitCycle
+                    )
+                }
+                return false
+            }
+            if unwrapped is InvocationExpressionSyntax innerInvocation && unwrappedSymbol is IMethodSymbol innerMethod {
+                if this.ShouldPromoteToNullableReference(innerMethod) || this.IsTranslatorWidenedDeclaration(
+                    innerMethod
+                ) ||
+                    this.IsImportedObliviousNullableMember(innerMethod) ||
+                    ObliviousNullabilityAnalyzer.IsImportedStatedNullablePosition(
+                    innerMethod,
+                    this.context.Compilation
+                ) ||
+                    this.DeclaredCallResultIsAnnotatedNullable(unwrapped) {
+                    return false
+                }
+                let innerUnreduced = innerMethod.ReducedFrom ?? innerMethod
+                let innerReturn = innerUnreduced.OriginalDefinition.ReturnType
+                let fedInnerPatterns = Dictionary[ITypeParameterSymbol, ITypeSymbol](SymbolEqualityComparer.Default)
+                if !this.CollectInnerMethodTypeParametersFeedingTarget(
+                    declaredPattern,
+                    innerReturn,
+                    targetTp,
+                    fedInnerPatterns
+                ) {
+                    return false
+                }
+                if fedInnerPatterns.Count == 0 {
+                    if !innerMethod.IsStatic &&
+                        innerMethod.ReducedFrom == nil &&
+                        innerMethod
+                        .TypeParameters
+                        .Length == 0 &&
+                        innerReturn is ITypeParameterSymbol typeMemberParam &&
+                        innerReturn.NullableAnnotation != Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated &&
+                        typeMemberParam.TypeParameterKind == TypeParameterKind.Type &&
+                        innerMethod
+                        .OriginalDefinition
+                        .ContainingType is INamedTypeSymbol{IsGenericType: true} containerType &&
+                        innerInvocation.Expression is MemberAccessExpressionSyntax innerAccess {
+                        let projectedContainer = this.SubstituteTypeParameters(
+                            containerType,
+                            Dictionary[ITypeParameterSymbol, ITypeSymbol](SymbolEqualityComparer.Default){
+                                [typeMemberParam.OriginalDefinition] = declaredPattern
+                            }
+                        )
+                        return this.ExpressionKeepsBareTypeParameterInProjectedResult(
+                            innerAccess.Expression,
+                            projectedContainer,
+                            targetTp,
+                            targetType,
+                            inProgressLocals,
+                            out hitCycle
+                        )
+                    }
+                    return false
+                }
+                for entry in fedInnerPatterns {
+                    let innerTp = entry.Key
+                    let innerPattern = entry.Value
+                    if SymbolEqualityComparer.Default.Equals(innerPattern, declaredPattern) {
+                        if !this.CallArgumentsKeepBareTypeParameterContract(
+                            innerInvocation,
+                            innerMethod,
+                            innerTp,
+                            targetType,
+                            inProgressLocals,
+                            out var innerCycle
+                        ) {
+                            hitCycle |= innerCycle
+                            return false
+                        }
+                        hitCycle |= innerCycle
+                    } else {
+                        let innerIsReduced = innerMethod.ReducedFrom != nil
+                        var matched = false
+                        if innerIsReduced &&
+                            innerUnreduced
+                            .Parameters
+                            .Length > 0 &&
+                            innerInvocation.Expression is MemberAccessExpressionSyntax innerMemberAccess &&
+                            MentionsTypeParameter(innerUnreduced.Parameters[0].OriginalDefinition.Type, innerTp) {
+                            matched = true
+                            let argPattern = this.SubstituteTypeParameters(
+                                innerUnreduced.Parameters[0].OriginalDefinition.Type,
+                                Dictionary[ITypeParameterSymbol, ITypeSymbol](SymbolEqualityComparer.Default){
+                                    [innerTp.OriginalDefinition] = innerPattern
+                                }
+                            )
+                            if !this.ExpressionKeepsBareTypeParameterInProjectedResult(
+                                innerMemberAccess.Expression,
+                                argPattern,
+                                targetTp,
+                                targetType,
+                                inProgressLocals,
+                                out var receiverCycle
+                            ) {
+                                hitCycle |= receiverCycle
+                                return false
+                            }
+                            hitCycle |= receiverCycle
+                        }
+                        for arg in innerInvocation.ArgumentList.Arguments {
+                            if this.GetArgumentParameter(arg, innerUnreduced) is {} argParam &&
+                                MentionsTypeParameter(argParam.OriginalDefinition.Type, innerTp) {
+                                matched = true
+                                let argPattern = this.SubstituteTypeParameters(
+                                    argParam.OriginalDefinition.Type,
+                                    Dictionary[ITypeParameterSymbol, ITypeSymbol](SymbolEqualityComparer.Default){
+                                        [innerTp.OriginalDefinition] = innerPattern
+                                    }
+                                )
+                                if !this.ExpressionKeepsBareTypeParameterInProjectedResult(
+                                    arg.Expression,
+                                    argPattern,
+                                    targetTp,
+                                    targetType,
+                                    inProgressLocals,
+                                    out var argCycle
+                                ) {
+                                    hitCycle |= argCycle
+                                    return false
+                                }
+                                hitCycle |= argCycle
+                            }
+                        }
+                        if !matched {
+                            return false
+                        }
+                    }
+                }
+                return true
+            }
+            return false
+        }
+
+        private func CollectInnerMethodTypeParametersFeedingTarget(
+            outerPattern ITypeSymbol,
+            innerPattern ITypeSymbol,
+            targetTp ITypeParameterSymbol,
+            fedInnerPatterns Dictionary[ITypeParameterSymbol, ITypeSymbol]
+        ) bool {
+            if !MentionsTypeParameter(outerPattern, targetTp) {
+                return true
+            }
+            if innerPattern is ITypeParameterSymbol innerTp &&
+                innerTp.TypeParameterKind == TypeParameterKind.Method &&
+                IsBareTypeParameter(innerTp) {
+                if outerPattern is ITypeParameterSymbol outerTp && !SymbolEqualityComparer.Default.Equals(
+                    outerTp,
+                    targetTp
+                ) {
+                    return true
+                }
+                if fedInnerPatterns.TryGetValue(innerTp, out var existingPattern) {
+                    return SymbolEqualityComparer.Default.Equals(existingPattern, outerPattern)
+                }
+                fedInnerPatterns[innerTp] = outerPattern
+                return true
+            }
+            if outerPattern is ITypeParameterSymbol {
+                return false
+            }
+            if outerPattern is IArrayTypeSymbol outerArray &&
+                innerPattern is IArrayTypeSymbol innerArray &&
+                outerArray.Rank == innerArray
+                .Rank {
+                return this.CollectInnerMethodTypeParametersFeedingTarget(
+                    outerArray.ElementType,
+                    innerArray.ElementType,
+                    targetTp,
+                    fedInnerPatterns
+                )
+            }
+            if outerPattern is INamedTypeSymbol{IsTupleType: true} outerTuple &&
+                innerPattern is INamedTypeSymbol{IsTupleType: true} innerTuple &&
+                outerTuple
+                .TupleElements
+                .Length == innerTuple
+                .TupleElements
+                .Length {
+                for var i = 0; i < outerTuple.TupleElements.Length; i++ {
+                    if !this.CollectInnerMethodTypeParametersFeedingTarget(
+                        outerTuple.TupleElements[i].Type,
+                        innerTuple.TupleElements[i].Type,
+                        targetTp,
+                        fedInnerPatterns
+                    ) {
+                        return false
+                    }
+                }
+                return true
+            }
+            if outerPattern is INamedTypeSymbol{IsGenericType: true} outerNamed &&
+                FindMatchingNamedTypeInHierarchy(innerPattern, outerNamed.OriginalDefinition) is {} innerNamed {
+                if outerNamed.ContainingType != nil &&
+                    innerNamed.ContainingType != nil &&
+                    !this
+                    .CollectInnerMethodTypeParametersFeedingTarget(
+                    outerNamed.ContainingType,
+                    innerNamed.ContainingType,
+                    targetTp,
+                    fedInnerPatterns
+                ) {
+                    return false
+                }
+                if outerNamed.TypeArguments.Length != innerNamed.TypeArguments.Length {
+                    return false
+                }
+                for var i = 0; i < outerNamed.TypeArguments.Length; i++ {
+                    if !this.CollectInnerMethodTypeParametersFeedingTarget(
+                        outerNamed.TypeArguments[i],
+                        innerNamed.TypeArguments[i],
+                        targetTp,
+                        fedInnerPatterns
+                    ) {
+                        return false
+                    }
+                }
+                return true
+            }
+            return false
+        }
+
         private func ForgiveNullableReferenceValueCore(
             value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
             translated GExpression?,
@@ -10463,6 +11369,13 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
                 return operatorOperand
+            }
+            if targetType is ITypeParameterSymbol bareTarget &&
+                IsBareTypeParameter(bareTarget) &&
+                this
+                .ExpressionKeepsBareTypeParameterContract(value, bareTarget) {
+                // Matching generic storage contracts need no runtime proof that their zero value is non-null.
+                return translated
             }
             if !operatorInput && this.TryBridgeTupleValue(
                 value,
@@ -12170,6 +13083,9 @@ partial class CSharpToGSharpTranslator {
 
         // Whether a value of `symbol`, of C# type `type`, is non-null in the emitted G#.
         private func DeclaredValueIsStaticallyNonNull(symbol ISymbol?, type ITypeSymbol?) bool {
+            if symbol is ILocalSymbol fixedLocal && this.state.FixedGenericLocalStorage.Contains(fixedLocal) {
+                return true
+            }
             if type != nil && type.IsValueType == true {
                 return type.OriginalDefinition?.SpecialType != SpecialType.System_Nullable_T
             }
@@ -12217,6 +13133,10 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func TryGetInferredLocalStaticNonNull(local ILocalSymbol, out isNonNull bool) bool {
+            if this.state.FixedGenericLocalStorage.Contains(local) {
+                isNonNull = true
+                return true
+            }
             isNonNull = false
             if !(
                 local
@@ -23675,23 +24595,46 @@ partial class CSharpToGSharpTranslator {
             parameter IParameterSymbol,
             callSite Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
         ) bool {
+            let typeParameter = this.InferredGenericParameterTypeParameter(parameter, callSite)
+            return typeParameter != nil &&
+                (
+                parameter
+                    .OriginalDefinition
+                    .Type is ITypeParameterSymbol ||
+                    (
+                    !NullableTypeArgumentViolatesTranslatedConstraints(typeParameter) &&
+                        !this.OtherArgumentFixesTypeParameterToNonNull(callSite, parameter, typeParameter)
+                )
+            )
+        }
+
+        private func InferredGenericParameterTypeParameter(
+            parameter IParameterSymbol,
+            callSite Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+        ) ITypeParameterSymbol? {
+            if ValueFeedsExplicitTypeArguments(callSite) {
+                return nil
+            }
             let declared = parameter.OriginalDefinition.Type
             // Only a METHOD type parameter is re-inferred from the argument. A
             // containing-type parameter is already fixed by the receiver
             // (`Box[C].Use(x)`), so its substituted type is the real target.
-            let IsMethodTypeParameter = func (candidate ITypeSymbol?) bool {
-                return candidate is ITypeParameterSymbol methodParameter &&
-                    methodParameter.TypeParameterKind == TypeParameterKind.Method
+            let MethodTypeParameter = func (candidate ITypeSymbol?) ITypeParameterSymbol? {
+                return if candidate is ITypeParameterSymbol methodParameter &&
+                    methodParameter.TypeParameterKind == TypeParameterKind.Method {
+                    methodParameter
+                } else {
+                    nil
+                }
             }
-            let generic = IsMethodTypeParameter(declared) ||
+            return MethodTypeParameter(declared) ??
                 (
-                this.IsExpandedParamsArgument(callSite, parameter) &&
-                    GetParamsElementType(parameter.OriginalDefinition) is ITypeParameterSymbol elementParameter &&
-                    elementParameter.TypeParameterKind == TypeParameterKind.Method &&
-                    !NullableTypeArgumentViolatesTranslatedConstraints(elementParameter) &&
-                    !this.OtherArgumentFixesTypeParameterToNonNull(callSite, parameter, elementParameter)
+                if this.IsExpandedParamsArgument(callSite, parameter) {
+                    MethodTypeParameter(GetParamsElementType(parameter.OriginalDefinition))
+                } else {
+                    nil
+                }
             )
-            return generic && !ValueFeedsExplicitTypeArguments(callSite)
         }
 
         private func IsExpandedParamsArgument(

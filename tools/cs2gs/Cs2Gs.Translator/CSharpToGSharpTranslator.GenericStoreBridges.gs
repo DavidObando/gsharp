@@ -230,6 +230,15 @@ partial class CSharpToGSharpTranslator {
             return (nil, nil)
         }
 
+        private func ResolveValueStoreContract(value ExpressionSyntax?)(Store ISymbol?, SlotType ITypeSymbol?) {
+            let (store, knownSlot) = this.ResolveStoreAtNode(
+                OutermostTransparentNode(value, stopAtAssignment: true),
+                value
+            )
+            this.ClassifyGenericStoreSlot(value, store, knownSlot, out var slotType, out _)
+            return (store, slotType ?? knownSlot)
+        }
+
         private func ResolveStoreAtNode(node SyntaxNode?, value ExpressionSyntax?)(
             Store ISymbol?,
             SlotType ITypeSymbol?
@@ -686,11 +695,22 @@ partial class CSharpToGSharpTranslator {
             // A value nested in transparent containers (parentheses, a C# `!`, a
             // conditional or switch arm, a tuple element) counts as the enclosing
             // invocation argument, as the store bridges resolve it.
-            private func ValueFeedsExplicitTypeArguments(value ExpressionSyntax?) bool -> value != nil &&
-                EnclosingInvocationArgument(value) is {
-                Parent: ArgumentListSyntax{Parent: InvocationExpressionSyntax invocation}
-            } &&
-                HasExplicitTypeArguments(invocation.Expression)
+            private func ValueFeedsExplicitTypeArguments(value ExpressionSyntax?) bool {
+                if value == nil {
+                    return false
+                }
+                let outer = OutermostTransparentNode(value)
+                if outer?.Parent is ArgumentSyntax{
+                    Parent: BaseArgumentListSyntax{Parent: InvocationExpressionSyntax invocation}
+                } {
+                    return HasExplicitTypeArguments(invocation.Expression)
+                }
+                return outer?.Parent is MemberAccessExpressionSyntax{
+                    Parent: InvocationExpressionSyntax reducedInvocation
+                } memberAccess &&
+                    memberAccess.Expression == outer &&
+                    HasExplicitTypeArguments(reducedInvocation.Expression)
+            }
 
             private func EnclosingInvocationArgument(
                 value ExpressionSyntax?

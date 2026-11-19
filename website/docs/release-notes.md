@@ -22,6 +22,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Reconcile generic local storage across aliases and fixed consumers in `cs2gs`, including delegate results and iterator elements. Complete dependency-tracked storage and inference decisions before emission, preserving generic defaults without added runtime assertions. Reuse an executable-wide read index, including nested captures. (Fixes #5960)
+
 - Keep the SDK reference-assembly pack regression independent of installed Android workloads. Retain four inner builds and exact effective-framework path checks. (Fixes #6032)
 
 - Preserve symbolic receiver types in imported method labels for hover, signature help, and member completion. Show source-defined arguments instead of erased `object` placeholders. Keep fixed-array lengths, tuple names, and declared return nullability. Keep declared signatures separate from call-result narrowing. (Fixes #5492)
