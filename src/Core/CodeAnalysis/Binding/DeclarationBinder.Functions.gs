@@ -1099,7 +1099,7 @@ internal partial class DeclarationBinder {
         }
         let created = symbols.MoveToImmutable()
         if retriedTypeParameters != nil {
-            retriedTypeParameters[syntax] = created
+            binderCtx.SetRetriedBinding(retriedTypeParameters, syntax, created)
         }
         return created
     }
@@ -2104,7 +2104,7 @@ internal partial class DeclarationBinder {
                 cast[VariableSymbol](LocalVariableSymbol(name, isReadOnly, type, declaringSyntax: identifier))
             }
             if !inTopLevelContext && declare && retriedVariables != nil {
-                retriedVariables[identifier] = variable
+                binderCtx.SetRetriedBinding(retriedVariables, cast[SyntaxNode](identifier), variable)
             }
         }
         if declare && !$scope.TryDeclareVariable(variable) {

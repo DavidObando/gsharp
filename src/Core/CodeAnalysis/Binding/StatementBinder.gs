@@ -106,6 +106,8 @@ internal partial class StatementBinder {
     // both bound values and the code after them refer to the same label objects.
     private var retriedValueUserLabels Dictionary[string, BoundLabel]?
     private var usingInitializationFlagCount int32
+    private let closureValueDecisions Dictionary[VariableDeclarationSyntax, ClosureValueDecision] =
+    Dictionary[VariableDeclarationSyntax, ClosureValueDecision]()
 
     init(
         binderCtx BinderContext,
@@ -421,8 +423,7 @@ internal partial class StatementBinder {
 
     /// Shared prepare-then-bind grouping for a consecutive run of local-
     /// function-literal declarations that all match [`isMember`](paramref)
-    /// (either (cref:IsGenericLocalFunctionDeclaration) or
-    /// (cref:IsNonGenericLocalFunctionLiteralDeclaration)): every
+    /// (generic or ref-returning declarations): every
     /// member's signature is registered (via `prepareGenericLocalFunctionDeclaration`,
     /// which is generic-list-agnostic) before any member's body binds, so the
     /// whole run can forward-reference and mutually recurse; then each body
@@ -493,6 +494,159 @@ internal partial class StatementBinder {
         return end - 1
     }
 
+    private func BindOptionalLocalFunctionLiteral(syntax VariableDeclarationSyntax) BoundStatement {
+        let hasOverloads = !$scope.TryLookupFunctions(syntax.Identifier.ValueText).IsEmpty
+        if !hasOverloads && closureValueDecisions.TryGetValue(syntax, out var previousDecision) &&
+            previousDecision.IsValid(enclosingScope: $scope) {
+            return BindOrdinaryVariableDeclaration(syntax)
+        }
+        // Resolve method overloads and generic adaptation before deciding whether a closure value is needed.
+        let enclosingScope = $scope
+        let diagnosticCount = Diagnostics.Count
+        let suppressionCount = Diagnostics.SuppressionCount
+        let rollbackNarrowing = CaptureCallArgumentPrebindRollback(syntax)
+        using let retriedBindings = binderCtx.BeginRetriedBindingsTransaction()
+        var bound BoundStatement
+        let stagingScope = BoundScope(enclosingScope)
+        $scope = stagingScope
+        try {
+            let bindBody = prepareGenericLocalFunctionDeclaration!!(syntax)
+            bound = bindBody()
+        } finally {
+            $scope = enclosingScope
+        }
+        if bound is BoundLocalFunctionDeclaration{Literal: {} literal} &&
+            (literal.CapturedVariables.IsEmpty || hasOverloads) &&
+            !Diagnostics
+            .HasErrorSince(diagnosticCount) {
+            literal.Function.HasCaptures = !literal.CapturedVariables.IsEmpty
+            reconcileGenericLocalFunctionGroupCaptures?(List[BoundFunctionLiteralExpression](){literal})
+            if !Diagnostics.HasErrorSince(diagnosticCount) && (literal.CapturedVariables.IsEmpty || hasOverloads) {
+                literal.Function.HasCaptures = !literal.CapturedVariables.IsEmpty
+                if !stagingScope.TryPublishStagedFunction(literal.Function) {
+                    Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, syntax.Identifier.ValueText)
+                }
+                retriedBindings.Commit()
+                return bound
+            }
+        }
+        if bound is BoundLocalFunctionDeclaration{Literal: {} capturing} {
+            if !closureValueDecisions.TryGetValue(syntax, out var decision) {
+                decision = ClosureValueDecision()
+                closureValueDecisions.Add(syntax, decision)
+            }
+            let proof = LocalFunctionValueCaptureProof(capturing.CapturedVariables, decision, enclosingScope)
+            proof.VisitStatement(capturing.Body)
+        }
+        Diagnostics.TruncateTo(diagnosticCount)
+        Diagnostics.RestoreSuppressionsTo(suppressionCount)
+        rollbackNarrowing()
+        retriedBindings.Dispose()
+        return BindOrdinaryVariableDeclaration(syntax)
+    }
+
+    // Keep source-level proof dependencies, not speculative symbols or bodies. Revalidate each
+    // binding role because an ancestor can change from a method into an ordinary function value.
+    private sealed class ClosureValueDecision {
+        private let variables HashSet[string] = HashSet[string](StringComparer.Ordinal)
+        private let functions Dictionary[VariableDeclarationSyntax, string] =
+        Dictionary[VariableDeclarationSyntax, string]()
+
+        func IsValid(enclosingScope BoundScope) bool {
+            for name in variables {
+                if enclosingScope.TryLookupSymbol(name) is VariableSymbol and not GlobalVariableSymbol {
+                    return true
+                }
+            }
+            for dependency in functions {
+                for function in enclosingScope.TryLookupFunctions(dependency.Value) {
+                    if function.LocalDeclaration == dependency.Key && function.HasCaptures {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+
+        func Record(variable VariableSymbol, enclosingScope BoundScope) {
+            if object.ReferenceEquals(enclosingScope.TryLookupSymbol(variable.Name), variable) {
+                variables.Add(variable.Name)
+            }
+        }
+
+        func Record(function FunctionSymbol, enclosingScope BoundScope) {
+            if function.HasCaptures && function.LocalDeclaration is {} declaration {
+                for visible in enclosingScope.TryLookupFunctions(function.Name) {
+                    if visible == function {
+                        functions[declaration] = function.Name
+                        break
+                    }
+                }
+            }
+        }
+    }
+
+    private sealed class LocalFunctionValueCaptureProof : BoundTreeWalker {
+        private let captured HashSet[VariableSymbol]
+        private let decision ClosureValueDecision
+        private let enclosingScope BoundScope
+
+        init(captured ImmutableArray[VariableSymbol], decision ClosureValueDecision, enclosingScope BoundScope) {
+            this.captured = HashSet[VariableSymbol](captured)
+            this.decision = decision
+            this.enclosingScope = enclosingScope
+        }
+
+        private func Observe(variable VariableSymbol) {
+            if captured.Contains(variable) {
+                decision.Record(variable, enclosingScope)
+            }
+        }
+
+        override func VisitExpression(node BoundExpression?) {
+            if node is BoundVariableExpression variable {
+                Observe(variable.Variable)
+            } else if node is BoundFunctionLiteralExpression literal {
+                VisitStatement(literal.Body)
+            } else {
+                base.VisitExpression(node)
+            }
+        }
+
+        protected override func VisitAssignmentExpression(node BoundAssignmentExpression) {
+            Observe(node.Variable)
+            base.VisitAssignmentExpression(node)
+        }
+
+        protected override func VisitCallExpression(node BoundCallExpression) {
+            if captured.Count > 0 {
+                decision.Record(node.Function, enclosingScope)
+            }
+            base.VisitCallExpression(node)
+        }
+
+        protected override func VisitFieldAssignmentExpression(node BoundFieldAssignmentExpression) {
+            if node.Receiver is {} receiver {
+                Observe(receiver)
+            }
+            base.VisitFieldAssignmentExpression(node)
+        }
+
+        protected override func VisitIndexAssignmentExpression(node BoundIndexAssignmentExpression) {
+            if node.Target is {} target {
+                Observe(target)
+            }
+            base.VisitIndexAssignmentExpression(node)
+        }
+
+        protected override func VisitClrIndexAssignmentExpression(node BoundClrIndexAssignmentExpression) {
+            if node.Target is {} target {
+                Observe(target)
+            }
+            base.VisitClrIndexAssignmentExpression(node)
+        }
+    }
+
     private func BindBlockStatements(
         statementSyntaxes ImmutableArray[StatementSyntax],
         startIndex int32,
@@ -509,9 +663,16 @@ internal partial class StatementBinder {
         let blockFrameIndex = binderCtx.NarrowedVariables.Count
         let memberNotNullFrame = binderCtx.PushNarrowingFrame(Dictionary[AccessPath, TypeSymbol]())
         var completedCleanupExit NarrowingState? = nil
+        var nonGenericRunStart = startIndex
+        var nonGenericRunEnd = startIndex
+        var nonGenericDirect = Array.Empty[bool]()
+        var nonGenericHasCrossReference = false
+        let nonGenericBodies = Dictionary[int32, () -> BoundStatement]()
+        let nonGenericLiterals = List[BoundFunctionLiteralExpression]()
         try {
             for var i = startIndex; i < statementSyntaxes.Length; i++ {
                 let statementSyntax = statementSyntaxes[i]
+                var preparedStatement BoundStatement? = nil
                 beforeBind?(statementSyntax)
                 EnterBackwardJumpSpanIfFirstStatement(statementSyntax)
                 if IsGenericLocalFunctionDeclaration(statementSyntax) && prepareGenericLocalFunctionDeclaration != nil {
@@ -539,47 +700,51 @@ internal partial class StatementBinder {
                     )
                     continue
                 }
-                // Issue #4219 (umbrella remainder): a run of TWO OR MORE
-                // consecutive non-generic local-function-literal `let`
-                // declarations gets the same forward-visibility/mutual-
-                // recursion treatment as a generic group — see
-                // IsNonGenericLocalFunctionLiteralDeclaration for why a lone
-                // member does not qualify. A run mixing generic and
-                // non-generic members never reaches here (the branch above
-                // already claimed the generic member and stopped at the
-                // first non-generic one), so a generic member calling a
-                // non-generic sibling declared AFTER it remains GS0130 —
-                // that broader-parity combination is deliberately out of
-                // scope here (see #4219's "mixed groups" note).
-                //
-                // Issue #4219 (umbrella remainder) correctness fix: also require an
-                // actual cross-reference between
-                // members of the run (see
-                // NonGenericLocalFunctionLiteralGroupHasCrossReference) —
-                // mere adjacency of two unrelated non-generic locals must
-                // not opt them into the direct-call representation; see that
-                // method's doc comment for the regression this prevents.
+                // Preserve required callable signatures. Choose other historically grouped members from their actual captures (#6082).
                 if IsNonGenericLocalFunctionLiteralDeclaration(statementSyntax) &&
-                    prepareGenericLocalFunctionDeclaration != nil &&
-                    i +
-                    1 < statementSyntaxes.Length &&
-                    statementSyntaxes[i + 1].SyntaxTree == statementSyntax.SyntaxTree &&
-                    IsNonGenericLocalFunctionLiteralDeclaration(statementSyntaxes[i + 1]) {
-                    var runEnd = i
-                    while runEnd < statementSyntaxes.Length &&
-                        statementSyntaxes[runEnd].SyntaxTree == statementSyntax.SyntaxTree &&
-                        IsNonGenericLocalFunctionLiteralDeclaration(statementSyntaxes[runEnd]) {
-                        runEnd++
+                    prepareGenericLocalFunctionDeclaration != nil {
+                    if i >= nonGenericRunEnd {
+                        nonGenericRunStart = i
+                        nonGenericRunEnd = i + 1
+                        while nonGenericRunEnd < statementSyntaxes.Length &&
+                            statementSyntaxes[nonGenericRunEnd].SyntaxTree == statementSyntax.SyntaxTree &&
+                            IsNonGenericLocalFunctionLiteralDeclaration(statementSyntaxes[nonGenericRunEnd]) {
+                            nonGenericRunEnd++
+                        }
+                        let plan = PlanNonGenericLocalFunctionLiterals(statementSyntaxes, i, nonGenericRunEnd)
+                        nonGenericDirect = plan.Direct
+                        nonGenericHasCrossReference = plan.HasCrossReference
+                        nonGenericBodies.Clear()
+                        for var member = i; member < nonGenericRunEnd; member++ {
+                            if nonGenericDirect[member - i] {
+                                beforeBind?(statementSyntaxes[member])
+                                nonGenericBodies[member] = prepareGenericLocalFunctionDeclaration!!(
+                                    cast[VariableDeclarationSyntax](statementSyntaxes[member])
+                                )
+                            }
+                        }
                     }
-                    if NonGenericLocalFunctionLiteralGroupHasCrossReference(statementSyntaxes, i, runEnd) {
-                        i = BindLocalFunctionLiteralGroup(
-                            statementSyntaxes,
-                            i,
-                            statements,
-                            beforeBind,
-                            IsNonGenericLocalFunctionLiteralDeclaration
-                        )
+                    if nonGenericDirect[i - nonGenericRunStart] {
+                        let bindBody = nonGenericBodies[i]
+                        let bound = bindBody()
+                        statements.Add(bound)
+                        if bound is BoundLocalFunctionDeclaration{Literal: {} literal} {
+                            literal.Function.HasCaptures = !literal.CapturedVariables.IsEmpty
+                            nonGenericLiterals.Add(literal)
+                        }
+                        if i + 1 == nonGenericRunEnd || !nonGenericDirect[i + 1 - nonGenericRunStart] {
+                            reconcileGenericLocalFunctionGroupCaptures?(nonGenericLiterals)
+                            for literal in nonGenericLiterals {
+                                literal.Function.HasCaptures = !literal.CapturedVariables.IsEmpty
+                            }
+                            nonGenericLiterals.Clear()
+                        }
                         continue
+                    }
+                    if nonGenericHasCrossReference && bindFunctionLiteralWithSelfDeclaration != nil {
+                        preparedStatement = BindOptionalLocalFunctionLiteral(
+                            cast[VariableDeclarationSyntax](statementSyntax)
+                        )
                     }
                 }
                 if statementSyntax is DeferStatementSyntax deferSyntax {
@@ -801,7 +966,7 @@ internal partial class StatementBinder {
                 }
                 let reachableBeforeStatement = currentStatementListFallsThrough
                 let externalCallableAliasesAtEntry = externalCallableAliases.ToArray()
-                let statement BoundStatement? = BindStatement(statementSyntax)
+                let statement BoundStatement? = preparedStatement ?? BindStatement(statementSyntax)
                 if statement == nil {
                     continue
                 }
@@ -1002,11 +1167,9 @@ internal partial class StatementBinder {
         /// (see `StatementBinder.Narrowing.cs`'s
         /// `bindFunctionLiteralWithSelfDeclaration` self-recursion path) to
         /// avoid silently changing every ordinary `let f = func ...` in the
-        /// language. Only a run of TWO OR MORE consecutive non-generic members
-        /// (see the minimum-run-length gate in (cref:BindBlockStatements))
-        /// opts into forward visibility — that plural shape is unambiguously a
-        /// deliberate group of named local functions, not an ordinary single
-        /// closure-valued local. An explicit outer type clause
+        /// language. Forward references and function pointers require direct-call regions.
+        /// (cref:PlanNonGenericLocalFunctionLiterals) preserves required signatures. Actual capture analysis keeps other capturing members as delegate-valued variables.
+        /// An explicit outer type clause
         /// (`let f (int32) -> int32 = func ...`) is also excluded: the
         /// direct-call path's signature comes entirely from the LITERAL (its own
         /// parameters/return type), so a declared outer type would be silently
@@ -1050,60 +1213,155 @@ internal partial class StatementBinder {
             }
         )
 
-        /// Issue #4219 (umbrella remainder) correctness fix: a syntactic pre-check
-        /// gating whether a consecutive run of (cref:IsNonGenericLocalFunctionLiteralDeclaration)
-        /// members actually needs the forward-visible/direct-call group
-        /// representation. Without this gate, mere source-adjacency of two
-        /// non-generic `let name = func ...` locals opted them in
-        /// regardless of whether either body ever names the other — so two
-        /// unrelated, ordinary capturing callbacks declared back-to-back (a
-        /// common shape: `let onClick = func() {...}; let onLog = func()
-        /// {...}; Register(onClick)`) lost the ability to convert a
-        /// capturing member's bare name to a delegate value, a previously-legal
-        /// pattern with nothing to do with recursion. Only a run where at least
-        /// one member's body actually references another member's name needs
-        /// forward visibility; an unrelated run keeps each member's original
-        /// delegate-valued-variable representation (self-recursion is
-        /// unaffected either way — it already works via the existing
-        /// single-declaration self-reference path, so a member naming only
-        /// itself does not count as a cross-reference here).
-        private func NonGenericLocalFunctionLiteralGroupHasCrossReference(
+        /// Plans each adjacent run once. Forward references and overloads require callable symbols.
+        /// Other historically grouped members keep callable symbols only when binding proves they capture nothing (#6082).
+        private func PlanNonGenericLocalFunctionLiterals(
             statementSyntaxes ImmutableArray[StatementSyntax],
             start int32,
             end int32
-        ) bool {
-            let siblingNames = HashSet[string]()
+        )(Direct[]bool, HasCrossReference bool) {
+            let siblingIndices = Dictionary[string, List[int32]]()
+            let declarations = List[VariableDeclarationSyntax]()
             for var idx = start; idx < end; idx++ {
-                siblingNames.Add((cast[VariableDeclarationSyntax](statementSyntaxes[idx])).Identifier.Text)
+                let declaration = cast[VariableDeclarationSyntax](statementSyntaxes[idx])
+                declarations.Add(declaration)
+                let name = declaration.Identifier.ValueText
+                if !siblingIndices.TryGetValue(name, out var overloads) {
+                    overloads = List[int32]()
+                    siblingIndices[name] = overloads
+                }
+                overloads.Add(idx)
             }
+            let groupEnds = [end - start]int32
+            let direct = [end - start]bool
+            let scopeIndex = ClosureScopeIndex()
+            let hasCrossReference = HasLocalFunctionCrossReference(declarations, siblingIndices.Keys)
             for var idx = start; idx < end; idx++ {
                 let decl = cast[VariableDeclarationSyntax](statementSyntaxes[idx])
-                let selfName = decl.Identifier.Text
-                // `[start, end)` is only ever the `[i, runEnd)` range built by
-                // BindBlockStatements's `runEnd` loop, which advances only while
-                // `IsNonGenericLocalFunctionLiteralDeclaration` holds for the
-                // member at that index -- and that predicate pattern-matches
-                // `Initializer: FunctionLiteralExpressionSyntax { IsRefReturn:
-                // false }`. So every declaration in this range already has a
-                // non-null `FunctionLiteralExpressionSyntax` initializer by
-                // construction; the `!` merely restates what the caller verified.
                 let literal = cast[FunctionLiteralExpressionSyntax](decl.Initializer!!)
+                groupEnds[idx - start] = idx
                 for node in literal.Body.DescendantNodesAndSelf() {
                     // A direct call (`second(x)`) is its own syntax node with an
                     // `Identifier` token — it is NOT a NameExpressionSyntax
                     // wrapping a call, so both shapes must be checked to catch
                     // the common "sibling(...)" recursive-call reference.
-                    let referencedName string? = switch node {
-                        case name is NameExpressionSyntax: name.IdentifierToken.Text
-                        case call is CallExpressionSyntax: call.Identifier.Text
-                        default: default(string?)
+                    let referencedName = LocalFunctionReferenceName(node)
+                    if referencedName != nil && siblingIndices.TryGetValue(referencedName, out var overloads) {
+                        let lastSibling = LastReferencedLocalOverload(node, overloads, statementSyntaxes)
+                        if lastSibling > idx &&
+                            !(
+                            node.Parent is AccessorExpressionSyntax accessor && object.ReferenceEquals(
+                                accessor.RightPart,
+                                node
+                            )
+                        ) &&
+                            !IsShadowedInsideLiteral(referencedName, node, literal, scopeIndex) {
+                            groupEnds[idx - start] = Math.Max(groupEnds[idx - start], lastSibling + 1)
+                        }
                     }
-                    if referencedName != nil && referencedName != selfName && siblingNames.Contains(referencedName) {
+                }
+            }
+            // Only cross-referencing runs previously had function-symbol identity.
+            if hasCrossReference {
+                var regionEnd = start
+                for var idx = start; idx < end; idx++ {
+                    let name = (cast[VariableDeclarationSyntax](statementSyntaxes[idx])).Identifier.ValueText
+                    regionEnd = Math.Max(regionEnd, groupEnds[idx - start])
+                    direct[idx - start] = idx < regionEnd || siblingIndices[name].Count > 1
+                }
+            }
+            return (direct, hasCrossReference)
+        }
+
+        private func IsShadowedInsideLiteral(
+            name string,
+            site SyntaxNode,
+            literal FunctionLiteralExpressionSyntax,
+            index ClosureScopeIndex
+        ) bool {
+            for var ancestor = site.Parent; ancestor != nil; ancestor = ancestor!!.Parent {
+                if ancestor is BlockStatementSyntax or
+                    BlockExpressionSyntax or
+                    ForClauseStatementSyntax &&
+                    index
+                    .DeclarationsOf(ancestor).TryGetValue(name, out var declarations) {
+                    for declaration in declarations {
+                        // Callable buckets merge parent overloads; only value bindings hide them.
+                        if declaration
+                            .Span
+                            .End <= site
+                            .Span
+                            .Start &&
+                            !IsGenericLocalFunctionDeclaration(declaration) &&
+                            (
+                            !IsNonGenericLocalFunctionLiteralDeclaration(declaration) ||
+                                index.IsOrdinaryLocalFunctionValue(declaration)
+                        ) &&
+                            !IsRefReturningLocalFunctionDeclaration(declaration) {
+                            return true
+                        }
+                    }
+                }
+                if IsScopeOwner(ancestor) && index.ParametersOf(ancestor).Contains(name) {
+                    return true
+                }
+                if object.ReferenceEquals(ancestor, literal) {
+                    return false
+                }
+            }
+            return false
+        }
+
+        private func LocalFunctionReferenceName(node SyntaxNode) string? -> switch node {
+            case name is NameExpressionSyntax: name.IdentifierToken.ValueText
+            case call is CallExpressionSyntax: call.Identifier.ValueText
+            default: default(string?)
+        }
+
+        private func HasLocalFunctionCrossReference(
+            declarations IEnumerable[VariableDeclarationSyntax],
+            siblingNames ICollection[string]
+        ) bool {
+            for declaration in declarations {
+                let literal = cast[FunctionLiteralExpressionSyntax](declaration.Initializer!!)
+                for node in literal.Body.DescendantNodesAndSelf() {
+                    if LocalFunctionReferenceName(node) is {} name &&
+                        name != declaration
+                        .Identifier
+                        .ValueText &&
+                        siblingNames.Contains(name) {
                         return true
                     }
                 }
             }
             return false
+        }
+
+        private func LastReferencedLocalOverload(
+            site SyntaxNode,
+            overloads List[int32],
+            statements ImmutableArray[StatementSyntax]
+        ) int32 {
+            if !(site is CallExpressionSyntax call) {
+                return overloads[overloads.Count - 1]
+            }
+            for var candidate = overloads.Count - 1; candidate >= 0; candidate-- {
+                let index = overloads[candidate]
+                let declaration = cast[VariableDeclarationSyntax](statements[index])
+                let literal = cast[FunctionLiteralExpressionSyntax](declaration.Initializer!!)
+                var required = 0
+                var variadic = false
+                for parameter in literal.Parameters {
+                    variadic |= parameter.IsVariadic
+                    if !parameter.IsVariadic && parameter.DefaultValue == nil {
+                        required++
+                    }
+                }
+                if call.Arguments.Count >= required && (variadic || call.Arguments.Count <= literal.Parameters.Count) {
+                    return index
+                }
+            }
+            return -1
         }
 
         private func IsSyntacticallyInfiniteLoop(statement BoundForInfiniteStatement) bool {

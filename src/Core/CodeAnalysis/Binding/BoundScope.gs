@@ -312,6 +312,26 @@ partial class BoundScope {
         return true
     }
 
+    internal func TryPublishStagedFunction(function FunctionSymbol) bool {
+        if !Pop().TryDeclareFunction(function) {
+            return false
+        }
+        // Retained body scopes must see the published method once, not once in each scope.
+        if functions is {} stagedFunctions && stagedFunctions.TryGetValue(function.Name, out var overloads) {
+            overloads.Remove(function)
+            if overloads.Count == 0 {
+                stagedFunctions.Remove(function.Name)
+                functionKeys?.Remove(function.Name)
+            }
+        }
+        if symbols is {} stagedSymbols && stagedSymbols.TryGetValue(function.Name, out var symbol) &&
+            object.ReferenceEquals(symbol, function) {
+            stagedSymbols.Remove(function.Name)
+            symbolKeys?.Remove(function.Name)
+        }
+        return true
+    }
+
     /// ADR-0063 §11: returns every overload of the given function name visible
     /// from this scope (walks parent scopes). Empty when no function with that
     /// name is in scope.

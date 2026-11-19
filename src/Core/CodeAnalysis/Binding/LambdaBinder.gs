@@ -401,7 +401,7 @@ internal class LambdaBinder {
                     refKind: refKind
                 )
                 if p.Identifier != nil && retriedVariables != nil {
-                    retriedVariables[p.Identifier] = lambdaParam
+                    binderCtx.SetRetriedBinding(retriedVariables, p.Identifier, cast[VariableSymbol](lambdaParam))
                 }
             }
             // ADR-0063 §5: function-literal (lambda) parameters can declare a
@@ -792,7 +792,7 @@ internal class LambdaBinder {
                     CanReuseLocalFunction(existingFunction, function) {
                     function = existingFunction
                 } else {
-                    retriedLocalFunctions[syntax] = function
+                    binderCtx.SetRetriedBinding(retriedLocalFunctions, syntax, function)
                 }
             }
             if !Scope.TryDeclareFunction(function) {
@@ -928,10 +928,10 @@ internal class LambdaBinder {
             return
         }
         let literals = List[BoundFunctionLiteralExpression](group)
-        if group.Count >= 2 {
-            for member in group {
-                CollectNestedFunctionLiterals(member.Body, literals)
-            }
+        for member in group {
+            CollectNestedFunctionLiterals(member.Body, literals)
+        }
+        if literals.Count >= 2 {
             let maxPasses = Math.Max(8, literals.Count * literals.Count)
             for var pass = 0; pass < maxPasses; pass++ {
                 var changed = false
@@ -958,6 +958,19 @@ internal class LambdaBinder {
         // combination that path does not support). Re-evaluate the
         // exclusion now that every member's final capture set is known.
         for literal in literals {
+            // Non-generic direct functions use the same lexical-owner restriction as generic declarations.
+            if !literal.Function.IsGeneric && literal.Function.LocalDeclaration is {} declaration {
+                FindEnclosingTypeParameterReference(
+                    literal.Function,
+                    literal.Body,
+                    ImmutableArray[TypeParameterSymbol].Empty,
+                    out var requiresLexicalOwner
+                )
+                literal.RequiresLexicalOwner |= requiresLexicalOwner
+                if requiresLexicalOwner {
+                    literal.EnclosingTypeParameterOffenderLocation = declaration.Identifier.Location
+                }
+            }
             if literal.EnclosingTypeParameterOffender is {} offender &&
                 !literal.EnclosingTypeParameterDiagnosticReported &&
                 literal
@@ -1466,7 +1479,7 @@ internal class LambdaBinder {
                     refKind: refKind
                 )
                 if p.Identifier != nil && retriedVariables != nil {
-                    retriedVariables[p.Identifier] = lambdaParam
+                    binderCtx.SetRetriedBinding(retriedVariables, p.Identifier, cast[VariableSymbol](lambdaParam))
                 }
             }
             // ADR-0063 §5: arrow-lambda parameters can also declare a default
@@ -2999,7 +3012,11 @@ internal class LambdaBinder {
             }
             discarded = builder.MoveToImmutable()
         }
-        cache[key] = RetriedFunctionLiteralEntry(bound, Diagnostics.VisibleSince(startMark), discarded, keptNaturalType)
+        binderCtx.SetRetriedBinding(
+            cache,
+            key,
+            RetriedFunctionLiteralEntry(bound, Diagnostics.VisibleSince(startMark), discarded, keptNaturalType)
+        )
     }
 
     private func CanReuseLocalFunction(existing FunctionSymbol, candidate FunctionSymbol) bool {

@@ -4079,7 +4079,7 @@ internal partial class ExpressionBinder {
                 LocalVariableSymbol(localName, isReadOnly, declaredType, declaringSyntax: syntax)
             }
             if syntax.DiscardToken == nil && retriedVariables != nil {
-                retriedVariables[syntax] = local
+                binderCtx.SetRetriedBinding(retriedVariables, cast[SyntaxNode](syntax), cast[VariableSymbol](local))
             }
             if syntax.DiscardToken == nil {
                 if syntax.DeclarationIdentifier is not{} resolvedDeclarationIdentifier {
