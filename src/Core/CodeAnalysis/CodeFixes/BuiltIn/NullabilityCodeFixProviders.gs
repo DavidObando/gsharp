@@ -101,7 +101,10 @@ internal class NullableValueCodeFixProvider : GSharpCodeFixProvider {
             "Provide default with '?? ${elvisDefault}'",
             "GS0154.NullCoalescingDefault",
             Applicability.MaybeIncorrect,
-            (editor SyntaxEditor) -> editor.ReplaceNode(target, "(${editor.OriginalText(target)} ?? ${elvisDefault})")
+            (editor SyntaxEditor) -> editor.ReplaceNode(
+                target,
+                "(${Operand(editor.OriginalText(target), target)} ?? ${elvisDefault})"
+            )
         )
         context.RegisterFix(
             NullAssertionTitle,
@@ -111,8 +114,8 @@ internal class NullableValueCodeFixProvider : GSharpCodeFixProvider {
         )
     }
 
-    // `!!` binds tighter than a binary operator: `a + b!!` asserts only `b`, so a compound
-    // expression is parenthesized first.
+    // `!!` binds tighter than a binary operator (`a + b!!` asserts only `b`), and `??` binds tighter
+    // than an assignment (`x = y ?? 0` defaults `y`), so a compound expression is parenthesized first.
     private func Operand(text string, node SyntaxNode) string -> switch node {
         case n is NameExpressionSyntax: text
         case a is AccessorExpressionSyntax: text

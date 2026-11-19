@@ -8,6 +8,7 @@ import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.CodeFixes
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
+import GSharp.Core.CodeAnalysis.Text
 import System.Collections.Immutable
 
 /// GS0127: a `let` variable that is assigned again becomes `var` (ADR-0227 D8, ADR-0008).
@@ -29,6 +30,12 @@ internal class LetToVarCodeFixProvider : GSharpCodeFixProvider {
         }
         let assignment SyntaxNode? = token.Parent
         if assignment == nil {
+            return
+        }
+        // A member assignment (`c.N = 1`, `a[i] = 1`) has a receiver that can have the same name as
+        // the read-only member. The provider cannot tell them apart, so it declines.
+        let target = tree.Text.ToString(TextSpan.FromBounds(assignment.Span.Start, token.Span.Start))
+        if target.Contains('.') || target.Contains('[') {
             return
         }
         let symbol Symbol? = TargetSymbol(context.SemanticModel, assignment, context)

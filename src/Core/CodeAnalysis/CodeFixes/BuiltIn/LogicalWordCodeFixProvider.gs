@@ -31,9 +31,7 @@ internal class LogicalWordCodeFixProvider : GSharpCodeFixProvider {
         }
         switch token.Text {
             case "or", "and" {
-                if context.Diagnostic.Id != "GS0125" {
-                    return
-                }
+                // `a or b` reports GS0125; `a or (b)` parses as a call and reports GS0130.
                 // A binary operator needs an operand on each side, on the line.
                 let previous SyntaxToken? = FixSyntax.PreviousRealToken(tree, token)
                 if previous == nil || !FixSyntax.SameLine(tree.Text, previous.Span.Start, token.Span.Start) ||

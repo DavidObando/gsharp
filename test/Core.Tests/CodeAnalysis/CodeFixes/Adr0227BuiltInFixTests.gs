@@ -178,6 +178,50 @@ open class Adr0227BuiltInFixTests {
     }
 
     @Fact
+    func LetField_WithAReceiverOfTheSameName_HasNoFix() {
+        const source = "package P\n\nclass C {\n    let c int32 = 0\n}\n\nfunc F() {\n    let c = C()\n    c.c = 1\n}\n"
+        let tree = SyntaxTree.Parse(source)
+        let compilation = Compilation(tree)
+        let target = compilation.GetDiagnostics().First((d Diagnostic) -> d.Id == "GS0127")
+        Assert.Empty(
+            CodeFixService(CodeFixRegistry.CreateDefault()).GetFixes(compilation, target).Where(
+                (f CodeFix) -> f.ProviderId == "GSharp.CodeFixes.LetToVar"
+            )
+        )
+    }
+
+    @Fact
+    func LogicalWords_BeforeAParenthesizedOperand_AreFixed() {
+        for word in[]string{"and", "or"} {
+            let source = "package P\n\nfunc F(a bool, b bool) bool {\n    return a " + word + " (b)\n}\n"
+            let tree = SyntaxTree.Parse(source)
+            let compilation = Compilation(tree)
+            let target = compilation.GetDiagnostics().First((d Diagnostic) -> d.Id == "GS0130")
+            let service = CodeFixService(CodeFixRegistry.CreateDefault())
+            let fix = Assert.Single(service.GetFixes(compilation, target))
+            let expected = if word == "and" {
+                "&&"
+            } else {
+                "||"
+            }
+            Assert.Contains("return a " + expected + " (b)\n", Assert.Single(service.Apply(fix)).Text.ToString())
+        }
+    }
+
+    @Fact
+    func NullCoalescingDefault_OnAnAssignment_DefaultsTheResult() {
+        const source = "package P\n\nfunc F(y int32?) int32 {\n    var x int32? = nil\n    return x = y\n}\n"
+        let tree = SyntaxTree.Parse(source)
+        let compilation = Compilation(tree)
+        let diagnostic = compilation.GetDiagnostics().First((d Diagnostic) -> d.Id == "GS0155" || d.Id == "GS0156")
+        let service = CodeFixService(CodeFixRegistry.CreateDefault())
+        let fallback = service.GetFixes(compilation, diagnostic).Single(
+            (f CodeFix) -> f.Title.StartsWith("Provide default", StringComparison.Ordinal)
+        )
+        Assert.Contains("return ((x = y) ?? 0)", Assert.Single(service.Apply(fallback)).Text.ToString())
+    }
+
+    @Fact
     func LogicalWords_WithoutOperands_HaveNoFix() {
         for source in[]string{
             "package P\n\nfunc F() bool {\n    return or\n}\n",
