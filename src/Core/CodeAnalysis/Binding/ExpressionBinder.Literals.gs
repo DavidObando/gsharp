@@ -2471,17 +2471,13 @@ internal partial class ExpressionBinder {
             // substitute both levels and the emitter encodes the reified nested
             // type (`Outer`1+Middle`2<int32, string>`).
             structSymbol = if enclosingTypeArguments.IsDefaultOrEmpty {
-                StructSymbol.Construct(
-                    structSymbol,
-                    typeArgs.MoveToImmutable(),
-                    $scope.References!!.MapClrTypeToReferences
-                )
+                StructSymbol.Construct(structSymbol, typeArgs.MoveToImmutable(), $scope.ClrTypeProjector)
             } else {
                 StructSymbol.ConstructNestedGeneric(
                     structSymbol,
                     enclosingTypeArguments,
                     typeArgs.MoveToImmutable(),
-                    $scope.References!!.MapClrTypeToReferences
+                    $scope.ClrTypeProjector
                 )
             }
         } else if syntax.TypeArgumentList != nil && initialStructSymbol.ClrType is not{IsConstructedGenericType: true} {
@@ -2497,11 +2493,7 @@ internal partial class ExpressionBinder {
             // enclosing type (`Box[int32].Tag{…}`) threads only the enclosing
             // arguments so member types typed as an enclosing parameter surface
             // closed and the emitter encodes `Box`1+Tag`1<int32>`.
-            structSymbol = StructSymbol.ConstructNested(
-                structSymbol,
-                enclosingTypeArguments,
-                $scope.References!!.MapClrTypeToReferences
-            )
+            structSymbol = StructSymbol.ConstructNested(structSymbol, enclosingTypeArguments, $scope.ClrTypeProjector)
         }
         if binderCtx.HasUnclosedEnclosingTypeParameters(structSymbol, getCurrentFunction()) {
             Diagnostics.ReportUnableToFindType(syntax.TypeIdentifier.Location, typeName)
@@ -4683,10 +4675,10 @@ internal partial class ExpressionBinder {
         elementType TypeSymbol,
         out listType ImportedTypeSymbol
     ) BoundExpression {
-        let openListType = $scope.References!!.MapClrTypeToReferences(typeof(List[_]))
+        let openListType = $scope.MapClrTypeToReferences(typeof(List[_]))
         var clrElementType Type? = resolveClrTypeForGenericArg(elementType)
         if clrElementType == nil && MemberLookup.TryProjectErasedClrType(elementType, out var projectedElementType) {
-            clrElementType = $scope.References!!.MapClrTypeToReferences(projectedElementType)
+            clrElementType = $scope.MapClrTypeToReferences(projectedElementType)
         }
         clrElementType ??= $scope.References!!.GetCoreType("System.Object")
         var closedListType Type
@@ -4821,9 +4813,9 @@ internal partial class ExpressionBinder {
         // type and concrete reflection argument in the resolver's load context;
         // retain the bound element symbol so open/same-compilation arguments
         // remain symbolic for emit.
-        let spanOpen = this.binderCtx.References.MapClrTypeToReferences(typeof(System.Span[_]))
+        let spanOpen = $scope.MapClrTypeToReferences(typeof(System.Span[_]))
         let elementClr = if elementType.ClrType != nil {
-            this.binderCtx.References.MapClrTypeToReferences(elementType.ClrType)!!
+            $scope.MapClrTypeToReferences(elementType.ClrType)!!
         } else if elementType is EnumSymbol {
             this.binderCtx.References.GetCoreType("System.Int32")
         } else {

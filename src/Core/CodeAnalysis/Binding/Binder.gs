@@ -6082,18 +6082,17 @@ partial class Binder {
                     type is NullableTypeSymbol ||
                     type is ImportedTypeSymbol
             ) &&
-                MemberLookup
-                .TryProjectErasedClrType(type, out var projected) {
-                return $scope.References!!.MapClrTypeToReferences(projected)!!
+                MemberLookup.TryProjectErasedClrType(type, out var projected) {
+                return $scope.MapClrTypeToReferences(projected)!!
             }
             return if TypeSymbol.ContainsTypeParameter(type) || TypeSymbol.ContainsSameCompilationUserType(type) ||
                 type.ClrType == nil {
-                $scope.References!!.MapClrTypeToReferences(erasedArgument)!!
+                $scope.MapClrTypeToReferences(erasedArgument)!!
             } else {
-                (ResolveClrTypeForGenericArg(type) ?? $scope.References!!.MapClrTypeToReferences(type.ClrType))!!
+                (ResolveClrTypeForGenericArg(type) ?? $scope.MapClrTypeToReferences(type.ClrType))!!
             }
         }
-        return (ResolveClrTypeForGenericArg(type) ?? $scope.References!!.MapClrTypeToReferences(type.ClrType))!!
+        return (ResolveClrTypeForGenericArg(type) ?? $scope.MapClrTypeToReferences(type.ClrType))!!
     }
 
     /// Issues #4089/#4090: asks both constraint questions of a G#-declared
@@ -6264,7 +6263,11 @@ partial class Binder {
     /// when the symbol has no CLR type.
     private func ResolveClrTypeForGenericArg(
         typeSymbol TypeSymbol
-    ) Type? -> NullableLifting.ResolveClrTypeForGenericArg(this.$scope.References!!, typeSymbol)
+    ) Type? -> NullableLifting.ResolveClrTypeForGenericArg(
+        this.$scope.References!!,
+        typeSymbol,
+        this.$scope.ConsumerAssemblyName
+    )
 
     /// Resolves a CLR type used in a type clause to its semantic aggregate when
     /// it is an imported data class/data struct. This keeps simple, qualified,

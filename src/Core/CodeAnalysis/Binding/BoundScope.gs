@@ -243,6 +243,13 @@ partial class BoundScope {
     internal func NormalizeSemanticAggregate(type TypeSymbol, clrType Type?) TypeSymbol -> ImportedTypeSymbol
         .NormalizeSemanticAggregate(type, clrType, References, ConsumerAssemblyName, HasExplicitConsumerAssemblyName)
 
+    internal func MapClrTypeToReferences(hostType Type?) Type? -> References?.ProjectClrType(
+        hostType,
+        ConsumerAssemblyName
+    )
+
+    internal prop ClrTypeProjector Func[Type, Type] -> References!!.GetTypeProjector(ConsumerAssemblyName)
+
     internal func CreateImportedClassSymbol(
         type Type,
         declaration ExpressionSyntax?,
@@ -677,12 +684,18 @@ partial class BoundScope {
         }
         for import_ in EnumerateImports() {
             if (import_.IsAlias && import_.Name == name) || References!!.HasTypeNameAtAnyArity(
-                import_.Target + "." + name
+                import_.Target + "." + name,
+                ConsumerAssemblyName,
+                HasExplicitConsumerAssemblyName
             ) {
                 return true
             }
         }
-        return GetCurrentDeclaringPackage() is {} package_ && References!!.HasTypeNameAtAnyArity(package_ + "." + name)
+        return GetCurrentDeclaringPackage() is {} package_ && References!!.HasTypeNameAtAnyArity(
+            package_ + "." + name,
+            ConsumerAssemblyName,
+            HasExplicitConsumerAssemblyName
+        )
     }
 
     /// Tries to lookup an imported generic open type by simple name and arity (Phase 4.4 / ADR-0020).

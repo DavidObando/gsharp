@@ -113,10 +113,7 @@ internal class CustomAttributeEncoder {
     /// (cref:string) argument, used by assembly-level helpers such as
     /// `EmitReferenceAssemblyAttribute` and the AssemblyInfo emitters.
     func EmitStringAttribute(parent EntityHandle, typeName string, fallbackType Type, value string) {
-        let attrType = if this
-            .emitCtx
-            .References
-            .TryResolveType(typeName, requireExternalVisibility: false, out var resolved) {
+        let attrType = if this.emitCtx.TryResolveType(typeName, requireExternalVisibility: false, out var resolved) {
             resolved
         } else {
             fallbackType
@@ -157,10 +154,7 @@ internal class CustomAttributeEncoder {
         firstValue string,
         secondValue string
     ) {
-        let attrType = if this
-            .emitCtx
-            .References
-            .TryResolveType(typeName, requireExternalVisibility: false, out var resolved) {
+        let attrType = if this.emitCtx.TryResolveType(typeName, requireExternalVisibility: false, out var resolved) {
             resolved
         } else {
             fallbackType
@@ -654,12 +648,16 @@ internal class CustomAttributeEncoder {
         // IsNullOrEmpty check) and the emit continued against the raw CLR type.
         // Returning here instead silently dropped the CustomAttribute row.
         let fullName string? = clrType.FullName
-        if fullName == nil ||
-            !this
-            .emitCtx
-            .References
-            .TryResolveType(fullName, requireExternalVisibility: false, out var resolved) {
-            resolved = clrType
+        let resolved = if this.emitCtx.References.OwnsType(clrType) {
+            clrType
+        } else if fullName != nil && this.emitCtx.TryResolveType(
+            fullName,
+            requireExternalVisibility: false,
+            out var mapped
+        ) {
+            mapped
+        } else {
+            clrType
         }
         let ctor ConstructorInfo? = ResolveAttributeConstructor(
             resolved,
@@ -1336,10 +1334,7 @@ internal class CustomAttributeEncoder {
     private func BuildNullableParts(underlying TypeSymbol)(Name string, Assembly string) {
         let (innerName, innerAssembly) = this.GetSerializedTypeParts(underlying)
         let suffix = "[[" + innerName + ", " + innerAssembly + "]]"
-        if this
-            .emitCtx
-            .References
-            .TryResolveType("System.Nullable`1", requireExternalVisibility: false, out var nullableOpen) &&
+        if this.emitCtx.TryResolveType("System.Nullable`1", requireExternalVisibility: false, out var nullableOpen) &&
             nullableOpen != nil {
             return (
                 (nullableOpen.FullName ?? "System.Nullable`1") + suffix,
@@ -1520,10 +1515,7 @@ internal class CustomAttributeEncoder {
         argumentParts IReadOnlyCollection[(Name string, Assembly string)],
         out parts(Name string, Assembly string)
     ) bool {
-        if !this
-            .emitCtx
-            .References
-            .TryResolveType(openDefinitionName, requireExternalVisibility: false, out var open_) ||
+        if !this.emitCtx.TryResolveType(openDefinitionName, requireExternalVisibility: false, out var open_) ||
             open_ == nil {
             parts = default((Name string, Assembly string))
             return false

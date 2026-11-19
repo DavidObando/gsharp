@@ -17,6 +17,7 @@ import System.Reflection
 /// borrowed address is emitted or suspension state is planned.
 internal class ManagedReferenceLowerer : BoundTreeRewriter {
     private let references ReferenceResolver
+    private let typeProjector Func[Type, Type]
     private let helpers List[StructSymbol] = List[StructSymbol]()
     private let methods Dictionary[FunctionSymbol, BoundBlockStatement] = Dictionary[
         FunctionSymbol,
@@ -25,8 +26,9 @@ internal class ManagedReferenceLowerer : BoundTreeRewriter {
     private var function FunctionSymbol?
     private var counter int32
 
-    private init(references ReferenceResolver) {
+    private init(references ReferenceResolver, consumerAssemblyName string?) {
         this.references = references
+        this.typeProjector = references.GetTypeProjector(consumerAssemblyName)
     }
 
     protected override func RewriteFunctionLiteralExpression(node BoundFunctionLiteralExpression) BoundExpression {
@@ -312,7 +314,7 @@ internal class ManagedReferenceLowerer : BoundTreeRewriter {
         let construction = if parameters.IsDefaultOrEmpty {
             helper
         } else {
-            SynthesizedClosureReifier.Reify(helper, parameters, this.references.MapClrTypeToReferences)
+            SynthesizedClosureReifier.Reify(helper, parameters, this.typeProjector)
         }
         if (enclosingDefinition is StructSymbol or InterfaceSymbol) {
             helper.SetContainingType(enclosingDefinition!!)
@@ -356,7 +358,7 @@ internal class ManagedReferenceLowerer : BoundTreeRewriter {
 
     shared {
         internal func Lower(program BoundProgram, references ReferenceResolver) BoundProgram {
-            let rewriter = ManagedReferenceLowerer(references)
+            let rewriter = ManagedReferenceLowerer(references, program.ConsumerAssemblyName)
             let functions = program.Functions.ToBuilder()
             // Issue #4663: deterministic order, never identity-hash order.
             for pair in BoundProgramOrder.Functions(program) {
@@ -395,6 +397,8 @@ internal class ManagedReferenceLowerer : BoundTreeRewriter {
                 FriendAssemblies = program.FriendAssemblies,
                 AssemblyAttributes = program.AssemblyAttributes,
                 ModuleAttributes = program.ModuleAttributes,
+                ConsumerAssemblyName = program.ConsumerAssemblyName,
+                HasExplicitConsumerAssemblyName = program.HasExplicitConsumerAssemblyName,
                 NativeProtocols = program.NativeProtocols
             }
         }

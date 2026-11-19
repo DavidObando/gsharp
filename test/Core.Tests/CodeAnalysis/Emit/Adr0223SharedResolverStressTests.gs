@@ -206,15 +206,26 @@ func Use() int32 {
         for worker in workers {
             worker.Join()
         }
+        let exceptions = List[string]()
+        for var index = 0; index < cases.Count; index++ {
+            if serialResults[index].StartsWith(ExceptionPrefix, StringComparison.Ordinal) {
+                exceptions.Add("case $index (${cases[index].Key}, serial): ${serialResults[index]}")
+            }
+        }
         let mismatches = List[string]()
         for var slot = 0; slot < jobs.Count; slot++ {
             let expected = serialResults[jobs[slot]]
             let actual = parallelResults[slot]
+            if actual.StartsWith(ExceptionPrefix, StringComparison.Ordinal) {
+                let entry = cases[jobs[slot]]
+                exceptions.Add("slot $slot (${entry.Key}, parallel): $actual")
+            }
             if !string.Equals(expected, actual, StringComparison.Ordinal) {
                 let entry = cases[jobs[slot]]
                 mismatches.Add("slot $slot (${entry.Key}):\n  serial:   $expected\n  parallel: $actual")
             }
         }
+        Assert.True(exceptions.Count == 0, "The compiler threw:\n" + string.Join("\n", exceptions.Take(10)))
         Assert.True(
             mismatches.Count == 0,
             "${mismatches.Count} of ${jobs.Count} parallel multi-assembly compilations differ from serial:\n" +

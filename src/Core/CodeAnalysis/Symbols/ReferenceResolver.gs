@@ -48,6 +48,7 @@ import SystemObject = System.Object
 /// suite where cross-targeting is not relevant.
 class ReferenceResolver : IDisposable {
     private let assemblies ImmutableArray[Assembly]
+    private let ownAssemblies ImmutableHashSet[Assembly]
     private let metadataContext MetadataLoadContext?
     // ADR-0209 PR 1: the handle-backed reference set, built beside the MetadataLoadContext
     // when GSHARP_METADATA_MODEL is `handles` or `compare`. No binder code reads it yet.
@@ -179,6 +180,7 @@ class ReferenceResolver : IDisposable {
         explicitReferenceAssemblies ImmutableHashSet[Assembly]? = nil
     ) {
         this.assemblies = assemblies
+        this.ownAssemblies = ImmutableHashSet.CreateRange[Assembly](ReferenceEqualityComparer.Instance, assemblies)
         this.metadataContext = metadataContext
         this.runtimeContext = runtimeContext
         this.missingTransitiveReferences = missingTransitiveReferences
@@ -555,8 +557,17 @@ class ReferenceResolver : IDisposable {
     /// @param fullName The attribute's fully-qualified metadata name.
     /// @param type The resolved declaration, if the target publishes one.
     /// @returns `true` when the target publishes the attribute.
-    internal func TryResolvePublishedEmbeddableAttribute(fullName string, @NotNullWhen(true) out type Type?) bool {
-        if !TryResolveType(fullName, requireExternalVisibility: true, out type) {
+    internal func TryResolvePublishedEmbeddableAttribute(
+        fullName string,
+        @NotNullWhen(true) out type Type?
+    ) bool -> TryResolvePublishedEmbeddableAttribute(fullName, CurrentAssemblyName, out type)
+
+    internal func TryResolvePublishedEmbeddableAttribute(
+        fullName string,
+        consumerAssemblyName string?,
+        @NotNullWhen(true) out type Type?
+    ) bool {
+        if !TryResolveType(fullName, requireExternalVisibility: true, consumerAssemblyName, out type) {
             return false
         }
         if IsHostFallback(type!!) && TargetsDownlevelFramework() {
@@ -741,6 +752,11 @@ class ReferenceResolver : IDisposable {
         return downlevelTarget == 1
     }
 
+    internal func OwnsType(type Type?) bool -> type != nil && ownAssemblies.Contains(type.Assembly)
+
+    internal func GetTypeProjector(consumerAssemblyName string?) Func[Type, Type] ->
+    (hostType Type) -> ProjectClrType(hostType, consumerAssemblyName)!!
+
     /// Projects a CLR (cref:Type) that may originate from the gsc host
     /// runtime onto the equivalent (cref:Type) from this resolver's
     /// reference set (its (cref:MetadataLoadContext) when one is in
@@ -768,7 +784,10 @@ class ReferenceResolver : IDisposable {
     /// set's (cref:MetadataLoadContext) (it is not resolvable by name and
     /// is not a recognised array/byref/pointer/generic shape).
     @return: NotNullIfNotNull("hostType")
-    func MapClrTypeToReferences(hostType Type?) Type? {
+    func MapClrTypeToReferences(hostType Type?) Type? -> ProjectClrType(hostType, CurrentAssemblyName)
+
+    @return: NotNullIfNotNull("hostType")
+    internal func ProjectClrType(hostType Type?, consumerAssemblyName string?) Type? {
         if hostType == nil {
             return nil
         }
@@ -805,7 +824,7 @@ class ReferenceResolver : IDisposable {
             // when IsArray/IsByRef/IsPointer is true (or the type is a generic
             // parameter, handled separately below) — guaranteed here by the
             // IsArray check on this line.
-            let mappedElement = MapClrTypeToReferences(hostType.GetElementType()!!)
+            let mappedElement = ProjectClrType(hostType.GetElementType()!!, consumerAssemblyName)
             let rank = hostType.GetArrayRank()
             return if rank == 1 {
                 mappedElement!!.MakeArrayType()
@@ -821,19 +840,19 @@ class ReferenceResolver : IDisposable {
         if hostType.IsByRef {
             // See the IsArray branch above: GetElementType() is non-null here
             // because IsByRef is true.
-            return MapClrTypeToReferences(hostType.GetElementType()!!)!!.MakeByRefType()
+            return ProjectClrType(hostType.GetElementType()!!, consumerAssemblyName)!!.MakeByRefType()
         }
         if hostType.IsPointer {
             // See the IsArray branch above: GetElementType() is non-null here
             // because IsPointer is true.
-            return MapClrTypeToReferences(hostType.GetElementType()!!)!!.MakePointerType()
+            return ProjectClrType(hostType.GetElementType()!!, consumerAssemblyName)!!.MakePointerType()
         }
         if hostType.IsGenericType && !hostType.IsGenericTypeDefinition {
-            let mappedDefinition = MapClrTypeToReferences(hostType.GetGenericTypeDefinition())
+            let mappedDefinition = ProjectClrType(hostType.GetGenericTypeDefinition(), consumerAssemblyName)
             let hostArguments = hostType.GetGenericArguments()
             let mappedArgs = [hostArguments.Length]Type
             for var i = 0; i < hostArguments.Length; i++ {
-                mappedArgs[i] = MapClrTypeToReferences(hostArguments[i])!!
+                mappedArgs[i] = ProjectClrType(hostArguments[i], consumerAssemblyName)!!
             }
             return mappedDefinition!!.MakeGenericType(mappedArgs)
         }
@@ -845,9 +864,14 @@ class ReferenceResolver : IDisposable {
         if hostType.IsGenericParameter {
             return hostType
         }
+        // A leaf type already declared by one of this resolver's own assemblies
+        // keeps its exact identity without name re-resolution (#6070).
+        if ownAssemblies.Contains(hostType.Assembly) {
+            return hostType
+        }
         let fullName = hostType.FullName
         if !string.IsNullOrEmpty(fullName) &&
-            TryResolveType(fullName, requireExternalVisibility: false, out var mapped) &&
+            TryResolveType(fullName, requireExternalVisibility: false, consumerAssemblyName, out var mapped) &&
             mapped != nil {
             return mapped
         }
@@ -1012,17 +1036,28 @@ class ReferenceResolver : IDisposable {
         .Value
         .Contains(namespaceName)
 
-    internal func HasTypeNameAtAnyArity(fullName string) bool -> (
-        if warmNameIndex == nil {
-            typeNameIndex.Value.ArityInsensitiveNames
+    internal func HasTypeNameAtAnyArity(
+        fullName string,
+        consumerAssemblyName string? = nil,
+        hasExplicitConsumerAssemblyName bool = false
+    ) bool {
+        let effectiveConsumer = if hasExplicitConsumerAssemblyName {
+            consumerAssemblyName
         } else {
-            arityInsensitiveTypeNames
+            consumerAssemblyName ?? CurrentAssemblyName
         }
-    )
-        .Value
-        .TryGetValue(fullName, out var candidates) && candidates.Any(
-        (candidate string) -> TryResolveType(candidate, out _)
-    )
+        return (
+            if warmNameIndex == nil {
+                typeNameIndex.Value.ArityInsensitiveNames
+            } else {
+                arityInsensitiveTypeNames
+            }
+        )
+            .Value
+            .TryGetValue(fullName, out var candidates) && candidates.Any(
+            (candidate string) -> TryResolveType(candidate, effectiveConsumer, out _)
+        )
+    }
 
     private func BuildArityInsensitiveTypeNames() Dictionary[string, ImmutableArray[string]] ->
     BuildArityInsensitiveTypeNamesForNames(cast[IEnumerable[string]](CurrentNameIndex().Keys))

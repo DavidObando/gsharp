@@ -13,6 +13,8 @@ import System
 import System.IO
 import System.Linq
 import System.Reflection
+import System.Reflection.Metadata
+import System.Reflection.PortableExecutable
 import System.Runtime.Loader
 import Xunit
 
@@ -239,6 +241,200 @@ func Use() int32 -> Derived().Compute()
         }
         Assert.Empty(interleavedFriend.GetDiagnostics().Where((d Diagnostic) -> d.IsError))
         Assert.NotEmpty(interleavedStranger.GetDiagnostics().Where((d Diagnostic) -> d.IsError))
+    }
+
+    @Fact
+    func SharedResolver_FriendVisibleTypeShadowsNativeAlias_WithoutMutatingResolver() {
+        using let fixture = CSharpFixture(`using System.Runtime.CompilerServices;
+[assembly: InternalsVisibleTo("Friend")]
+namespace AliasLib {
+    internal class slice<T> {
+        public T Value;
+        public slice(T v) { Value = v; }
+    }
+}`)
+        let source = `package Probe
+import AliasLib
+func Use() int32 {
+    let s = slice[int32](42)
+    return s.Value
+}
+`
+        using let shared = ReferenceResolver.WithReferences([]string{fixture.AssemblyPath})
+        let friend = Compilation(shared, SyntaxTree.Parse(SourceText.From(source, "friend.gs"))){
+            AssemblyName = "Friend"
+        }
+        let stranger = Compilation(shared, SyntaxTree.Parse(SourceText.From(source, "stranger.gs"))){
+            AssemblyName = "Stranger"
+        }
+        Assert.Empty(friend.GetDiagnostics().Where((d Diagnostic) -> d.IsError))
+        using let pe = MemoryStream()
+        let emitResult = friend.Emit(pe, nil, nil, assemblyName: "Friend")
+        Assert.True(emitResult.Success, Describe(emitResult.Diagnostics))
+        Assert.Equal(42, InvokeRunMethod(pe.ToArray(), fixture.AssemblyPath, "Probe.<Program>", "Use"))
+        Assert.NotEmpty(stranger.GetDiagnostics().Where((d Diagnostic) -> d.IsError))
+    }
+
+    @Fact
+    func EmitWithoutRepeatingAssemblyName_PreservesFriendCopyConstructorThroughLowering() {
+        using let fixture = CSharpFixture(`using System.Runtime.CompilerServices;
+[assembly: InternalsVisibleTo("Friend")]
+namespace BaseCopyLib {
+    public class BaseRec {
+        public BaseRec() {}
+        internal BaseRec(BaseRec other) {}
+    }
+}`)
+        let source = `package Probe
+import BaseCopyLib
+data class Derived(X int32) : BaseRec
+func Capture(v int32) int32 {
+    var x = v
+    let f = () -> x
+    let msg = "v=$v"
+    return f() + msg.Length
+}
+`
+        using let shared = ReferenceResolver.WithReferences([]string{fixture.AssemblyPath})
+        let friend = Compilation(shared, SyntaxTree.Parse(SourceText.From(source, "friend.gs"))){
+            AssemblyName = "Friend"
+        }
+        using let pe = MemoryStream()
+        let emitResult = friend.Emit(pe)
+        Assert.True(emitResult.Success, Describe(emitResult.Diagnostics))
+    }
+
+    @Fact
+    func SharedResolver_EmitBoundInternalAttribute_PreservesFriendAssemblyIdentity() {
+        using let internalAttr = CSharpFixture(`using System;
+using System.Runtime.CompilerServices;
+[assembly: InternalsVisibleTo("Friend")]
+namespace AttrNs {
+    [AttributeUsage(AttributeTargets.Class)]
+    internal sealed class MarkerAttribute : Attribute {
+        public MarkerAttribute(int code) {}
+    }
+}`, assemblyName: "AttrInternal")
+        using let publicAttr = CSharpFixture(`using System;
+namespace AttrNs {
+    [AttributeUsage(AttributeTargets.Class)]
+    public sealed class MarkerAttribute : Attribute {
+        public MarkerAttribute(string label) {}
+    }
+}`, assemblyName: "AttrPublic")
+        let source = `package Probe
+import AttrNs
+@Marker(7)
+public class Tagged {}
+`
+        using let shared = ReferenceResolver.WithReferences(
+            []string{internalAttr.AssemblyPath, publicAttr.AssemblyPath}
+        )
+        let friend = Compilation(shared, SyntaxTree.Parse(SourceText.From(source, "friend.gs"))){
+            AssemblyName = "Friend"
+        }
+        using let pe = MemoryStream()
+        let emitResult = friend.Emit(pe)
+        Assert.True(emitResult.Success, Describe(emitResult.Diagnostics))
+        pe.Position = 0
+        using let reader = PEReader(pe)
+        let md = reader.GetMetadataReader()
+        let tagged = md
+            .TypeDefinitions
+            .Select((h TypeDefinitionHandle) -> md.GetTypeDefinition(h))
+            .Single((td TypeDefinition) -> md.GetString(td.Name) == "Tagged")
+        let attrAssemblies = tagged
+            .GetCustomAttributes()
+            .Select(
+            (h CustomAttributeHandle) -> {
+                let attr = md.GetCustomAttribute(h)
+                let mr = md.GetMemberReference(cast[MemberReferenceHandle](attr.Constructor))
+                let tr = md.GetTypeReference(cast[TypeReferenceHandle](mr.Parent))
+                return (
+                    Assembly: md.GetString(
+                        md.GetAssemblyReference(cast[AssemblyReferenceHandle](tr.ResolutionScope)).Name
+                    ),
+                    Name: md.GetString(tr.Name)
+                )
+            }
+        )
+            .Where((entry(Assembly string, Name string)) -> entry.Name == "MarkerAttribute")
+            .ToArray()
+        let emittedAttr = Assert.Single(attrAssemblies)
+        Assert.Equal("AttrInternal", emittedAttr.Assembly)
+    }
+
+    @Fact
+    func SharedResolver_DuplicateTypeInGenericArgAndDelegateParam_PreservesConsumerIdentity() {
+        using let internalLib = CSharpFixture(`using System.Runtime.CompilerServices;
+[assembly: InternalsVisibleTo("Friend")]
+namespace DupGeneric {
+    internal class Item {
+        public int Id => 7;
+    }
+}`, assemblyName: "DupGenericInternal")
+        using let publicLib = CSharpFixture(`namespace DupGeneric {
+    public class Item {
+        public string Label => "pub";
+    }
+}`, assemblyName: "DupGenericPublic")
+        let friendSource = `package Probe
+import DupGeneric
+import System.Collections.Generic
+func Use(cb (Item) -> int32) int32 {
+    let list = List[Item]()
+    list.Add(Item())
+    return cb(list[0]) + list[0].Id
+}
+`
+        let strangerSource = `package Probe
+import DupGeneric
+import System.Collections.Generic
+func Use(cb (Item) -> string) string {
+    let list = List[Item]()
+    list.Add(Item())
+    return cb(list[0]) + list[0].Label
+}
+`
+        using let shared = ReferenceResolver.WithReferences([]string{internalLib.AssemblyPath, publicLib.AssemblyPath})
+        let friend = Compilation(shared, SyntaxTree.Parse(SourceText.From(friendSource, "friend.gs"))){
+            AssemblyName = "Friend"
+        }
+        let stranger = Compilation(shared, SyntaxTree.Parse(SourceText.From(strangerSource, "stranger.gs"))){
+            AssemblyName = "Stranger"
+        }
+        using let friendPe = MemoryStream()
+        let friendEmit = friend.Emit(friendPe)
+        Assert.True(friendEmit.Success, Describe(friendEmit.Diagnostics))
+        using let strangerPe = MemoryStream()
+        let strangerEmit = stranger.Emit(strangerPe)
+        Assert.True(strangerEmit.Success, Describe(strangerEmit.Diagnostics))
+
+        friendPe.Position = 0
+        using let friendReader = PEReader(friendPe)
+        let friendMd = friendReader.GetMetadataReader()
+        let friendItemScope = friendMd
+            .TypeReferences
+            .Select((h TypeReferenceHandle) -> friendMd.GetTypeReference(h))
+            .Single((tr TypeReference) -> friendMd.GetString(tr.Name) == "Item")
+            .ResolutionScope
+        Assert.Equal(
+            "DupGenericInternal",
+            friendMd.GetString(friendMd.GetAssemblyReference(cast[AssemblyReferenceHandle](friendItemScope)).Name)
+        )
+
+        strangerPe.Position = 0
+        using let strangerReader = PEReader(strangerPe)
+        let strangerMd = strangerReader.GetMetadataReader()
+        let strangerItemScope = strangerMd
+            .TypeReferences
+            .Select((h TypeReferenceHandle) -> strangerMd.GetTypeReference(h))
+            .Single((tr TypeReference) -> strangerMd.GetString(tr.Name) == "Item")
+            .ResolutionScope
+        Assert.Equal(
+            "DupGenericPublic",
+            strangerMd.GetString(strangerMd.GetAssemblyReference(cast[AssemblyReferenceHandle](strangerItemScope)).Name)
+        )
     }
 
     shared {

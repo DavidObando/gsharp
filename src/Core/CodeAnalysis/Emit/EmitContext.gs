@@ -8,6 +8,7 @@ import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Symbols
 import System
 import System.Collections.Generic
+import System.Diagnostics.CodeAnalysis
 import System.IO
 import System.Reflection
 import System.Reflection.Metadata
@@ -118,6 +119,23 @@ internal class EmitContext {
         assembly,
         ConsumerAssemblyName
     )
+
+    internal func TryResolveType(fullName string, @NotNullWhen(true) out type Type?) bool -> References.TryResolveType(
+        fullName,
+        ConsumerAssemblyName,
+        out type
+    )
+
+    internal func TryResolveType(
+        fullName string,
+        requireExternalVisibility bool,
+        @NotNullWhen(true) out type Type?
+    ) bool -> References.TryResolveType(fullName, requireExternalVisibility, ConsumerAssemblyName, out type)
+
+    internal func TryResolvePublishedEmbeddableAttribute(
+        fullName string,
+        @NotNullWhen(true) out type Type?
+    ) bool -> References.TryResolvePublishedEmbeddableAttribute(fullName, ConsumerAssemblyName, out type)
 
     /// Gets a value indicating whether this is a metadata-only reference-
     /// assembly emit (no method bodies, marked with
@@ -307,7 +325,7 @@ internal class EmitContext {
     /// @param fullName The metadata full name to resolve.
     /// @param fallback The host type to use when resolution fails.
     /// @returns The resolved type; never `null`.
-    private func ResolveCoreType(fullName string, fallback Type) Type -> if this.References.TryResolveType(
+    private func ResolveCoreType(fullName string, fallback Type) Type -> if this.TryResolveType(
         fullName,
         requireExternalVisibility: false,
         out var resolved

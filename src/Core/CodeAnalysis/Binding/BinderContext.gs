@@ -318,6 +318,8 @@ internal class BinderContext {
         clrType Type?
     ) TypeSymbol -> RootScope.NormalizeSemanticAggregate(type, clrType)
 
+    internal prop ClrTypeProjector Func[Type, Type] -> RootScope.ClrTypeProjector
+
     internal func CreateImportedClassSymbol(
         type Type,
         declaration ExpressionSyntax?,

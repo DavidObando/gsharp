@@ -999,6 +999,8 @@ internal shared class CaptureBoxingRewriter {
             FriendAssemblies = program.FriendAssemblies,
             AssemblyAttributes = program.AssemblyAttributes,
             ModuleAttributes = program.ModuleAttributes,
+            ConsumerAssemblyName = program.ConsumerAssemblyName,
+            HasExplicitConsumerAssemblyName = program.HasExplicitConsumerAssemblyName,
             NativeProtocols = program.NativeProtocols
         }
         return result

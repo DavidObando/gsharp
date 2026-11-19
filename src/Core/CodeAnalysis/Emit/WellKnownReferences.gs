@@ -1793,7 +1793,6 @@ internal class WellKnownReferences {
     /// @returns `true` when an externally visible declaration was found; otherwise `false`.
     private func TryResolveEmbeddableAttribute(fullName string, @NotNullWhen(true) out attributeType Type?) bool -> this
         .emitCtx
-        .References
         .TryResolvePublishedEmbeddableAttribute(fullName, out attributeType)
 
     /// Issue #4922: returns the constructor of a copy of the embeddable

@@ -466,7 +466,6 @@ internal partial class MethodBodyEmitter {
         if !this
             .outer
             .emitCtx
-            .References
             .TryResolveType(
             "Gsharp.Concurrency.GoroutineRuntime",
             requireExternalVisibility: false,

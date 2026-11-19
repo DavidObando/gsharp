@@ -1204,7 +1204,7 @@ open class Compilation {
         using let capturePhase = CompilationMeasurements.BeginPhase("lowering.capture-boxing")
         program = CaptureBoxingRewriter.Lower(
             program,
-            (References ?? ReferenceResolver.Default()).MapClrTypeToReferences
+            (References ?? ReferenceResolver.Default()).GetTypeProjector(EffectiveConsumerAssemblyName)
         )
         capturePhase?.Dispose()
         using let managedReferencePhase = CompilationMeasurements.BeginPhase("lowering.managed-references")

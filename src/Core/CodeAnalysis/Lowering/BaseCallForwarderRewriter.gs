@@ -948,6 +948,8 @@ shared class BaseCallForwarderRewriter {
             FriendAssemblies = program.FriendAssemblies,
             AssemblyAttributes = program.AssemblyAttributes,
             ModuleAttributes = program.ModuleAttributes,
+            ConsumerAssemblyName = program.ConsumerAssemblyName,
+            HasExplicitConsumerAssemblyName = program.HasExplicitConsumerAssemblyName,
             NativeProtocols = program.NativeProtocols
         }
     }
