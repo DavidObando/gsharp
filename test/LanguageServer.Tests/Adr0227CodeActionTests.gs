@@ -415,6 +415,36 @@ open class Adr0227CodeActionTests {
         }
     }
 
+    @Fact
+    func SourceFixAll_AppliesEveryMachineApplicableFix_OnlyWhenAsked() {
+        const source = "package P\n\nfunc F(a bool, b bool) string? {\n    if a or b {\n        return null\n    }\n    return null\n}\n"
+        let content = LanguageServerTestHelpers.Content(source)
+        let uri = DocumentUri.From("file:///a.gs")!!
+        let origin = Position(0, 0)
+        Assert.DoesNotContain(
+            CodeActionComputer.ComputeCodeActions(uri, content, Range(origin, origin)),
+            (a CommandOrCodeAction) -> a.CodeAction.Kind == CodeActionKind.SourceFixAllGSharp
+        )
+        let context = CodeActionContext{Only: []CodeActionKind{CodeActionKind("source.fixAll")}}
+        let action = Assert.Single(
+            CodeActionComputer.ComputeCodeActions(
+                uri,
+                content,
+                Range(origin, origin),
+                context,
+                CodeActionClientOptions()
+            )
+        )
+            .CodeAction
+        Assert.Equal(CodeActionKind.SourceFixAllGSharp, action.Kind)
+        let edit = Assert.Single(action.Edit!!.Changes!![uri])
+        let start = LanguageServerTestHelpers.PositionOf(source, "or")
+        Assert.Equal(start.Line, edit.Range.Start.Line)
+        Assert.Contains("||", edit.NewText, StringComparison.Ordinal)
+        Assert.Contains("nil", edit.NewText, StringComparison.Ordinal)
+        Assert.DoesNotContain("null", edit.NewText, StringComparison.Ordinal)
+    }
+
     private func AssertOffered(source string, at string, title string, newText string) {
         let content = LanguageServerTestHelpers.Content(source)
         let uri = DocumentUri.From("file:///a.gs")!!

@@ -232,7 +232,9 @@ type abstract class GSharp.Core.CodeAnalysis.CodeFixes.GSharpCodeFixProvider : S
   method protected Void .ctor()
   method public abstract System.Collections.Immutable.ImmutableArray`1<String> get_FixableDiagnosticIds()
   method public abstract Void RegisterCodeFixes(GSharp.Core.CodeAnalysis.CodeFixes.CodeFixContext context)
+  method public virtual Boolean get_SupportsFixAll()
   method public virtual String get_Id()
+  property public Boolean SupportsFixAll { get; }
   property public String Id { get; }
   property public System.Collections.Immutable.ImmutableArray`1<String> FixableDiagnosticIds { get; }
 type abstract class GSharp.Core.CodeAnalysis.Documentation.DocInline : System.Object, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocInline>
@@ -782,6 +784,16 @@ type enum GSharp.Core.CodeAnalysis.CodeFixes.Applicability : Int32
   field public const GSharp.Core.CodeAnalysis.CodeFixes.Applicability MachineApplicable = 0
   field public const GSharp.Core.CodeAnalysis.CodeFixes.Applicability MaybeIncorrect = 1
   field public const GSharp.Core.CodeAnalysis.CodeFixes.Applicability Unspecified = 3
+type enum GSharp.Core.CodeAnalysis.CodeFixes.FixAllScopeKind : Int32
+  field public const GSharp.Core.CodeAnalysis.CodeFixes.FixAllScopeKind Document = 0
+  field public const GSharp.Core.CodeAnalysis.CodeFixes.FixAllScopeKind Project = 1
+  field public const GSharp.Core.CodeAnalysis.CodeFixes.FixAllScopeKind Solution = 2
+type enum GSharp.Core.CodeAnalysis.CodeFixes.FixDropReason : Int32
+  field public const GSharp.Core.CodeAnalysis.CodeFixes.FixDropReason ApplicabilityFiltered = 2
+  field public const GSharp.Core.CodeAnalysis.CodeFixes.FixDropReason DeltaRejected = 3
+  field public const GSharp.Core.CodeAnalysis.CodeFixes.FixDropReason NotSupported = 4
+  field public const GSharp.Core.CodeAnalysis.CodeFixes.FixDropReason Overlap = 0
+  field public const GSharp.Core.CodeAnalysis.CodeFixes.FixDropReason ProviderFailed = 1
 type enum GSharp.Core.CodeAnalysis.DiagnosticFinality : Int32
   field public const GSharp.Core.CodeAnalysis.DiagnosticFinality Artifact = 2
   field public const GSharp.Core.CodeAnalysis.DiagnosticFinality Final = 0
@@ -3342,6 +3354,7 @@ type sealed class GSharp.Core.CodeAnalysis.CodeFixes.CodeFixService : System.Obj
   method public GSharp.Core.CodeAnalysis.CodeFixes.DiagnosticDelta ComputeDelta(GSharp.Core.CodeAnalysis.CodeFixes.DeltaBaseline baseline, GSharp.Core.CodeAnalysis.CodeFixes.CodeFix fix, System.Threading.CancellationToken cancellationToken = null)
   method public GSharp.Core.CodeAnalysis.CodeFixes.DiagnosticDelta ComputeDelta(GSharp.Core.CodeAnalysis.CodeFixes.DeltaBaseline baseline, GSharp.Core.CodeAnalysis.CodeFixes.FixChanges changes, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> targets, System.Threading.CancellationToken cancellationToken = null)
   method public GSharp.Core.CodeAnalysis.CodeFixes.DiagnosticDelta ComputeDelta(GSharp.Core.CodeAnalysis.Compilation.Compilation compilation, GSharp.Core.CodeAnalysis.CodeFixes.CodeFix fix, GSharp.Core.CodeAnalysis.CodeFixes.DeltaOptions options = null, System.Threading.CancellationToken cancellationToken = null)
+  method public GSharp.Core.CodeAnalysis.CodeFixes.FixAllResult FixAll(GSharp.Core.CodeAnalysis.CodeFixes.FixAllScope fixAllScope, String equivalenceKey, GSharp.Core.CodeAnalysis.CodeFixes.FixAllOptions options = null, System.Threading.CancellationToken cancellationToken = null)
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.CodeFixes.CodeFix> GetFixes(GSharp.Core.CodeAnalysis.Compilation.Compilation compilation, GSharp.Core.CodeAnalysis.Diagnostic diagnostic, System.Threading.CancellationToken cancellationToken = null)
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.CodeFixes.CodeFix> GetFixes(GSharp.Core.CodeAnalysis.Compilation.Compilation compilation, GSharp.Core.CodeAnalysis.Diagnostic diagnostic, out System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> providerDiagnostics, System.Threading.CancellationToken cancellationToken = null)
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.CodeFixes.CodeFix> GetFixes(GSharp.Core.CodeAnalysis.Compilation.Compilation compilation, GSharp.Core.CodeAnalysis.Syntax.SyntaxTree tree, GSharp.Core.CodeAnalysis.Text.TextSpan span, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> additionalDiagnostics, out System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> providerDiagnostics, System.Threading.CancellationToken cancellationToken = null)
@@ -3405,6 +3418,56 @@ type sealed class GSharp.Core.CodeAnalysis.CodeFixes.DocumentChanges : System.Ob
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxTree Tree { get; }
   property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Text.TextChange> Changes { get; }
   property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Text.TextSpan> Placeholders { get; }
+type sealed class GSharp.Core.CodeAnalysis.CodeFixes.DroppedFix : System.Object
+  method public GSharp.Core.CodeAnalysis.CodeFixes.CodeFix get_Fix()
+  method public GSharp.Core.CodeAnalysis.CodeFixes.FixDropReason get_Reason()
+  method public GSharp.Core.CodeAnalysis.Diagnostic get_Diagnostic()
+  method public Int32 get_Round()
+  property public GSharp.Core.CodeAnalysis.CodeFixes.CodeFix Fix { get; }
+  property public GSharp.Core.CodeAnalysis.CodeFixes.FixDropReason Reason { get; }
+  property public GSharp.Core.CodeAnalysis.Diagnostic Diagnostic { get; }
+  property public Int32 Round { get; }
+type sealed class GSharp.Core.CodeAnalysis.CodeFixes.FixAllDocument : System.Object
+  method public GSharp.Core.CodeAnalysis.Syntax.SyntaxTree get_Changed()
+  method public GSharp.Core.CodeAnalysis.Syntax.SyntaxTree get_Original()
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Text.TextChange> GetChanges()
+  property public GSharp.Core.CodeAnalysis.Syntax.SyntaxTree Changed { get; }
+  property public GSharp.Core.CodeAnalysis.Syntax.SyntaxTree Original { get; }
+type sealed class GSharp.Core.CodeAnalysis.CodeFixes.FixAllOptions : System.Object
+  method public GSharp.Core.CodeAnalysis.CodeFixes.Applicability get_MinimumApplicability()
+  method public GSharp.Core.CodeAnalysis.CodeFixes.DeltaOptions get_DeltaOptions()
+  method public GSharp.Core.CodeAnalysis.CodeFixes.DeltaPolicy get_Gate()
+  method public Int32 get_MaxRounds()
+  method public Void .ctor()
+  method public Void set_DeltaOptions(GSharp.Core.CodeAnalysis.CodeFixes.DeltaOptions value)
+  method public Void set_Gate(GSharp.Core.CodeAnalysis.CodeFixes.DeltaPolicy value)
+  method public Void set_MaxRounds(Int32 value)
+  method public Void set_MinimumApplicability(GSharp.Core.CodeAnalysis.CodeFixes.Applicability value)
+  property public GSharp.Core.CodeAnalysis.CodeFixes.Applicability MinimumApplicability { get; set; }
+  property public GSharp.Core.CodeAnalysis.CodeFixes.DeltaOptions DeltaOptions { get; set; }
+  property public GSharp.Core.CodeAnalysis.CodeFixes.DeltaPolicy Gate { get; set; }
+  property public Int32 MaxRounds { get; set; }
+type sealed class GSharp.Core.CodeAnalysis.CodeFixes.FixAllResult : System.Object
+  method public Int32 get_Rounds()
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.CodeFixes.CodeFix> get_Applied()
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.CodeFixes.DroppedFix> get_Dropped()
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.CodeFixes.FixAllDocument> get_Documents()
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Compilation.Compilation> get_Compilations()
+  property public Int32 Rounds { get; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.CodeFixes.CodeFix> Applied { get; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.CodeFixes.DroppedFix> Dropped { get; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.CodeFixes.FixAllDocument> Documents { get; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Compilation.Compilation> Compilations { get; }
+type sealed class GSharp.Core.CodeAnalysis.CodeFixes.FixAllScope : System.Object
+  method public GSharp.Core.CodeAnalysis.CodeFixes.FixAllScopeKind get_Kind()
+  method public GSharp.Core.CodeAnalysis.Syntax.SyntaxTree get_Tree()
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Compilation.Compilation> get_Compilations()
+  method public static GSharp.Core.CodeAnalysis.CodeFixes.FixAllScope Document(GSharp.Core.CodeAnalysis.Compilation.Compilation compilation, GSharp.Core.CodeAnalysis.Syntax.SyntaxTree tree)
+  method public static GSharp.Core.CodeAnalysis.CodeFixes.FixAllScope Project(GSharp.Core.CodeAnalysis.Compilation.Compilation compilation)
+  method public static GSharp.Core.CodeAnalysis.CodeFixes.FixAllScope Solution(System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Compilation.Compilation> compilations)
+  property public GSharp.Core.CodeAnalysis.CodeFixes.FixAllScopeKind Kind { get; }
+  property public GSharp.Core.CodeAnalysis.Syntax.SyntaxTree Tree { get; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Compilation.Compilation> Compilations { get; }
 type sealed class GSharp.Core.CodeAnalysis.CodeFixes.FixChanges : System.Object
   method public Boolean get_IsEmpty()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.CodeFixes.DocumentChanges> get_Documents()

@@ -165,6 +165,24 @@ class CodeFixService {
         return DiagnosticDeltaCalculator.Compute(baseline, changes, targets, cancellationToken)
     }
 
+    /// Applies the fixes of every diagnostic in [`fixAllScope`](paramref) that have the equivalence key,
+    /// with the batch fixer (ADR-0227 D3). Each round computes the fixes against one snapshot and
+    /// keeps the fixes whose changes do not overlap. The compilations of the scope do not change.
+    /// @param fixAllScope The trees and compilations.
+    /// @param equivalenceKey The key of the fixes, or `null` for the first fix of each diagnostic.
+    /// @param options The options; `null` uses the defaults (machine-applicable fixes, one round).
+    /// @param cancellationToken Cancels the FixAll.
+    /// @returns The applied and dropped fixes, the changed documents and the new compilations.
+    func FixAll(
+        fixAllScope FixAllScope,
+        equivalenceKey string?,
+        options FixAllOptions? = nil,
+        cancellationToken CancellationToken = default(CancellationToken)
+    ) FixAllResult {
+        ArgumentNullException.ThrowIfNull(fixAllScope)
+        return BatchFixer(this, equivalenceKey, options ?? FixAllOptions()).Run(fixAllScope, cancellationToken)
+    }
+
     private func Collect(
         compilation Compilation,
         tree SyntaxTree,

@@ -102,6 +102,13 @@ shared class CodeActionComputer {
                 actions.Add(CommandOrCodeAction(sortImports))
             }
         }
+        // ADR-0227 D7: a FixAll runs only when the client asks for source actions by name.
+        if only != nil && only.Count > 0 && KindRequested(CodeActionKind.SourceFixAllGSharp, only) {
+            let fixAll CodeAction? = TryCreateFixAll(uri, content, client, ct)
+            if fixAll != nil {
+                actions.Add(CommandOrCodeAction(fixAll))
+            }
+        }
         if KindRequested(CodeActionKind.QuickFix, only) {
             for action in ComputeQuickFixes(uri, content, RangeToSpan(content, $range), client, registryOverride, ct) {
                 actions.Add(CommandOrCodeAction(action))
@@ -448,6 +455,37 @@ shared class CodeActionComputer {
             Range: SemanticLookup.ToRange(source, d.Location.Span),
             Severity: DocumentSyncHandler.ToLspSeverity(d.Severity),
             Source: Constants.LanguageIdentifier
+        }
+    }
+
+    // The document FixAll of the machine-applicable fixes, as one edit (ADR-0227 D3, D7).
+    private func TryCreateFixAll(
+        uri DocumentUri,
+        content DocumentContent,
+        client CodeActionClientOptions,
+        ct CancellationToken
+    ) CodeAction? {
+        let compilation = CompilationFor(content)
+        let registry = content.Project?.GetCodeFixRegistry() ?? DefaultRegistry
+        let result = CodeFixService(registry).FixAll(
+            FixAllScope.Document(compilation, content.SyntaxTree),
+            nil,
+            nil,
+            ct
+        )
+        let document FixAllDocument? = result.Documents.FirstOrDefault()
+        if document == nil {
+            return nil
+        }
+        let changes = FixChanges(
+            ImmutableArray.Create(
+                DocumentChanges(content.SyntaxTree, document.GetChanges(), ImmutableArray[TextSpan].Empty)
+            )
+        )
+        return CodeAction{
+            Title: "Fix all auto-fixable G# problems",
+            Kind: CodeActionKind.SourceFixAllGSharp,
+            Edit: BuildEdit(uri, content, changes, client)
         }
     }
 
