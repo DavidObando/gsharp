@@ -667,22 +667,28 @@ using System.Runtime.CompilerServices;
 public struct Pair { public int Value; }
 public static class P
 {
+    delegate bool SameDelegate(ref readonly int left, ref readonly int right);
     static bool Same(ref readonly int left, ref readonly int right) =>
         Unsafe.AreSame(ref Unsafe.AsRef(in left), ref Unsafe.AsRef(in right));
     public static void Main()
     {
         int x = 7;
         Pair pair = default;
+        int[] xs = new int[1];
+        SameDelegate d = Same;
         Console.Write(
             Same(in x, in x) + "|" +
             Same(x, x) + "|" +
             Same(ref x, ref x) + "|" +
             Same(in pair.Value, in pair.Value) + "|" +
             Same(right: in pair.Value, left: in pair.Value) + "|" +
-            Same(x + 1, x));
+            Same(x + 1, x) + "|" +
+            d(right: pair.Value, left: pair.Value) + "|" +
+            d(right: xs[0], left: xs[0]) + "|" +
+            d(right: x + 1, left: x));
     }
 }
-`, "True|True|True|True|True|False", (
+`, "True|True|True|True|True|False|True|True|False", (
                 translated string
             ) -> {
                 Assert.Contains(

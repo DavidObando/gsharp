@@ -2528,10 +2528,13 @@ namespace Demo
 #nullable enable
 using System.Runtime.CompilerServices;
 using System.Threading;
+using A;
+using B;
 using ExternalRefExt6063;
 public static class IntExt
 {
     public static void Bump(this ref int value) { value++; }
+    public static string Who(this in int value, [CallerMemberName] string caller = "") => caller + ":" + value;
 }
 public static class Demo
 {
@@ -2552,14 +2555,30 @@ public static class Demo
         int other = 10;
         counters[0].Swap(ref other);
         counters[0].AddExternal(5);
-        return direct + "|" + counters[0] + ":" + other + "|" + other.SameInt(in other);
+        return direct + "|" + counters[0] + ":" + other + "|" + other.SameInt(in other) + "|" + other.Who() + "|" + other.ReadA() + ":" + other.ReadB();
     }
 }`, `
-namespace ExternalRefExt6063;
-public static class ExternalIntExtensions
+namespace ExternalRefExt6063
 {
-    public static void AddExternal(this ref int value, int delta) { value += delta; }
-}`, strictIl: true, rejectConditionalIndexWarnings: true, expectedOutput: "1:a:1|15:4|True")
+    public static class ExternalIntExtensions
+    {
+        public static void AddExternal(this ref int value, int delta) { value += delta; }
+    }
+}
+namespace A
+{
+    public static class Extensions
+    {
+        public static int ReadA(this in int value) => value + 1;
+    }
+}
+namespace B
+{
+    public static class Extensions
+    {
+        public static int ReadB(this in int value) => value + 2;
+    }
+}`, strictIl: true, rejectConditionalIndexWarnings: true, expectedOutput: "1:a:1|15:4|True|Run:4|5:6")
         Assert.Contains("func Bump(ref value int32)", printed, StringComparison.Ordinal)
         Assert.Contains("private func PrivateBump(ref value int32)", printed, StringComparison.Ordinal)
         Assert.Contains("IntExt.Bump(&counters[0])", printed, StringComparison.Ordinal)

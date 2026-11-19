@@ -240,21 +240,25 @@ partial class CSharpToGSharpTranslator {
                 .Symbol is IMethodSymbol extMethod &&
                 extMethod.MethodKind == MethodKind.ReducedExtension &&
                 this
-                .TryGetStaticExtensionHelper(extMethod, out var extOwner, out var extName) {
+                .TryGetStaticExtensionHelper(extMethod, out _, out var extName) {
                 let extArgs = List[GExpression]{
                     PassStaticExtensionHelperReceiver(
                         this.TranslateReceiverWithNullForgiveness(extMember.Expression),
                         extMethod
                     )!!
                 }
-                extArgs.AddRange(this.TranslateArguments(invocation.ArgumentList.Arguments))
+                extArgs.AddRange(this.TranslateCallArguments(invocation, invocation.ArgumentList.Arguments))
                 let extTypeArgs IReadOnlyList[GTypeReference]? = if extMember.Name is GenericNameSyntax extGeneric {
                     this.MapTypeArguments(extGeneric)
                 } else {
                     default(IReadOnlyList[GTypeReference]?)
                 }
+                let extOwnerType = (extMethod.ReducedFrom ?? extMethod).ContainingType
                 return InvocationExpression(
-                    MemberAccessExpression(IdentifierExpression(extOwner), extName),
+                    MemberAccessExpression(
+                        this.StaticQualifierReceiver(extOwnerType, invocation.GetLocation()),
+                        extName
+                    ),
                     extArgs,
                     extTypeArgs
                 )
@@ -709,7 +713,10 @@ partial class CSharpToGSharpTranslator {
             this.BuildNullConditionalStaticExtensionHelper(
                 conditionalAccess,
                 invocation,
-                owner,
+                this.StaticQualifierReceiver(
+                    (method!!.ReducedFrom ?? method)!!.ContainingType,
+                    invocation!!.GetLocation()
+                ),
                 name,
                 helperName,
                 chainedReceiver,
@@ -778,7 +785,10 @@ partial class CSharpToGSharpTranslator {
                 this.BuildNullConditionalStaticExtensionHelper(
                     conditionalAccess,
                     invocation,
-                    owner,
+                    this.StaticQualifierReceiver(
+                        (method!!.ReducedFrom ?? method)!!.ContainingType,
+                        invocation!!.GetLocation()
+                    ),
                     name,
                     helperName,
                     chainedReceiver,
@@ -837,7 +847,7 @@ partial class CSharpToGSharpTranslator {
         private func BuildNullConditionalStaticExtensionHelper(
             conditionalAccess ConditionalAccessExpressionSyntax,
             invocation InvocationExpressionSyntax?,
-            owner string?,
+            ownerReceiver GExpression,
             name string?,
             helperName SimpleNameSyntax?,
             chainedReceiver Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
@@ -861,12 +871,8 @@ partial class CSharpToGSharpTranslator {
             }
             let TranslateCall = func () GExpression {
                 let callArgs = List[GExpression]{helperReceiver!!}
-                callArgs.AddRange(this.TranslateArguments(invocation!!.ArgumentList.Arguments))
-                return InvocationExpression(
-                    MemberAccessExpression(IdentifierExpression(owner), name),
-                    callArgs,
-                    callTypeArgs
-                )
+                callArgs.AddRange(this.TranslateCallArguments(invocation!!, invocation!!.ArgumentList.Arguments))
+                return InvocationExpression(MemberAccessExpression(ownerReceiver, name), callArgs, callTypeArgs)
             }
             call = if hostLocalAssignmentSeam && this.RequiresLocalAssignmentSeam(conditionalAccess.WhenNotNull) {
                 this.TranslateWithLocalAssignmentSeam(conditionalAccess.WhenNotNull, TranslateCall)
@@ -1034,7 +1040,10 @@ partial class CSharpToGSharpTranslator {
                 default(List[GTypeReference]?)
             }
             let call = InvocationExpression(
-                MemberAccessExpression(IdentifierExpression(ownerName), methodName),
+                MemberAccessExpression(
+                    this.StaticQualifierReceiver(original.ContainingType, member.GetLocation()),
+                    methodName
+                ),
                 arguments,
                 typeArguments
             )
@@ -1164,10 +1173,15 @@ partial class CSharpToGSharpTranslator {
                 case creationOp is IObjectCreationOperation: creationOp.Constructor
                 default: default(IMethodSymbol?)
             }
-            let operationArguments = switch this.context.SemanticModel.GetOperation(callSyntax!!) {
+            var operationArguments = switch this.context.SemanticModel.GetOperation(callSyntax!!) {
                 case invocationOp is IInvocationOperation: invocationOp.Arguments
                 case creationOp is IObjectCreationOperation: creationOp.Arguments
                 default: default(ImmutableArray[IArgumentOperation])
+            }
+            if targetMethod?.MethodKind == MethodKind.ReducedExtension &&
+                !operationArguments.IsDefaultOrEmpty &&
+                operationArguments[0].Syntax is not ArgumentSyntax {
+                operationArguments = operationArguments.RemoveAt(0)
             }
             if operationArguments.IsDefaultOrEmpty {
                 return this.TranslateArgumentsWithCallerInfo(callSyntax, arguments, operationArguments)
@@ -1359,7 +1373,7 @@ partial class CSharpToGSharpTranslator {
             paramsCollectionArgument IArgumentOperation,
             out consumedSyntaxArguments int32
         ) List[GExpression] {
-            let result = List[GExpression](paramsCollectionArgument.Parameter!!.Ordinal)
+            let result = List[GExpression](arguments.Count)
             consumedSyntaxArguments = 0
             for operationArgument in operationArguments {
                 if operationArgument.ArgumentKind == ArgumentKind.ParamCollection {
@@ -1510,14 +1524,14 @@ partial class CSharpToGSharpTranslator {
             if argument.Parameter!!.RefKind == RefKind.None {
                 return this.SnapshotPermutedArgumentOperand(value, argument)
             }
+            let isReadOnlyParam = argument.Parameter!!.RefKind == RefKind.In ||
+                argument.Parameter!!.RefKind == RefKind.RefReadOnlyParameter
             // Capture an address, never a copy of its pointee. This also runs
             // an array index/getter and its exceptions in source order.
             if value is UnaryExpression{Operator: "&" or "in "} address {
                 if address.Operand is ThisExpression {
                     return value
                 }
-                let isReadOnlyParam = argument.Parameter!!.RefKind == RefKind.In ||
-                    argument.Parameter!!.RefKind == RefKind.RefReadOnlyParameter
                 let needsValueTemporary = isReadOnlyParam &&
                     argument.Syntax is ArgumentSyntax syntax &&
                     syntax
@@ -1557,6 +1571,28 @@ partial class CSharpToGSharpTranslator {
                 } else {
                     value
                 }
+            }
+            if isReadOnlyParam &&
+                argument.Syntax is ArgumentSyntax implicitSyntax &&
+                implicitSyntax
+                .RefKindKeyword
+                .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.None) &&
+                PassesImplicitReadOnlyAliasWithoutConversion(argument) {
+                if value is ThisExpression {
+                    return value
+                }
+                let temp = this.NewSpillName()
+                this.state.PendingSpillPrologue!!.Add(
+                    LocalDeclarationStatement(
+                        BindingKind.Let,
+                        temp,
+                        this.typeMapper.Map(argument.Parameter!!.Type, this.context, argument.Syntax.GetLocation()),
+                        value,
+                        isRefAlias: true,
+                        isReadOnlyRefAlias: true
+                    )
+                )
+                return OutArgumentExpression("in", temp)
             }
             return this.SnapshotPermutedArgumentOperand(value, argument)
         }
@@ -2434,6 +2470,31 @@ partial class CSharpToGSharpTranslator {
             .IncludeNullability
             .Equals(value.Type, parameter.Type)
 
+        private func PassesImplicitReadOnlyAliasWithoutConversion(argument IArgumentOperation) bool ->
+        argument is {Parameter: {} parameter, Value: {} value} &&
+            IsReadOnlyAddressableStorageOperation(value) &&
+            SymbolEqualityComparer
+            .IncludeNullability
+            .Equals(value.Type, parameter.Type)
+
+        private func IsReadOnlyAddressableStorageOperation(value IOperation?) bool -> switch value {
+            case local is ILocalReferenceOperation: !local.Local.IsConst
+            case _ is IParameterReferenceOperation or
+                _ is IArrayElementReferenceOperation or
+                _ is IInstanceReferenceOperation: true
+            case field is IFieldReferenceOperation: !field
+                .Field
+                .IsConst &&
+                (
+                field.Instance == nil ||
+                    field.Instance!!
+                    .Type
+                    ?.IsReferenceType == true ||
+                    IsReadOnlyAddressableStorageOperation(field.Instance)
+            )
+            default: false
+        }
+
         private func IsVariableStorageOperation(value IOperation?) bool ->
         value is ILocalReferenceOperation &&
             value
@@ -2865,11 +2926,7 @@ partial class CSharpToGSharpTranslator {
                     (compilation CSharpCompilation) -> SameAssembly(compilation.Assembly, original!!.ContainingAssembly)
                 )
                 let topLevelGSharpExtension = original!!.ContainingType?.Name == "<Program>"
-                let useStaticHelper = this.TryGetStaticExtensionHelper(
-                    original,
-                    out var helperOwner,
-                    out var helperName
-                ) ||
+                let useStaticHelper = this.TryGetStaticExtensionHelper(original, out _, out var helperName) ||
                     (!sourceDefined && !topLevelGSharpExtension)
                 var receiver GExpression?
                 if useStaticHelper {
@@ -2883,11 +2940,7 @@ partial class CSharpToGSharpTranslator {
                     receiver = this.CaptureMethodGroupReceiver(receiver, extensionMember.Expression)
                     arguments.Add(PassStaticExtensionHelperReceiver(receiver, original)!!)
                     target = MemberAccessExpression(
-                        if helperOwner != nil {
-                            cast[GExpression](IdentifierExpression(helperOwner))
-                        } else {
-                            this.StaticQualifierReceiver(original!!.ContainingType, expression.GetLocation())
-                        },
+                        this.StaticQualifierReceiver(original!!.ContainingType, expression.GetLocation()),
                         helperName ?? this.EmittedName(original, original!!.Name)
                     )
                 } else {
