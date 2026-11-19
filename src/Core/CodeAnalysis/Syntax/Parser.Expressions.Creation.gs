@@ -1116,11 +1116,13 @@ open partial class Parser {
         // ADR-0075: `(T1, T2, ...) -> R` arrow function-type clause, or a
         // tuple-type clause `(T1, T2, ...)`. Both start with '('.
         if Peek(pos).Kind == SyntaxKind.OpenParenthesisToken {
-            // A function/tuple type clause is unambiguously a type shape.
-            isComplex = true
             pos++
             var sawEllipsis = false
-            if Peek(pos).Kind != SyntaxKind.CloseParenthesisToken {
+            var sawComma = false
+            var sawElementName = false
+            var hasComplexInner = false
+            let isEmpty = Peek(pos).Kind == SyntaxKind.CloseParenthesisToken
+            if !isEmpty {
                 while true {
                     if Peek(pos).Kind == SyntaxKind.EllipsisToken {
                         sawEllipsis = true
@@ -1130,15 +1132,18 @@ open partial class Parser {
                     // `(line int32, column int32)` — mirrors
                     // LooksLikeTupleElementName on the speculative cursor.
                     if Peek(pos).Kind == SyntaxKind.IdentifierToken && ScanLooksLikeTupleElementNameAt(pos) {
+                        sawElementName = true
                         pos++
                     }
                     // A grouping or element inside an allowed position (for
                     // example `cast[unmanaged[CC] () -> (*uint8)](x)`) is
                     // not a generic argument either.
-                    if !TryScanTypeClause(&pos, out _, pointerAllowed) {
+                    if !TryScanTypeClause(&pos, out var elementIsComplex, pointerAllowed) {
                         return false
                     }
+                    hasComplexInner |= elementIsComplex
                     if Peek(pos).Kind == SyntaxKind.CommaToken {
+                        sawComma = true
                         pos++
                         continue
                     }
@@ -1160,9 +1165,21 @@ open partial class Parser {
                 return false
             }
             // Optional trailing `?` for nullables (tuples and function types both support `?`).
-            if Peek(pos).Kind == SyntaxKind.QuestionToken {
+            let hasQuestion = Peek(pos).Kind == SyntaxKind.QuestionToken
+            if hasQuestion {
                 pos++
             }
+            // Issue #6071: a parenthesized single name/index `(x)` or `(a[b])`
+            // without `,`, `->`, element name, or `?` is syntactically
+            // ambiguous with a parenthesized index expression unless its inner
+            // clause is unambiguously a type.
+            isComplex = isEmpty ||
+                isArrowFunction ||
+                sawComma ||
+                sawEllipsis ||
+                sawElementName ||
+                hasQuestion ||
+                hasComplexInner
             return true
         }
         // Phase 4.7: legacy `func(T) R` function-type clause.
@@ -1222,13 +1239,13 @@ open partial class Parser {
             return false
         }
         pos++
-        // Nested type-argument list, e.g. `List[int]`.
-        if !TryScanOptionalTypeArgumentList(&pos, out var headHadTypeArgumentList) {
+        // Nested type-argument list, e.g. `List[int32]` vs `jobs[slot]`.
+        // Issue #6071: `Name[Arg]` is syntactically ambiguous with an index
+        // expression unless an inner argument is unambiguously a type.
+        if !TryScanOptionalTypeArgumentList(&pos, out _, out var headHasComplexTypeArgument) {
             return false
         }
-        // A nested type-argument list makes this unambiguously a type shape
-        // (`List[int32]`) rather than a plain index expression (Issue #1323).
-        isComplex |= headHadTypeArgumentList
+        isComplex |= headHasComplexTypeArgument
         // Issue #1174: a dotted tail names a (possibly nested, possibly
         // generic) type — `Container.Nested`, `A.B.C`, or `Outer.Generic[T]`.
         // Each `.Identifier` segment may carry its own type-argument list.
@@ -1240,10 +1257,10 @@ open partial class Parser {
         // LooksLikeGenericCallSite) is untouched.
         while Peek(pos).Kind == SyntaxKind.DotToken && Peek(pos + 1).Kind == SyntaxKind.IdentifierToken {
             pos += 2
-            if !TryScanOptionalTypeArgumentList(&pos, out var segmentHadTypeArgumentList) {
+            if !TryScanOptionalTypeArgumentList(&pos, out _, out var segmentHasComplexTypeArgument) {
                 return false
             }
-            isComplex |= segmentHadTypeArgumentList
+            isComplex |= segmentHasComplexTypeArgument
         }
         // Optional trailing `?` for nullables.
         if Peek(pos).Kind == SyntaxKind.QuestionToken {
@@ -1361,9 +1378,17 @@ open partial class Parser {
     /// as `Outer.Generic[T]` scans as one type clause.
     /// @param pos The scan position, advanced past the list when present.
     /// @returns `true` when there is no list or it scans cleanly.
-    private func TryScanOptionalTypeArgumentList(ref pos int32) bool -> TryScanOptionalTypeArgumentList(&pos, out _)
+    private func TryScanOptionalTypeArgumentList(ref pos int32) bool -> TryScanOptionalTypeArgumentList(
+        &pos,
+        out _,
+        out _
+    )
 
-    private func TryScanOptionalTypeArgumentList(ref pos int32, out present bool) bool {
+    private func TryScanOptionalTypeArgumentList(ref pos int32, out present bool) bool ->
+    TryScanOptionalTypeArgumentList(&pos, out present, out _)
+
+    private func TryScanOptionalTypeArgumentList(ref pos int32, out present bool, out anyArgumentComplex bool) bool {
+        anyArgumentComplex = false
         if Peek(pos).Kind != SyntaxKind.OpenSquareBracketToken {
             present = false
             return true
@@ -1371,9 +1396,10 @@ open partial class Parser {
         present = true
         pos++
         while true {
-            if !TryScanTypeClause(&pos) {
+            if !TryScanTypeClause(&pos, out var argumentIsComplex) {
                 return false
             }
+            anyArgumentComplex |= argumentIsComplex
             if Peek(pos).Kind == SyntaxKind.CommaToken {
                 pos++
                 continue

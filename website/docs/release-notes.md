@@ -38,6 +38,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Parse nested indexers followed by member access (`samples[jobs[slot]].Key`) as indexers instead of generic type names unless an inner type argument is unambiguously type-shaped, and reshape index-shaped nested generic static receivers (`Box[List[int32]].Create()`) in the binder. (Fixes #6071)
+
 - Report targetless method groups (`GS0582`) and inapplicable nullable-receiver member reads (`GS0158`) instead of discarding them to `BoundErrorExpression` across operators, indexers, switches, and assignments, avoiding silent `?`-typed locals and `GS9998` crashes in emit. (Fixes #6077)
 
 - Reify synthesized anonymous object types over referenced generic type parameters from generic local functions, methods, classes, and nested generic scopes. Preserve deterministic parameter ordering, same-shape deduplication, `data object` value semantics, and rich anonymous object enclosing-scope mappings. (Fixes #6109)
