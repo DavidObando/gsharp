@@ -578,7 +578,8 @@ class Lowerer : BoundTreeRewriter {
                         expression: "node.StructType"
                     ),
                     node.Property.BackingField!!,
-                    value
+                    value,
+                    node.Type
                 )
             }
             if node.Receiver is BoundVariableExpression varExpr {
@@ -591,7 +592,8 @@ class Lowerer : BoundTreeRewriter {
                         expression: "node.StructType"
                     ),
                     node.Property.BackingField!!,
-                    value
+                    value,
+                    node.Type
                 )
             }
         }

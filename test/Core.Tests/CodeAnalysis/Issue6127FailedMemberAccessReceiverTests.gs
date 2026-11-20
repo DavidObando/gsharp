@@ -59,11 +59,15 @@ open class Issue6127FailedMemberAccessReceiverTests {
         Assert.Equal("c", parameter.Name)
     }
 
-    @Fact
-    func NullableIntermediateOfAChain_AnswersItsSymbolAndType() {
+    @Theory
+    @InlineData("return c.Child.N")
+    @InlineData("c.Child.N += 1\n    return 0")
+    func NullableIntermediateOfAChain_AnswersItsSymbolAndType(body string) {
         let tree = SyntaxTree.Parse(
             SourceText.From(
-                "package P\n\nclass C {\n    var N int32\n    var Child C?\n}\n\nfunc F(c C) int32? {\n    return c.Child.N\n}\n",
+                "package P\n\nclass C {\n    var N int32\n    var Child C?\n}\n\nfunc F(c C) int32? {\n    " +
+                    body +
+                    "\n}\n",
                 "chain.gs"
             )
         )

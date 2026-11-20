@@ -9,6 +9,7 @@ import GSharp.Compiler.Tests
 import System
 import System.Diagnostics
 import System.IO
+import System.Linq
 import Xunit
 
 /// Issue #6142: end-to-end driver (gsc -> PE -> IlVerifier -> dotnet exec) tests for the FixAll
@@ -97,8 +98,12 @@ func Main() {
 ` + Main
         let output = CompileExpectingFailure(source)
         Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
-        Assert.Contains("Txt", output, StringComparison.Ordinal)
         Assert.DoesNotContain("ContainsKey", output, StringComparison.Ordinal)
+        // GS0158 at `Txt`: line and column of the member name, 1-based.
+        let offset = source.IndexOf("].Txt", StringComparison.Ordinal) + 2
+        let line = source.Substring(0, offset).Count((c char) -> c == '\n') + 1
+        let column = offset - source.LastIndexOf('\n', offset - 1)
+        Assert.Contains("(${line},${column},${line},${column + 3}): error GS0158:", output, StringComparison.Ordinal)
     }
 
     shared {
@@ -155,11 +160,19 @@ func Main() {
                 psi.ArgumentList.Add("--runtimeconfig")
                 psi.ArgumentList.Add(Path.ChangeExtension(outPath, ".runtimeconfig.json"))
                 psi.ArgumentList.Add(outPath)
-                using let proc Process? = Process.Start(psi)
-                let stdout = proc!!.StandardOutput.ReadToEnd()
-                let stderr = proc!!.StandardError.ReadToEnd()
-                Assert.True(proc!!.WaitForExit(30_000), "dotnet exec timed out")
-                Assert.True(proc!!.ExitCode == 0, "exited ${proc!!.ExitCode}\nstdout:\n${stdout}\nstderr:\n${stderr}")
+                using let proc = Process.Start(psi) ?? throw InvalidOperationException("Could not start dotnet.")
+                // Both streams are read concurrently, so the timeout applies even when the program
+                // never closes its pipes.
+                let stdoutTask = proc.StandardOutput.ReadToEndAsync()
+                let stderrTask = proc.StandardError.ReadToEndAsync()
+                if !proc.WaitForExit(30_000) {
+                    proc.Kill(entireProcessTree: true)
+                    proc.WaitForExit()
+                    Assert.Fail("dotnet exec timed out")
+                }
+                let stdout = stdoutTask.GetAwaiter().GetResult()
+                let stderr = stderrTask.GetAwaiter().GetResult()
+                Assert.True(proc.ExitCode == 0, "exited ${proc.ExitCode}\nstdout:\n${stdout}\nstderr:\n${stderr}")
                 return stdout.ReplaceLineEndings(Environment.NewLine)
             } finally {
                 try {

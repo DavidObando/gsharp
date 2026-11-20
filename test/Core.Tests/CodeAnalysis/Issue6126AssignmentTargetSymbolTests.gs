@@ -115,6 +115,22 @@ open class Issue6126AssignmentTargetSymbolTests {
     }
 
     @Fact
+    func AutoPropertyWriteThroughAConstructedReceiver_HasTheConstructedType() {
+        let tree = SyntaxTree.Parse(
+            SourceText.From(
+                "package P\n\nclass Box[T] {\n    prop Items []T { get; set; }\n\n    func Run(other Box[string]) {\n        other.Items = []string{}\n    }\n}\n",
+                "constructed.gs"
+            )
+        )
+        let compilation = Compilation(tree)
+        Assert.Empty(compilation.GetDiagnostics())
+        let model = compilation.GetSemanticModel(tree)
+        let write = tree.Root.DescendantNodes().OfType[FieldAssignmentExpressionSyntax]().Single()
+        Assert.Equal("[]string", model.GetTypeInfo(write).Type?.ToString())
+        Assert.Equal("Items", model.GetSymbolInfo(write).Symbol?.Name)
+    }
+
+    @Fact
     func LocalAssignment_StillAnswersTheLocal() {
         let (model, tree) = CreateModel(Source)
         let local = Assert.IsType[LocalVariableSymbol](model.GetSymbolInfo(Statement(tree, "x = 2")).Symbol)

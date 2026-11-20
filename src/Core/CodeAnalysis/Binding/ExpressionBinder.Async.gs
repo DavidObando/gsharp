@@ -897,7 +897,10 @@ internal partial class ExpressionBinder {
                         },
                         compoundSyntax: syntax
                     )
-                    return BoundErrorExpression.ForFailedMemberAccess(boundReceiver)
+                    return BoundErrorExpression.ForFailedMemberAccess(
+                        boundReceiver,
+                        GetRightmostMemberNameSyntax(accessor.LeftPart)
+                    )
                 }
             }
             flags = BindingFlags.Public | BindingFlags.Instance
