@@ -206,10 +206,12 @@ open class Adr0227BuiltInFixTests {
     @InlineData("c.M ??= 1")
     @InlineData("d.Child.N += 1")
     @InlineData("c.Child.N = 1")
+    @InlineData("c.Tag.N += 1")
+    @InlineData("(c.Tag).N += 1")
     @InlineData("c.Items[0] = 1")
     @InlineData("c.Items[0] += 1")
     func NullConditionalAccess_OnACompoundAssignmentTarget_HasNoFix(statement string) {
-        let source = "package P\n\nclass C {\n    var N int32\n    var M int32?\n    var Child C?\n    var Items []int32 = []int32{0}\n}\n\nclass D {\n    var N int32\n    var Child C?\n}\n\nfunc F(c C?, d D) {\n    " +
+        let source = "package P\n\nclass C {\n    var N int32\n    var M int32?\n    var Child C?\n    var Items []int32 = []int32{0}\n    var Tag D = D()\n}\n\nclass D {\n    var N int32\n    var Child C?\n}\n\nfunc F(c C?, d D) {\n    " +
             statement +
             "\n}\n"
         let tree = SyntaxTree.Parse(SourceText.From(source, "a.gs"))

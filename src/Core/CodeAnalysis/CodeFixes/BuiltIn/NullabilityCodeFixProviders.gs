@@ -65,7 +65,7 @@ internal class NullConditionalAccessCodeFixProvider : GSharpCodeFixProvider {
         )
     }
 
-    // Whether the access, or the chain, parentheses or indexing it ends, is written: the target of a
+    // Whether the access, or a chain, parentheses or indexing around it, is written: the target of a
     // compound or null-coalescing assignment, the receiver of a member write (`c.Child.N = 1`), or
     // the indexed target of an index write (`c.Items[0] = 1`). A right-hand value and an index
     // argument are reads.
@@ -73,7 +73,9 @@ internal class NullConditionalAccessCodeFixProvider : GSharpCodeFixProvider {
         var current SyntaxNode = accessor
         while true {
             let parent = current.Parent
-            if parent is AccessorExpressionSyntax outer && object.ReferenceEquals(outer.RightPart, current) {
+            // A chain that contains the access, on either side, writes through it when the chain is
+            // written (`c.Tag.N += 1` however the chain nests).
+            if parent is AccessorExpressionSyntax outer {
                 current = outer
             } else if parent is ParenthesizedExpressionSyntax {
                 current = parent
