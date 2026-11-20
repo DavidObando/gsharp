@@ -391,6 +391,11 @@ partial class BoundScope {
         if !Pop().TryDeclareFunction(function) {
             return false
         }
+        UnstageFunction(function)
+        return true
+    }
+
+    internal func UnstageFunction(function FunctionSymbol) {
         // Retained body scopes must see the published method once, not once in each scope.
         if functions is {} stagedFunctions && stagedFunctions.TryGetValue(function.Name, out var overloads) {
             overloads.Remove(function)
@@ -404,7 +409,6 @@ partial class BoundScope {
             stagedSymbols.Remove(function.Name)
             symbolKeys?.Remove(function.Name)
         }
-        return true
     }
 
     /// ADR-0063 §11: returns every overload of the given function name visible
