@@ -880,7 +880,7 @@ partial class CSharpToGSharpTranslator {
             let refKind string? = switch symbol.RefKind {
                 case RefKind.Ref: "ref"
                 case RefKind.Out: "out"
-                case RefKind.In: "in"
+                case RefKind.In or RefKind.RefReadOnlyParameter: "in"
                 default: default(string?)
             }
             // gsc's own variadic parameter (`...T`, DeclarationBinder.cs) is always
