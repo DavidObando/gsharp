@@ -488,6 +488,246 @@ open class Adr0227CodeActionTests {
         }
     }
 
+    @Fact
+    func DataDefinedFix_ThatAddsADiagnostic_IsNotOffered() {
+        const source = "package P\n\nfunc F() string? {\n    return null\n}\n"
+        let content = LanguageServerTestHelpers.Content(source)
+        let uri = DocumentUri.From("file:///a.gs")!!
+        let at = LanguageServerTestHelpers.PositionOf(source, "null")
+        for dataDefined in[]bool{false, true} {
+            let registry = GSharp.Core.CodeAnalysis.CodeFixes.CodeFixRegistry()
+            registry.Add(UndefinedNameProvider(dataDefined))
+            let titles = CodeActionComputer
+                .ComputeCodeActions(
+                uri,
+                content,
+                Range(at, at),
+                nil,
+                CodeActionClientOptions(),
+                registry,
+                default(System.Threading.CancellationToken)
+            )
+                .Select((a CommandOrCodeAction) -> a.CodeAction.Title)
+                .ToList()
+            // The hand-written fix gets only the syntax gate; the data-defined one gets the full gate.
+            Assert.Equal(!dataDefined, titles.Contains("Use an undefined name"))
+            Assert.Contains("Use 'nil'", titles)
+        }
+    }
+
+    @Fact
+    func SourceFixAll_WithADataDefinedFixThatAddsADiagnostic_IsNotOffered() {
+        const source = "package P\n\nfunc F() int32 {\n    let x = 1\n    x = 2\n    return x\n}\n"
+        let content = LanguageServerTestHelpers.Content(source)
+        let uri = DocumentUri.From("file:///a.gs")!!
+        let origin = Position(0, 0)
+        let context = CodeActionContext{Only: []CodeActionKind{CodeActionKind("source.fixAll")}}
+        for dataDefined in[]bool{false, true} {
+            let registry = GSharp.Core.CodeAnalysis.CodeFixes.CodeFixRegistry()
+            registry.Add(
+                UndefinedNameProvider(
+                    dataDefined,
+                    "GS0127",
+                    GSharp.Core.CodeAnalysis.CodeFixes.Applicability.MachineApplicable
+                )
+            )
+            let actions = CodeActionComputer.ComputeCodeActions(
+                uri,
+                content,
+                Range(origin, origin),
+                context,
+                CodeActionClientOptions(),
+                registry,
+                default(System.Threading.CancellationToken)
+            )
+            // FixAll gates the batch on syntax only; a batch with a data-defined fix gets the full gate.
+            Assert.Equal(
+                !dataDefined,
+                actions.Any((a CommandOrCodeAction) -> a.CodeAction.Kind == CodeActionKind.SourceFixAllGSharp)
+            )
+        }
+    }
+
+    @Fact
+    func DataDefinedFix_ThatAddsAnAnalyzerDiagnostic_IsNotOffered() {
+        const source = "package P\n\nfunc F() string? {\n    return null\n}\n"
+        let content = LanguageServerTestHelpers.Content(source)
+        let uri = DocumentUri.From("file:///a.gs")!!
+        let at = LanguageServerTestHelpers.PositionOf(source, "null")
+        let analyzers = []GSharp.Core.CodeAnalysis.Analyzers.GSharpDiagnosticAnalyzer{NilAnalyzer()}
+        for withAnalyzers in[]bool{false, true} {
+            let registry = GSharp.Core.CodeAnalysis.CodeFixes.CodeFixRegistry()
+            registry.Add(NilProvider())
+            let titles = CodeActionComputer
+                .ComputeCodeActions(
+                uri,
+                content,
+                Range(at, at),
+                nil,
+                CodeActionClientOptions(),
+                registry,
+                if withAnalyzers {
+                    analyzers
+                } else {
+                    nil
+                },
+                default(System.Threading.CancellationToken)
+            )
+                .Select((a CommandOrCodeAction) -> a.CodeAction.Title)
+                .ToList()
+            // The full gate runs the project's analyzers: the edit adds the analyzer's diagnostic.
+            Assert.Equal(!withAnalyzers, titles.Contains("Write nil (data)"))
+        }
+    }
+
+    @Fact
+    func DataDefinedFix_IsNotOffered_WhenAnAnalyzerDoesNotRunToTheEnd() {
+        const source = "package P\n\nfunc F() string? {\n    return null\n}\n"
+        let content = LanguageServerTestHelpers.Content(source)
+        let uri = DocumentUri.From("file:///a.gs")!!
+        let at = LanguageServerTestHelpers.PositionOf(source, "null")
+        for broken in[]bool{false, true} {
+            let registry = GSharp.Core.CodeAnalysis.CodeFixes.CodeFixRegistry()
+            registry.Add(NilProvider())
+            let analyzers = if broken {
+                []GSharp.Core.CodeAnalysis.Analyzers.GSharpDiagnosticAnalyzer{ThrowingTreeAnalyzer()}
+            } else {
+                []GSharp.Core.CodeAnalysis.Analyzers.GSharpDiagnosticAnalyzer{}
+            }
+            let titles = CodeActionComputer
+                .ComputeCodeActions(
+                uri,
+                content,
+                Range(at, at),
+                nil,
+                CodeActionClientOptions(),
+                registry,
+                analyzers,
+                default(System.Threading.CancellationToken)
+            )
+                .Select((a CommandOrCodeAction) -> a.CodeAction.Title)
+                .ToList()
+            // An analyzer that throws before and after the edit leaves the gate incomplete.
+            Assert.Equal(!broken, titles.Contains("Write nil (data)"))
+        }
+    }
+
+    // An analyzer that throws on every tree.
+    private class ThrowingTreeAnalyzer : GSharp.Core.CodeAnalysis.Analyzers.GSharpDiagnosticAnalyzer {
+        override prop SupportedDiagnostics System
+            .Collections
+            .Immutable
+            .ImmutableArray[GSharp.Core.CodeAnalysis.DiagnosticDescriptor] -> System
+            .Collections
+            .Immutable
+            .ImmutableArray
+            .Create(NilAnalyzer.NilRule)
+
+        override func Initialize(context GSharp.Core.CodeAnalysis.Analyzers.AnalysisContext) {
+            context.RegisterSyntaxTreeAction(
+                (_ GSharp.Core.CodeAnalysis.Analyzers.SyntaxTreeAnalysisContext) -> {
+                    throw InvalidOperationException("broken analyzer")
+                }
+            )
+        }
+    }
+
+    // A data-defined fix that writes `nil` for `null`.
+    private class NilProvider : GSharp.Core.CodeAnalysis.CodeFixes.GSharpCodeFixProvider {
+        override prop FixableDiagnosticIds System
+            .Collections
+            .Immutable
+            .ImmutableArray[string] -> System
+            .Collections
+            .Immutable
+            .ImmutableArray
+            .Create("GS0273")
+
+        override prop IsDataDefined bool -> true
+
+        override func RegisterCodeFixes(context GSharp.Core.CodeAnalysis.CodeFixes.CodeFixContext) {
+            let token = context.Tree.Root.FindToken(context.Diagnostic.Location.Span.Start)!!
+            context.RegisterFix(
+                "Write nil (data)",
+                "test.nil",
+                GSharp.Core.CodeAnalysis.CodeFixes.Applicability.MaybeIncorrect,
+                (editor SyntaxEditor) -> editor.ReplaceToken(token, "nil")
+            )
+        }
+    }
+
+    // An analyzer that reports every `nil`.
+    private class NilAnalyzer : GSharp.Core.CodeAnalysis.Analyzers.GSharpDiagnosticAnalyzer {
+        override prop SupportedDiagnostics System
+            .Collections
+            .Immutable
+            .ImmutableArray[GSharp.Core.CodeAnalysis.DiagnosticDescriptor] -> System
+            .Collections
+            .Immutable
+            .ImmutableArray
+            .Create(NilRule)
+
+        override func Initialize(context GSharp.Core.CodeAnalysis.Analyzers.AnalysisContext) {
+            context.RegisterSyntaxTreeAction(
+                (ctx GSharp.Core.CodeAnalysis.Analyzers.SyntaxTreeAnalysisContext) -> {
+                    for token in ctx.Tree.Root.DescendantTokens() {
+                        if token.Text == "nil" {
+                            ctx.ReportDiagnostic(GSharp.Core.CodeAnalysis.Diagnostic.Create(NilRule, token.Location))
+                        }
+                    }
+                }
+            )
+        }
+
+        shared {
+            let NilRule GSharp
+                .Core
+                .CodeAnalysis
+                .DiagnosticDescriptor = GSharp
+                .Core
+                .CodeAnalysis
+                .DiagnosticDescriptor("TEST0230", GSharp.Core.CodeAnalysis.DiagnosticSeverity.Warning, "nil")
+        }
+    }
+
+    // A fix that replaces the token at the diagnostic with a name that does not exist: it adds GS0125.
+    private class UndefinedNameProvider : GSharp.Core.CodeAnalysis.CodeFixes.GSharpCodeFixProvider {
+        private let dataDefined bool
+        private let id string
+        private let applicability GSharp.Core.CodeAnalysis.CodeFixes.Applicability
+
+        convenience init(dataDefined bool) {
+            init(dataDefined, "GS0273", GSharp.Core.CodeAnalysis.CodeFixes.Applicability.MaybeIncorrect)
+        }
+
+        init(dataDefined bool, id string, applicability GSharp.Core.CodeAnalysis.CodeFixes.Applicability) {
+            this.dataDefined = dataDefined
+            this.id = id
+            this.applicability = applicability
+        }
+
+        override prop FixableDiagnosticIds System
+            .Collections
+            .Immutable
+            .ImmutableArray[string] -> System
+            .Collections
+            .Immutable
+            .ImmutableArray
+            .Create(id)
+
+        override prop IsDataDefined bool -> dataDefined
+
+        override func RegisterCodeFixes(context GSharp.Core.CodeAnalysis.CodeFixes.CodeFixContext) {
+            let token = context.Tree.Root.FindToken(context.Diagnostic.Location.Span.Start)!!
+            context.RegisterFix(
+                "Use an undefined name",
+                "test.undefined",
+                applicability,
+                (editor SyntaxEditor) -> editor.ReplaceToken(token, "undefinedName")
+            )
+        }
+    }
+
     private func AssertOffered(source string, at string, title string, newText string) {
         let content = LanguageServerTestHelpers.Content(source)
         let uri = DocumentUri.From("file:///a.gs")!!

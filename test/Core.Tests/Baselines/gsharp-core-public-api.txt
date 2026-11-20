@@ -232,8 +232,10 @@ type abstract class GSharp.Core.CodeAnalysis.CodeFixes.GSharpCodeFixProvider : S
   method protected Void .ctor()
   method public abstract System.Collections.Immutable.ImmutableArray`1<String> get_FixableDiagnosticIds()
   method public abstract Void RegisterCodeFixes(GSharp.Core.CodeAnalysis.CodeFixes.CodeFixContext context)
+  method public virtual Boolean get_IsDataDefined()
   method public virtual Boolean get_SupportsFixAll()
   method public virtual String get_Id()
+  property public Boolean IsDataDefined { get; }
   property public Boolean SupportsFixAll { get; }
   property public String Id { get; }
   property public System.Collections.Immutable.ImmutableArray`1<String> FixableDiagnosticIds { get; }
@@ -3314,6 +3316,7 @@ type sealed class GSharp.Core.CodeAnalysis.ClosureValue : System.Object
   property public System.Collections.Generic.Dictionary`2<GSharp.Core.CodeAnalysis.Symbols.TypeParameterSymbol, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> CapturedTypeArguments { get; }
   property public System.Collections.Generic.Dictionary`2<GSharp.Core.CodeAnalysis.Symbols.VariableSymbol, Object> CapturedLocals { get; }
 type sealed class GSharp.Core.CodeAnalysis.CodeFixes.CodeFix : System.Object
+  method public Boolean get_IsDataDefined()
   method public GSharp.Core.CodeAnalysis.CodeFixes.Applicability get_Applicability()
   method public GSharp.Core.CodeAnalysis.CodeFixes.CodeFix WithLowerApplicability(GSharp.Core.CodeAnalysis.CodeFixes.Applicability applicability)
   method public GSharp.Core.CodeAnalysis.CodeFixes.FixChanges GetChanges(System.Threading.CancellationToken cancellationToken = null)
@@ -3323,6 +3326,7 @@ type sealed class GSharp.Core.CodeAnalysis.CodeFixes.CodeFix : System.Object
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> get_Diagnostics()
   method public Void .ctor(String title, String equivalenceKey, GSharp.Core.CodeAnalysis.CodeFixes.Applicability applicability, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics, String providerId, System.Func`2<System.Threading.CancellationToken, GSharp.Core.CodeAnalysis.CodeFixes.FixChanges> compute)
   method public virtual override String ToString()
+  property public Boolean IsDataDefined { get; }
   property public GSharp.Core.CodeAnalysis.CodeFixes.Applicability Applicability { get; }
   property public String EquivalenceKey { get; }
   property public String ProviderId { get; }

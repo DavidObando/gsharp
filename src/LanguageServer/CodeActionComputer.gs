@@ -93,7 +93,29 @@ shared class CodeActionComputer {
         client CodeActionClientOptions,
         registryOverride CodeFixRegistry?,
         ct CancellationToken
+    ) CommandOrCodeActionContainer -> ComputeCodeActions(
+        uri,
+        content,
+        $range,
+        context,
+        client,
+        registryOverride,
+        nil,
+        ct
+    )
+
+    // Tests give the registry and the analyzers; the server uses the project's.
+    internal func ComputeCodeActions(
+        uri DocumentUri,
+        content DocumentContent,
+        $range Range,
+        context CodeActionContext?,
+        client CodeActionClientOptions,
+        registryOverride CodeFixRegistry?,
+        analyzersOverride IReadOnlyList[GSharpDiagnosticAnalyzer]?,
+        ct CancellationToken
     ) CommandOrCodeActionContainer {
+        let analyzers = analyzersOverride?.ToImmutableArray() ?? ProjectAnalyzers(content)
         let only IReadOnlyList[CodeActionKind]? = context?.Only
         let actions = List[CommandOrCodeAction]()
         if KindRequested(CodeActionKind.RefactorRewrite, only) {
@@ -104,13 +126,21 @@ shared class CodeActionComputer {
         }
         // ADR-0227 D7: a FixAll runs only when the client asks for source actions by name.
         if only != nil && only.Count > 0 && KindRequested(CodeActionKind.SourceFixAllGSharp, only) {
-            let fixAll CodeAction? = TryCreateFixAll(uri, content, client, registryOverride, ct)
+            let fixAll CodeAction? = TryCreateFixAll(uri, content, client, registryOverride, analyzers, ct)
             if fixAll != nil {
                 actions.Add(CommandOrCodeAction(fixAll))
             }
         }
         if KindRequested(CodeActionKind.QuickFix, only) {
-            for action in ComputeQuickFixes(uri, content, RangeToSpan(content, $range), client, registryOverride, ct) {
+            for action in ComputeQuickFixes(
+                uri,
+                content,
+                RangeToSpan(content, $range),
+                client,
+                registryOverride,
+                analyzers,
+                ct
+            ) {
                 actions.Add(CommandOrCodeAction(action))
             }
         }
@@ -183,6 +213,7 @@ shared class CodeActionComputer {
         span TextSpan,
         client CodeActionClientOptions,
         registryOverride CodeFixRegistry?,
+        analyzers ImmutableArray[GSharpDiagnosticAnalyzer],
         ct CancellationToken
     ) sequence[CodeAction] {
         let tree = content.SyntaxTree
@@ -197,7 +228,7 @@ shared class CodeActionComputer {
             compilation,
             tree,
             span,
-            AnalyzerDiagnostics(content, compilation, registry, ct),
+            AnalyzerDiagnostics(analyzers, compilation, registry, ct),
             out _,
             ct
         )
@@ -208,6 +239,7 @@ shared class CodeActionComputer {
         let gateOptions = DeltaOptions()
         gateOptions.SyntaxOnly = true
         let baseline = DeltaBaseline.Create(compilation, gateOptions, ct)
+        var fullBaseline DeltaBaseline? = nil
         // First the fixes that survive the gate, their computation and the edit; then the actions,
         // so that the preferred fix is chosen among the fixes that the client gets.
         let survivors = List[Candidate]()
@@ -218,6 +250,15 @@ shared class CodeActionComputer {
             try {
                 if !service.ComputeDelta(baseline, fix, ct).AddedSyntax.IsEmpty {
                     continue
+                }
+                // ADR-0227 Q4: a data-defined fix must pass the full gate: it adds no diagnostic.
+                if fix.IsDataDefined {
+                    if fullBaseline == nil {
+                        fullBaseline = DeltaBaseline.Create(compilation, FullGateOptions(analyzers), ct)
+                    }
+                    if !PassesFullGate(fullBaseline, service.ComputeDelta(fullBaseline, fix, ct)) {
+                        continue
+                    }
                 }
                 changes = fix.GetChanges(ct)
             } catch (ex OperationCanceledException) when ct.IsCancellationRequested {
@@ -377,16 +418,11 @@ shared class CodeActionComputer {
 
     // ADR-0227 D7: analyzer diagnostics, only when a provider fixes one of the analyzers' IDs.
     private func AnalyzerDiagnostics(
-        content DocumentContent,
+        analyzers ImmutableArray[GSharpDiagnosticAnalyzer],
         compilation Compilation,
         registry CodeFixRegistry,
         ct CancellationToken
     ) ImmutableArray[CoreDiagnostic] {
-        let project ProjectState? = content.Project
-        if project == nil {
-            return ImmutableArray[CoreDiagnostic].Empty
-        }
-        let analyzers = project.GetGsAnalyzers(out _)
         if analyzers.IsEmpty {
             return ImmutableArray[CoreDiagnostic].Empty
         }
@@ -406,6 +442,34 @@ shared class CodeActionComputer {
         AnalyzerResults.AddOrUpdate(compilation, AnalyzerResult(analyzers, produced))
         return produced
     }
+
+    private func ProjectAnalyzers(content DocumentContent) ImmutableArray[GSharpDiagnosticAnalyzer] {
+        let project ProjectState? = content.Project
+        if project == nil {
+            return ImmutableArray[GSharpDiagnosticAnalyzer].Empty
+        }
+        return project.GetGsAnalyzers(out _)
+    }
+
+    // ADR-0227 Q4: the full gate of a data-defined fix compares the compiler's diagnostics and the
+    // analyzers' diagnostics, under the analyzers' time budget.
+    private func FullGateOptions(analyzers ImmutableArray[GSharpDiagnosticAnalyzer]) DeltaOptions {
+        let options = DeltaOptions()
+        options.Analyzers = analyzers
+        options.AnalyzerOptions = AnalyzerOptions{TimeBudgetMilliseconds: AnalyzerTimeBudgetMilliseconds}
+        return options
+    }
+
+    // ADR-0227 Q4: the full gate passes when the edit adds no diagnostic and every analyzer ran to
+    // the end before and after the edit. An analyzer that threw or ran out of time reported only
+    // part of its diagnostics, so the comparison would not cover them.
+    private func PassesFullGate(baseline DeltaBaseline, delta DiagnosticDelta) bool -> DeltaPolicy
+        .NoNewDiagnostics
+        .Accepts(delta) && !baseline.Diagnostics.Any(IsIncompleteAnalyzerRun) && !delta.Persisting.Any(
+        IsIncompleteAnalyzerRun
+    )
+
+    private func IsIncompleteAnalyzerRun(d CoreDiagnostic) bool -> d.Id == "GS9300" || d.Id == "GS9302"
 
     // Whether a provider fixes an ID that one of the analyzers reports. A failing metadata getter
     // skips that analyzer only; the driver guards the same read.
@@ -464,6 +528,7 @@ shared class CodeActionComputer {
         content DocumentContent,
         client CodeActionClientOptions,
         registryOverride CodeFixRegistry?,
+        analyzers ImmutableArray[GSharpDiagnosticAnalyzer],
         ct CancellationToken
     ) CodeAction? {
         let compilation = CompilationFor(content, content.Project?.GetCompilation())
@@ -473,12 +538,8 @@ shared class CodeActionComputer {
         let options = FixAllOptions()
         let deltaOptions = DeltaOptions()
         deltaOptions.AnalyzerOptions = AnalyzerOptions{TimeBudgetMilliseconds: AnalyzerTimeBudgetMilliseconds}
-        let project ProjectState? = content.Project
-        if project != nil {
-            let analyzers = project.GetGsAnalyzers(out _)
-            if AnyFixable(analyzers, registry, ct) {
-                deltaOptions.Analyzers = analyzers
-            }
+        if AnyFixable(analyzers, registry, ct) {
+            deltaOptions.Analyzers = analyzers
         }
         options.DeltaOptions = deltaOptions
         let result = service.FixAll(FixAllScope.Document(compilation, content.SyntaxTree), nil, options, ct)
@@ -505,6 +566,14 @@ shared class CodeActionComputer {
         )
         if !delta.AddedSyntax.IsEmpty {
             return nil
+        }
+        // ADR-0227 Q4: a batch with a data-defined fix passes the full gate as a whole.
+        if result.Applied.Any((f CodeFix) -> f.IsDataDefined) {
+            let fullBaseline = DeltaBaseline.Create(compilation, FullGateOptions(analyzers), ct)
+            let full = service.ComputeDelta(fullBaseline, changes, ImmutableArray[CoreDiagnostic].Empty, ct)
+            if !PassesFullGate(fullBaseline, full) {
+                return nil
+            }
         }
         let edit WorkspaceEdit? = BuildEdit(uri, content, changes, client)
         if edit == nil {

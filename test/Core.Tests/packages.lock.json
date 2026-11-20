@@ -289,6 +289,13 @@
           "Microsoft.VisualStudio.Validation": "[17.8.8, )"
         }
       },
+      "gsharp.codeanalysis.transformations": {
+        "type": "Project",
+        "dependencies": {
+          "GSharp.Core": "[1.0.0, )",
+          "Microsoft.VisualStudio.Validation": "[17.8.8, )"
+        }
+      },
       "GSharp.Core": {
         "type": "Project",
         "dependencies": {

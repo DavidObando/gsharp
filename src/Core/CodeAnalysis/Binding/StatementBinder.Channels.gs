@@ -44,6 +44,7 @@ internal partial class StatementBinder {
         elementType = TypeSymbol.Error
         var operand = bindExpression(receive.Operand, false)
         if operand is BoundErrorExpression || operand.Type == TypeSymbol.Error {
+            let _ = ExpressionBinder.ReportUnresolvedTargetlessValues(Diagnostics, operand)
             return nil
         }
         // ADR-0186 §4: a receive requires a non-null channel — the same check

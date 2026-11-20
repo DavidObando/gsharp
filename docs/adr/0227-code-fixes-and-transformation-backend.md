@@ -433,6 +433,44 @@ All tests obey ADR-0154: each new test fails on the code before the change.
 - **LSP tests.** Extend `test/LanguageServer.Tests/CodeActionHandlerTests.gs`: `context.only` filtering, resolve, `isPreferred`, stale versions, and the moved nullability fixes with the same titles and edits as today.
 - **Performance.** A benchmark of `ComputeDelta` on the repository samples and on the Oats dev programs, which reports p50 and p95 against the budgets of D4.
 
+## Implementation notes (phases 1–3)
+
+The implementation follows the decision, with these differences and results:
+
+- **Compiler suggestions replace one provider.** GS0273 (`null` → `nil`) is a `Diagnostic.Suggestions` entry at its report site (D2 option b), not a provider. GS0302 (`->` switch arm → `:`) also has a suggestion. `CodeFixService` offers suggestions before provider fixes.
+- **Names.** A fix that edits several trees uses `CodeFixContext.RegisterMultiDocumentFix` and `MultiDocumentEditor`. `FixAll` takes a nullable equivalence key: `null` takes the first fix of each diagnostic (used by `source.fixAll.gsharp`). `FixAllDocument.GetChanges()` gives one change between the common prefix and suffix of the texts.
+- **FixAll conflicts.** Two changes of different fixes conflict when they share a character, or when an insertion touches the other change.
+- **Editor guards.** The editor rejects a token whose text is not the source text at its span (parser-generated tokens of desugared forms), and a node that borrows tokens of another node (payload-enum cases). `SyntaxNode.FindToken` returns the smallest real token at a position.
+- **Language server.** `source.fixAll.gsharp` runs only when the request's `only` asks for it. Analyzer diagnostics are computed only when a provider fixes one of the analyzers' IDs, and are cached per compilation snapshot.
+- **Programs edit only their captures.** A program cannot express an edit at a declaration that the pattern does not reach, such as `let` → `var` at the declaration of a reassigned variable. That fix stays a provider.
+- **Semantic-model gaps.** `GetSymbolInfo` on an implicit-receiver field assignment answers the `this` parameter (#6126), and the receiver of a member access that reports GS0158 has no symbol or type (#6127). The `let` → `var` provider and the program interpreter fall back to `LookupSymbols` and the variable's declared type.
+- **Deferred.** The body-local speculative bind (#6128), snippet edits for `HasPlaceholders` fixes (#6129), and packaging of `GSharp.CodeAnalysis.Transformations` (#6130).
+- **Extra fix.** GS0156 between two numeric types (the sized integers, `nint`, `nuint`, `char`, the floating types and `decimal`) gets `Convert to 'T'`, which writes `checked(cast[T](expr))` (`MaybeIncorrect`). The fix applies only to a name, a member access of names, or one of these in parentheses, whose type is the source type of the diagnostic. It declines a constant, because `checked` evaluates a constant conversion at compile time, and an out-of-range constant would then be a compile error. It also declines the operand of a compound assignment (the cast would change the operator's result), range bounds and function-literal bodies (the semantic model gives no type there). An integer, `char` or `decimal` conversion out of range throws at run time instead of changing the value. A floating-point conversion does not throw: `float64` → `float32` gives infinity for a value beyond the `float32` range, even under `checked`.
+- **`let` → `var` rules.** The provider declines member assignments, parameters and instance fields of an inline struct. A field declared in another file gets a fix that edits that file. A bare field assignment in the same class gets the fix, which closes the gap of #6126 for this provider.
+- **FixAll order.** Changes apply in source order: by file name, then by position.
+- **FixAll in the language server.** `source.fixAll.gsharp` keeps the default `MinimumApplicability` (`MachineApplicable`), not `MaybeIncorrect` as D3 says. So it applies no numeric conversion and no field fix. With a `null` equivalence key, FixAll takes the first fix of each diagnostic and then filters it by applicability. When that first fix is filtered out, a later fix of the same diagnostic is not tried.
+- **Data-defined fixes in the language server.** A fix from a transformation program gets the full delta, and a built-in fix gets the syntax-only check. The full gate runs the project's analyzers before and after the edit, under their time budget. It fails when an analyzer threw or ran out of time in either run, because such an analyzer reported only part of its diagnostics. `source.fixAll.gsharp` runs the full gate on the combined batch when it holds a data-defined fix. A copy made by `WithLowerApplicability` keeps the data-defined mark. A resolved code action is found by an opaque id in a cache per document version.
+- **Program validation.** The schema and the loader share the structural rules. A non-delete edit needs a `template`. `argumentEquals` needs `argumentIndex`. The comparison guards (`textEquals`, `kindIs`, `symbolKind`, `declaredWith`, `typeIs`) need a `value`, and `sameLine` needs `other`. The loader checks more than the schema, so a program that the schema accepts can still fail to load. Every capture that a guard or an edit names must exist in the pattern, a capture name appears once, and the `other` of `sameLine` must differ from its `capture`. `sameLine` also applies to `ancestor` edges. `isNullable` asks whether the type itself is nullable. A name lookup uses the semantic name (`$c` names `c`). It runs only for an unqualified name, never for a member name in a chain. `constructsReferenceType` rejects calls of function values and accepts type aliases. The built-in `Remove 'new'` provider follows the same rules.
+- **Compiler bugs found.** `LookupSymbols` on a `let` whose initializer is an `if` expression (#6140), and an internal error for `OrderBy` with a key selector and a `StringComparer` (#6142). The implementation avoids both.
+
+**Measured** before the numeric fix was narrowed to simple operands (so the `GS0156.NumericConversion` count is an upper bound for the merged provider), over the 327 broken programs of the Oats S0 dev repair log, with the built-in providers and suggestions, in one process at low priority while another benchmark ran:
+
+| Measure | Result |
+| --- | --- |
+| Programs with at least one fix | 78 of 327 |
+| Fixes | 118 |
+| Fixes that pass `NoNewDiagnostics` | 112 |
+| First error of the program fixed and accepted | 67 programs |
+| Warm check (`GetDiagnostics`), p50 / p95 | 4.85 ms / 21.5 ms |
+| Full-bind delta of one fix, p50 / p95 | 4.9 ms / 21.1 ms |
+| Fixes whose edit removes a comment | 0 of 118 |
+
+By key: `GS0156.NumericConversion` 64 (64 accepted), `GS0125.DropNew` 17 (15), `GS0127.LetToVar` 13 (13), `LogicalWord.or` 12 (12), `LogicalWord.and` 5 (1), `GS0273.UseNil` 4 (4), `LogicalWord.not` 3 (3). The delta costs about one warm check, which meets the Oats budget of D4.
+
+**Phase 4 decision.** None of the 118 measured fixes lost a comment. Those fixes come from the built-in providers and suggestions, which edit tokens or compose `OriginalText`. Transformation programs were not measured. A `delete` of a captured node drops the comments inside it. A `replace` keeps the comments of every capture that its template writes with `${capture}`, because the slot copies the capture's source text, and drops the comments in the parts of the node that the template leaves out.
+
+Hand-written `OriginalText` composition is small. Three built-in fixes compose it: the two nullability fixes that wrap an operand (`?? default` and the parenthesized form), and the numeric conversion. Each is one interpolated expression around one operand, with no trivia handling of its own. The program interpreter composes it in one place, the `${capture}` slot, for every program. Neither the measured loss nor this code is significant, so option B stays. Revisit option A when programs that delete or partly replace nodes holding comments are in use, or when a provider makes structural rewrites of such nodes.
+
 ## Consequences
 
 - G# gets one fix mechanism for compiler and analyzer diagnostics, for the language server and for library hosts.

@@ -293,6 +293,27 @@ open class Adr0227BuiltInFixTests {
     }
 
     @Fact
+    func NewOfAnEscapedFunctionValue_HasNoFix() {
+        let source = "package P\n\nclass C { }\n\nfunc F(" +
+            "$" +
+            "make () -> C) C {\n    return new " +
+            "$" +
+            "make()\n}\n"
+        let compilation = Compilation(SyntaxTree.Parse(source))
+        let target = compilation.GetDiagnostics().First((d Diagnostic) -> d.Id == "GS0125")
+        Assert.Empty(CodeFixService(CodeFixRegistry.CreateDefault()).GetFixes(compilation, target))
+    }
+
+    @Fact
+    func NewOfATypeAlias_IsRemoved() {
+        const source = "package P\n\nclass C { }\n\ntype D = C\n\nfunc F() C {\n    return new D()\n}\n"
+        let compilation = Compilation(SyntaxTree.Parse(source))
+        let target = compilation.GetDiagnostics().First((d Diagnostic) -> d.Id == "GS0125")
+        let fix = Assert.Single(CodeFixService(CodeFixRegistry.CreateDefault()).GetFixes(compilation, target))
+        Assert.Contains("return D()", Assert.Single(fix.GetChanges().Documents).GetChangedText().ToString())
+    }
+
+    @Fact
     func NullCoalescingDefault_ForANarrowType_IsTyped() {
         const source = "package P\n\nfunc F(x uint8?) uint8 -> x\n"
         let tree = SyntaxTree.Parse(source)
