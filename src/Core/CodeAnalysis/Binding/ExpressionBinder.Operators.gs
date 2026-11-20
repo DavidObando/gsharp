@@ -4665,11 +4665,19 @@ internal partial class ExpressionBinder {
                             }
                         }
                     }
+                    let bareNativeTarget = nativeTarget.StripToBareShape()
                     if Conversion.RequiresSymbolicTypeArgumentIdentity(sourceType) &&
-                        !nativeTarget
-                        .StripToBareShape()
-                        .ConstructedTypeArguments
-                        .IsDefaultOrEmpty &&
+                        (
+                        !bareNativeTarget
+                            .ConstructedTypeArguments
+                            .IsDefaultOrEmpty ||
+                            bareNativeTarget is SliceTypeSymbol or
+                            ArrayTypeSymbol or
+                            RectangularArrayTypeSymbol ||
+                            bareNativeTarget
+                            .ClrType
+                            ?.IsArray == true
+                    ) &&
                         !TypeSymbol.ContainsTypeParameter(nativeTarget) &&
                         !symbolicConversion.IsImplicit &&
                         !Conversion.HasClrArgumentRuntimeRelation(sourceType, nativeTarget) &&

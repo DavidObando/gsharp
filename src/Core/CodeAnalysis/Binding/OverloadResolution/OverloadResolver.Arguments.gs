@@ -61,7 +61,39 @@ internal partial class OverloadResolver {
         let paramsIndex = parameters.Length - 1
         let paramArrayType = parameters[paramsIndex].ParameterType
         let elementClrType Type? = paramArrayType.GetElementType()
-        var elementTypeSymbol = paramsElementTypeOverride ??
+        let PeelParamsSliceElement = func (paramType TypeSymbol?) TypeSymbol? {
+            var current = paramType
+            while current is NullableTypeSymbol nullable {
+                current = nullable.UnderlyingType
+            }
+            while current is PlatformTypeSymbol platform {
+                current = platform.UnderlyingType
+            }
+            return if current is SliceTypeSymbol slice {
+                slice.ElementType
+            } else {
+                default(TypeSymbol?)
+            }
+        }
+        var overrideParamType TypeSymbol? = nil
+        parameterTypeOverrides?.TryGetValue(paramsIndex, out overrideParamType)
+        let resolvedParamsElement = paramsElementTypeOverride ??
+            PeelParamsSliceElement(overrideParamType) ??
+            (
+            if method != nil && receiverType != nil {
+                PeelParamsSliceElement(
+                    MemberLookup.GetClrMethodParameterConversionTargetTypeSymbol(
+                        receiverType,
+                        method,
+                        paramsIndex,
+                        symbolicMethodTypeArgs
+                    )
+                )
+            } else {
+                default(TypeSymbol?)
+            }
+        )
+        var elementTypeSymbol = resolvedParamsElement ??
             (
             if elementClrType == nil {
                 TypeSymbol.Object
@@ -69,14 +101,15 @@ internal partial class OverloadResolver {
                 GetParamsElementTypeSymbol(parameters[paramsIndex], elementClrType)
             }
         )
-        if !symbolicMethodTypeArgs.IsDefaultOrEmpty &&
-            parameters[paramsIndex].Member is MethodInfo method &&
-            method
+        if resolvedParamsElement == nil &&
+            !symbolicMethodTypeArgs.IsDefaultOrEmpty &&
+            parameters[paramsIndex].Member is MethodInfo paramsMethod &&
+            paramsMethod
             .IsGenericMethod {
-            let openMethod = if method.IsGenericMethodDefinition {
-                method
+            let openMethod = if paramsMethod.IsGenericMethodDefinition {
+                paramsMethod
             } else {
-                method.GetGenericMethodDefinition()
+                paramsMethod.GetGenericMethodDefinition()
             }
             let openParameters = openMethod.GetParameters()
             let openElementType Type? = openParameters[paramsIndex].ParameterType.GetElementType()
