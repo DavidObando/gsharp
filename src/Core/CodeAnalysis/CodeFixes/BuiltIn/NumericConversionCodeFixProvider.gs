@@ -49,20 +49,20 @@ internal class NumericConversionCodeFixProvider : GSharpCodeFixProvider {
             return
         }
         // The diagnostic can cover a tuple while its arguments name one element's conversion: the
-        // operand itself must have the source type.
-        let type = context.SemanticModel.GetTypeInfo(node, context.CancellationToken).Type
+        // operand itself must have the source type. Parentheses are looked through for the query.
+        let inner = Unparenthesized(node)
+        let type = context.SemanticModel.GetTypeInfo(inner, context.CancellationToken).Type
         if type == nil || type.ToString() != arguments[0] {
             return
         }
         // In a compound assignment (`x /= y`) the conversion is of the operation's result, so
         // converting the right operand changes the value.
-        let previous SyntaxToken? = FixSyntax.PreviousRealToken(context.Tree, node.GetFirstToken())
-        if previous != nil && SyntaxFacts.TryGetCompoundAssignmentBaseOperator(previous.Kind, out _) {
+        if FollowsCompoundOperator(node) {
             return
         }
         // A constant operand is checked at compile time: an out-of-range constant would report an
         // error under `checked`, so a constant gets no fix.
-        if IsConstant(context, node) {
+        if IsConstant(context, inner) {
             return
         }
         let expression = node
@@ -78,6 +78,35 @@ internal class NumericConversionCodeFixProvider : GSharpCodeFixProvider {
                 "checked(cast[${target}](${editor.OriginalText(expression)}))"
             )
         )
+    }
+
+    private func Unparenthesized(node SyntaxNode) SyntaxNode {
+        var current = node
+        while current is ParenthesizedExpressionSyntax parenthesized {
+            current = parenthesized.Expression
+        }
+        return current
+    }
+
+    // The token just before the operand inside its parent is a compound-assignment operator. The
+    // search looks at the parent's children only, not at the whole tree.
+    private func FollowsCompoundOperator(node SyntaxNode) bool {
+        let parent SyntaxNode? = node.Parent
+        if parent == nil {
+            return false
+        }
+        var previous SyntaxToken? = nil
+        for child in parent.GetChildren() {
+            if object.ReferenceEquals(child, node) {
+                break
+            }
+            if child is SyntaxToken token && token.Span.Length > 0 {
+                previous = token
+            } else {
+                previous = nil
+            }
+        }
+        return previous != nil && SyntaxFacts.TryGetCompoundAssignmentBaseOperator(previous.Kind, out _)
     }
 
     private func IsConstant(context CodeFixContext, node SyntaxNode) bool {

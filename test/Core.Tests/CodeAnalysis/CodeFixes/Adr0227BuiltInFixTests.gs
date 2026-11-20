@@ -414,6 +414,17 @@ open class Adr0227BuiltInFixTests {
     }
 
     @Fact
+    func NumericConversion_LooksThroughParentheses() {
+        VerifyFix(
+            "package P\n\nfunc F(n int64) int32 {\n    let m int32 = (n)\n    return m\n}\n",
+            "GS0156",
+            "Convert to 'int32'",
+            Applicability.MaybeIncorrect,
+            "package P\n\nfunc F(n int64) int32 {\n    let m int32 = checked(cast[int32]((n)))\n    return m\n}\n"
+        )
+    }
+
+    @Fact
     func LetSharedField_OfAnInlineStruct_BecomesVar() {
         VerifyFix(
             "package P\n\ninline struct S {\n    shared {\n        let Count int32 = 0\n\n        func Set() {\n            Count = 2\n        }\n    }\n}\n",
