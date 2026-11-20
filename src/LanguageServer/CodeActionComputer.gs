@@ -256,7 +256,7 @@ shared class CodeActionComputer {
                     if fullBaseline == nil {
                         fullBaseline = DeltaBaseline.Create(compilation, FullGateOptions(analyzers), ct)
                     }
-                    if !DeltaPolicy.NoNewDiagnostics.Accepts(service.ComputeDelta(fullBaseline, fix, ct)) {
+                    if !PassesFullGate(fullBaseline, service.ComputeDelta(fullBaseline, fix, ct)) {
                         continue
                     }
                 }
@@ -460,6 +460,17 @@ shared class CodeActionComputer {
         return options
     }
 
+    // ADR-0227 Q4: the full gate passes when the edit adds no diagnostic and every analyzer ran to
+    // the end before and after the edit. An analyzer that threw or ran out of time reported only
+    // part of its diagnostics, so the comparison would not cover them.
+    private func PassesFullGate(baseline DeltaBaseline, delta DiagnosticDelta) bool -> DeltaPolicy
+        .NoNewDiagnostics
+        .Accepts(delta) && !baseline.Diagnostics.Any(IsIncompleteAnalyzerRun) && !delta.Persisting.Any(
+        IsIncompleteAnalyzerRun
+    )
+
+    private func IsIncompleteAnalyzerRun(d CoreDiagnostic) bool -> d.Id == "GS9300" || d.Id == "GS9302"
+
     // Whether a provider fixes an ID that one of the analyzers reports. A failing metadata getter
     // skips that analyzer only; the driver guards the same read.
     internal func AnyFixable(
@@ -558,13 +569,9 @@ shared class CodeActionComputer {
         }
         // ADR-0227 Q4: a batch with a data-defined fix passes the full gate as a whole.
         if result.Applied.Any((f CodeFix) -> f.IsDataDefined) {
-            let full = service.ComputeDelta(
-                DeltaBaseline.Create(compilation, FullGateOptions(analyzers), ct),
-                changes,
-                ImmutableArray[CoreDiagnostic].Empty,
-                ct
-            )
-            if !DeltaPolicy.NoNewDiagnostics.Accepts(full) {
+            let fullBaseline = DeltaBaseline.Create(compilation, FullGateOptions(analyzers), ct)
+            let full = service.ComputeDelta(fullBaseline, changes, ImmutableArray[CoreDiagnostic].Empty, ct)
+            if !PassesFullGate(fullBaseline, full) {
                 return nil
             }
         }

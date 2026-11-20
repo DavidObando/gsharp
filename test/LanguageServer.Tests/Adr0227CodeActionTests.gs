@@ -580,6 +580,58 @@ open class Adr0227CodeActionTests {
         }
     }
 
+    @Fact
+    func DataDefinedFix_IsNotOffered_WhenAnAnalyzerDoesNotRunToTheEnd() {
+        const source = "package P\n\nfunc F() string? {\n    return null\n}\n"
+        let content = LanguageServerTestHelpers.Content(source)
+        let uri = DocumentUri.From("file:///a.gs")!!
+        let at = LanguageServerTestHelpers.PositionOf(source, "null")
+        for broken in[]bool{false, true} {
+            let registry = GSharp.Core.CodeAnalysis.CodeFixes.CodeFixRegistry()
+            registry.Add(NilProvider())
+            let analyzers = if broken {
+                []GSharp.Core.CodeAnalysis.Analyzers.GSharpDiagnosticAnalyzer{ThrowingTreeAnalyzer()}
+            } else {
+                []GSharp.Core.CodeAnalysis.Analyzers.GSharpDiagnosticAnalyzer{}
+            }
+            let titles = CodeActionComputer
+                .ComputeCodeActions(
+                uri,
+                content,
+                Range(at, at),
+                nil,
+                CodeActionClientOptions(),
+                registry,
+                analyzers,
+                default(System.Threading.CancellationToken)
+            )
+                .Select((a CommandOrCodeAction) -> a.CodeAction.Title)
+                .ToList()
+            // An analyzer that throws before and after the edit leaves the gate incomplete.
+            Assert.Equal(!broken, titles.Contains("Write nil (data)"))
+        }
+    }
+
+    // An analyzer that throws on every tree.
+    private class ThrowingTreeAnalyzer : GSharp.Core.CodeAnalysis.Analyzers.GSharpDiagnosticAnalyzer {
+        override prop SupportedDiagnostics System
+            .Collections
+            .Immutable
+            .ImmutableArray[GSharp.Core.CodeAnalysis.DiagnosticDescriptor] -> System
+            .Collections
+            .Immutable
+            .ImmutableArray
+            .Create(NilAnalyzer.NilRule)
+
+        override func Initialize(context GSharp.Core.CodeAnalysis.Analyzers.AnalysisContext) {
+            context.RegisterSyntaxTreeAction(
+                (_ GSharp.Core.CodeAnalysis.Analyzers.SyntaxTreeAnalysisContext) -> {
+                    throw InvalidOperationException("broken analyzer")
+                }
+            )
+        }
+    }
+
     // A data-defined fix that writes `nil` for `null`.
     private class NilProvider : GSharp.Core.CodeAnalysis.CodeFixes.GSharpCodeFixProvider {
         override prop FixableDiagnosticIds System
