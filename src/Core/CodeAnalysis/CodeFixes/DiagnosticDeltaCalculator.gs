@@ -169,7 +169,9 @@ internal shared class DiagnosticDeltaCalculator {
     ] {
         let all = List[Diagnostic](compilation.GetDiagnostics(cancellationToken))
         if !options.Analyzers.IsEmpty {
-            all.AddRange(GSharpAnalyzerDriver.Run(compilation, options.Analyzers, nil, cancellationToken))
+            all.AddRange(
+                GSharpAnalyzerDriver.Run(compilation, options.Analyzers, options.AnalyzerOptions, cancellationToken)
+            )
         }
         return Filter(all, options)
     }

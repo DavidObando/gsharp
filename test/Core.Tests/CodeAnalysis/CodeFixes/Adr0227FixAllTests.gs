@@ -127,6 +127,214 @@ open class Adr0227FixAllTests {
         Assert.Contains("return a || b", Assert.Single(result.Documents).Changed.Text.ToString())
     }
 
+    @Fact
+    func DocumentScope_ReportsEveryTreeThatAFixChanges() {
+        let a = SyntaxTree.Parse(SourceText.From("package P\n\nfunc A() string? -> null\n", "a.gs"))
+        let b = SyntaxTree.Parse(SourceText.From("package P\n\nfunc B() int32 -> 1\n", "b.gs"))
+        let compilation = Compilation(a, b)
+        let result = Registry(CompanionEditProvider(b)).FixAll(FixAllScope.Document(compilation, a), "companion")
+        Assert.Equal(
+            []string{"a.gs", "b.gs"},
+            result.Documents.Select((d FixAllDocument) -> d.Original.Text.FileName).ToArray()
+        )
+    }
+
+    @Fact
+    func DeferredProviderFailure_IsDroppedAndTheRunGoesOn() {
+        let tree = SyntaxTree.Parse(TwoNulls)
+        let result = Registry(ThrowingComputeProvider()).FixAll(FixAllScope.Document(Compilation(tree), tree), "throws")
+        Assert.Empty(result.Applied)
+        Assert.Equal(2, result.Dropped.Count((d DroppedFix) -> d.Reason == FixDropReason.ProviderFailed))
+    }
+
+    @Fact
+    func Gate_SeesEveryDeclaredTarget() {
+        const source = "package P\n\nfunc F() string? -> null\n\nfunc G() int32 -> missing\n"
+        let tree = SyntaxTree.Parse(source)
+        let options = FixAllOptions()
+        options.Gate = DeltaPolicy.RemovesTargetNoNewErrors
+        // The fix declares GS0273 and GS0125 as targets but removes only GS0273.
+        let result = Registry(TwoTargetProvider()).FixAll(FixAllScope.Document(Compilation(tree), tree), "two", options)
+        Assert.Empty(result.Applied)
+        Assert.Equal(FixDropReason.DeltaRejected, Assert.Single(result.Dropped).Reason)
+    }
+
+    @Fact
+    func OverlappingFixes_TheEarlierInSourceWins_WhateverTheDiagnosticOrder() {
+        // The global's GS0273 is a declaration diagnostic, reported before the body's, but it is later in the file.
+        const source = "package P\n\nfunc F() string? -> null\n\nlet g string? = null\n"
+        let tree = SyntaxTree.Parse(source)
+        let compilation = Compilation(tree)
+        let result = Registry(ToEndProvider()).FixAll(FixAllScope.Document(compilation, tree), "to-end")
+        let applied = Assert.Single(result.Applied)
+        Assert.Equal(source.IndexOf("null", StringComparison.Ordinal), applied.Diagnostics[0].Location.Span.Start)
+    }
+
+    @Fact
+    func AnalyzerDiagnostics_AreFixedWhenTheOptionsNameTheAnalyzers() {
+        let tree = SyntaxTree.Parse(SourceText.From("package P\n\nfunc F() int32 -> 1\n", "a.gs"))
+        let options = FixAllOptions()
+        let deltaOptions = DeltaOptions()
+        deltaOptions.Analyzers = ImmutableArray.Create[GSharp.Core.CodeAnalysis.Analyzers.GSharpDiagnosticAnalyzer](
+            PackageAnalyzer()
+        )
+        options.DeltaOptions = deltaOptions
+        let result = Registry(PackageFixProvider()).FixAll(
+            FixAllScope.Document(Compilation(tree), tree),
+            "package",
+            options
+        )
+        Assert.Contains("package Q", Assert.Single(result.Documents).Changed.Text.ToString())
+    }
+
+    private func Registry(provider GSharpCodeFixProvider) CodeFixService {
+        let registry = CodeFixRegistry()
+        registry.Add(provider)
+        return CodeFixService(registry)
+    }
+
+    // Edits the trigger's tree and a companion tree.
+    private class CompanionEditProvider : GSharpCodeFixProvider {
+        private let companion SyntaxTree
+
+        init(companion SyntaxTree) {
+            this.companion = companion
+        }
+
+        override prop FixableDiagnosticIds ImmutableArray[string] -> ImmutableArray.Create("GS0273")
+
+        override func RegisterCodeFixes(context CodeFixContext) {
+            let token = context.Tree.Root.FindToken(context.Diagnostic.Location.Span.Start)!!
+            let other = companion
+            let tree = context.Tree
+            context.RegisterFix(
+                CodeFix(
+                    "companion",
+                    "companion",
+                    Applicability.MachineApplicable,
+                    ImmutableArray.Create(context.Diagnostic),
+                    "test.companion",
+                    (ct CancellationToken) -> FixChanges(
+                        ImmutableArray.Create(
+                            DocumentChanges(
+                                tree,
+                                ImmutableArray.Create(TextChange(token.Span, "nil")),
+                                ImmutableArray[TextSpan].Empty
+                            ),
+                            DocumentChanges(
+                                other,
+                                ImmutableArray.Create(TextChange(TextSpan(0, 0), "// touched\n")),
+                                ImmutableArray[TextSpan].Empty
+                            )
+                        )
+                    )
+                )
+            )
+        }
+    }
+
+    private class ThrowingComputeProvider : GSharpCodeFixProvider {
+        override prop FixableDiagnosticIds ImmutableArray[string] -> ImmutableArray.Create("GS0273")
+
+        override func RegisterCodeFixes(context CodeFixContext) {
+            context.RegisterFix(
+                "throws",
+                "throws",
+                Applicability.MachineApplicable,
+                (editor SyntaxEditor) -> {
+                    throw InvalidOperationException("broken provider")
+                }
+            )
+        }
+    }
+
+    // Declares the GS0125 of the file as a second target and fixes only the GS0273.
+    private class TwoTargetProvider : GSharpCodeFixProvider {
+        override prop FixableDiagnosticIds ImmutableArray[string] -> ImmutableArray.Create("GS0273")
+
+        override func RegisterCodeFixes(context CodeFixContext) {
+            let other = context.Compilation.GetDiagnostics().First((d Diagnostic) -> d.Id == "GS0125")
+            let tree = context.Tree
+            let token = tree.Root.FindToken(context.Diagnostic.Location.Span.Start)!!
+            context.RegisterFix(
+                CodeFix(
+                    "two",
+                    "two",
+                    Applicability.MachineApplicable,
+                    ImmutableArray.Create(context.Diagnostic, other),
+                    "test.two",
+                    (ct CancellationToken) -> FixChanges(
+                        ImmutableArray.Create(
+                            DocumentChanges(
+                                tree,
+                                ImmutableArray.Create(TextChange(token.Span, "nil")),
+                                ImmutableArray[TextSpan].Empty
+                            )
+                        )
+                    )
+                )
+            )
+        }
+    }
+
+    // Replaces `null` and the rest of the file, so any two of its fixes overlap.
+    private class ToEndProvider : GSharpCodeFixProvider {
+        override prop FixableDiagnosticIds ImmutableArray[string] -> ImmutableArray.Create("GS0273")
+
+        override func RegisterCodeFixes(context CodeFixContext) {
+            let tree = context.Tree
+            let span = TextSpan.FromBounds(context.Diagnostic.Location.Span.Start, tree.Text.Length)
+            context.RegisterFix(
+                CodeFix(
+                    "to-end",
+                    "to-end",
+                    Applicability.MachineApplicable,
+                    ImmutableArray.Create(context.Diagnostic),
+                    "test.to-end",
+                    (ct CancellationToken) -> FixChanges(
+                        ImmutableArray.Create(
+                            DocumentChanges(
+                                tree,
+                                ImmutableArray.Create(TextChange(span, "nil\n")),
+                                ImmutableArray[TextSpan].Empty
+                            )
+                        )
+                    )
+                )
+            )
+        }
+    }
+
+    // Reports TEST0231 on the package name.
+    private class PackageAnalyzer : GSharp.Core.CodeAnalysis.Analyzers.GSharpDiagnosticAnalyzer {
+        private let Rule DiagnosticDescriptor = DiagnosticDescriptor("TEST0231", DiagnosticSeverity.Warning, "package")
+
+        override prop SupportedDiagnostics ImmutableArray[DiagnosticDescriptor] -> ImmutableArray.Create(Rule)
+
+        override func Initialize(context GSharp.Core.CodeAnalysis.Analyzers.AnalysisContext) {
+            context.RegisterSyntaxTreeAction(
+                (c GSharp.Core.CodeAnalysis.Analyzers.SyntaxTreeAnalysisContext) -> {
+                    let name = c.Tree.Root.DescendantTokens().First((t SyntaxToken) -> t.Text == "P")
+                    c.ReportDiagnostic(Diagnostic.Create(Rule, TextLocation(c.Tree.Text, name.Span)))
+                }
+            )
+        }
+    }
+
+    private class PackageFixProvider : GSharpCodeFixProvider {
+        override prop FixableDiagnosticIds ImmutableArray[string] -> ImmutableArray.Create("TEST0231")
+
+        override func RegisterCodeFixes(context CodeFixContext) {
+            let token = context.Tree.Root.FindToken(context.Diagnostic.Location.Span.Start)!!
+            context.RegisterFix(
+                "package",
+                "package",
+                Applicability.MachineApplicable,
+                (editor SyntaxEditor) -> editor.ReplaceToken(token, "Q")
+            )
+        }
+    }
+
     private func Service() CodeFixService -> CodeFixService(CodeFixRegistry.CreateDefault())
 
     // Replaces `null` and one character on each side, so two adjacent arguments overlap.

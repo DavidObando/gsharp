@@ -445,6 +445,48 @@ open class Adr0227CodeActionTests {
         Assert.DoesNotContain("null", edit.NewText, StringComparison.Ordinal)
     }
 
+    @Fact
+    func SourceFixAll_ThatAddsASyntaxError_IsNotOffered() {
+        let content = LanguageServerTestHelpers.Content(Source)
+        let uri = DocumentUri.From("file:///a.gs")!!
+        let origin = Position(0, 0)
+        let registry = GSharp.Core.CodeAnalysis.CodeFixes.CodeFixRegistry()
+        registry.Add(BreakingProvider())
+        let context = CodeActionContext{Only: []CodeActionKind{CodeActionKind("source.fixAll")}}
+        let actions = CodeActionComputer.ComputeCodeActions(
+            uri,
+            content,
+            Range(origin, origin),
+            context,
+            CodeActionClientOptions(),
+            registry,
+            default(System.Threading.CancellationToken)
+        )
+        Assert.Empty(actions)
+    }
+
+    // A machine-applicable fix that leaves an open parenthesis.
+    private class BreakingProvider : GSharp.Core.CodeAnalysis.CodeFixes.GSharpCodeFixProvider {
+        override prop FixableDiagnosticIds System
+            .Collections
+            .Immutable
+            .ImmutableArray[string] -> System
+            .Collections
+            .Immutable
+            .ImmutableArray
+            .Create("GS0273")
+
+        override func RegisterCodeFixes(context GSharp.Core.CodeAnalysis.CodeFixes.CodeFixContext) {
+            let token = context.Tree.Root.FindToken(context.Diagnostic.Location.Span.Start)!!
+            context.RegisterFix(
+                "Break",
+                "test.break",
+                GSharp.Core.CodeAnalysis.CodeFixes.Applicability.MachineApplicable,
+                (editor SyntaxEditor) -> editor.ReplaceToken(token, "(nil")
+            )
+        }
+    }
+
     private func AssertOffered(source string, at string, title string, newText string) {
         let content = LanguageServerTestHelpers.Content(source)
         let uri = DocumentUri.From("file:///a.gs")!!

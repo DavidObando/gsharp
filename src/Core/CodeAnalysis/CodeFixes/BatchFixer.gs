@@ -54,7 +54,8 @@ internal class BatchFixer {
                     break
                 }
             }
-            for index in indexes {
+            // A fix of a selected diagnostic can edit other trees too, so every tree is compared.
+            for var index = 0; index < compilation.SyntaxTrees.Length; index++ {
                 let original = compilation.SyntaxTrees[index]
                 let changed = current.SyntaxTrees[index]
                 if !object.ReferenceEquals(original, changed) {
@@ -95,7 +96,16 @@ internal class BatchFixer {
                 dropped.Add(DroppedFix(diagnostic, fix, FixDropReason.ApplicabilityFiltered, round))
                 continue
             }
-            let changes = fix.GetChanges(cancellationToken)
+            // A provider's deferred computation can throw; that fix is dropped and the others go on.
+            var changes FixChanges? = nil
+            try {
+                changes = fix.GetChanges(cancellationToken)
+            } catch (ex OperationCanceledException) when cancellationToken.IsCancellationRequested {
+                rethrow
+            } catch (ex Exception) when !(ex is OutOfMemoryException) && !(ex is StackOverflowException) {
+                dropped.Add(DroppedFix(diagnostic, fix, FixDropReason.ProviderFailed, round))
+                continue
+            }
             if changes.IsEmpty || Conflicts(changes, keptByTree) {
                 if !changes.IsEmpty {
                     dropped.Add(DroppedFix(diagnostic, fix, FixDropReason.Overlap, round))
@@ -133,12 +143,17 @@ internal class BatchFixer {
         let gate DeltaPolicy? = options.Gate
         if gate != nil {
             let baseline = DeltaBaseline.Create(compilation, options.DeltaOptions, cancellationToken)
-            let delta = service.ComputeDelta(
-                baseline,
-                combined,
-                kept.Select((k KeptFix) -> k.Diagnostic).ToImmutableArray(),
-                cancellationToken
-            )
+            // The targets are every diagnostic that a kept fix declares, each occurrence once.
+            let targets = ImmutableArray.CreateBuilder[Diagnostic]()
+            let seenTargets = HashSet[Diagnostic](ReferenceEqualityComparer.Instance)
+            for k in kept {
+                for target in k.Fix.Diagnostics {
+                    if seenTargets.Add(target) {
+                        targets.Add(target)
+                    }
+                }
+            }
+            let delta = service.ComputeDelta(baseline, combined, targets.ToImmutable(), cancellationToken)
             if !gate.Accepts(delta) {
                 for k in kept {
                     dropped.Add(DroppedFix(k.Diagnostic, k.Fix, FixDropReason.DeltaRejected, round))
@@ -156,7 +171,11 @@ internal class BatchFixer {
         for k in kept {
             applied.Add(k.Fix)
         }
-        return compilation.WithReplacedSyntaxTrees(oldTrees.ToImmutable(), newTrees.ToImmutable())
+        let successor = compilation.WithReplacedSyntaxTrees(oldTrees.ToImmutable(), newTrees.ToImmutable())
+        // The next round binds the successor: it gets the host's limits and the request token.
+        let budget = compilation.WorkBudget
+        successor.WorkBudget = CompilationWorkBudget(budget.MaxWorkers, budget.MemoryBudgetMiB, cancellationToken)
+        return successor
     }
 
     // The fix of a diagnostic: the first fix with the equivalence key, or the first fix when the key is null.
@@ -192,6 +211,10 @@ internal class BatchFixer {
         Diagnostic
     ] {
         let texts = HashSet[SourceText](trees.Select((t SyntaxTree) -> t.Text), ReferenceEqualityComparer.Instance)
+        let order = Dictionary[SourceText, int32](ReferenceEqualityComparer.Instance)
+        for var index = 0; index < compilation.SyntaxTrees.Length; index++ {
+            order.TryAdd(compilation.SyntaxTrees[index].Text, index)
+        }
         let result = List[Diagnostic]()
         for d in compilation.GetDiagnostics(cancellationToken) {
             if d.Location.Text != nil && texts.Contains(d.Location.Text) {
@@ -200,13 +223,25 @@ internal class BatchFixer {
         }
         let analyzers = options.DeltaOptions?.Analyzers ?? ImmutableArray[GSharpDiagnosticAnalyzer].Empty
         if !analyzers.IsEmpty {
-            for d in GSharpAnalyzerDriver.Run(compilation, analyzers, nil, cancellationToken) {
+            for d in GSharpAnalyzerDriver.Run(
+                compilation,
+                analyzers,
+                options.DeltaOptions?.AnalyzerOptions,
+                cancellationToken
+            ) {
                 if d.Location.Text != nil && texts.Contains(d.Location.Text) {
                     result.Add(d)
                 }
             }
         }
+        // First wins in source order: by tree, then position; ties keep their order (a stable sort).
         return result
+            .Select((d Diagnostic, i int32) -> (Diagnostic: d, Index: i))
+            .OrderBy((x(Diagnostic Diagnostic, Index int32)) -> order[x.Diagnostic.Location.Text!!])
+            .ThenBy((x(Diagnostic Diagnostic, Index int32)) -> x.Diagnostic.Location.Span.Start)
+            .ThenBy((x(Diagnostic Diagnostic, Index int32)) -> x.Index)
+            .Select((x(Diagnostic Diagnostic, Index int32)) -> x.Diagnostic)
+            .ToList()
     }
 
     // Two changes of different fixes conflict when they share a character, or when an insertion
