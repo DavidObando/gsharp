@@ -45,6 +45,91 @@ import System.Linq
 /// This preserves foreach-style fresh-variable semantics when closures
 /// escape while still sharing one cell among closures from the same iteration.
 internal shared class CaptureBoxingRewriter {
+    private class LocalFunctionValueRewriter : NestedFunctionBodyRewriter {
+        func RewriteArgument(argument BoundExpression) BoundExpression -> this.RewriteExpression(argument)
+
+        protected override func RewriteMethodGroupExpression(node BoundMethodGroupExpression) BoundExpression ->
+        if node.Function is {HasCaptures: true, LocalFunctionValue: {} value} {
+            BoundVariableExpression(node.Syntax, value)
+        } else {
+            base.RewriteMethodGroupExpression(node)
+        }
+
+        protected override func RewriteBlockStatement(node BoundBlockStatement) BoundStatement {
+            let rewritten = cast[BoundBlockStatement](base.RewriteBlockStatement(node))
+            let statements = RewriteDeclarations(rewritten.Statements)
+            return if statements.Equals(rewritten.Statements) {
+                rewritten
+            } else {
+                BoundBlockStatement(rewritten.Syntax, statements)
+            }
+        }
+
+        protected override func RewriteBlockExpression(node BoundBlockExpression) BoundExpression {
+            let rewritten = cast[BoundBlockExpression](base.RewriteBlockExpression(node))
+            let statements = RewriteDeclarations(rewritten.Statements)
+            return if statements.Equals(rewritten.Statements) {
+                rewritten
+            } else {
+                BoundBlockExpression(rewritten.Syntax, statements, rewritten.Expression)
+            }
+        }
+
+        private func RewriteDeclarations(source ImmutableArray[BoundStatement]) ImmutableArray[BoundStatement] {
+            var statements ImmutableArray[BoundStatement].Builder? = nil
+            for var index = 0; index < source.Length; index++ {
+                if source[index] is not BoundLocalFunctionDeclaration {
+                    statements?.Add(source[index])
+                    continue
+                }
+                var end = index
+                while end < source.Length && source[end] is BoundLocalFunctionDeclaration {
+                    end++
+                }
+                for var member = index; member < end; member++ {
+                    let declaration = cast[BoundLocalFunctionDeclaration](source[member])
+                    if declaration.Literal.Function is {HasCaptures: true, LocalFunctionValue: {} value} {
+                        if statements == nil {
+                            statements = ImmutableArray.CreateBuilder[BoundStatement]()
+                            statements.AddRange(source.Take(index))
+                        }
+                        // Allocate every forward-referenced delegate cell before initializing any closure.
+                        statements.Add(BoundVariableDeclaration(nil, value, BoundDefaultExpression(nil, value.Type)))
+                    }
+                }
+                if statements != nil {
+                    for var member = index; member < end; member++ {
+                        let declaration = cast[BoundLocalFunctionDeclaration](source[member])
+                        statements.Add(
+                            if declaration.Literal.Function is {HasCaptures: true, LocalFunctionValue: {} value} {
+                                cast[BoundStatement](
+                                    BoundExpressionStatement(
+                                        declaration.Syntax,
+                                        BoundAssignmentExpression(
+                                            nil,
+                                            value,
+                                            if value.Type is DelegateTypeSymbol {
+                                                cast[BoundExpression](
+                                                    BoundConversionExpression(nil, value.Type, declaration.Literal)
+                                                )
+                                            } else {
+                                                cast[BoundExpression](declaration.Literal)
+                                            }
+                                        )
+                                    )
+                                )
+                            } else {
+                                cast[BoundStatement](declaration)
+                            }
+                        )
+                    }
+                }
+                index = end - 1
+            }
+            return statements?.ToImmutable() ?? source
+        }
+    }
+
     private class BoxedVariable {
         init(
             original VariableSymbol,
@@ -1026,6 +1111,10 @@ internal shared class CaptureBoxingRewriter {
         out rewrittenArguments ImmutableArray[BoundExpression],
         out parameterPrologue ImmutableArray[BoundStatement]
     )(Body BoundBlockStatement, LambdaUpdates Dictionary[FunctionSymbol, BoundBlockStatement]) {
+        let values = LocalFunctionValueRewriter()
+        let body = cast[BoundBlockStatement](values.RewriteStatement(body))
+        let arguments = arguments.Select((argument BoundExpression) -> values.RewriteArgument(argument))
+            .ToImmutableArray()
         rewrittenArguments = arguments
         parameterPrologue = ImmutableArray[BoundStatement].Empty
         let emptyUpdates = Dictionary[FunctionSymbol, BoundBlockStatement]()

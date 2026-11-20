@@ -225,7 +225,7 @@ internal partial class DeclarationBinder {
                         location
                     )
                 }
-                ReportProtectedReceiverAccess(clrInit ?? gsharpInit)
+                ReportInitializerDiagnostics(clrInit ?? gsharpInit)
                 $scope = staticScope
             }
         } finally {
@@ -752,14 +752,16 @@ internal partial class DeclarationBinder {
     /// protected-receiver pass runs over the resolved initializer's final
     /// arguments, after constructor resolution has rebound any deferred
     /// (target-dependent) argument. Primary and explicit constructors both
-    /// call this.
+    /// call this. Final method-group and pointer validation belongs here
+    /// for the same reason.
     /// @param initializer The resolved base-constructor initializer, if resolution succeeded.
-    private func ReportProtectedReceiverAccess(initializer BaseConstructorInitializer?) {
+    private func ReportInitializerDiagnostics(initializer BaseConstructorInitializer?) {
         if initializer == nil {
             return
         }
         for argument in initializer.Arguments {
             ProtectedReceiverDiagnostics.Report(argument, getCurrentFunction(), Diagnostics)
+            MethodGroupDiagnostics.ReportUnresolved(argument, Diagnostics)
         }
     }
 
@@ -1555,7 +1557,7 @@ internal partial class DeclarationBinder {
                         location
                     )
                 }
-                ReportProtectedReceiverAccess(init)
+                ReportInitializerDiagnostics(init)
                 $scope = staticScope
             }
         } finally {

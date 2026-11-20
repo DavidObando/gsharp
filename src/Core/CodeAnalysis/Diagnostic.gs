@@ -21,6 +21,8 @@ class Diagnostic {
         Message = message
         AdditionalLocations = ImmutableArray[TextLocation].Empty
         Properties = ImmutableDictionary[string, string?].Empty
+        MessageArguments = ImmutableArray[string].Empty
+        Suggestions = ImmutableArray[DiagnosticSuggestion].Empty
     }
 
     /// Initializes a new instance of the (cref:Diagnostic) class with
@@ -38,7 +40,9 @@ class Diagnostic {
         severity DiagnosticSeverity,
         message string,
         additionalLocations ImmutableArray[TextLocation],
-        properties ImmutableDictionary[string, string?]
+        properties ImmutableDictionary[string, string?],
+        messageArguments ImmutableArray[string],
+        suggestions ImmutableArray[DiagnosticSuggestion]
     ) {
         Descriptor = descriptor
         Location = location
@@ -47,6 +51,8 @@ class Diagnostic {
         Message = message
         AdditionalLocations = additionalLocations
         Properties = properties
+        MessageArguments = messageArguments
+        Suggestions = suggestions
     }
 
     // ADR-0225: a copy that keeps every field and sets the prefix finality.
@@ -63,6 +69,8 @@ class Diagnostic {
         Message = source.Message
         AdditionalLocations = source.AdditionalLocations
         Properties = source.Properties
+        MessageArguments = source.MessageArguments
+        Suggestions = source.Suggestions
         PrefixFinality = prefixFinality
         this.prefixReason = prefixReason
     }
@@ -84,6 +92,19 @@ class Diagnostic {
 
     /// Gets the diagnostic information message.
     prop Message string {
+        get;
+    }
+
+    /// Gets the arguments of the message format, each formatted as the message formats it, in
+    /// order (ADR-0227 D2). A code fix reads them instead of the message text. Empty when the
+    /// producer did not record them.
+    prop MessageArguments ImmutableArray[string] {
+        get;
+    }
+
+    /// Gets the fixes that the compiler attached when it reported the diagnostic (ADR-0227 D2).
+    /// Empty for most diagnostics. Equality and de-duplication do not read them.
+    prop Suggestions ImmutableArray[DiagnosticSuggestion] {
         get;
     }
 
@@ -197,8 +218,45 @@ class Diagnostic {
                 } else {
                     additionalLocations
                 },
-                properties ?? ImmutableDictionary[string, string?].Empty
+                properties ?? ImmutableDictionary[string, string?].Empty,
+                FormatArguments(messageArguments),
+                ImmutableArray[DiagnosticSuggestion].Empty
             )
+        }
+
+        /// Creates a diagnostic of the compiler's report funnel (ADR-0227 D2). It keeps the
+        /// descriptor and the message arguments, and uses the given severity.
+        internal func CreateReported(
+            descriptor DiagnosticDescriptor,
+            location TextLocation,
+            severity DiagnosticSeverity,
+            messageArguments[]object?,
+            suggestions ImmutableArray[DiagnosticSuggestion] = default(ImmutableArray[DiagnosticSuggestion])
+        ) Diagnostic -> Diagnostic(
+            descriptor,
+            location,
+            severity,
+            string.Format(descriptor.MessageFormat, messageArguments),
+            ImmutableArray[TextLocation].Empty,
+            ImmutableDictionary[string, string?].Empty,
+            FormatArguments(messageArguments),
+            if suggestions.IsDefault {
+                ImmutableArray[DiagnosticSuggestion].Empty
+            } else {
+                suggestions
+            }
+        )
+
+        // Each argument formatted as string.Format formats it in the message.
+        private func FormatArguments(messageArguments[]object?) ImmutableArray[string] {
+            if messageArguments.Length == 0 {
+                return ImmutableArray[string].Empty
+            }
+            let builder = ImmutableArray.CreateBuilder[string](messageArguments.Length)
+            for argument in messageArguments {
+                builder.Add(string.Format("{0}", argument))
+            }
+            return builder.MoveToImmutable()
         }
     }
 }

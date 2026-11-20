@@ -487,6 +487,70 @@ internal class BinderContext {
         RetriedFunctionLiterals = saved
     }
 
+    private let retriedBindingUndo List[Action] = List[Action]()
+    private var retriedBindingTransactionDepth int32
+
+    internal func SetRetriedBinding[K, V](cache Dictionary[K, V], key K, value V) {
+        if retriedBindingTransactionDepth > 0 {
+            let existed = cache.TryGetValue(key, out var previous)
+            retriedBindingUndo.Add(
+                func () void {
+                    if existed {
+                        cache[key] = previous
+                    } else {
+                        cache.Remove(key)
+                    }
+                }
+            )
+        }
+        cache[key] = value
+    }
+
+    internal func BeginRetriedBindingsTransaction() RetriedBindingsTransaction {
+        retriedBindingTransactionDepth++
+        return RetriedBindingsTransaction(this, retriedBindingUndo.Count)
+    }
+
+    private func FinishRetriedBindingsTransaction(mark int32, rollback bool) {
+        if rollback {
+            for var index = retriedBindingUndo.Count - 1; index >= mark; index-- {
+                retriedBindingUndo[index].Invoke()
+            }
+            retriedBindingUndo.RemoveRange(mark, retriedBindingUndo.Count - mark)
+        }
+        // Keep committed inner writes available to an enclosing rollback.
+        retriedBindingTransactionDepth--
+        if retriedBindingTransactionDepth == 0 {
+            retriedBindingUndo.Clear()
+        }
+    }
+
+    internal sealed class RetriedBindingsTransaction : IDisposable {
+        private let owner BinderContext
+        private let mark int32
+        private var finished bool
+
+        init(owner BinderContext, mark int32) {
+            this.owner = owner
+            this.mark = mark
+        }
+
+        func Commit() {
+            Finish(rollback: false)
+        }
+
+        func Dispose() {
+            Finish(rollback: true)
+        }
+
+        private func Finish(rollback bool) {
+            if !finished {
+                owner.FinishRetriedBindingsTransaction(mark, rollback)
+                finished = true
+            }
+        }
+    }
+
     /// Gets or sets a value indicating whether the current function, lambda, or
     /// local-function body contains a user `goto` statement or non-loop `label:`
     /// declaration, computed syntactically once before that body binds (see

@@ -996,7 +996,7 @@ internal partial class StatementBinder {
     /// would box a fresh copy on every entry, defeating mutual exclusion.
     private func BindLockStatement(syntax LockStatementSyntax) BoundStatement {
         var target = bindExpression(syntax.Expression, false)
-        if target is BoundErrorExpression {
+        if target is BoundErrorExpression || ExpressionBinder.ReportUnresolvedTargetlessValues(Diagnostics, target) {
             return BindErrorStatement()
         }
         // ADR-0186 §4: a `lock`/`sync` subject is a position the ADR names

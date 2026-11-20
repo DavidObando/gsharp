@@ -621,6 +621,7 @@ internal partial class ExpressionBinder {
             }
             boundReceiver = BindExpression(accessor.LeftPart)
             if boundReceiver.Type == TypeSymbol.Error {
+                let _ = ReportUnresolvedTargetlessValues(boundReceiver)
                 return BoundErrorExpression(nil)
             }
             // ADR-0186 §4/§5, issue #4325: this method binds BOTH event

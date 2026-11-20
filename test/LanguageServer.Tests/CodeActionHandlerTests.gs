@@ -27,7 +27,11 @@ func F() {}
             .ToList()
         let sort = Assert.Single(actions, (a CommandOrCodeAction) -> a.CodeAction.Title == "Sort imports")
         Assert.Equal(CodeActionKind.RefactorRewrite, sort.CodeAction.Kind)
-        Assert.Contains("import Alpha", sort.CodeAction.Edit.Changes[uri].Single().NewText, StringComparison.Ordinal)
+        Assert.Contains(
+            "import Alpha",
+            sort.CodeAction.Edit!!.Changes!![uri].Single().NewText,
+            StringComparison.Ordinal
+        )
     }
 
     @Fact
@@ -47,10 +51,10 @@ func F() {}
         let actions = CodeActionComputer.ComputeCodeActions(uri, content, range_).ToList()
         let quickFix = Assert.Single(
             actions,
-            (a CommandOrCodeAction) -> a.CodeAction.Title == NullabilityQuickFixes.NullConditionalAccessTitle
+            (a CommandOrCodeAction) -> a.CodeAction.Title == "Use null-conditional access '?.'"
         )
         Assert.Equal(CodeActionKind.QuickFix, quickFix.CodeAction.Kind)
-        let edit = quickFix.CodeAction.Edit.Changes[uri].Single()
+        let edit = quickFix.CodeAction.Edit!!.Changes!![uri].Single()
         Assert.Equal("?.", edit.NewText)
         // Apply the edit and verify the resulting program no longer reports GS0158.
         let rewritten = ApplyEdit(source, edit)
@@ -76,7 +80,7 @@ func F() {}
         let actions = CodeActionComputer.ComputeCodeActions(uri, content, range_).ToList()
         Assert.DoesNotContain(
             actions,
-            (a CommandOrCodeAction) -> a.CodeAction.Title == NullabilityQuickFixes.NullConditionalAccessTitle
+            (a CommandOrCodeAction) -> a.CodeAction.Title == "Use null-conditional access '?.'"
         )
     }
 
@@ -100,15 +104,12 @@ func F() {}
                 .Title
                 .StartsWith("Provide default with '??", StringComparison.Ordinal)
         )
-        let bang = Assert.Single(
-            actions,
-            (a CommandOrCodeAction) -> a.CodeAction.Title == NullabilityQuickFixes.NullAssertionTitle
-        )
+        let bang = Assert.Single(actions, (a CommandOrCodeAction) -> a.CodeAction.Title == "Assert non-nil with '!!'")
         Assert.Equal(CodeActionKind.QuickFix, elvis.CodeAction.Kind)
         Assert.Equal(CodeActionKind.QuickFix, bang.CodeAction.Kind)
-        let elvisEdit = elvis.CodeAction.Edit.Changes[uri].Single()
+        let elvisEdit = elvis.CodeAction.Edit!!.Changes!![uri].Single()
         Assert.Equal("(x ?? \"\")", elvisEdit.NewText)
-        let bangEdit = bang.CodeAction.Edit.Changes[uri].Single()
+        let bangEdit = bang.CodeAction.Edit!!.Changes!![uri].Single()
         Assert.Equal("(x!!)", bangEdit.NewText)
         // Applying either edit clears the GS0155/GS0156 diagnostic.
         for fix in[]GSharp.LanguageServer.Protocol.TextEdit{elvisEdit, bangEdit} {
@@ -144,13 +145,10 @@ func main() {
                 .Title
                 .StartsWith("Provide default with '??", StringComparison.Ordinal)
         )
-        let bang = Assert.Single(
-            actions,
-            (a CommandOrCodeAction) -> a.CodeAction.Title == NullabilityQuickFixes.NullAssertionTitle
-        )
-        let elvisEdit = elvis.CodeAction.Edit.Changes[uri].Single()
+        let bang = Assert.Single(actions, (a CommandOrCodeAction) -> a.CodeAction.Title == "Assert non-nil with '!!'")
+        let elvisEdit = elvis.CodeAction.Edit!!.Changes!![uri].Single()
         Assert.Equal("(x ?? \"\")", elvisEdit.NewText)
-        let bangEdit = bang.CodeAction.Edit.Changes[uri].Single()
+        let bangEdit = bang.CodeAction.Edit!!.Changes!![uri].Single()
         Assert.Equal("(x!!)", bangEdit.NewText)
         // The applied null-assertion fix must remove GS0154.
         let rewritten = ApplyEdit(source, bangEdit)
@@ -176,10 +174,7 @@ func main() {
         let pos = LanguageServerTestHelpers.PositionOf(source, "nil")
         let range_ = Range(pos, pos)
         let actions = CodeActionComputer.ComputeCodeActions(uri, content, range_).ToList()
-        Assert.DoesNotContain(
-            actions,
-            (a CommandOrCodeAction) -> a.CodeAction.Title == NullabilityQuickFixes.NullAssertionTitle
-        )
+        Assert.DoesNotContain(actions, (a CommandOrCodeAction) -> a.CodeAction.Title == "Assert non-nil with '!!'")
         Assert.DoesNotContain(
             actions,
             (a CommandOrCodeAction) -> a
@@ -201,13 +196,10 @@ func main() {
         let pos = LanguageServerTestHelpers.PositionOf(source, "\"abc\"")
         let range_ = Range(pos, pos)
         let actions = CodeActionComputer.ComputeCodeActions(uri, content, range_).ToList()
+        Assert.DoesNotContain(actions, (a CommandOrCodeAction) -> a.CodeAction.Title == "Assert non-nil with '!!'")
         Assert.DoesNotContain(
             actions,
-            (a CommandOrCodeAction) -> a.CodeAction.Title == NullabilityQuickFixes.NullAssertionTitle
-        )
-        Assert.DoesNotContain(
-            actions,
-            (a CommandOrCodeAction) -> a.CodeAction.Title == NullabilityQuickFixes.NullConditionalAccessTitle
+            (a CommandOrCodeAction) -> a.CodeAction.Title == "Use null-conditional access '?.'"
         )
         Assert.DoesNotContain(
             actions,
@@ -230,10 +222,7 @@ func main() {
         // Caret on the first line ("func main()") — the diagnostic is on line 2.
         let range_ = Range(Position(0, 0), Position(0, 0))
         let actions = CodeActionComputer.ComputeCodeActions(uri, content, range_).ToList()
-        Assert.DoesNotContain(
-            actions,
-            (a CommandOrCodeAction) -> a.CodeAction.Title == NullabilityQuickFixes.NullAssertionTitle
-        )
+        Assert.DoesNotContain(actions, (a CommandOrCodeAction) -> a.CodeAction.Title == "Assert non-nil with '!!'")
         Assert.DoesNotContain(
             actions,
             (a CommandOrCodeAction) -> a

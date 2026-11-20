@@ -3387,6 +3387,18 @@ internal class ConversionClassifier {
             )
             return BoundErrorExpression(nil)
         }
+        if MethodGroupDiagnostics.ReportUnsupportedLocalRefReturn(Diagnostics, pick, diagnosticLocation) {
+            return BoundErrorExpression(group.Syntax)
+        }
+        if pick.LocalDeclaration != nil && !pick.IsGeneric {
+            binderCtx.RootScope.GetLocalFunctionValue(
+                pick,
+                FunctionTypeSymbol.Get(
+                    pick.Parameters.Select((parameter ParameterSymbol) -> parameter.Type).ToImmutableArray(),
+                    getMethodGroupObservableReturnType(pick, pick.Type)
+                )
+            )
+        }
         let pickFnType = FunctionTypeSymbol.Get(
             ImmutableArray.CreateRange(
                 Invariant.Required(
@@ -5884,10 +5896,13 @@ internal class ConversionClassifier {
                 return BoundDefaultExpression(nil, parameterType)
             }
             let valueType = GetOptionalDefaultValueType(parameterType)
-            if valueType.StripToBareShape() == TypeSymbol.Object {
+            if valueType.StripToBareShape() == TypeSymbol.Object ||
+                valueType == TypeSymbol.NInt ||
+                valueType == TypeSymbol
+                .NUInt {
                 let literal = BoundLiteralExpression(nil, value)
                 if literal.Type != valueType {
-                    return BoundConversionExpression(nil, parameterType, literal)
+                    return LiftOptionalDefaultValue(BoundConversionExpression(nil, valueType, literal), parameterType)
                 }
             }
             return LiftOptionalDefaultValue(BoundLiteralExpression(nil, value, valueType), parameterType)
@@ -7078,6 +7093,9 @@ internal class ConversionClassifier {
                 (bareTarget?.ClrType is not Type targetClrType || !ClrTypeUtilities.IsDelegateType(targetClrType)) {
                 return false
             }
+            if !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(bareTarget, out _) {
+                return false
+            }
             if !DelegateRefKindUtilities.TryGetSourceParameterRefKinds(expression, out var sourceRefKinds) {
                 return false
             }
@@ -7259,9 +7277,9 @@ internal class ConversionClassifier {
 
         private func CanAdaptSynthesizedRefDelegateBranch(branch BoundExpression, target TypeSymbol) bool {
             switch branch {
-                case literal is BoundFunctionLiteralExpression {
-                    return !HasDelegateParameterRefKindMismatch(target, literal) && Conversion.Classify(
-                        literal.Type,
+                case BoundFunctionLiteralExpression or BoundMethodGroupExpression{FunctionType: not nil} {
+                    return !HasDelegateParameterRefKindMismatch(target, branch) && Conversion.Classify(
+                        branch.Type,
                         target
                     )
                         .IsImplicit
@@ -7902,6 +7920,13 @@ internal class ConversionClassifier {
                     NullabilityFreeReason.TypeStructure
                 )
             }
+            // ECMA-335 has no native-int Constant element type; match Roslyn's
+            // int32 / uint32 Constant-table encoding and 32-bit range rules.
+            if target == TypeSymbol.NInt {
+                target = TypeSymbol.Int32
+            } else if target == TypeSymbol.NUInt {
+                target = TypeSymbol.UInt32
+            }
             return target == TypeSymbol.Char || ExpressionBinder.IsIntegerType(target)
         }
 
@@ -7921,22 +7946,21 @@ internal class ConversionClassifier {
                 parameterType
             }
             try {
-                if target.ClrType is Type clrType && TryNormalizeClrConstant(value, clrType, out normalized) {
+                if (target == TypeSymbol.NInt || target == TypeSymbol.NUInt) &&
+                    TryNormalizeClrConstant(
+                    value,
+                    if target == TypeSymbol.NInt {
+                        typeof(int32)
+                    } else {
+                        typeof(uint32)
+                    },
+                    out normalized
+                ) {
+                    return true
+                } else if target.ClrType is Type clrType && TryNormalizeClrConstant(value, clrType, out normalized) {
                     return true
                 } else if target is EnumSymbol {
                     normalized = Convert.ToInt32(value, CultureInfo.InvariantCulture)
-                } else if (target == TypeSymbol.NInt || target == TypeSymbol.NUInt) &&
-                    (
-                    value is int8 ||
-                        value is uint8 ||
-                        value is int16 ||
-                        value is uint16 ||
-                        value is int32 ||
-                        value is uint32 ||
-                        value is int64 ||
-                        value is uint64
-                ) {
-                    normalized = value
                 }
             } catch (Exception) {
                 normalized = nil
@@ -7961,6 +7985,10 @@ internal class ConversionClassifier {
             let typeCode = Type.GetTypeCode(targetType)
             let convertible = if value is char ch && typeCode != TypeCode.Char {
                 cast[object](uint16(ch))
+            } else if value is nint ni {
+                cast[object](int64(ni))
+            } else if value is nuint nu {
+                cast[object](uint64(nu))
             } else {
                 value
             }

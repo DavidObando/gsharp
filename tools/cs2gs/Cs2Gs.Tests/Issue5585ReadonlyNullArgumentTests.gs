@@ -372,7 +372,7 @@ public class Holder {
             return compilation
         }
 
-        private func VerifyStrictIL(assembly string) {
+        internal func VerifyStrictIL(assembly string) {
             let arguments = List[string]{"tool", "run", "ilverify", assembly, "-s", "System.Private.CoreLib"}
             let references = Directory.EnumerateFiles(
                 Path.GetDirectoryName(typeof(object).Assembly.Location)!!,

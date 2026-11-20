@@ -136,6 +136,56 @@ abstract class SyntaxNode {
         }
     }
 
+    /// Enumerates the tokens of this node in child order, synthesized and missing tokens included
+    /// (ADR-0227 D1).
+    /// @returns The tokens.
+    func DescendantTokens() sequence[SyntaxToken] {
+        let pending = Stack[SyntaxNode]()
+        pending.Push(this)
+        while pending.Count > 0 {
+            let node = pending.Pop()
+            if node is SyntaxToken token {
+                yield token
+                continue
+            }
+            let count = node.ChildCount
+            for var i = count - 1; i >= 0; i-- {
+                pending.Push(node.GetChild(i))
+            }
+        }
+    }
+
+    /// Finds the smallest real token whose span contains [`position`](paramref) (ADR-0227 D1). A
+    /// real token has source text: it is not missing, not synthesized, and its text is the source
+    /// text at its span. Inside an interpolation
+    /// hole, the token of the hole wins over the string token that encloses it.
+    /// @param position A position in the text of the tree.
+    /// @returns The token, or `null` when no real token covers the position.
+    func FindToken(position int32) SyntaxToken? {
+        let text = SyntaxTree.Text
+        var best SyntaxToken? = nil
+        for token in DescendantTokens() {
+            if token.IsMissing || token.IsSynthesized || token.Span.Length == 0 {
+                continue
+            }
+            // A token that the parser made for a desugared form (the `*` of `p->field`, the `:`
+            // of a payload-enum case) can sit on other source text. It is not a source token.
+            if token.Span.End > text.Length || text.ToString(token.Span) != token.Text {
+                continue
+            }
+            if token
+                .Span
+                .Start <= position &&
+                position < token
+                .Span
+                .End &&
+                (best == nil || token.Span.Length < best.Span.Length) {
+                best = token
+            }
+        }
+        return best
+    }
+
     /// Gets the number of children of this syntax node. Every concrete node class overrides this
     /// in `SyntaxNode.Children.g.gs`, which `build/generate-syntax-children.py` writes (issue #5136).
     /// A class that the generator did not see, or a subclass of a generated open class, uses the

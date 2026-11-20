@@ -378,8 +378,18 @@ partial class CSharpToGSharpTranslator {
                             () -> this.TranslateConditionalAccessWithLocalAssignmentSeam(conditionalAccess)
                         )
                     }
-                    if this.RequiresLocalAssignmentSeam(conditionalAccess.WhenNotNull) {
-                        return this.TranslateConditionalAccessWithLocalAssignmentSeam(conditionalAccess)
+                    if this.RequiresLocalAssignmentSeam(conditionalAccess.WhenNotNull) ||
+                        (
+                        this
+                            .context
+                            .GetTypeInfo(conditionalAccess)
+                            .Type is ITypeParameterSymbol conditionalTp &&
+                            !CSharpTypeMapper.HasProvenSourceNullableKind(conditionalTp)
+                    ) {
+                        return this.TranslateWithLocalAssignmentSeam(
+                            conditionalAccess,
+                            () -> this.TranslateConditionalAccessWithLocalAssignmentSeam(conditionalAccess)
+                        )
                     }
                     if FindLeadingElementBinding(
                         conditionalAccess.WhenNotNull
@@ -416,7 +426,17 @@ partial class CSharpToGSharpTranslator {
                                 this.context,
                                 conditionalAccess.GetLocation()
                             )
-                            return ConversionExpression(MakeNullable(resultType), indexed, isCheckedReferenceCast: true)
+                            return if CSharpTypeMapper.CanAnnotateTypeParameterNullableInGSharp(conditionalType) {
+                                cast[GExpression](
+                                    ConversionExpression(
+                                        MakeNullable(resultType),
+                                        indexed,
+                                        isCheckedReferenceCast: true
+                                    )
+                                )
+                            } else {
+                                indexed
+                            }
                         }
                         if dependsOnReceiver && !this.ConditionalIndexReceiverIsNullable(conditionalAccess.Expression) {
                             return this.TranslateNonNullableConditionalIndex(
@@ -770,7 +790,9 @@ partial class CSharpToGSharpTranslator {
                 this.context,
                 conditionalAccess.GetLocation()
             )
-            if !nullableType!!.IsNullable {
+            if !nullableType!!.IsNullable && CSharpTypeMapper.CanAnnotateTypeParameterNullableInGSharp(
+                conditionalType
+            ) {
                 nullableType = MakeNullable(nullableType)
             }
             return ParenthesizedExpression(
@@ -5326,7 +5348,12 @@ partial class CSharpToGSharpTranslator {
                 statements,
                 assignment.Left
             )
-            let current GExpression? = this.SpillOperand(target!!, statements)
+            let isUnqualifiedProperty = target is IdentifierExpression &&
+                this
+                .context
+                .GetSymbolInfo(Unparenthesize(assignment.Left))
+                .Symbol is IPropertySymbol
+            let current GExpression? = this.SpillOperand(target!!, statements, forceNonTrivial: isUnqualifiedProperty)
             let value = IfExpression(
                 BinaryExpression(current, "==", LiteralExpression.Null()),
                 AssignmentExpression(target, this.TranslateAssignmentValue(assignment)),

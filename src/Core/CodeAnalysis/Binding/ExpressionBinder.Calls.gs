@@ -37,6 +37,7 @@ internal partial class ExpressionBinder {
     ) BoundExpression {
         var receiver = receiver
         if receiver.Type == TypeSymbol.Error {
+            let _ = ReportUnresolvedTargetlessValues(receiver)
             return BoundErrorExpression(nil)
         }
         // ADR-0186 §4: copying reads every member of the receiver, so a
@@ -270,6 +271,7 @@ internal partial class ExpressionBinder {
         target BoundExpression
     ) BoundExpression {
         if target.Type == TypeSymbol.Error || target.Type == nil {
+            let _ = ReportUnresolvedTargetlessValues(target)
             for init in syntax.Initializers {
                 let _ = BindExpression(init.Value)
             }
@@ -357,6 +359,7 @@ internal partial class ExpressionBinder {
     ) BoundExpression {
         var target = target
         if target.Type == TypeSymbol.Error || target.Type == nil {
+            let _ = ReportUnresolvedTargetlessValues(target)
             BindCollectionElementsForDiagnostics(syntax)
             return BoundErrorExpression(nil)
         }

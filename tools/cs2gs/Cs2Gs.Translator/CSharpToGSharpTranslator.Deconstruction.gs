@@ -1461,7 +1461,8 @@ partial class CSharpToGSharpTranslator {
                 let argument = switch refKind {
                     case RefKind.Out: cast[GExpression](OutArgumentExpression("out", parameters[i].Name))
                     case RefKind.Ref: cast[GExpression](UnaryExpression("&", IdentifierExpression(parameters[i].Name)))
-                    case RefKind.In: cast[GExpression](OutArgumentExpression("in", parameters[i].Name))
+                    case RefKind.In or
+                        RefKind.RefReadOnlyParameter: cast[GExpression](OutArgumentExpression("in", parameters[i].Name))
                     default: cast[GExpression](IdentifierExpression(parameters[i].Name))
                 }
                 arguments.Add(argument)
@@ -1722,7 +1723,10 @@ partial class CSharpToGSharpTranslator {
                                 case RefKind.Ref: cast[GExpression](
                                     UnaryExpression("&", IdentifierExpression(ctorParameters[i].Name))
                                 )
-                                case RefKind.In: cast[GExpression](OutArgumentExpression("in", ctorParameters[i].Name))
+                                case RefKind.In or
+                                    RefKind.RefReadOnlyParameter: cast[GExpression](
+                                    OutArgumentExpression("in", ctorParameters[i].Name)
+                                )
                                 default: cast[GExpression](IdentifierExpression(ctorParameters[i].Name))
                             }
                             baseArguments.Add(arg)
@@ -4461,6 +4465,31 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return false
             }
+            let storage = this.GetDeconstructedTupleStorageType(local)
+            if storage != nil &&
+                local
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is SingleVariableDesignationSyntax d &&
+                d
+                .Ancestors()
+                .OfType[AssignmentExpressionSyntax]()
+                .FirstOrDefault() is {Left: {} left, Right: {} right} &&
+                TryFindDeconstructionPath(d, left, List[int32](), out var path) {
+                var current ExpressionSyntax? = Unparenthesize(right)
+                var reachedLiteralLeaf = true
+                for index in path!! {
+                    if current is TupleExpressionSyntax tuple && index < tuple.Arguments.Count {
+                        current = Unparenthesize(tuple.Arguments[index].Expression)
+                    } else {
+                        reachedLiteralLeaf = false
+                        break
+                    }
+                }
+                if !reachedLiteralLeaf {
+                    return !storage.IsNullable
+                }
+            }
             let initializer = this.GetInferredLocalInitializer(local, out _, out _)
             if initializer != nil {
                 return this.GSharpExpressionIsStaticallyNonNull(initializer)
@@ -4472,7 +4501,6 @@ partial class CSharpToGSharpTranslator {
                     ObliviousNullabilityAnalyzer.SymbolValueType(element)
                 )
             }
-            let storage = this.GetDeconstructedTupleStorageType(local)
             return storage != nil && !storage.IsNullable
         }
 
@@ -4833,14 +4861,30 @@ partial class CSharpToGSharpTranslator {
         ) GExpression {
             switch target {
                 case member is MemberAccessExpression {
-                    return MemberAccessExpression(
-                        this.MakeDuplicationSafeTarget(
-                            member.Target,
-                            prologue,
-                            (syntax as MemberAccessExpressionSyntax)?.Expression
-                        ),
-                        member.MemberName
-                    )
+                    let receiverSyntax = (syntax as MemberAccessExpressionSyntax)?.Expression
+                    let safeReceiver = this.MakeDuplicationSafeTarget(member.Target, prologue, receiverSyntax)
+                    let receiverType = if receiverSyntax != nil {
+                        this.context.GetTypeInfo(receiverSyntax).Type
+                    } else {
+                        default(ITypeSymbol?)
+                    }
+                    let spilledReceiver = if receiverType != nil &&
+                        CSharpTypeMapper
+                        .CanAnnotateNullableReferenceInGSharp(receiverType) {
+                        let receiverSymbol = this.context.GetSymbolInfo(receiverSyntax).Symbol
+                        let forceSnapshot = safeReceiver is IdentifierExpression &&
+                            (receiverSymbol is ILocalSymbol || receiverSymbol is IParameterSymbol) &&
+                            (
+                            this.IsByReferenceVariable(receiverSymbol) || this.IsSymbolReassigned(
+                                receiverSymbol,
+                                this.state.CurrentBodyScope ?? receiverSyntax!!.SyntaxTree.GetRoot()
+                            )
+                        )
+                        this.SpillOperand(safeReceiver, prologue, forceNonTrivial: forceSnapshot)
+                    } else {
+                        safeReceiver
+                    }
+                    return MemberAccessExpression(spilledReceiver, member.MemberName)
                 }
                 case index is IndexExpression {
                     // `^n` is contextual index syntax: spilling the whole expression

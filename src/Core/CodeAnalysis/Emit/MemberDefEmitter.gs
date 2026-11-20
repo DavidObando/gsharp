@@ -587,8 +587,8 @@ internal class MemberDefEmitter {
         // explicit implementations sharing a plain property name would
         // otherwise also share the identical "get_Name" accessor name).
         let getterName = if prop.HasExplicitInterfaceClause {
-            "get_" + ExplicitInterfaceMetadataNaming.GetMetadataName(
-                prop.Name,
+            ExplicitInterfaceMetadataNaming.GetMetadataName(
+                "get_${prop.Name}",
                 Invariant.Required(
                     prop.ExplicitInterfaceClauseTarget,
                     "an explicit property implementation has a target",
@@ -709,8 +709,8 @@ internal class MemberDefEmitter {
         // parameter follows the index parameters).
         // ADR-0149: see the matching comment in EmitPropertyGetter.
         let setterName = if prop.HasExplicitInterfaceClause {
-            "set_" + ExplicitInterfaceMetadataNaming.GetMetadataName(
-                prop.Name,
+            ExplicitInterfaceMetadataNaming.GetMetadataName(
+                "set_${prop.Name}",
                 Invariant.Required(
                     prop.ExplicitInterfaceClauseTarget,
                     "an explicit property implementation has a target",

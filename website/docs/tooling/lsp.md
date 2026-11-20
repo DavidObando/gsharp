@@ -56,7 +56,7 @@ The server capability factory enables the following:
 | Completion | `textDocument/completion`. The server advertises `.` as its only trigger character, while the VS Code extension enables quick suggestions for `[gsharp]`, so completions appear as you type identifiers, keywords, and member names. Mid-identifier completions include replacement ranges so accepting an item replaces the typed prefix. In type-clause positions the list includes ready-to-use snippets for `async (T) -> R` and `async sequence[T]`. |
 | Signature help | `textDocument/signatureHelp`, triggered by `(` and `,`. |
 | Rename | `textDocument/prepareRename` and `textDocument/rename`. |
-| Code actions | `textDocument/codeAction`, exposing project-wide refactorings (e.g. `Sort imports`) and quick fixes for the nil-related diagnostics covered in [Quick fixes](#quick-fixes-textdocumentcodeaction) below. |
+| Code actions | `textDocument/codeAction` and `codeAction/resolve`, exposing project-wide refactorings (e.g. `Sort imports`) and the code fixes covered in [Quick fixes](#quick-fixes-textdocumentcodeaction) below. |
 | Code lenses | `textDocument/codeLens`, currently reference-count lenses for declarations. |
 | Semantic tokens | Full and range semantic tokens. |
 | Inlay hints | `textDocument/inlayHint`, inferred-type hints and parameter-name hints at call sites. |
@@ -93,7 +93,16 @@ The VS Code setting `gsharp.coldStartCache.enable` controls the cold-start cache
 
 The server returns a mix of whole-document refactorings and diagnostic-driven quick fixes from `textDocument/codeAction`. Refactorings (such as `Sort imports`) surface whenever they apply; quick fixes only surface when the request range overlaps the originating diagnostic's span.
 
-The current quick-fix set targets nil-related diagnostics. Each diagnostic maps to one or more rewrites, returned as LSP `TextEdit`s so they compose with concurrent client edits without server-side re-parsing:
+The quick fixes come from the code-fix providers of `GSharp.Core` (ADR-0227) and from `@GSharpCodeFixProvider` types in the project's analyzer assemblies. Each action carries its diagnostic, and the one machine-applicable fix of a diagnostic is marked `isPreferred`. The server offers a fix only when its edit adds no syntax diagnostic. When the client supports `workspaceEdit.documentChanges`, edits are versioned `TextDocumentEdit`s, so the client rejects an edit for a document that changed. When the client resolves `edit` lazily, the list carries only titles and `data`, and `codeAction/resolve` computes the edit for the same document version. `context.only` filters the kinds.
+
+| Diagnostic | Trigger | Offered rewrites |
+| --- | --- | --- |
+| `GS0273` (`'null' is not a literal in G#.`) | The name `null`. | `Use 'nil'` (preferred). |
+| `GS0125` (`Variable 'new' doesn't exist.`) | `new T(...)` where `T(...)` constructs a reference type. | `Remove 'new'` (preferred). A value type needs `T{...}` and gets no fix. |
+| `GS0127` (`Variable 'x' is read-only ...`) | An assignment to a `let` local or field declared in the same file. | `Change 'let' to 'var'` (preferred for a local). |
+| `GS0125`, `GS0130` on `or`, `and`, `not` | The C#/Python words in an expression. | `Use '\|\|'`, `Use '&&'` (preferred), `Use '!'`. |
+
+The nil-related quick fixes:
 
 | Diagnostic | Trigger | Offered rewrites |
 | --- | --- | --- |

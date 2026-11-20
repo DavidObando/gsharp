@@ -771,6 +771,33 @@ open class Compilation {
         return CreateSuccessor(SyntaxTrees.SetItem(index, newTree), shareBodyCache: false)
     }
 
+    /// Returns a one-shot compilation in which each tree of [`oldTrees`](paramref) is replaced by the
+    /// tree at the same index of [`newTrees`](paramref) (ADR-0227 D4). Like
+    /// (cref:WithReplacedSyntaxTree), it binds from scratch, never re-points this compilation's
+    /// symbols, and has no body cache. The tree order of this compilation does not change.
+    /// @param oldTrees Distinct trees of this compilation.
+    /// @param newTrees The replacements, one for each old tree.
+    /// @returns The snapshot compilation.
+    func WithReplacedSyntaxTrees(oldTrees ImmutableArray[SyntaxTree], newTrees ImmutableArray[SyntaxTree]) Compilation {
+        if oldTrees.IsDefault || newTrees.IsDefault || oldTrees.Length != newTrees.Length {
+            throw ArgumentException("Give one new tree for each old tree.", "newTrees")
+        }
+        var next = SyntaxTrees
+        let seen = HashSet[SyntaxTree]()
+        for var i = 0; i < oldTrees.Length; i++ {
+            let oldTree = oldTrees[i]
+            let newTree = newTrees[i]
+            ArgumentNullException.ThrowIfNull(oldTree, paramName: "oldTrees")
+            ArgumentNullException.ThrowIfNull(newTree, paramName: "newTrees")
+            let index = SyntaxTrees.IndexOf(oldTree)
+            if index < 0 || !seen.Add(oldTree) {
+                throw ArgumentException("A syntax tree is not part of this compilation or is given twice.", "oldTrees")
+            }
+            next = next.SetItem(index, newTree)
+        }
+        return CreateSuccessor(next, shareBodyCache: false)
+    }
+
     /// Returns the declared type whose metadata name is [`fullyQualifiedMetadataName`](paramref), or
     /// `null` (ADR-0212 §7a). The name is the one the emitter writes: the package, a dot, then the
     /// type name with its own generic arity (`Box`1`); a nested type follows its enclosing type after

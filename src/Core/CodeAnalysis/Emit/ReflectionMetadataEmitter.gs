@@ -2816,7 +2816,10 @@ internal class ReflectionMetadataEmitter {
             EmitClassTypeDefRow(c)
         }
         for s in topStructs {
+            using let _ = this.remaps.PushSmRemap(s)
+            let gpRowStart = this.emitCtx.PendingGenericParameters.Count
             this.typeDefEmitter.EmitStructTypeDef(s, structFirstFieldRow[s], TopStructMethodListRow(s))
+            this.PreResolveReifiedGenericConstraints(gpRowStart)
             EmitInterfaceImplRows(s)
         }
         // Issue #193: emit enum TypeDefs between non-SM structs and the nested
@@ -3662,6 +3665,7 @@ internal class ReflectionMetadataEmitter {
             this.interfaceImpls.EmitImplicitEventMethodImpls(s)
         }
         for s in topStructs {
+            using let _ = this.remaps.PushSmRemap(s)
             EmitStructMethodBodies(s)
         }
         // B3.5 / Issue #910 / ADR-0110: emit method bodies for the unified

@@ -600,6 +600,124 @@ public static class P {
 `.Replace("TYPE", type).Replace("READ", read).Replace("CONTROL", control), "False|True")
     }
 
+    @Fact
+    func ReadonlyIn_NonIdentifierStorageOperands_PreserveAddressIdentity() {
+        AssertParity(`
+using System;
+using System.Runtime.CompilerServices;
+public struct Counter
+{
+    public int Value;
+    public readonly bool SameThis(in Counter other) =>
+        Unsafe.AreSame(ref Unsafe.AsRef(in this), ref Unsafe.AsRef(in other));
+}
+public static class P
+{
+    static bool Same(in int left, in int right) =>
+        Unsafe.AreSame(ref Unsafe.AsRef(in left), ref Unsafe.AsRef(in right));
+    static string Read()
+    {
+        Counter x = default;
+        int[] xs = new int[1];
+        return x.SameThis(in x) + "|" + Same(in x.Value, in x.Value) + "|" + Same(in xs[0], in xs[0]);
+    }
+    public static void Main() { Console.Write(Read()); }
+}
+`, "True|True|True", (
+                translated string
+            ) -> {
+                Assert.Contains(
+                    "in this",
+                    translated,
+                    StringComparison.Ordinal
+                )
+                Assert.Contains(
+                    "in x.Value",
+                    translated,
+                    StringComparison.Ordinal
+                )
+                Assert.Contains(
+                    "in xs[0]",
+                    translated,
+                    StringComparison.Ordinal
+                )
+                Assert.DoesNotContain(
+                    "&this",
+                    translated,
+                    StringComparison.Ordinal
+                )
+                Assert.DoesNotContain(
+                    "&x.Value",
+                    translated,
+                    StringComparison.Ordinal
+                )
+                Assert.DoesNotContain(
+                    "&xs[0]",
+                    translated,
+                    StringComparison.Ordinal
+                )
+            })
+    }
+
+    @Fact
+    func SourceRefReadOnlyParameter_MatchesDeclarationsAndCallsWithIdentity() {
+        AssertParity(`
+using System;
+using System.Runtime.CompilerServices;
+public struct Pair { public int Value; }
+public static class P
+{
+    delegate bool SameDelegate(ref readonly int left, ref readonly int right);
+    static int slotValue = 11;
+    static ref int Slot() => ref slotValue;
+    static ref readonly int SlotProp => ref slotValue;
+    static bool Same(ref readonly int left, ref readonly int right) =>
+        Unsafe.AreSame(ref Unsafe.AsRef(in left), ref Unsafe.AsRef(in right));
+    public static void Main()
+    {
+        int x = 7;
+        int y = 8;
+        bool flag = true;
+        Pair pair = default;
+        int[] xs = new int[1];
+        SameDelegate d = Same;
+        Console.Write(
+            Same(in x, in x) + "|" +
+            Same(x, x) + "|" +
+            Same(ref x, ref x) + "|" +
+            Same(in pair.Value, in pair.Value) + "|" +
+            Same(right: in pair.Value, left: in pair.Value) + "|" +
+            Same(x + 1, x) + "|" +
+            d(right: pair.Value, left: pair.Value) + "|" +
+            d(right: xs[0], left: xs[0]) + "|" +
+            d(right: Slot(), left: Slot()) + "|" +
+            d(right: SlotProp, left: SlotProp) + "|" +
+            d(right: (flag ? ref x : ref y), left: x) + "|" +
+            d(right: (!flag ? ref y : ref x), left: x) + "|" +
+            d(right: x + 1, left: x));
+    }
+}
+`, "True|True|True|True|True|False|True|True|True|True|True|True|False", (
+                translated string
+            ) -> {
+                Assert.Contains(
+                    "in left int32, in right int32",
+                    translated,
+                    StringComparison.Ordinal
+                )
+                Assert.Contains(
+                    "Same(in x, in x)",
+                    translated,
+                    StringComparison.Ordinal
+                )
+                Assert.Contains(
+                    "Same(in pair.Value, in pair.Value)",
+                    translated,
+                    StringComparison.Ordinal
+                )
+            })
+    }
+
     @Theory
     @InlineData("p.Read()", "node|3;nil|3")
     @InlineData("p == null ? \"guarded\" : p.Read()", "node|3;guarded|3")

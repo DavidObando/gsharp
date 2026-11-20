@@ -240,21 +240,25 @@ partial class CSharpToGSharpTranslator {
                 .Symbol is IMethodSymbol extMethod &&
                 extMethod.MethodKind == MethodKind.ReducedExtension &&
                 this
-                .TryGetStaticExtensionHelper(extMethod, out var extOwner, out var extName) {
+                .TryGetStaticExtensionHelper(extMethod, out _, out var extName) {
                 let extArgs = List[GExpression]{
                     PassStaticExtensionHelperReceiver(
                         this.TranslateReceiverWithNullForgiveness(extMember.Expression),
                         extMethod
                     )!!
                 }
-                extArgs.AddRange(this.TranslateArguments(invocation.ArgumentList.Arguments))
+                extArgs.AddRange(this.TranslateCallArguments(invocation, invocation.ArgumentList.Arguments))
                 let extTypeArgs IReadOnlyList[GTypeReference]? = if extMember.Name is GenericNameSyntax extGeneric {
                     this.MapTypeArguments(extGeneric)
                 } else {
                     default(IReadOnlyList[GTypeReference]?)
                 }
+                let extOwnerType = (extMethod.ReducedFrom ?? extMethod).ContainingType
                 return InvocationExpression(
-                    MemberAccessExpression(IdentifierExpression(extOwner), extName),
+                    MemberAccessExpression(
+                        this.StaticQualifierReceiver(extOwnerType, invocation.GetLocation()),
+                        extName
+                    ),
                     extArgs,
                     extTypeArgs
                 )
@@ -709,7 +713,11 @@ partial class CSharpToGSharpTranslator {
             this.BuildNullConditionalStaticExtensionHelper(
                 conditionalAccess,
                 invocation,
-                owner,
+                method,
+                this.StaticQualifierReceiver(
+                    (method!!.ReducedFrom ?? method)!!.ContainingType,
+                    invocation!!.GetLocation()
+                ),
                 name,
                 helperName,
                 chainedReceiver,
@@ -722,7 +730,9 @@ partial class CSharpToGSharpTranslator {
                 this.context,
                 conditionalAccess.GetLocation()
             )
-            if !nullableType!!.IsNullable {
+            if !nullableType!!.IsNullable && CSharpTypeMapper.CanAnnotateTypeParameterNullableInGSharp(
+                conditionalType
+            ) {
                 nullableType = MakeNullable(nullableType)
             }
             result = ParenthesizedExpression(IfExpression(guard_, call, DefaultValueExpression(nullableType)))
@@ -776,7 +786,11 @@ partial class CSharpToGSharpTranslator {
                 this.BuildNullConditionalStaticExtensionHelper(
                     conditionalAccess,
                     invocation,
-                    owner,
+                    method,
+                    this.StaticQualifierReceiver(
+                        (method!!.ReducedFrom ?? method)!!.ContainingType,
+                        invocation!!.GetLocation()
+                    ),
                     name,
                     helperName,
                     chainedReceiver,
@@ -835,7 +849,8 @@ partial class CSharpToGSharpTranslator {
         private func BuildNullConditionalStaticExtensionHelper(
             conditionalAccess ConditionalAccessExpressionSyntax,
             invocation InvocationExpressionSyntax?,
-            owner string?,
+            method IMethodSymbol?,
+            ownerReceiver GExpression,
             name string?,
             helperName SimpleNameSyntax?,
             chainedReceiver Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
@@ -858,13 +873,9 @@ partial class CSharpToGSharpTranslator {
                 default(IReadOnlyList[GTypeReference]?)
             }
             let TranslateCall = func () GExpression {
-                let callArgs = List[GExpression]{helperReceiver!!}
-                callArgs.AddRange(this.TranslateArguments(invocation!!.ArgumentList.Arguments))
-                return InvocationExpression(
-                    MemberAccessExpression(IdentifierExpression(owner), name),
-                    callArgs,
-                    callTypeArgs
-                )
+                let callArgs = List[GExpression]{PassStaticExtensionHelperReceiver(helperReceiver, method)!!}
+                callArgs.AddRange(this.TranslateCallArguments(invocation!!, invocation!!.ArgumentList.Arguments))
+                return InvocationExpression(MemberAccessExpression(ownerReceiver, name), callArgs, callTypeArgs)
             }
             call = if hostLocalAssignmentSeam && this.RequiresLocalAssignmentSeam(conditionalAccess.WhenNotNull) {
                 this.TranslateWithLocalAssignmentSeam(conditionalAccess.WhenNotNull, TranslateCall)
@@ -1032,7 +1043,10 @@ partial class CSharpToGSharpTranslator {
                 default(List[GTypeReference]?)
             }
             let call = InvocationExpression(
-                MemberAccessExpression(IdentifierExpression(ownerName), methodName),
+                MemberAccessExpression(
+                    this.StaticQualifierReceiver(original.ContainingType, member.GetLocation()),
+                    methodName
+                ),
                 arguments,
                 typeArguments
             )
@@ -1162,10 +1176,15 @@ partial class CSharpToGSharpTranslator {
                 case creationOp is IObjectCreationOperation: creationOp.Constructor
                 default: default(IMethodSymbol?)
             }
-            let operationArguments = switch this.context.SemanticModel.GetOperation(callSyntax!!) {
+            var operationArguments = switch this.context.SemanticModel.GetOperation(callSyntax!!) {
                 case invocationOp is IInvocationOperation: invocationOp.Arguments
                 case creationOp is IObjectCreationOperation: creationOp.Arguments
                 default: default(ImmutableArray[IArgumentOperation])
+            }
+            if targetMethod?.IsExtensionMethod == true &&
+                !operationArguments.IsDefaultOrEmpty &&
+                operationArguments[0].Syntax is not ArgumentSyntax {
+                operationArguments = operationArguments.RemoveAt(0)
             }
             if operationArguments.IsDefaultOrEmpty {
                 return this.TranslateArgumentsWithCallerInfo(callSyntax, arguments, operationArguments)
@@ -1357,7 +1376,7 @@ partial class CSharpToGSharpTranslator {
             paramsCollectionArgument IArgumentOperation,
             out consumedSyntaxArguments int32
         ) List[GExpression] {
-            let result = List[GExpression](paramsCollectionArgument.Parameter!!.Ordinal)
+            let result = List[GExpression](arguments.Count)
             consumedSyntaxArguments = 0
             for operationArgument in operationArguments {
                 if operationArgument.ArgumentKind == ArgumentKind.ParamCollection {
@@ -1380,13 +1399,27 @@ partial class CSharpToGSharpTranslator {
             return result
         }
 
+        private func ResolveOperationArgumentSyntax(argument IArgumentOperation) ArgumentSyntax? {
+            for var current Microsoft
+                .CodeAnalysis
+                .SyntaxNode? = argument.Syntax;
+                current != nil &&
+                current is not BaseArgumentListSyntax;
+                current = current!!.Parent {
+                if current is ArgumentSyntax argSyntax {
+                    return argSyntax
+                }
+            }
+            return nil
+        }
+
         private func RequiresFunctionArgumentReassembly(
             targetMethod IMethodSymbol?,
             operationArguments ImmutableArray[IArgumentOperation]
         ) bool {
             if operationArguments.IsDefaultOrEmpty || !operationArguments.Any(
                 (a IArgumentOperation) -> a.ArgumentKind == ArgumentKind.DefaultValue ||
-                    (a.Syntax is ArgumentSyntax and {NameColon: not nil})
+                    (ResolveOperationArgumentSyntax(a) is {} namedSyntax && namedSyntax.NameColon != nil)
             ) ||
                 !operationArguments
                 .All(
@@ -1394,7 +1427,7 @@ partial class CSharpToGSharpTranslator {
                     (
                     a.ArgumentKind == ArgumentKind.DefaultValue ||
                         IsEmptyParamsArgument(a) ||
-                        (a.ArgumentKind == ArgumentKind.Explicit && a.Syntax is ArgumentSyntax)
+                        (a.ArgumentKind == ArgumentKind.Explicit && ResolveOperationArgumentSyntax(a) != nil)
                 )
             ) {
                 return false
@@ -1493,7 +1526,7 @@ partial class CSharpToGSharpTranslator {
                     )
                     continue
                 }
-                let argumentSyntax = cast[ArgumentSyntax](argumentOperation.Syntax)
+                let argumentSyntax = ResolveOperationArgumentSyntax(argumentOperation)!!
                 let value GExpression? = this.TranslateArgumentValue(argumentSyntax)
                 slots[ordinal] = if permutesExplicitArguments {
                     this.SnapshotPermutedArgument(value, argumentOperation)
@@ -1508,31 +1541,42 @@ partial class CSharpToGSharpTranslator {
             if argument.Parameter!!.RefKind == RefKind.None {
                 return this.SnapshotPermutedArgumentOperand(value, argument)
             }
+            let isReadOnlyParam = argument.Parameter!!.RefKind == RefKind.In ||
+                argument.Parameter!!.RefKind == RefKind.RefReadOnlyParameter
+            let argumentSyntax = ResolveOperationArgumentSyntax(argument)
             // Capture an address, never a copy of its pointee. This also runs
             // an array index/getter and its exceptions in source order.
-            if value is UnaryExpression{Operator: "&"} address {
-                let needsValueTemporary = argument.Parameter!!.RefKind == RefKind.In &&
-                    argument.Syntax is ArgumentSyntax syntax &&
-                    syntax
+            if value is UnaryExpression{Operator: "&" or "in "} address {
+                if address.Operand is ThisExpression {
+                    return value
+                }
+                let needsValueTemporary = isReadOnlyParam &&
+                    argumentSyntax != nil &&
+                    argumentSyntax
                     .RefKindKeyword
                     .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.None) &&
-                    (
-                    argument.Value is not ILocalReferenceOperation and
-                        not IParameterReferenceOperation and
-                        not IFieldReferenceOperation and
-                        not IArrayElementReferenceOperation
-                )
+                    !this.IsReadOnlyAddressableStorageOperation(argument.Value)
+                let isReadOnlyAlias = address.Operator == "in " && isReadOnlyParam && !needsValueTemporary
                 let temp = this.NewSpillName()
                 this.state.PendingSpillPrologue!!.Add(
                     LocalDeclarationStatement(
-                        BindingKind.Var,
+                        if isReadOnlyAlias {
+                            BindingKind.Let
+                        } else {
+                            BindingKind.Var
+                        },
                         temp,
                         this.typeMapper.Map(argument.Parameter!!.Type, this.context, argument.Syntax.GetLocation()),
                         address.Operand,
-                        isRefAlias: !needsValueTemporary
+                        isRefAlias: !needsValueTemporary,
+                        isReadOnlyRefAlias: isReadOnlyAlias
                     )
                 )
-                return UnaryExpression("&", IdentifierExpression(temp))
+                return if isReadOnlyAlias {
+                    cast[GExpression](OutArgumentExpression("in", temp))
+                } else {
+                    cast[GExpression](UnaryExpression("&", IdentifierExpression(temp)))
+                }
             }
             if value is OutArgumentExpression outArgument {
                 return if outArgument.Keyword == "out var" {
@@ -1540,6 +1584,26 @@ partial class CSharpToGSharpTranslator {
                 } else {
                     value
                 }
+            }
+            if isReadOnlyParam && argumentSyntax != nil && argumentSyntax.RefKindKeyword.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.None
+            ) &&
+                PassesImplicitReadOnlyAliasWithoutConversion(argument) {
+                if value is ThisExpression {
+                    return value
+                }
+                let temp = this.NewSpillName()
+                this.state.PendingSpillPrologue!!.Add(
+                    LocalDeclarationStatement(
+                        BindingKind.Let,
+                        temp,
+                        this.typeMapper.Map(argument.Parameter!!.Type, this.context, argument.Syntax.GetLocation()),
+                        value,
+                        isRefAlias: true,
+                        isReadOnlyRefAlias: true
+                    )
+                )
+                return OutArgumentExpression("in", temp)
             }
             return this.SnapshotPermutedArgumentOperand(value, argument)
         }
@@ -1556,14 +1620,16 @@ partial class CSharpToGSharpTranslator {
             if (argument.Value is IConversionOperation or IDelegateCreationOperation) ||
                 value is DefaultValueExpression {
                 let temp = this.NewSpillName()
-                this.state.PendingSpillPrologue!!.Add(
-                    LocalDeclarationStatement(
-                        BindingKind.Let,
-                        temp,
-                        this.typeMapper.Map(argument.Parameter!!.Type, this.context, argument.Syntax.GetLocation()),
-                        value
-                    )
-                )
+                let tempType = if this.TryGetEmittedNonNullGenericSlotType(
+                    argument.Parameter,
+                    argument.Syntax.GetLocation(),
+                    out var nonNullSlotType
+                ) {
+                    nonNullSlotType
+                } else {
+                    this.typeMapper.Map(argument.Parameter!!.Type, this.context, argument.Syntax.GetLocation())
+                }
+                this.state.PendingSpillPrologue!!.Add(LocalDeclarationStatement(BindingKind.Let, temp, tempType, value))
                 return IdentifierExpression(temp)
             }
             return this.SpillOperand(value!!, forceNonTrivial: true)
@@ -1600,7 +1666,42 @@ partial class CSharpToGSharpTranslator {
                         "$parameterKind default value of type '${parameter.Type}' has no gsc constant form."
                     )
                 }
-                defaultValue = IdentifierExpression("nil")
+                defaultValue = if legitimateNull && callSyntax != nil && this.TryGetEmittedNonNullGenericSlotType(
+                    parameter,
+                    callSyntax.GetLocation(),
+                    out var nonNullSlotType
+                ) {
+                    cast[GExpression](DefaultValueExpression(nonNullSlotType))
+                } else {
+                    let mappedType GTypeReference? = this.typeMapper.Map(
+                        parameter.Type,
+                        this.context,
+                        callSyntax?.GetLocation() ?? parameter.Locations.FirstOrDefault()
+                    )
+                    let nonNullableValueType = parameter
+                        .Type
+                        .IsValueType &&
+                        parameter
+                        .Type
+                        .OriginalDefinition
+                        ?.SpecialType != SpecialType.System_Nullable_T &&
+                        parameter
+                        .Type
+                        .NullableAnnotation != Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated
+                    if legitimateNull &&
+                        (
+                        nonNullableValueType ||
+                            (parameter.Type is ITypeParameterSymbol && mappedType is not{IsNullable: true})
+                    ) &&
+                        mappedType != nil {
+                        cast[GExpression](DefaultValueExpression(mappedType))
+                    } else {
+                        cast[GExpression](IdentifierExpression("nil"))
+                    }
+                }
             }
             return if coerceToParameterType {
                 this.CoerceMaterializedArgument(defaultValue, parameter.Type, callSyntax!!.GetLocation())
@@ -1681,6 +1782,36 @@ partial class CSharpToGSharpTranslator {
         /// so the statement carries the same suppression as a dropped `!`.
         /// @param argument The C# argument.
         /// @returns `true` when the statement must suppress GS0612.
+        private func ByRefErasedGenericSlotNeedsSuppression(argument ArgumentSyntax) bool {
+            let boundParameter IParameterSymbol? = this.GetArgumentParameter(argument)
+            if boundParameter == nil || !this.TryGetEmittedNonNullGenericSlotType(
+                boundParameter,
+                argument.Expression.GetLocation(),
+                out _
+            ) {
+                return false
+            }
+            let operand = Unparenthesize(argument.Expression)
+            let symbol ISymbol? = this.context.GetSymbolInfo(operand).Symbol
+            let storageType ITypeSymbol? = switch symbol {
+                case local is ILocalSymbol: local.Type
+                case parameter is IParameterSymbol: parameter.Type
+                case field is IFieldSymbol: field.Type
+                case property is IPropertySymbol: property.Type
+                default: (this.context.SemanticModel.GetOperation(operand) as IArrayElementReferenceOperation)?.Type ??
+                    this
+                    .context
+                    .GetTypeInfo(operand)
+                    .Type
+            }
+            return storageType != nil &&
+                (
+                storageType.NullableAnnotation == NullableAnnotation.Annotated || this.IsTranslatorWidenedDeclaration(
+                    symbol
+                )
+            )
+        }
+
         private func FlowProvenByRefArgumentNeedsSuppression(argument ArgumentSyntax) bool {
             if !argument.RefKindKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.RefKeyword) &&
                 !argument
@@ -1920,7 +2051,8 @@ partial class CSharpToGSharpTranslator {
                 (
                 this.DropsByRefNullabilitySuppression(argument) || this.FlowProvenByRefArgumentNeedsSuppression(
                     argument
-                )
+                ) ||
+                    this.ByRefErasedGenericSlotNeedsSuppression(argument)
             ) {
                 // Issues #4422 and #6036: carry a dropped `!`, or a csc flow proof that
                 // gsc does not narrow, across as a statement-scoped suppression of GS0612.
@@ -1952,13 +2084,11 @@ partial class CSharpToGSharpTranslator {
             }
             // ADR-0060: an explicit C# `in x` argument keeps its keyword, and
             // an implicit one naming a variable that targets a source-declared
-            // `in` parameter gains it. Non-identifier explicit lvalues use the
-            // universal `&expr` back-compat form the binder accepts at any
-            // ref-kind parameter. Issue #4400: any other implicit argument
-            // stays a plain value — gsc now binds it like C#, taking an
-            // lvalue's address or spilling an rvalue to a readonly temp, so
-            // `Scale(x + 1)` must not become the non-lvalue `&(x + 1)`.
-            // Imported CLR targets keep the plain value too.
+            // `in` or `ref readonly` parameter gains it. Explicit non-identifier
+            // lvalues keep `in <expr>` so readonly storage (`in this`, `in x.Value`)
+            // is addressed without copying or failing GS9005. Issue #4400: any other
+            // implicit argument stays a plain value — gsc now binds it like C#,
+            // taking an lvalue's address or spilling an rvalue to a readonly temp.
             if refKind == Microsoft.CodeAnalysis.CSharp.SyntaxKind.InKeyword || this.TargetsSourceDeclaredInParameter(
                 argument
             ) {
@@ -1975,11 +2105,8 @@ partial class CSharpToGSharpTranslator {
                 ) {
                     return OutArgumentExpression("in", inIdentifier.Name)
                 }
-                // An implicit non-variable argument stays a plain value (its
-                // `!!` is a valid value assertion); only an explicit `in`
-                // needs the address form.
                 return if refKind == Microsoft.CodeAnalysis.CSharp.SyntaxKind.InKeyword {
-                    AddressOf(translatedIn)
+                    ReadOnlyAddressOf(translatedIn)
                 } else {
                     translatedValue
                 }
@@ -2172,6 +2299,24 @@ partial class CSharpToGSharpTranslator {
                 !isXunitNullAssertion &&
                 targetParameter is {} nullableTargetParam &&
                 targetType != nil {
+                if this.TryGetEmittedNonNullGenericSlotType(
+                    nullableTargetParam,
+                    argument.Expression.GetLocation(),
+                    out var nonNullGenericSlotType,
+                    argument.Expression
+                ) {
+                    if IsNullOrSuppressedNull(argument.Expression) {
+                        if translated is not DefaultValueExpression {
+                            translated = DefaultValueExpression(nonNullGenericSlotType)
+                        }
+                    } else if !this.SinkInfersTypeFromValue(nullableTargetParam, argument.Expression) &&
+                        !this
+                        .GSharpExpressionIsStaticallyNonNull(argument.Expression, translated) {
+                        translated = ParenthesizedExpression(
+                            BinaryExpression(translated, "??", DefaultValueExpression(nonNullGenericSlotType))
+                        )
+                    }
+                }
                 translated = this.BridgeWidenedImplicitArrayConsumer(
                     argument.Expression,
                     translated,
@@ -2293,7 +2438,7 @@ partial class CSharpToGSharpTranslator {
             .context
             .SemanticModel
             .GetOperation(argument) is IArgumentOperation{Parameter: {} parameter} &&
-            parameter.RefKind == RefKind.In &&
+            (parameter.RefKind == RefKind.In || parameter.RefKind == RefKind.RefReadOnlyParameter) &&
             !parameter
             .ContainingSymbol
             .DeclaringSyntaxReferences
@@ -2335,6 +2480,73 @@ partial class CSharpToGSharpTranslator {
             SymbolEqualityComparer
             .IncludeNullability
             .Equals(value.Type, parameter.Type)
+
+        private func PassesImplicitReadOnlyAliasWithoutConversion(argument IArgumentOperation) bool ->
+        argument is {Parameter: {} parameter, Value: {} value} &&
+            IsReadOnlyAddressableStorageOperation(value) &&
+            SymbolEqualityComparer
+            .IncludeNullability
+            .Equals(value.Type, parameter.Type)
+
+        private func IsReadOnlyAddressableStorageOperation(value IOperation?) bool -> switch value {
+            case local is ILocalReferenceOperation: !local.Local.IsConst
+            case _ is IParameterReferenceOperation or
+                _ is IArrayElementReferenceOperation or
+                _ is IInstanceReferenceOperation: true
+            case invocation is IInvocationOperation: invocation
+                .TargetMethod
+                .ReturnsByRef ||
+                invocation
+                .TargetMethod
+                .ReturnsByRefReadonly
+            case property is IPropertyReferenceOperation: property
+                .Property
+                .ReturnsByRef ||
+                property
+                .Property
+                .ReturnsByRefReadonly
+            case conditional is IConditionalOperation: conditional.IsRef &&
+                SymbolEqualityComparer
+                .IncludeNullability
+                .Equals(conditional.WhenTrue.Type, conditional.WhenFalse?.Type) &&
+                this.IsReadOnlyAddressableStorageOperation(conditional.WhenTrue) &&
+                this.IsReadOnlyAddressableStorageOperation(conditional.WhenFalse)
+            case field is IFieldReferenceOperation: !field
+                .Field
+                .IsConst &&
+                (
+                field.Instance == nil ||
+                    field.Instance!!
+                    .Type
+                    ?.IsReferenceType == true ||
+                    field.Instance!!.Type is IPointerTypeSymbol ||
+                    this.IsPointerStorageSyntax(field.Syntax) || this.IsReadOnlyAddressableStorageOperation(
+                    field.Instance
+                )
+            )
+            default: value != nil && value.Kind == OperationKind.None && this.IsPointerStorageSyntax(value.Syntax)
+        }
+
+        private func IsPointerStorageSyntax(syntax Microsoft.CodeAnalysis.SyntaxNode?) bool {
+            let unwrapped = Unparenthesize(syntax as Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax)
+            return (
+                unwrapped is PrefixUnaryExpressionSyntax ptr && ptr.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.PointerIndirectionExpression
+                )
+            ) ||
+                (
+                unwrapped is MemberAccessExpressionSyntax ptrMember && ptrMember.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.PointerMemberAccessExpression
+                )
+            ) ||
+                (
+                unwrapped is ElementAccessExpressionSyntax ptrElem &&
+                    this
+                    .context
+                    .GetTypeInfo(ptrElem.Expression)
+                    .Type is IPointerTypeSymbol
+            )
+        }
 
         private func IsVariableStorageOperation(value IOperation?) bool ->
         value is ILocalReferenceOperation &&
@@ -2411,6 +2623,9 @@ partial class CSharpToGSharpTranslator {
                 out _
             ) {
                 targetType = paramsElementType
+            }
+            if parameter != nil {
+                targetType = this.TryProjectErasedGenericDelegateType(parameter, targetType) ?? targetType
             }
             invoke = GetDelegateInvokeMethod(targetType)
             return invoke != nil
@@ -2675,6 +2890,13 @@ partial class CSharpToGSharpTranslator {
             }
             return GetLambdaResultExpressions(lambda).Any(
                 (result Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax) -> {
+                    if IsNullOrDefaultLiteral(result) && this.TryGetEmittedNonNullLambdaReturnSlotType(
+                        lambda,
+                        result.GetLocation(),
+                        out _
+                    ) {
+                        return true
+                    }
                     let resultType ITypeSymbol? = this.context.GetTypeInfo(result).Type
                     return resultType != nil &&
                         (
@@ -2757,11 +2979,7 @@ partial class CSharpToGSharpTranslator {
                     (compilation CSharpCompilation) -> SameAssembly(compilation.Assembly, original!!.ContainingAssembly)
                 )
                 let topLevelGSharpExtension = original!!.ContainingType?.Name == "<Program>"
-                let useStaticHelper = this.TryGetStaticExtensionHelper(
-                    original,
-                    out var helperOwner,
-                    out var helperName
-                ) ||
+                let useStaticHelper = this.TryGetStaticExtensionHelper(original, out _, out var helperName) ||
                     (!sourceDefined && !topLevelGSharpExtension)
                 var receiver GExpression?
                 if useStaticHelper {
@@ -2775,11 +2993,7 @@ partial class CSharpToGSharpTranslator {
                     receiver = this.CaptureMethodGroupReceiver(receiver, extensionMember.Expression)
                     arguments.Add(PassStaticExtensionHelperReceiver(receiver, original)!!)
                     target = MemberAccessExpression(
-                        if helperOwner != nil {
-                            cast[GExpression](IdentifierExpression(helperOwner))
-                        } else {
-                            this.StaticQualifierReceiver(original!!.ContainingType, expression.GetLocation())
-                        },
+                        this.StaticQualifierReceiver(original!!.ContainingType, expression.GetLocation()),
                         helperName ?? this.EmittedName(original, original!!.Name)
                     )
                 } else {
@@ -3050,6 +3264,7 @@ partial class CSharpToGSharpTranslator {
             if this.TryGetManagedReferenceArrayProjectedMethod(creation, out var projectedConstructor) {
                 typeSymbol = projectedConstructor!!.ContainingType
             }
+            typeSymbol = this.TryProjectErasedGenericType(this.ResolveValueSink(creation), typeSymbol) ?? typeSymbol
             var type GTypeReference? = if typeSymbol != nil {
                 this.typeMapper.Map(typeSymbol, this.context, creation.GetLocation())
             } else {
@@ -3311,6 +3526,9 @@ partial class CSharpToGSharpTranslator {
             parameterType ITypeSymbol,
             location Location
         ) GExpression? {
+            if value is DefaultValueExpression {
+                return value
+            }
             if !parameterType.IsReferenceType {
                 return this.CoerceOperandTo(value, parameterType, location)
             }
@@ -4577,18 +4795,20 @@ partial class CSharpToGSharpTranslator {
                     ){IsNullable = namedDelegateRef.IsNullable}
                 }
             }
+            let effectiveCastTargetType GTypeReference? = if cast.Type is NullableTypeSyntax &&
+                !targetType!!.IsNullable &&
+                CSharpTypeMapper.CanAnnotateTypeParameterNullableInGSharp(targetSymbol) {
+                MakeNullable(targetType)
+            } else {
+                targetType
+            }
             if StripParentheses(cast.Expression).IsKind(
                 Microsoft.CodeAnalysis.CSharp.SyntaxKind.NullLiteralExpression
             ) &&
                 (targetSymbol != nil && targetSymbol.IsReferenceType == true || targetType!!.IsNullable) {
                 // Typed null keeps overload selection without an unparseable
                 // conversion such as `[]char(nil)` or `Guid?(nil)`.
-                let defaultType GTypeReference? = if cast.Type is NullableTypeSyntax && !targetType!!.IsNullable {
-                    MakeNullable(targetType)
-                } else {
-                    targetType
-                }
-                return DefaultValueExpression(defaultType)
+                return DefaultValueExpression(effectiveCastTargetType)
             }
             var operand GExpression? = this.TranslateExpression(cast.Expression)
             let conversion = if sourceSymbol == nil || targetSymbol == nil {
@@ -4610,13 +4830,8 @@ partial class CSharpToGSharpTranslator {
                 operand = EnsureNonNullAssertion(operand)
             }
             if conversion.IsBoxing {
-                let boxingTargetType GTypeReference? = if cast.Type is NullableTypeSyntax && !targetType!!.IsNullable {
-                    MakeNullable(targetType)
-                } else {
-                    targetType
-                }
                 let useUnambiguousCast = targetSymbol?.SpecialType != SpecialType.System_Object
-                return ConversionExpression(boxingTargetType, operand, useUnambiguousCast)
+                return ConversionExpression(effectiveCastTargetType, operand, useUnambiguousCast)
             }
             // Preserve explicit class/interface-to-object casts when they
             // supply a surrounding expression's common type, such as
@@ -4627,12 +4842,7 @@ partial class CSharpToGSharpTranslator {
             if targetSymbol?.SpecialType == SpecialType.System_Object &&
                 sourceSymbol != nil &&
                 sourceSymbol.IsReferenceType == true {
-                let objectTargetType GTypeReference? = if cast.Type is NullableTypeSyntax && !targetType!!.IsNullable {
-                    MakeNullable(targetType)
-                } else {
-                    targetType
-                }
-                return ConversionExpression(objectTargetType, operand)
+                return ConversionExpression(effectiveCastTargetType, operand)
             }
             // Issue #3843: a C# reference cast over a NULLABLE operand stays
             // `cast[T](expr)`. It used to lower to the null-preserving safe
@@ -4647,11 +4857,7 @@ partial class CSharpToGSharpTranslator {
             // wrong-type cast from a throw into a nil. `cast[T]` matches C#
             // `(T)x` exactly: nil in → nil out, wrong type → InvalidCastException,
             // static result non-nullable.
-            let conversionTargetType GTypeReference? = if cast.Type is NullableTypeSyntax && !targetType!!.IsNullable {
-                MakeNullable(targetType)
-            } else {
-                targetType
-            }
+            let conversionTargetType GTypeReference? = effectiveCastTargetType
             // Issue #3907: a TUPLE target has no `T(expr)` spelling. That form
             // renders as `(TaskArm, SelectWaiter)(state)`, which G# reads as a
             // call on a parenthesized expression rather than a conversion —
@@ -11761,14 +11967,37 @@ partial class CSharpToGSharpTranslator {
             }
 
             /// The G# address of [`operand`](paramref) (`&x`), the form
-            /// every by-reference position takes: `ref`/`out`/`in`
-            /// arguments, `&` in unsafe code, and ref aliases.
+            /// every writable by-reference position takes.
             /// @param operand The translated variable.
             /// @returns The address-of expression.
             private func AddressOf(operand GExpression?) GExpression -> UnaryExpression(
                 "&",
                 WithoutNonNullAssertion(operand)
             )
+
+            /// The G# `in` operand expression for an explicit readonly by-reference
+            /// argument (`in this`, `in x.Value`, `in (*p)`).
+            /// @param operand The translated storage operand.
+            /// @returns The `in` expression.
+            private func ReadOnlyAddressOf(operand GExpression?) GExpression {
+                let unwrapped = WithoutNonNullAssertion(operand)
+                let safeOperand = if CanStartRefArgumentOperand(unwrapped) {
+                    unwrapped
+                } else {
+                    cast[GExpression](ParenthesizedExpression(unwrapped))
+                }
+                return UnaryExpression("in ", safeOperand)
+            }
+
+            private func CanStartRefArgumentOperand(operand GExpression?) bool -> switch operand {
+                case _ is IdentifierExpression or _ is ThisExpression or _ is ParenthesizedExpression: true
+                case member is MemberAccessExpression: CanStartRefArgumentOperand(member.Target)
+                case index is IndexExpression: CanStartRefArgumentOperand(index.Target)
+                case invocation is InvocationExpression: CanStartRefArgumentOperand(invocation.Target)
+                case conversion is ConversionExpression: conversion.IsCheckedReferenceCast ||
+                    conversion.TargetType is NamedTypeReference
+                default: false
+            }
 
             /// Drops a non-null assertion from a by-reference operand. `x!!` is
             /// a value, not a variable, so `&x!!` is rejected (GS9001);

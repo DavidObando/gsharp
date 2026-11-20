@@ -221,16 +221,7 @@ Run()`)
     }
 
     @Fact
-    func CapturingGroupMember_MethodGroupConversion_KnownDeferredLimitation() {
-        // Documented, deliberately deferred limitation: a CAPTURING member
-        // of a 2+ non-generic local-function group has no single stable
-        // closure instance to bind a bare-name delegate conversion to (each
-        // direct call it makes materializes its own instance). This matches
-        // the PRE-EXISTING behavior of a capturing GENERIC local function —
-        // not a new restriction introduced for the non-generic case — but IS
-        // a narrowing relative to the old non-generic delegate-variable
-        // baseline, where this converted trivially. Reported here so the
-        // gap is pinned, not silently regressed without a test.
+    func BackwardOnlyCapturingLocals_KeepFunctionValueConversion() {
         let result = EmittedOracle.Evaluate(`func Run() int32 {
     var outer = 41
     let first = func(x int32) int32 { return outer + x }
@@ -239,7 +230,8 @@ Run()`)
     return callback(1)
 }
 Run()`)
-        Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0126")
+        Assert.Empty(result.Diagnostics.Where((d Diagnostic) -> d.IsError))
+        Assert.Equal(42, result.Value)
     }
 
     @Fact
@@ -327,6 +319,35 @@ let s = SBox[int32]{}
 Box[string]().Run(4) + s.Run(3) + Box[int32]().EchoViaDelegate(21)`)
         Assert.Empty(result.Diagnostics.Where((d Diagnostic) -> d.IsError))
         Assert.Equal(42, result.Value)
+    }
+
+    @Fact
+    func BackwardHelper_PreservesPrivateAccessInGenericOwner() {
+        let source = `class Holder[Outer] {
+    shared {
+        private func Secret() int32 { return 42 }
+        func Run() int32 {
+            let helper = func() int32 { return Holder[int32].Secret() }
+            let next = func() int32 { return helper() }
+            return next()
+        }
+    }
+}
+Holder[string].Run()`
+        let privateAccess = EmittedOracle.Evaluate(source)
+        Assert.Empty(privateAccess.Diagnostics.Where((d Diagnostic) -> d.IsError))
+        Assert.Equal(42, privateAccess.Value)
+        let nonGeneric = EmittedOracle.Evaluate(
+            source
+                .Replace("Holder[Outer]", "Holder")
+                .Replace("Holder[int32]", "Holder")
+                .Replace("Holder[string]", "Holder")
+        )
+        Assert.Empty(nonGeneric.Diagnostics.Where((d Diagnostic) -> d.IsError))
+        Assert.Equal(42, nonGeneric.Value)
+        let accessible = EmittedOracle.Evaluate(source.Replace("private func Secret", "public func Secret"))
+        Assert.Empty(accessible.Diagnostics.Where((d Diagnostic) -> d.IsError))
+        Assert.Equal(42, accessible.Value)
     }
 
     @Theory

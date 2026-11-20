@@ -3039,8 +3039,11 @@ internal partial class ExpressionBinder {
         // untyped conversion for a NAMED ref-returning function is left to
         // whatever existing diagnostic that pre-existing machinery already
         // produces.
-        if function.ReturnRefKind != RefKind.None && function.LocalDeclaration != nil {
-            Diagnostics.ReportRefReturningFunctionLiteralRequiresDirectLocalFunction(syntax.IdentifierToken.Location)
+        if MethodGroupDiagnostics.ReportUnsupportedLocalRefReturn(
+            Diagnostics,
+            function,
+            syntax.IdentifierToken.Location
+        ) {
             return false
         }
         if function.IsGeneric {
@@ -3055,7 +3058,14 @@ internal partial class ExpressionBinder {
             parameterTypes.MoveToImmutable(),
             this.MethodGroupObservableReturnType(function)
         )
-        methodGroup = BoundMethodGroupExpression(syntax, function, fnType)
+        let group = BoundMethodGroupExpression(syntax, function, fnType)
+        methodGroup = group
+        if function.LocalDeclaration != nil {
+            let value = $scope.GetLocalFunctionValue(function, fnType)
+            if value.Type is DelegateTypeSymbol {
+                methodGroup = BoundConversionExpression(nil, value.Type, group)
+            }
+        }
         return true
     }
 
@@ -3906,7 +3916,7 @@ internal partial class ExpressionBinder {
 
     private func BindIsExpression(syntax IsExpressionSyntax) BoundExpression {
         var expression = BindExpression(syntax.Expression)
-        if ReportUnresolvedBareDefaults(expression) {
+        if ReportUnresolvedTargetlessValues(expression) {
             return BoundErrorExpression(syntax)
         }
         if expression.Type is TupleTypeSymbol{HasNilElement: true} unresolvedTuple {
@@ -6265,20 +6275,8 @@ internal partial class ExpressionBinder {
         }
 
         private func IsMethodGroupCandidateUsable(function FunctionSymbol) bool {
-            // Issue #4219 (umbrella remainder): a non-generic, non-capturing
-            // direct-call local function (a member of a 2+ non-generic local-
-            // function-literal group, see StatementBinder's
-            // IsNonGenericLocalFunctionLiteralDeclaration) has no Package —
-            // it is a local, not a package-level function — but converts to a
-            // delegate exactly like one: a plain static-shaped MethodDef, no
-            // capture instance to bind. A GENERIC or CAPTURING local function
-            // keeps falling through to "not a variable" below, matching the
-            // pre-existing behavior for a capturing generic local function
-            // (no single stable closure instance to bind a bare-name delegate
-            // conversion to — each direct call it makes materializes its own).
-            let isConvertibleLocalFunction = function.LocalDeclaration != nil &&
-                !function.IsGeneric &&
-                !function.HasCaptures
+            // Value-used local functions reuse ordinary delegate storage and capture boxing.
+            let isConvertibleLocalFunction = function.LocalDeclaration != nil && !function.IsGeneric
             if function.IsInstanceMethod ||
                 function.IsExtension ||
                 function.IsStatic ||

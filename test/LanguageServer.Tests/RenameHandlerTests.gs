@@ -28,7 +28,7 @@ return x + y
             "value"
         )
         Assert.NotNull(edit)
-        let edits = edit!!.Changes[uri].ToList()
+        let edits = edit!!.Changes!![uri].ToList()
         Assert.Equal(3, edits.Count)
         Assert.All(edits, (e GSharp.LanguageServer.Protocol.TextEdit) -> Assert.Equal("value", e.NewText))
     }
@@ -90,7 +90,7 @@ func Ret() Box[bool] { return Box[bool]() }`
             "Crate"
         )
         Assert.NotNull(edit)
-        let edits = edit!!.Changes[uri].ToList()
+        let edits = edit!!.Changes!![uri].ToList()
         Assert.All(edits, (e GSharp.LanguageServer.Protocol.TextEdit) -> Assert.Equal("Crate", e.NewText))
         AssertRanges(edits, source, "Box")
     }
@@ -110,7 +110,7 @@ func S(c Outer[string].Color) {}`
             "Shade"
         )
         Assert.NotNull(edit)
-        let edits = edit!!.Changes[uri].ToList()
+        let edits = edit!!.Changes!![uri].ToList()
         Assert.All(edits, (e GSharp.LanguageServer.Protocol.TextEdit) -> Assert.Equal("Shade", e.NewText))
         AssertRanges(edits, source, "Color")
     }
@@ -131,7 +131,7 @@ func B(value Source[bool]) {}`
             "Provider"
         )
         Assert.NotNull(edit)
-        let edits = edit!!.Changes[uri].ToList()
+        let edits = edit!!.Changes!![uri].ToList()
         Assert.All(edits, (e GSharp.LanguageServer.Protocol.TextEdit) -> Assert.Equal("Provider", e.NewText))
         AssertRanges(edits, source, "Source")
     }
@@ -151,7 +151,7 @@ func Use(value List[Box[int32]]) {}`
             "Crate"
         )
         Assert.NotNull(edit)
-        let edits = edit!!.Changes[uri].ToList()
+        let edits = edit!!.Changes!![uri].ToList()
         Assert.All(edits, (e GSharp.LanguageServer.Protocol.TextEdit) -> Assert.Equal("Crate", e.NewText))
         AssertRanges(edits, source, "Box")
     }
@@ -182,9 +182,9 @@ func Use(
             "Crate"
         )
         Assert.NotNull(edit)
-        Assert.Equal(2, edit!!.Changes.Count)
-        let declarationEdits = edit!!.Changes[declarationUri].ToList()
-        let useEdits = edit!!.Changes[useUri].ToList()
+        Assert.Equal(2, edit!!.Changes!!.Count)
+        let declarationEdits = edit!!.Changes!![declarationUri].ToList()
+        let useEdits = edit!!.Changes!![useUri].ToList()
         Assert.All(
             declarationEdits.Concat(useEdits),
             (e GSharp.LanguageServer.Protocol.TextEdit) -> Assert.Equal("Crate", e.NewText)

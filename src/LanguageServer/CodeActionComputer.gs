@@ -5,52 +5,592 @@
 package GSharp.LanguageServer
 
 import CoreDiagnostic = GSharp.Core.CodeAnalysis.Diagnostic
+import GSharp.Core.CodeAnalysis.Analyzers
+import GSharp.Core.CodeAnalysis.CodeFixes
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 import GSharp.LanguageServer.Protocol
 import Range = GSharp.LanguageServer.Protocol.Range
 import System
+import System.Collections.Concurrent
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.Linq
+import System.Runtime.CompilerServices
 import System.Threading
 
-/// Computes `textDocument/codeAction` results. The computer combines
-/// project-wide refactorings (e.g. "Sort imports") with quick-fixes that
-/// react to specific GSharp diagnostics in the requested range — most
-/// notably the three nil-related rewrites introduced by ADR-0099 / issue
-/// #730:
-/// - `.` → `?.` on a member access whose receiver is nullable (GS0158 with a nullable receiver type).
-/// - `expr` → `(expr ?? default)` on a nullable value used where a non-nullable value is required
-/// (GS0154 / GS0155 / GS0156 / GS0274).
-/// - `expr` → `(expr!!)` on the same triggers when the user is certain the value is non-nil at runtime.
+/// What the client supports for code actions (ADR-0227 D7).
+class CodeActionClientOptions {
+    /// Gets or sets a value that tells whether the client applies versioned `documentChanges`.
+    prop SupportsDocumentChanges bool
+
+    /// Gets or sets a value that tells whether the client resolves the `edit` of an action lazily.
+    prop SupportsResolveEdit bool
+
+    /// Gets or sets the stored content of an open document (its tree and client version, captured
+    /// together), or `null` when the document is not open. The server sets it; an edit of another
+    /// open document carries that version.
+    prop DocumentOf Func[DocumentUri, DocumentContent?]?
+}
+
+/// Computes `textDocument/codeAction` and `codeAction/resolve` results (ADR-0227 D7). The fixes
+/// come from (cref:CodeFixService): the built-in providers of `GSharp.Core` and the providers of
+/// the project's analyzer assemblies. "Sort imports" is a refactoring of the server.
 shared class CodeActionComputer {
-    /// Computes the LSP code actions visible in [`range`](paramref).
-    /// The set always includes any whole-document refactorings that apply
-    /// (e.g. "Sort imports") regardless of where the caret is — LSP clients
-    /// filter on kind/title themselves — plus diagnostic-driven quick fixes
-    /// whose underlying diagnostic span overlaps the request range.
+    // A document without a project uses the built-in providers only.
+    private let DefaultRegistry CodeFixRegistry = CodeFixRegistry.CreateDefault()
+
+    // ADR-0227 D7: the analyzer diagnostics of a compilation snapshot and an analyzer set. Any edit
+    // of the project makes a new snapshot, and a change of the analyzer configuration makes a new
+    // analyzer set, so either one invalidates the entry. The document version alone is not enough.
+    private let AnalyzerResults ConditionalWeakTable[Compilation, AnalyzerResult] = ConditionalWeakTable[
+        Compilation,
+        AnalyzerResult
+    ]()
+
+    /// The time budget of each analyzer when the computer runs the analyzers itself.
+    private const AnalyzerTimeBudgetMilliseconds int32 = 2000
+
+    /// Computes the code actions for [`range`](paramref) with no request context.
     /// @param uri The document URI for edit attribution.
     /// @param content The cached document content (parsed syntax + project).
     /// @param range The LSP request range.
-    /// @param ct Token checked between quick-fix-eligible diagnostics.
+    /// @param ct Cancels the computation.
     /// @returns An LSP (cref:CommandOrCodeActionContainer).
     func ComputeCodeActions(
         uri DocumentUri,
         content DocumentContent,
         $range Range,
         ct CancellationToken = default(CancellationToken)
+    ) CommandOrCodeActionContainer -> ComputeCodeActions(uri, content, $range, nil, CodeActionClientOptions(), ct)
+
+    /// Computes the code actions for [`range`](paramref): the whole-document refactorings that
+    /// apply, and the fixes of the diagnostics whose span overlaps the range. Each fix passes the
+    /// syntax stage of the delta gate: it adds no syntax diagnostic (ADR-0227 decision Q4).
+    /// @param uri The document URI for edit attribution.
+    /// @param content The cached document content (parsed syntax + project).
+    /// @param range The LSP request range.
+    /// @param context The request context; its `only` filters the kinds.
+    /// @param client What the client supports.
+    /// @param ct Cancels the computation.
+    /// @returns An LSP (cref:CommandOrCodeActionContainer).
+    func ComputeCodeActions(
+        uri DocumentUri,
+        content DocumentContent,
+        $range Range,
+        context CodeActionContext?,
+        client CodeActionClientOptions,
+        ct CancellationToken = default(CancellationToken)
+    ) CommandOrCodeActionContainer -> ComputeCodeActions(uri, content, $range, context, client, nil, ct)
+
+    // Tests give the registry; the server uses the project's.
+    internal func ComputeCodeActions(
+        uri DocumentUri,
+        content DocumentContent,
+        $range Range,
+        context CodeActionContext?,
+        client CodeActionClientOptions,
+        registryOverride CodeFixRegistry?,
+        ct CancellationToken
+    ) CommandOrCodeActionContainer -> ComputeCodeActions(
+        uri,
+        content,
+        $range,
+        context,
+        client,
+        registryOverride,
+        nil,
+        ct
+    )
+
+    // Tests give the registry and the analyzers; the server uses the project's.
+    internal func ComputeCodeActions(
+        uri DocumentUri,
+        content DocumentContent,
+        $range Range,
+        context CodeActionContext?,
+        client CodeActionClientOptions,
+        registryOverride CodeFixRegistry?,
+        analyzersOverride IReadOnlyList[GSharpDiagnosticAnalyzer]?,
+        ct CancellationToken
     ) CommandOrCodeActionContainer {
+        let analyzers = analyzersOverride?.ToImmutableArray() ?? ProjectAnalyzers(content)
+        let only IReadOnlyList[CodeActionKind]? = context?.Only
         let actions = List[CommandOrCodeAction]()
-        let sortImports CodeAction? = TryCreateSortImports(uri, content)
-        if sortImports != nil {
-            actions.Add(CommandOrCodeAction(sortImports))
+        if KindRequested(CodeActionKind.RefactorRewrite, only) {
+            let sortImports CodeAction? = TryCreateSortImports(uri, content, client)
+            if sortImports != nil {
+                actions.Add(CommandOrCodeAction(sortImports))
+            }
         }
-        AppendNullabilityQuickFixes(uri, content, $range, actions, ct)
+        // ADR-0227 D7: a FixAll runs only when the client asks for source actions by name.
+        if only != nil && only.Count > 0 && KindRequested(CodeActionKind.SourceFixAllGSharp, only) {
+            let fixAll CodeAction? = TryCreateFixAll(uri, content, client, registryOverride, analyzers, ct)
+            if fixAll != nil {
+                actions.Add(CommandOrCodeAction(fixAll))
+            }
+        }
+        if KindRequested(CodeActionKind.QuickFix, only) {
+            for action in ComputeQuickFixes(
+                uri,
+                content,
+                RangeToSpan(content, $range),
+                client,
+                registryOverride,
+                analyzers,
+                ct
+            ) {
+                actions.Add(CommandOrCodeAction(action))
+            }
+        }
         return CommandOrCodeActionContainer(actions)
     }
 
-    private func TryCreateSortImports(uri DocumentUri, content DocumentContent) CodeAction? {
+    /// Resolves the edit of an action that the list request returned without one. The action
+    /// gets no edit when the document has another version, or when the fix no longer exists.
+    /// @param action The action from the client.
+    /// @param content The current document content.
+    /// @param client What the client supports.
+    /// @param ct Cancels the computation.
+    /// @returns The action, with its edit when the fix still applies to the same version.
+    func ResolveCodeAction(
+        action CodeAction,
+        content DocumentContent,
+        client CodeActionClientOptions,
+        ct CancellationToken = default(CancellationToken)
+    ) CodeAction {
+        let data CodeActionData? = action.Data
+        if data == nil || action.Edit != nil {
+            return action
+        }
+        // ADR-0227 D7: resolve returns the edit that the list request computed and gated, never a
+        // recomputed one. It returns no edit when a snapshot that the edit depends on changed.
+        if !ResolveCache.TryGetValue(data.Key, out var entry) {
+            return action
+        }
+        if entry.Version != content.Version || !object.ReferenceEquals(entry.Tree, content.SyntaxTree) {
+            return action
+        }
+        if entry.ProjectCompilation != nil && !object.ReferenceEquals(
+            entry.ProjectCompilation,
+            content.Project?.GetCompilation()
+        ) {
+            return action
+        }
+        for pair in entry.OtherVersions {
+            if CurrentVersion(client, pair.Key) != pair.Value {
+                return action
+            }
+        }
+        action.Edit = entry.Edit
+        return action
+    }
+
+    // The gated edits that a lazy client resolves later, by an opaque ID (ADR-0227 D7). The cache
+    // keeps the newest entries only.
+    private let ResolveCache ConcurrentDictionary[string, ResolveEntry] = ConcurrentDictionary[string, ResolveEntry](
+        StringComparer.Ordinal
+    )
+
+    private let ResolveOrder ConcurrentQueue[string] = ConcurrentQueue[string]()
+
+    private const ResolveCacheCapacity int32 = 512
+
+    private func Remember(entry ResolveEntry) string {
+        let id = Guid.NewGuid().ToString("N")
+        ResolveCache[id] = entry
+        ResolveOrder.Enqueue(id)
+        while ResolveOrder.Count > ResolveCacheCapacity && ResolveOrder.TryDequeue(out var oldest) {
+            ResolveCache.TryRemove(oldest, out _)
+        }
+        return id
+    }
+
+    private func ComputeQuickFixes(
+        uri DocumentUri,
+        content DocumentContent,
+        span TextSpan,
+        client CodeActionClientOptions,
+        registryOverride CodeFixRegistry?,
+        analyzers ImmutableArray[GSharpDiagnosticAnalyzer],
+        ct CancellationToken
+    ) sequence[CodeAction] {
+        let tree = content.SyntaxTree
+        // The project snapshot is captured once, before the fixes are computed, and the fixes use
+        // it when it holds the document's tree. The resolve entry records the same snapshot, so
+        // resolve cannot accept a fix that was gated against older files.
+        let projectCompilation Compilation? = content.Project?.GetCompilation()
+        let compilation = CompilationFor(content, projectCompilation)
+        let registry = registryOverride ?? content.Project?.GetCodeFixRegistry() ?? DefaultRegistry
+        let service = CodeFixService(registry)
+        let fixes = service.GetFixes(
+            compilation,
+            tree,
+            span,
+            AnalyzerDiagnostics(analyzers, compilation, registry, ct),
+            out _,
+            ct
+        )
+        if fixes.IsEmpty {
+            yield break
+        }
+        // ADR-0227 Q4: in phase 1 the server runs the syntax stage of the gate on every fix.
+        let gateOptions = DeltaOptions()
+        gateOptions.SyntaxOnly = true
+        let baseline = DeltaBaseline.Create(compilation, gateOptions, ct)
+        var fullBaseline DeltaBaseline? = nil
+        // First the fixes that survive the gate, their computation and the edit; then the actions,
+        // so that the preferred fix is chosen among the fixes that the client gets.
+        let survivors = List[Candidate]()
+        for fix in fixes {
+            ct.ThrowIfCancellationRequested()
+            // A provider's deferred computation can throw. That fix is dropped; the others stay.
+            var changes FixChanges? = nil
+            try {
+                if !service.ComputeDelta(baseline, fix, ct).AddedSyntax.IsEmpty {
+                    continue
+                }
+                // ADR-0227 Q4: a data-defined fix must pass the full gate: it adds no diagnostic.
+                if fix.IsDataDefined {
+                    if fullBaseline == nil {
+                        fullBaseline = DeltaBaseline.Create(compilation, FullGateOptions(analyzers), ct)
+                    }
+                    if !PassesFullGate(fullBaseline, service.ComputeDelta(fullBaseline, fix, ct)) {
+                        continue
+                    }
+                }
+                changes = fix.GetChanges(ct)
+            } catch (ex OperationCanceledException) when ct.IsCancellationRequested {
+                rethrow
+            } catch (ex Exception) when !(ex is OutOfMemoryException) && !(ex is StackOverflowException) {
+                continue
+            }
+            let edit WorkspaceEdit? = BuildEdit(uri, content, changes, client, out var otherVersions)
+            if edit != nil {
+                survivors.Add(Candidate(fix, edit, otherVersions))
+            }
+        }
+        let offered = survivors.Select((c Candidate) -> c.Fix).ToImmutableArray()
+        for candidate in survivors {
+            let fix = candidate.Fix
+            let action = CodeAction{
+                Title: fix.Title,
+                Kind: CodeActionKind.QuickFix,
+                Diagnostics: fix.Diagnostics.Select((d CoreDiagnostic) -> ToProtocolDiagnostic(d, tree.Text)).ToList(),
+                IsPreferred: if IsPreferred(fix, offered) {
+                    true
+                } else {
+                    default(bool?)
+                }
+            }
+            if client.SupportsResolveEdit {
+                let id = Remember(
+                    ResolveEntry(candidate.Edit, content.Version, tree, projectCompilation, candidate.OtherVersions)
+                )
+                action.Data = CodeActionData{Uri: uri.ToString(), Version: content.Version, Key: id}
+            } else {
+                action.Edit = candidate.Edit
+            }
+            yield action
+        }
+    }
+
+    // ADR-0227 D5: the one machine-applicable fix of a diagnostic is the preferred action.
+    private func IsPreferred(fix CodeFix, all ImmutableArray[CodeFix]) bool {
+        if fix.Applicability != Applicability.MachineApplicable || fix.Diagnostics.IsEmpty {
+            return false
+        }
+        let target = fix.Diagnostics[0]
+        return all.Count(
+            (other CodeFix) -> other.Applicability == Applicability.MachineApplicable && other.Diagnostics.Contains(
+                target
+            )
+        ) == 1
+    }
+
+    internal func BuildEdit(
+        uri DocumentUri,
+        content DocumentContent,
+        changes FixChanges,
+        client CodeActionClientOptions
+    ) WorkspaceEdit? -> BuildEdit(uri, content, changes, client, out _)
+
+    // Builds the edit. An edit of another open document uses the version that was stored with that
+    // document's tree. When the open document's tree is not the tree that the fix edited (the
+    // document changed after the compilation was built), the ranges would be stale, so there is no edit.
+    internal func BuildEdit(
+        uri DocumentUri,
+        content DocumentContent,
+        changes FixChanges,
+        client CodeActionClientOptions,
+        out otherVersions Dictionary[string, int32?]
+    ) WorkspaceEdit? {
+        otherVersions = Dictionary[string, int32?](StringComparer.Ordinal)
+        let documentEdits = List[TextDocumentEdit]()
+        for document in changes.Documents {
+            let own = object.ReferenceEquals(document.Tree, content.SyntaxTree)
+            let documentUri DocumentUri? = if own {
+                uri
+            } else {
+                DocumentUri.FromFileSystemPath(document.Tree.Text.FileName)
+            }
+            if documentUri == nil {
+                continue
+            }
+            var version int32? = content.Version
+            if !own {
+                version = nil
+                let openDocument DocumentContent? = client.DocumentOf?(documentUri)
+                if openDocument != nil {
+                    if !object.ReferenceEquals(openDocument.SyntaxTree, document.Tree) &&
+                        openDocument
+                        .SyntaxTree
+                        .Text
+                        .ToString() != document
+                        .Tree
+                        .Text
+                        .ToString() {
+                        return nil
+                    }
+                    version = openDocument.Version
+                }
+                otherVersions[documentUri.ToString()] = version
+            }
+            let edits = document
+                .Changes
+                .Select(
+                (c TextChange) -> GSharp
+                    .LanguageServer
+                    .Protocol
+                    .TextEdit{Range: SemanticLookup.ToRange(document.Tree.Text, c.Span), NewText: c.NewText}
+            )
+                .ToList()
+            documentEdits.Add(
+                TextDocumentEdit{
+                    TextDocument: OptionalVersionedTextDocumentIdentifier{Uri: documentUri, Version: version},
+                    Edits: edits
+                }
+            )
+        }
+        if client.SupportsDocumentChanges {
+            return WorkspaceEdit{DocumentChanges: documentEdits}
+        }
+        let byUri = Dictionary[DocumentUri, IEnumerable[GSharp.LanguageServer.Protocol.TextEdit]]()
+        for d in documentEdits {
+            byUri[d.TextDocument.Uri] = d.Edits
+        }
+        return WorkspaceEdit{Changes: byUri}
+    }
+
+    // The current client version of an open document, or null.
+    private func CurrentVersion(client CodeActionClientOptions, key string) int32? {
+        let other DocumentUri? = DocumentUri.From(key)
+        if other == nil {
+            return nil
+        }
+        let openDocument DocumentContent? = client.DocumentOf?(other)
+        if openDocument == nil {
+            return nil
+        }
+        return openDocument.Version
+    }
+
+    // The compilation that holds the document's tree: the project's, else a one-tree compilation.
+    private func CompilationFor(content DocumentContent, projectCompilation Compilation? = nil) Compilation {
+        let tree = content.SyntaxTree
+        let project ProjectState? = content.Project
+        if project != nil {
+            let compilation = projectCompilation ?? project.GetCompilation()
+            if compilation.SyntaxTrees.Contains(tree) {
+                return compilation
+            }
+            let path = tree.Text.FileName
+            if !string.IsNullOrEmpty(path) && project.ContainsFile(path) {
+                let snapshot = project.GetCompilationForSnapshot(path, tree)
+                if snapshot.SyntaxTrees.Contains(tree) {
+                    return snapshot
+                }
+            }
+        }
+        return ServerCompilation.Create(tree)
+    }
+
+    // ADR-0227 D7: analyzer diagnostics, only when a provider fixes one of the analyzers' IDs.
+    private func AnalyzerDiagnostics(
+        analyzers ImmutableArray[GSharpDiagnosticAnalyzer],
+        compilation Compilation,
+        registry CodeFixRegistry,
+        ct CancellationToken
+    ) ImmutableArray[CoreDiagnostic] {
+        if analyzers.IsEmpty {
+            return ImmutableArray[CoreDiagnostic].Empty
+        }
+        let fixable = AnyFixable(analyzers, registry, ct)
+        if !fixable {
+            return ImmutableArray[CoreDiagnostic].Empty
+        }
+        if AnalyzerResults.TryGetValue(compilation, out var cached) && cached.Analyzers == analyzers {
+            return cached.Diagnostics
+        }
+        let produced = GSharpAnalyzerDriver.Run(
+            compilation,
+            analyzers,
+            AnalyzerOptions{TimeBudgetMilliseconds: AnalyzerTimeBudgetMilliseconds},
+            ct
+        )
+        AnalyzerResults.AddOrUpdate(compilation, AnalyzerResult(analyzers, produced))
+        return produced
+    }
+
+    private func ProjectAnalyzers(content DocumentContent) ImmutableArray[GSharpDiagnosticAnalyzer] {
+        let project ProjectState? = content.Project
+        if project == nil {
+            return ImmutableArray[GSharpDiagnosticAnalyzer].Empty
+        }
+        return project.GetGsAnalyzers(out _)
+    }
+
+    // ADR-0227 Q4: the full gate of a data-defined fix compares the compiler's diagnostics and the
+    // analyzers' diagnostics, under the analyzers' time budget.
+    private func FullGateOptions(analyzers ImmutableArray[GSharpDiagnosticAnalyzer]) DeltaOptions {
+        let options = DeltaOptions()
+        options.Analyzers = analyzers
+        options.AnalyzerOptions = AnalyzerOptions{TimeBudgetMilliseconds: AnalyzerTimeBudgetMilliseconds}
+        return options
+    }
+
+    // ADR-0227 Q4: the full gate passes when the edit adds no diagnostic and every analyzer ran to
+    // the end before and after the edit. An analyzer that threw or ran out of time reported only
+    // part of its diagnostics, so the comparison would not cover them.
+    private func PassesFullGate(baseline DeltaBaseline, delta DiagnosticDelta) bool -> DeltaPolicy
+        .NoNewDiagnostics
+        .Accepts(delta) && !baseline.Diagnostics.Any(IsIncompleteAnalyzerRun) && !delta.Persisting.Any(
+        IsIncompleteAnalyzerRun
+    )
+
+    private func IsIncompleteAnalyzerRun(d CoreDiagnostic) bool -> d.Id == "GS9300" || d.Id == "GS9302"
+
+    // Whether a provider fixes an ID that one of the analyzers reports. A failing metadata getter
+    // skips that analyzer only; the driver guards the same read.
+    internal func AnyFixable(
+        analyzers ImmutableArray[GSharpDiagnosticAnalyzer],
+        registry CodeFixRegistry,
+        ct CancellationToken
+    ) bool {
+        for analyzer in analyzers {
+            try {
+                if analyzer.SupportedDiagnostics.Any(
+                    (d GSharp.Core.CodeAnalysis.DiagnosticDescriptor) -> !registry.GetProviders(d.Id).IsEmpty
+                ) {
+                    return true
+                }
+            } catch (ex OperationCanceledException) when ct.IsCancellationRequested {
+                rethrow
+            } catch (ex Exception) when !(ex is OutOfMemoryException) && !(ex is StackOverflowException) {
+                continue
+            }
+        }
+        return false
+    }
+
+    private func KindRequested(kind CodeActionKind, only IReadOnlyList[CodeActionKind]?) bool {
+        if only == nil || only.Count == 0 {
+            return true
+        }
+        let value = kind.Value ?? string.Empty
+        for o in only {
+            let requested = o.Value ?? string.Empty
+            if value == requested || value.StartsWith(requested + ".", StringComparison.Ordinal) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func ToProtocolDiagnostic(d CoreDiagnostic, text SourceText) GSharp.LanguageServer.Protocol.Diagnostic {
+        let source SourceText = d.Location.Text ?? text
+        return GSharp
+            .LanguageServer
+            .Protocol
+            .Diagnostic{
+            Code: DiagnosticCode(d.Id),
+            Message: d.Message,
+            Range: SemanticLookup.ToRange(source, d.Location.Span),
+            Severity: DocumentSyncHandler.ToLspSeverity(d.Severity),
+            Source: Constants.LanguageIdentifier
+        }
+    }
+
+    // The document FixAll of the machine-applicable fixes, as one edit (ADR-0227 D3, D7).
+    private func TryCreateFixAll(
+        uri DocumentUri,
+        content DocumentContent,
+        client CodeActionClientOptions,
+        registryOverride CodeFixRegistry?,
+        analyzers ImmutableArray[GSharpDiagnosticAnalyzer],
+        ct CancellationToken
+    ) CodeAction? {
+        let compilation = CompilationFor(content, content.Project?.GetCompilation())
+        let registry = registryOverride ?? content.Project?.GetCodeFixRegistry() ?? DefaultRegistry
+        let service = CodeFixService(registry)
+        // The analyzers' diagnostics take part when a provider fixes them, under the same budget.
+        let options = FixAllOptions()
+        let deltaOptions = DeltaOptions()
+        deltaOptions.AnalyzerOptions = AnalyzerOptions{TimeBudgetMilliseconds: AnalyzerTimeBudgetMilliseconds}
+        if AnyFixable(analyzers, registry, ct) {
+            deltaOptions.Analyzers = analyzers
+        }
+        options.DeltaOptions = deltaOptions
+        let result = service.FixAll(FixAllScope.Document(compilation, content.SyntaxTree), nil, options, ct)
+        if result.Documents.IsEmpty {
+            return nil
+        }
+        // Every changed tree, each with its own changes from its original text.
+        let changes = FixChanges(
+            result
+                .Documents
+                .Select(
+                (d FixAllDocument) -> DocumentChanges(d.Original, d.GetChanges(), ImmutableArray[TextSpan].Empty)
+            )
+                .ToImmutableArray()
+        )
+        // ADR-0227 Q4: the batch passes the syntax stage of the gate as a whole.
+        let gateOptions = DeltaOptions()
+        gateOptions.SyntaxOnly = true
+        let delta = service.ComputeDelta(
+            DeltaBaseline.Create(compilation, gateOptions, ct),
+            changes,
+            ImmutableArray[CoreDiagnostic].Empty,
+            ct
+        )
+        if !delta.AddedSyntax.IsEmpty {
+            return nil
+        }
+        // ADR-0227 Q4: a batch with a data-defined fix passes the full gate as a whole.
+        if result.Applied.Any((f CodeFix) -> f.IsDataDefined) {
+            let fullBaseline = DeltaBaseline.Create(compilation, FullGateOptions(analyzers), ct)
+            let full = service.ComputeDelta(fullBaseline, changes, ImmutableArray[CoreDiagnostic].Empty, ct)
+            if !PassesFullGate(fullBaseline, full) {
+                return nil
+            }
+        }
+        let edit WorkspaceEdit? = BuildEdit(uri, content, changes, client)
+        if edit == nil {
+            return nil
+        }
+        return CodeAction{
+            Title: "Fix all auto-fixable G# problems",
+            Kind: CodeActionKind.SourceFixAllGSharp,
+            Edit: edit
+        }
+    }
+
+    private func TryCreateSortImports(
+        uri DocumentUri,
+        content DocumentContent,
+        client CodeActionClientOptions
+    ) CodeAction? {
         let imports = content.SyntaxTree.Root.Members.OfType[ImportSyntax]().ToList()
         if imports.Count < 2 {
             return nil
@@ -72,80 +612,20 @@ shared class CodeActionComputer {
             break
         }
         let newText = string.Join(Environment.NewLine, sorted) + Environment.NewLine
+        let changes = FixChanges(
+            ImmutableArray.Create(
+                DocumentChanges(
+                    content.SyntaxTree,
+                    ImmutableArray.Create(TextChange(TextSpan.FromBounds(start, end), newText)),
+                    ImmutableArray[TextSpan].Empty
+                )
+            )
+        )
         return CodeAction{
             Title: "Sort imports",
             Kind: CodeActionKind.RefactorRewrite,
-            Edit: WorkspaceEdit{
-                Changes: Dictionary[DocumentUri, IEnumerable[GSharp.LanguageServer.Protocol.TextEdit]]{
-                    [uri] = []GSharp
-                        .LanguageServer
-                        .Protocol
-                        .TextEdit{
-                        GSharp
-                            .LanguageServer
-                            .Protocol
-                            .TextEdit{
-                            Range: SemanticLookup.ToRange(content.SyntaxTree.Text, TextSpan.FromBounds(start, end)),
-                            NewText: newText
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private func AppendNullabilityQuickFixes(
-        uri DocumentUri,
-        content DocumentContent,
-        $range Range,
-        actions List[CommandOrCodeAction],
-        ct CancellationToken = default(CancellationToken)
-    ) {
-        // ADR-0099 / issue #730. Skip the (expensive) BoundProgram pull
-        // entirely when the document has no syntax-level diagnostics or
-        // global-scope errors that could plausibly host a nullability fix:
-        // requesting code-actions on a clean file is a common no-op flow
-        // (hover / format / right-click in an editor) and must stay cheap.
-        let compilation = content.Project?.GetCompilation() ?? ServerCompilation.Create(content.SyntaxTree)
-        let requestSpan = RangeToSpan(content, $range)
-        for diag in EnumerateRelevantDiagnostics(compilation, content.SyntaxTree, ct) {
-            ct.ThrowIfCancellationRequested()
-            if !Overlaps(diag.Location.Span, requestSpan) {
-                continue
-            }
-            switch diag.Id {
-                case "GS0158" {
-                    let dotFix CodeAction? = NullabilityQuickFixes.TryCreateDotToQuestionDot(uri, content, diag)
-                    if dotFix != nil {
-                        actions.Add(CommandOrCodeAction(dotFix))
-                    }
-                }
-                case "GS0154", "GS0155", "GS0156", "GS0274" {
-                    for fix in NullabilityQuickFixes.CreateNullableValueFixes(uri, content, diag) {
-                        actions.Add(CommandOrCodeAction(fix))
-                    }
-                }
-            }
-        }
-    }
-
-    private func EnumerateRelevantDiagnostics(compilation Compilation, tree SyntaxTree, ct CancellationToken) sequence[
-        CoreDiagnostic
-    ] {
-        // Quick-fix triggers come exclusively from the binding pass — syntax
-        // errors don't carry the type information we key on. Filtering by
-        // source tree mirrors DocumentSyncHandler so multi-file projects only
-        // surface fixes for the file the user is editing. Bodies come first, then declarations
-        // (ADR-0212 §7a), which keeps the order of the fixes.
-        for d in compilation.GetBodyDiagnostics(ct) {
-            if d.Location.Text == tree.Text {
-                yield d
-            }
-        }
-        for d in compilation.GetDeclarationDiagnostics(ct) {
-            if d.Location.Text == tree.Text {
-                yield d
-            }
+            // Only the requested document changes, so the edit always exists.
+            Edit: BuildEdit(uri, content, changes, client)!!
         }
     }
 
@@ -158,13 +638,75 @@ shared class CodeActionComputer {
         return TextSpan.FromBounds(Math.Min(start, end), Math.Max(start, end))
     }
 
-    private func Overlaps(a TextSpan, b TextSpan) bool {
-        var a = a
-        var b = b
-        // Treat zero-length spans (the typical caret-only request) as a hit
-        // when they sit inside the diagnostic range — matches the editor's
-        // behaviour of associating "no selection" with whatever the cursor
-        // is on.
-        return a.Start <= b.End && b.Start <= a.End
+    private class Candidate {
+        init(fix CodeFix, edit WorkspaceEdit, otherVersions Dictionary[string, int32?]) {
+            Fix = fix
+            Edit = edit
+            OtherVersions = otherVersions
+        }
+
+        prop Fix CodeFix {
+            get;
+        }
+
+        prop Edit WorkspaceEdit {
+            get;
+        }
+
+        prop OtherVersions Dictionary[string, int32?] {
+            get;
+        }
+    }
+
+    private class ResolveEntry {
+        init(
+            edit WorkspaceEdit,
+            version int32?,
+            tree SyntaxTree,
+            projectCompilation Compilation?,
+            otherVersions Dictionary[string, int32?]
+        ) {
+            Edit = edit
+            Version = version
+            Tree = tree
+            ProjectCompilation = projectCompilation
+            OtherVersions = otherVersions
+        }
+
+        prop Edit WorkspaceEdit {
+            get;
+        }
+
+        prop Version int32? {
+            get;
+        }
+
+        prop Tree SyntaxTree {
+            get;
+        }
+
+        prop ProjectCompilation Compilation? {
+            get;
+        }
+
+        prop OtherVersions Dictionary[string, int32?] {
+            get;
+        }
+    }
+
+    private class AnalyzerResult {
+        init(analyzers ImmutableArray[GSharpDiagnosticAnalyzer], diagnostics ImmutableArray[CoreDiagnostic]) {
+            Analyzers = analyzers
+            Diagnostics = diagnostics
+        }
+
+        // The analyzer set of the run, compared by reference: ProjectState replaces it on a reload.
+        prop Analyzers ImmutableArray[GSharpDiagnosticAnalyzer] {
+            get;
+        }
+
+        prop Diagnostics ImmutableArray[CoreDiagnostic] {
+            get;
+        }
     }
 }

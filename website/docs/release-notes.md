@@ -14,6 +14,22 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ## Unreleased (0.5 line)
 
+- **Data-defined transformation programs** (Part of #6119; ADR-0227 D6). The new assembly `GSharp.CodeAnalysis.Transformations` reads a `TransformationProgram` from JSON (schema: `transformation-program.schema.json`): a diagnostic trigger, a tree pattern anchored at the diagnostic with named captures, guards from a closed set of syntax and semantic predicates, and replace/delete/insert edits with `${capture}` templates. Unknown properties, predicates and operations are rejected at load time, and a program's `Version` is the SHA-256 of its canonical JSON. `ProgramFixProvider` interprets programs as a data-defined code-fix provider; the language server runs the full delta gate on data-defined fixes. The assembly is not packed yet.
+
+- **Compiler suggestions on diagnostics** (Part of #6119; ADR-0227 D2 option b). `Diagnostic.Suggestions` holds the fixes that the compiler already knows at the report site, as `DiagnosticSuggestion` (message, equivalence key, applicability, text changes). GS0273 suggests `nil` for `null`, and GS0302 suggests `:` for the deprecated `->` switch arm. `CodeFixService` offers each suggestion as a fix before the providers' fixes. Suggestions do not take part in diagnostic equality.
+
+- **Numeric-conversion and cross-file code fixes** (Part of #6119; ADR-0227 phase 2). GS0156 between two numeric types (including `nint`, `nuint` and `char`) gets `Convert to 'T'`, which wraps a simple operand in `checked(cast[T](expr))`, so an out-of-range value throws instead of wrapping; compound assignments and tuple elements get no fix. `CodeFixContext.RegisterMultiDocumentFix` and `MultiDocumentEditor` let a fix edit several trees of the compilation; the `let` → `var` fix now edits a field declared in another file of a partial type.
+
+- **FixAll for code fixes** (Part of #6119; ADR-0227 D3). `CodeFixService.FixAll` applies every fix with an equivalence key (or the first fix of each diagnostic) at `FixAllScope.Document`, `Project` or `Solution` scope, like Roslyn's batch fixer: each round computes the fixes against one snapshot and keeps the fixes whose changes do not overlap or touch. `FixAllOptions` sets the minimum applicability (machine-applicable by default), the number of rounds and an optional delta gate. `FixAllResult` lists applied and dropped fixes with the reason, the changed documents and the new compilations. The language server offers `source.fixAll.gsharp` when the client asks for it.
+
+- **Language-server code actions use the code-fix service** (Part of #6119; ADR-0227 D7). `textDocument/codeAction` returns the Core and analyzer-assembly fixes for the diagnostics in range (syntax, declaration, body and, when a provider fixes them, analyzer diagnostics), with `diagnostics`, `isPreferred` and `context.only` filtering. Each fix passes the syntax stage of the delta gate. The server now declares `resolveProvider` and handles `codeAction/resolve`, records the client's document version, and emits versioned `documentChanges` when the client supports them. The ADR-0099 nullability fixes moved to Core with the same titles and edits.
+
+- **Built-in code fixes for common C#-isms** (Part of #6119; ADR-0227 D8). `CodeFixRegistry.CreateDefault()` now has providers for `null` → `nil` (GS0273), `new T(...)` → `T(...)` for a reference type (GS0125), `let` → `var` on a reassigned variable (GS0127), `or`/`and` → `||`/`&&` and `not` → `!` (GS0125, GS0130), and the ADR-0099 nullability fixes (GS0158, GS0154/0155/0156). Compiler diagnostics now keep their `Descriptor` and a new `Diagnostic.MessageArguments`, so fixes no longer parse message text; `GetDiagnostics()` results do not change.
+
+- **Diagnostic-delta gate for code fixes** (Part of #6119; ADR-0227 D4). `CodeFixService.ComputeDelta` parses each changed document, stops when the parse adds a syntax diagnostic, and otherwise binds a snapshot compilation (`Compilation.WithReplacedSyntaxTrees`) under the request's own work budget. It compares the diagnostics of the whole compilation before and after the complete edit set by document, ID, severity, message and mapped span, after the host's severity filter. `DeltaPolicy` names the gate rules: `NoNewDiagnostics` (the default), `RemovesTargetNoNewErrors`, `NetImprovement` and `PhaseAware` (for fixes of parse errors only). The host's compilation does not change.
+
+- **Code-fix API and span editor** (Part of #6119; ADR-0227). `GSharp.Core` adds `TextChange`, `SourceText.WithChanges`, `SyntaxEditor`, `SyntaxNode.DescendantTokens` and `SyntaxNode.FindToken`, and the `GSharp.Core.CodeAnalysis.CodeFixes` namespace: `CodeFix` with an equivalence key and an `Applicability`, `GSharpCodeFixProvider`, `CodeFixRegistry` and `CodeFixService`. `GSharpAnalyzerHost.LoadCodeFixProviders` loads `@GSharpCodeFixProvider` types from analyzer assemblies. A provider that throws reports GS9308 and gives no fix.
+
 - **Preserve P/Invoke return marshalling overrides** (#6072). Emit return-target `MarshalAs` descriptors for `DllImport` and both `LibraryImport` methods. Preserve other return attributes, diagnose unsupported return forms, and keep unannotated boolean defaults unchanged.
 
 ### Breaking Changes
@@ -22,6 +38,24 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Normalize `nint` and `nuint` optional parameter default values to `int32` and `uint32` CLR Constant metadata, rejecting out-of-range defaults with GS0265 and converting omitted call-site arguments to native-width integers. (Fixes #6073)
+
+- Report targetless method groups (`GS0582`) and inapplicable nullable-receiver member reads (`GS0158`) instead of discarding them to `BoundErrorExpression` across operators, indexers, switches, and assignments, avoiding silent `?`-typed locals and `GS9998` crashes in emit. (Fixes #6077)
+
+- Reify synthesized anonymous object types over referenced generic type parameters from generic local functions, methods, classes, and nested generic scopes. Preserve deterministic parameter ordering, same-shape deduplication, `data object` value semantics, and rich anonymous object enclosing-scope mappings. (Fixes #6109)
+
+- Convert capturing forward-recursive local functions to function values and compatible delegates. Preserve callback identity and shared capture cells across direct calls, escaped callbacks, and loop iterations. (Fixes #6105)
+
+- Report `GS0325` at the declaration for bodyless top-level functions, extension functions, receiver-clause operators, and conversion operators without `@DllImport` or `@LibraryImport`, and skip body binding when `Body` is absent so `gsc` exits with diagnostics instead of `GS9998` or emitting an empty method. (Fixes #6116)
+
+- Allow overloaded explicit interface indexers with distinct parameter signatures on the same interface while still reporting `GS0495` for duplicate signatures, and align metadata-only explicit property accessor names with emitted runtime accessors. (Fixes #6125)
+
+- Preserve `ref` and `in` contracts across primitive/value-type extension receivers, non-identifier `in` operands (`in this`, `in x.Value`, `in xs[0]`), and source `ref readonly` parameter declarations and calls in `cs2gs` without copying storage operands. (Fixes #6063, #6052, #6047)
+
+- Replace recursive closure-chain traversal and full callable-state copies in `StatementBinder.AssignedRootsCollector` with an explicit heap work stack and immutable persistent state. Deep closure-call chains no longer overflow the compiler host stack or allocate quadratically, while preserving callable provenance, argument-dependent effects, cycles, and captured-write invalidation. (Fixes #6111)
+
+- Lower open generic `T?` and `default(T?)` in `cs2gs` to bare `T` and `default(T)` when type-parameter constraints do not prove a reference or value kind under ADR-0224, while preserving `T?` for proven `class`/`class?`/`struct`/`unmanaged`/concrete-reference bounds and preserving runtime semantics across callers, overrides, generic interface property bridges, async awaited forwarding, and `??=` without throwing assertions. (Fixes #6113)
+
 - Keep the SDK reference-assembly pack regression independent of installed Android workloads. Retain four inner builds and exact effective-framework path checks. (Fixes #6032)
 
 - Preserve symbolic receiver types in imported method labels for hover, signature help, and member completion. Show source-defined arguments instead of erased `object` placeholders. Keep fixed-array lengths, tuple names, and declared return nullability. Keep declared signatures separate from call-result narrowing. (Fixes #5492)
@@ -29,6 +63,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 - Set `MALLOC_MMAP_THRESHOLD_=131072` for mirrored `cs2gs` `dotnet test` runs. With this fixed glibc threshold, freed native blocks of 128 KB or more return to the OS. Under hosted-runner limits, the self-migrated `Cs2Gs.Tests` testhost peaks at 4.9 GB instead of 15.3 GB. Build environments do not change. (Fixes #6096)
 
 - Preserve non-null assignment facts from ordinary extension-call receivers, including imported extensions. Receiver-side `??=` no longer causes a false GS0158 after the call. Keep later assignments and by-reference writes invalidating those facts. (Fixes #6107)
+
+- Preserve function values for capturing `let` literals that call earlier local functions. Keep forward references, outer/local overloads, and capture-free functions directly callable without allocating extra delegates. Bind capture-free functions as methods, including generic async and nested recursive helpers; bind closure values afresh without leaking speculative diagnostics or capture state. Reconcile nested capturing overloads and validate the final method host before publication. Revalidate source-level capture proofs after symbol-role changes to avoid repeated nested binding. Journal speculative retry-cache writes instead of copying growing caches. Keep shadowed address-of locals and nested functions from changing the enclosing closure's value representation. Separate capture-free method eligibility from required forward signatures; use shared run-eligibility decisions for inner function values and ignore qualified member names while preserving applicable outer callable overloads, including optional and variadic parameters. End forward regions at the last applicable overload and compare semantic identifier names, including escaped spellings. (Fixes #6082)
 
 - Reject constructor initializer targets other than `base` with GS0642 instead of silently calling a base constructor. Use `convenience init() { init(args) }` for same-class chaining. (Fixes #6074)
 
@@ -817,6 +853,8 @@ The entries below are newer than v0.5.212. Published features and migration note
 - **Nullable tuple and block consumers after backward jumps** (Fixes #5653). Tuple literals capture narrowed reads per element and resolve them for the consumer's target type, including nested tuples and `defer` or `using` block values. Nullable destinations accept the declared value; non-null destinations still check a retracted narrowing. Existing tuple conversion classification and ordinary call results remain unchanged. Later conversions preserve committed element checks, and cleanup values keep the result saved before cleanup runs. Top-level statements in multiple files keep the same checks.
 
 - Keep writable pattern destinations separate from narrowed reads in `cs2gs`. Invalidate matched-value read proofs after writes, preserve nullable stores and projected storage contracts, and materialize reassigned or address-taken captures, including readonly aliases, exact readonly arguments, and receivers. Constructor writes complete before initializer reads. Guard reads, closures, switch bodies, and lifted recursive local functions share capture storage with matching nullable contracts. Readonly address-exposed captures use readonly reference parameters, not copies; suspending helpers and nested by-reference closures report explicit unsupported diagnostics (#6053). Lifted helpers use their own parameter contracts and local null guards, not outer pattern proofs. (Fixes #5991)
+
+- Keep required `!!` assertions in `cs2gs` where `gsc` drops narrowing on exited `if` conditions for by-reference (`out`/`ref`/`in`) parameters and `ref` locals when the condition contains a call or mutating expression, and on readonly fields after intervening calls or CLR member accesses inside the same `&&`/`||` operand, while keeping `!!` omitted where `gsc` genuinely narrows. (Fixes #6124)
 
 ## 0.5.212 (October 22, 2026)
 
