@@ -36,11 +36,9 @@ internal class NullConditionalAccessCodeFixProvider : GSharpCodeFixProvider {
         if accessor == nil || accessor.IsNullConditional || !FixSyntax.IsReal(accessor.DotToken) {
             return
         }
-        // `?.` reads a member. The target of a compound assignment (`c.N += 1`) is a write.
-        if accessor.Parent is EventSubscriptionExpressionSyntax compound && object.ReferenceEquals(
-            compound.LeftHandSide,
-            accessor
-        ) {
+        // `?.` reads a member. An assignment target (`c.N += 1`, `c.Child.N += 1`, `c.N ??= 1`) is
+        // a write, where `?.` is not valid.
+        if IsAssignmentTarget(accessor) {
             return
         }
         // The receiver's type decides (#6127). The model has no answer inside a function literal
@@ -65,6 +63,30 @@ internal class NullConditionalAccessCodeFixProvider : GSharpCodeFixProvider {
             Applicability.MaybeIncorrect,
             (editor SyntaxEditor) -> editor.ReplaceToken(dot, "?.")
         )
+    }
+
+    // Whether the access, or the chain or parentheses it ends, is the target of a compound or a
+    // null-coalescing assignment.
+    private func IsAssignmentTarget(accessor AccessorExpressionSyntax) bool {
+        var current SyntaxNode = accessor
+        while true {
+            let parent = current.Parent
+            if parent is AccessorExpressionSyntax outer && object.ReferenceEquals(outer.RightPart, current) {
+                current = outer
+            } else if parent is ParenthesizedExpressionSyntax {
+                current = parent
+            } else {
+                break
+            }
+        }
+        return switch current.Parent {
+            case compound is EventSubscriptionExpressionSyntax: object.ReferenceEquals(compound.LeftHandSide, current)
+            case coalescing is NullCoalescingAssignmentExpressionSyntax: object.ReferenceEquals(
+                coalescing.Target,
+                current
+            )
+            default: false
+        }
     }
 
     // The smallest accessor whose right part covers the span. GS0158 is reported at the member name.

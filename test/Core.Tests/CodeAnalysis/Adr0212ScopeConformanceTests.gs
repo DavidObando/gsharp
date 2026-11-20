@@ -523,6 +523,53 @@ class C {
         Assert.Contains(messages, (m string) -> m.Contains("NotDeclared", StringComparison.Ordinal))
     }
 
+    // #6140: a header variable the body never reads still has its declaration.
+    @Theory
+    @InlineData("for item in 42 {", "item")
+    @InlineData("for k, v in Missing.Items {", "k")
+    @InlineData("for k, v in Missing.Items {", "v")
+    @InlineData("for (a, b) in Missing.Items {", "a")
+    @InlineData("for (a, b) in Missing.Items {", "b")
+    @InlineData("await for item in 42 {", "item")
+    func UniterableLoop_UnreadHeaderVariableIsDeclared(header string, name string) {
+        let text = "package P\n\nclass C {\n    async func Check() {\n        " +
+            header +
+            "\n            let value = 1\n        }\n    }\n}\n"
+        let tree = SyntaxTree.Parse(SourceText.From(text, "unread.gs"))
+        let compilation = Compilation(tree)
+        Assert.Single(compilation.BoundProgram.Diagnostics)
+        let model = compilation.GetSemanticModel(tree)
+        let headerStart = text.IndexOf(header, StringComparison.Ordinal)
+        let token = tree.Root.FindToken(headerStart + header.IndexOf(name, StringComparison.Ordinal))
+        Assert.NotNull(token)
+        Assert.Equal(name, token!!.Text)
+        let local = Assert.IsType[LocalVariableSymbol](model.GetDeclaredSymbol(token!!))
+        Assert.Equal(name, local.Name)
+    }
+
+    // #6140: a collection that is a failed member access keeps its receiver's answers.
+    @Theory
+    @InlineData("for item in c.N {")
+    @InlineData("await for item in c.N {")
+    func UniterableLoop_FailedCollectionReceiverAnswers(header string) {
+        let text = "package P\n\nclass C {\n    var N []int32 = []int32{}\n}\n\nclass D {\n    async func Check(c C?) {\n        " +
+            header +
+            "\n            let value = 1\n        }\n    }\n}\n"
+        let tree = SyntaxTree.Parse(SourceText.From(text, "receiver.gs"))
+        let compilation = Compilation(tree)
+        let model = compilation.GetSemanticModel(tree)
+        let receiver = tree
+            .Root
+            .DescendantNodes()
+            .OfType[AccessorExpressionSyntax]()
+            .Select((a AccessorExpressionSyntax) -> a.LeftPart)
+            .OfType[NameExpressionSyntax]()
+            .Single((n NameExpressionSyntax) -> n.IdentifierToken.Text == "c")
+        let parameter = Assert.IsType[ParameterSymbol](model.GetSymbolInfo(receiver).Symbol)
+        Assert.Equal("c", parameter.Name)
+        Assert.IsType[NullableTypeSymbol](model.GetTypeInfo(receiver).Type)
+    }
+
     @Fact
     func LookupSymbols_AgreesWithTheBinder_OnThePurposeWrittenProgram() {
         let mismatches = List[string]()

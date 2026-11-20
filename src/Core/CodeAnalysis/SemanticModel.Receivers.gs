@@ -987,9 +987,10 @@ partial class SemanticModel {
         }
         // The target or the receiver of an assignment answers what the assignment writes, or the
         // variable it writes through (#6126).
-        // An imported member written by name keeps the lookup below, which names it at its
+        // An imported member written by bare name keeps the lookup below, which names it at its
         // declaring type.
-        if AssignmentTokenSymbol(token) is {} assigned && !IsImportedMemberSymbol(assigned) {
+        if AssignmentTokenSymbol(token) is {} assigned &&
+            !(token.Parent is AssignmentExpressionSyntax && IsImportedMemberSymbol(assigned)) {
             return if SpellsName(assigned, token.ValueText) {
                 assigned
             } else {

@@ -28,15 +28,16 @@ shared class TypeMemberModel {
     // Storage reads retain the canonical property association through exact
     // backing-field identity in the effective owner, never synthesized names.
     internal func PropertyForBackingField(type StructSymbol?, field FieldSymbol) PropertySymbol? {
-        if type == nil || field.IsStatic || field.IsEventBackingField {
+        if type == nil || field.IsEventBackingField {
             return nil
         }
         var selected PropertySymbol? = nil
         for owner in GetHierarchy(type) {
             let definitionField = owner.GetDefinitionField(field) ?? field
             for property in owner.Properties {
+                // A shared auto-property's backing field is shared too (#6126).
                 if !property.IsAutoProperty ||
-                    property.IsStatic ||
+                    property.IsStatic != field.IsStatic ||
                     property.IsIndexer ||
                     (
                     !object.ReferenceEquals(property.BackingField, field) && !object.ReferenceEquals(

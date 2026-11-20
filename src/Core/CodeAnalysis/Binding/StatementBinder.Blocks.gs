@@ -3005,12 +3005,7 @@ internal partial class StatementBinder {
         stream = binderCtx.InsertPlatformCheck(stream, syntax.Stream.Location, "an 'await for' source")
         if !MemberLookup.TryGetAsyncEnumerableElementType(stream.Type, out var elementType) {
             Diagnostics.ReportTypeIsNotAsyncEnumerable(syntax.Stream.Location, stream.Type ?? TypeSymbol.Error)
-            return BindAwaitForRangeBodyWithoutIteration(
-                syntax,
-                labelName,
-                originatingSyntax,
-                BoundErrorExpression(nil)
-            )
+            return BindAwaitForRangeBodyWithoutIteration(syntax, labelName, originatingSyntax, stream)
         }
         $scope = BoundScope($scope)
         let sourceType = Invariant.Required(
@@ -3073,13 +3068,15 @@ internal partial class StatementBinder {
         } else {
             bindTypeClause(syntax.TypeClause) ?? TypeSymbol.Error
         }
-        bindLocalVariable(syntax.Identifier, false, declaredType)
+        let variable = bindLocalVariable(syntax.Identifier, false, declaredType)
         let body = BindLoopBody(syntax.Body, labelName, out var breakLabel, out var continueLabel)
         $scope = $scope.Pop()
         return BoundBlockStatement(
             originatingSyntax,
             ImmutableArray.Create[BoundStatement](
                 BoundExpressionStatement(syntax, error),
+                // The loop variable is declared even when the body never reads it.
+                BoundVariableDeclaration(nil, variable, BoundErrorExpression(nil)),
                 body,
                 BoundLabelStatement(originatingSyntax, continueLabel),
                 BoundLabelStatement(originatingSyntax, breakLabel)

@@ -60,6 +60,27 @@ open class Issue6127FailedMemberAccessReceiverTests {
     }
 
     @Fact
+    func NullableIntermediateOfAChain_AnswersItsSymbolAndType() {
+        let tree = SyntaxTree.Parse(
+            SourceText.From(
+                "package P\n\nclass C {\n    var N int32\n    var Child C?\n}\n\nfunc F(c C) int32? {\n    return c.Child.N\n}\n",
+                "chain.gs"
+            )
+        )
+        let compilation = Compilation(tree)
+        Assert.Single(compilation.GetDiagnostics().Where((d Diagnostic) -> d.Id == "GS0158"))
+        let model = compilation.GetSemanticModel(tree)
+        let child = tree
+            .Root
+            .DescendantNodes()
+            .OfType[NameExpressionSyntax]()
+            .Single((n NameExpressionSyntax) -> n.IdentifierToken.Text == "Child")
+        let field = Assert.IsType[FieldSymbol](model.GetSymbolInfo(child).Symbol)
+        Assert.Equal("Child", field.Name)
+        Assert.IsType[NullableTypeSymbol](model.GetReceiverTypeInfo(child).Type)
+    }
+
+    @Fact
     func Diagnostics_AreOnePerFailedAccess() {
         let tree = SyntaxTree.Parse(SourceText.From(Source, "issue6127.gs"))
         let compilation = Compilation(tree)

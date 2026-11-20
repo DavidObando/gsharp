@@ -201,9 +201,13 @@ open class Adr0227BuiltInFixTests {
         )
     }
 
-    @Fact
-    func NullConditionalAccess_OnACompoundAssignmentTarget_HasNoFix() {
-        const source = "package P\n\nclass C {\n    var N int32\n}\n\nfunc F(c C?) {\n    c.N += 1\n}\n"
+    @Theory
+    @InlineData("c.N += 1")
+    @InlineData("c.M ??= 1")
+    @InlineData("c.Child.N += 1")
+    func NullConditionalAccess_OnACompoundAssignmentTarget_HasNoFix(statement string) {
+        let source = "package P\n\nclass C {\n    var N int32\n    var M int32?\n    var Child C?\n}\n\nfunc F(c C?, d C) {\n    " +
+            statement.Replace("c.Child", "d.Child") + "\n}\n"
         let tree = SyntaxTree.Parse(SourceText.From(source, "a.gs"))
         let compilation = Compilation(tree)
         let target = compilation.GetDiagnostics().Single((d Diagnostic) -> d.Id == "GS0158")

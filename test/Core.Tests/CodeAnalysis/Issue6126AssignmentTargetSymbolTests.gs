@@ -91,6 +91,30 @@ open class Issue6126AssignmentTargetSymbolTests {
     }
 
     @Fact
+    func SharedAutoPropertyAssignment_AnswersTheProperty() {
+        let (model, tree) = CreateModel(Source)
+        let property = Assert.IsType[PropertySymbol](model.GetSymbolInfo(Statement(tree, "Q = 9")).Symbol)
+        Assert.Equal("Q", property.Name)
+        Assert.True(property.IsStatic)
+    }
+
+    @Fact
+    func ImportedPropertyWriteThroughAVariable_TokenAnswersTheProperty() {
+        let tree = SyntaxTree.Parse(
+            SourceText.From(
+                "package P\n\nimport System.Text\n\nfunc F(b StringBuilder) {\n    b.Length = 1\n}\n",
+                "imported.gs"
+            )
+        )
+        let compilation = Compilation(tree)
+        Assert.Empty(compilation.GetDiagnostics())
+        let model = compilation.GetSemanticModel(tree)
+        let write = tree.Root.DescendantNodes().OfType[FieldAssignmentExpressionSyntax]().Single()
+        let property = Assert.IsAssignableFrom[PropertySymbol](model.GetSymbolInfo(write.FieldIdentifier).Symbol)
+        Assert.Equal("Length", property.Name)
+    }
+
+    @Fact
     func LocalAssignment_StillAnswersTheLocal() {
         let (model, tree) = CreateModel(Source)
         let local = Assert.IsType[LocalVariableSymbol](model.GetSymbolInfo(Statement(tree, "x = 2")).Symbol)
@@ -119,6 +143,7 @@ class C {
     prop P int32 { get; set; }
     shared {
         var S int32 = 0
+        prop Q int32 { get; set; }
     }
 
     func Set() {
@@ -127,6 +152,7 @@ class C {
         this.N = 3
         P = 4
         S = 6
+        Q = 9
         this.P = 7
         var x = 1
         x = 2
