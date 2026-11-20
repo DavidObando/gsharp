@@ -208,6 +208,7 @@ open class Adr0227BuiltInFixTests {
     @InlineData("c.Child.N = 1")
     @InlineData("c.Tag.N += 1")
     @InlineData("(c.Tag).N += 1")
+    @InlineData("var x = 0\n    c.Tag.N, x = 1, 2")
     @InlineData("c.Items[0] = 1")
     @InlineData("c.Items[0] += 1")
     func NullConditionalAccess_OnACompoundAssignmentTarget_HasNoFix(statement string) {
@@ -230,6 +231,7 @@ open class Adr0227BuiltInFixTests {
     @Theory
     @InlineData("d.N = c.N")
     @InlineData("d.Items[c.N] = 1")
+    @InlineData("var x int32? = 0\n    d.N, x = 1, c.N")
     func NullConditionalAccess_InTheValueOrIndexOfAWrite_IsFixed(statement string) {
         let source = "package P\n\nclass C {\n    var N int32\n}\n\nclass D {\n    var N int32?\n    var Items map[int32?]int32 = map[int32?]int32{}\n}\n\nfunc F(c C?, d D) {\n    " +
             statement +
