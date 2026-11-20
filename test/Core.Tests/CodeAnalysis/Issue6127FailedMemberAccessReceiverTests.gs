@@ -17,19 +17,12 @@ import Xunit
 /// the semantic model, wherever the failed access appears.
 open class Issue6127FailedMemberAccessReceiverTests {
     @Theory
-    @InlineData(0, false) // return c.N
-    @InlineData(1, false) // let a = c.N + 1
-    @InlineData(3, false) // let d = c.N.ToString()
-    @InlineData(4, false) // c.N += 1
-    @InlineData(0, true)
-    @InlineData(1, true)
-    // An argument of a call that fails too: the call keeps its failed member accesses only when
-    // the compilation records member groups (the language server's compilations do).
-    @InlineData(2, true) // let b = Use(c.N)
-    @InlineData(3, true)
-    @InlineData(4, true)
-    func NullableReceiver_AnswersItsSymbolAndType(occurrence int32, recordMemberGroups bool) {
-        let (model, tree) = CreateModel(recordMemberGroups)
+    @InlineData(0) // return c.N
+    @InlineData(1) // let a = c.N + 1
+    @InlineData(3) // let d = c.N.ToString()
+    @InlineData(4) // c.N += 1
+    func NullableReceiver_AnswersItsSymbolAndType(occurrence int32) {
+        let (model, tree) = CreateModel()
         let receiver = Receiver(tree, "c", occurrence)
         let parameter = Assert.IsType[ParameterSymbol](model.GetSymbolInfo(receiver).Symbol)
         Assert.Equal("c", parameter.Name)
@@ -41,11 +34,21 @@ open class Issue6127FailedMemberAccessReceiverTests {
 
     @Fact
     func MissingMember_ReceiverAnswersItsSymbolAndType() {
-        let (model, tree) = CreateModel(false)
+        let (model, tree) = CreateModel()
         let receiver = Receiver(tree, "g", 0)
         let parameter = Assert.IsType[ParameterSymbol](model.GetSymbolInfo(receiver).Symbol)
         Assert.Equal("g", parameter.Name)
         Assert.Equal("C", model.GetTypeInfo(receiver).Type?.Name)
+    }
+
+    @Fact
+    func NullableStringReceiver_AnswersItsSymbolAndType() {
+        let (model, tree) = CreateModel()
+        let receiver = Receiver(tree, "s", 0)
+        let parameter = Assert.IsType[ParameterSymbol](model.GetSymbolInfo(receiver).Symbol)
+        Assert.Equal("s", parameter.Name)
+        let type = Assert.IsType[NullableTypeSymbol](model.GetTypeInfo(receiver).Type)
+        Assert.Same(TypeSymbol.String, type.UnderlyingType)
     }
 
     @Fact
@@ -79,12 +82,15 @@ func F(c C?, g C) int32? {
     let m = g.Missing
     return c.N
 }
+
+func H(s string?) int32 {
+    return s.Length
+}
 `
 
-        private func CreateModel(recordMemberGroups bool)(SemanticModel, SyntaxTree) {
+        private func CreateModel()(SemanticModel, SyntaxTree) {
             let tree = SyntaxTree.Parse(SourceText.From(Source, "issue6127.gs"))
             let compilation = Compilation(tree)
-            compilation.RecordMemberGroups = recordMemberGroups
             return (compilation.GetSemanticModel(tree), tree)
         }
 

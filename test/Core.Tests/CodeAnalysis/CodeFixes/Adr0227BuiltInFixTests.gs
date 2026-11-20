@@ -215,6 +215,41 @@ open class Adr0227BuiltInFixTests {
     }
 
     @Fact
+    func NullConditionalAccess_WhereTheModelHasNoAnswer_FallsBackToTheSyntax() {
+        // The semantic model answers nothing inside a function literal, or in an argument of a call
+        // that fails too; the receiver's declaration then decides.
+        let sources = []string{
+            "package P\n\nclass C {\n    var N int32\n}\n\nfunc F(c C?) {\n    let f = () -> c.N\n}\n",
+            "package P\n\nclass C {\n    var N int32\n}\n\nfunc Use(v int32) int32 -> v\n\nfunc F(c C?) int32 {\n    return Use(c.N)\n}\n"
+        }
+        for source in sources {
+            let tree = SyntaxTree.Parse(SourceText.From(source, "a.gs"))
+            let compilation = Compilation(tree)
+            let target = compilation.GetDiagnostics().First((d Diagnostic) -> d.Id == "GS0158")
+            let service = CodeFixService(CodeFixRegistry.CreateDefault())
+            let fix = Assert.Single(
+                service.GetFixes(compilation, target).Where(
+                    (f CodeFix) -> f.ProviderId == "GSharp.CodeFixes.NullConditionalAccess"
+                )
+            )
+            Assert.Contains("c?.N", Assert.Single(service.Apply(fix)).Text.ToString())
+        }
+    }
+
+    @Fact
+    func LetField_BareAssignmentInAFunctionLiteral_BecomesVar() {
+        // The semantic model answers nothing inside a function literal; the name GS0127 gives is
+        // looked up at the assignment.
+        VerifyFix(
+            "package P\n\nclass C {\n    let N int32 = 1\n\n    func Set() {\n        let f = func() { N = 2 }\n        f()\n    }\n}\n",
+            "GS0127",
+            "Change 'let' to 'var'",
+            Applicability.MaybeIncorrect,
+            "package P\n\nclass C {\n    var N int32 = 1\n\n    func Set() {\n        let f = func() { N = 2 }\n        f()\n    }\n}\n"
+        )
+    }
+
+    @Fact
     func NullableValue_GetsDefaultAndAssertionFixes() {
         const source = "package P\n\nfunc Use(s string) int32 -> s.Length\n\nfunc F(t string?) int32 {\n    return Use(t)\n}\n"
         let tree = SyntaxTree.Parse(SourceText.From(source, "a.gs"))

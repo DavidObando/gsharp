@@ -15,7 +15,10 @@ import System.Collections.Immutable
 import System.Linq
 
 /// GS0158 on a member of a nullable receiver: `.` → `?.` (ADR-0099, moved to Core by ADR-0227 D7).
-/// @remarks The semantic model must give the receiver a nullable type. The fix changes the result type, so it is
+/// @remarks The semantic model must give the receiver a nullable type. Where it has no answer (a
+/// function literal body, an argument of a failed call), the receiver must look nullable from the
+/// syntax: a `?.` chain, a `nil` literal, or a name whose declared type clause ends with `?`. The
+/// fix changes the result type, so it is
 /// (cref:Applicability.MaybeIncorrect).
 internal class NullConditionalAccessCodeFixProvider : GSharpCodeFixProvider {
     /// The title of the fix.
@@ -40,13 +43,19 @@ internal class NullConditionalAccessCodeFixProvider : GSharpCodeFixProvider {
         ) {
             return
         }
-        // The receiver keeps its type when the member access fails (#6127).
+        // The receiver's type decides (#6127). The model has no answer inside a function literal
+        // or in an argument of a call that fails too; there the syntax decides.
         let model = context.SemanticModel
         let receiverType = model.GetReceiverTypeInfo(accessor.LeftPart, context.CancellationToken)
             .Type ??
             model
             .GetTypeInfo(accessor.LeftPart, context.CancellationToken).Type
-        if !(receiverType is NullableTypeSymbol) {
+        let nullable = if receiverType != nil {
+            receiverType is NullableTypeSymbol
+        } else {
+            NullabilitySyntax.ReceiverLooksNullable(context.Tree, accessor.LeftPart)
+        }
+        if !nullable {
             return
         }
         let dot = accessor.DotToken
@@ -219,5 +228,61 @@ internal class NullableValueCodeFixProvider : GSharpCodeFixProvider {
             "float32" or
             "decimal": "${targetType}(0)"
         default: "default"
+    }
+}
+
+/// Syntax-only nullability checks of the nullability providers (ADR-0099).
+internal shared class NullabilitySyntax {
+    /// Returns a value that tells whether the receiver looks nullable from the syntax: a `?.`
+    /// chain, a `nil` literal, or a name whose declared type clause ends with `?`.
+    func ReceiverLooksNullable(tree SyntaxTree, receiver ExpressionSyntax) bool {
+        switch receiver {
+            case nested is AccessorExpressionSyntax when nested.IsNullConditional {
+                return true
+            }
+            case literal is LiteralExpressionSyntax when literal.LiteralToken.Kind == SyntaxKind.NilKeyword {
+                return true
+            }
+            case name is NameExpressionSyntax {
+                return NameDeclaresNullableType(tree, name.IdentifierToken.Text)
+            }
+            default {
+                return false
+            }
+        }
+    }
+
+    private func NameDeclaresNullableType(tree SyntaxTree, name string) bool {
+        if string.IsNullOrEmpty(name) {
+            return false
+        }
+        for node in tree.Root.DescendantNodesAndSelf() {
+            switch node {
+                case v is VariableDeclarationSyntax when v
+                    .Identifier
+                    ?.Text == name &&
+                    EndsWithQuestion(tree, v.TypeClause) {
+                    return true
+                }
+                case p is ParameterSyntax when p.Identifier?.Text == name && EndsWithQuestion(tree, p.Type) {
+                    return true
+                }
+                case f is FieldDeclarationSyntax when f.Identifier?.Text == name && EndsWithQuestion(tree, f.Type) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private func EndsWithQuestion(tree SyntaxTree, type TypeClauseSyntax?) bool {
+        if type == nil {
+            return false
+        }
+        let span = type.Span
+        if span.End <= span.Start || span.End > tree.Text.Length {
+            return false
+        }
+        return tree.Text[span.End - 1] == '?'
     }
 }

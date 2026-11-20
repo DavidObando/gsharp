@@ -60,6 +60,15 @@ open class Issue6126AssignmentTargetSymbolTests {
         Assert.Equal("P", property.Name)
     }
 
+    @Theory
+    @InlineData("this.P = 7")
+    @InlineData("c.P = 8")
+    func QualifiedPropertyAssignment_AnswersTheProperty(statement string) {
+        let (model, tree) = CreateModel(Source)
+        let property = Assert.IsType[PropertySymbol](model.GetSymbolInfo(Statement(tree, statement)).Symbol)
+        Assert.Equal("P", property.Name)
+    }
+
     @Fact
     func LocalAssignment_StillAnswersTheLocal() {
         let (model, tree) = CreateModel(Source)
@@ -97,6 +106,7 @@ class C {
         this.N = 3
         P = 4
         S = 6
+        this.P = 7
         var x = 1
         x = 2
     }
@@ -104,6 +114,7 @@ class C {
 
 func G(c C) int32 {
     c.N = 5
+    c.P = 8
     return c.N
 }
 `

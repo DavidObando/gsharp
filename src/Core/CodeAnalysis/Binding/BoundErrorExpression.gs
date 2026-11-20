@@ -70,7 +70,6 @@ class BoundErrorExpression : BoundExpression {
             let error = BoundErrorExpression(nil)
             if receiver != nil && !(receiver is BoundErrorExpression) {
                 error.FailedReceiver = receiver
-                CallCandidateRecorder.RecordFailedMemberAccess(error)
             }
             return error
         }
