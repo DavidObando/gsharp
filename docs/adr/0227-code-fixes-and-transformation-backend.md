@@ -1,6 +1,6 @@
 # ADR-0227: Code fixes, a span-edit transformation backend and a diagnostic-delta gate
 
-- **Status**: Accepted (provisional decisions on the open questions, see "Decisions"; the maintainer may revise them)
+- **Status**: Implemented (phases 1–3 in #6122, #6135, #6138, #6139, #6141, #6143, #6144 and #6145; implementation notes in #6146; the maintainer accepted the decisions on Q1–Q9 on 2026-11-20)
 - **Date**: 2026-11-18
 - **Phase**: Tooling
 - **Issue**: Refs [#6119](https://github.com/DavidObando/gsharp/issues/6119)
@@ -491,9 +491,9 @@ Hand-written `OriginalText` composition is small. Three built-in fixes compose i
 - **Roslyn's code-fix types through a projection.** Rejected by ADR-0027 and ADR-0169.
 - **Rewrite through bound trees (`BoundTreeRewriter`).** Rejected: bound trees are lowered and have no source text, so the edit cannot go back to the user's source.
 
-## Decisions (provisional; the maintainer may revise them)
+## Decisions (accepted by the maintainer, 2026-11-20)
 
-The maintainer did not answer the open questions before implementation. These defaults apply until the maintainer changes them:
+The maintainer did not answer the open questions before implementation, so these were applied as provisional defaults. The maintainer accepted them after implementation:
 
 - **Q1.** `SyntaxEditor` is in `GSharp.Core.CodeAnalysis.Syntax`, with the tree.
 - **Q2.** Code-fix providers are separate types. `GSharpAnalyzerHost` loads them from the analyzer assemblies.
@@ -505,7 +505,7 @@ The maintainer did not answer the open questions before implementation. These de
 - **Q8.** `let` → `var` for locals is `MachineApplicable`.
 - **Q9.** GS9308 is the ID for "code-fix provider failed".
 
-## Open questions for the maintainer (answered provisionally above)
+## Open questions for the maintainer (answered in "Decisions")
 
 - **Q1. Layering of the editor.** Is `SyntaxEditor` in `GSharp.Core.CodeAnalysis.Syntax` (with the tree) or in `CodeFixes`? The proposal puts the text types in `Text` and the editor in `CodeFixes`.
 - **Q2. Provider discovery.** Do code-fix providers ship in analyzer assemblies and load through `GSharpAnalyzerHost`, or in separate assemblies with their own host? The proposal reuses the analyzer host.
