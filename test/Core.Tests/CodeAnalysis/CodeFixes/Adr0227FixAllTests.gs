@@ -189,7 +189,8 @@ open class Adr0227FixAllTests {
 
     @Fact
     func InvalidRawEdits_AreProviderFailures_AndTheOtherFixesApply() {
-        const source = "package P\n\nfunc F() string? -> null\n\nfunc G() int32 -> missing\n"
+        // Diagnostics without compiler suggestions, so each provider's fix is the only fix.
+        const source = "package P\n\nfunc F() int32 {\n    let x = 1\n    x = 2\n    return x\n}\n\nfunc G() int32 -> missing\n"
         let tree = SyntaxTree.Parse(source)
         let registry = CodeFixRegistry()
         registry.Add(OutOfBoundsProvider())
@@ -251,7 +252,7 @@ open class Adr0227FixAllTests {
 
     // A fix whose change ends after the end of the text.
     private class OutOfBoundsProvider : GSharpCodeFixProvider {
-        override prop FixableDiagnosticIds ImmutableArray[string] -> ImmutableArray.Create("GS0273")
+        override prop FixableDiagnosticIds ImmutableArray[string] -> ImmutableArray.Create("GS0127")
 
         override func RegisterCodeFixes(context CodeFixContext) {
             let tree = context.Tree
