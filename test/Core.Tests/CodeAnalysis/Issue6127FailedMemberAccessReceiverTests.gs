@@ -19,8 +19,9 @@ open class Issue6127FailedMemberAccessReceiverTests {
     @Theory
     @InlineData(0) // return c.N
     @InlineData(1) // let a = c.N + 1
-    @InlineData(3) // let d = c.N.ToString()
-    @InlineData(4) // c.N += 1
+    @InlineData(2) // let u = -c.N
+    @InlineData(4) // let d = c.N.ToString()
+    @InlineData(5) // c.N += 1
     func NullableReceiver_AnswersItsSymbolAndType(occurrence int32) {
         let (model, tree) = CreateModel()
         let receiver = Receiver(tree, "c", occurrence)
@@ -114,7 +115,7 @@ open class Issue6127FailedMemberAccessReceiverTests {
         Assert.NotNull(model.GetSymbolInfo(Receiver(tree, "c", 0)).Symbol)
         let after = compilation.GetDiagnostics().Select((d Diagnostic) -> d.ToString()).ToArray()
         Assert.Equal(before, after)
-        Assert.Equal(6, before.Count((d string) -> d.Contains("because receiver 'c' may be nil")))
+        Assert.Equal(7, before.Count((d string) -> d.Contains("because receiver 'c' may be nil")))
         Assert.Single(before.Where((d string) -> d.Contains("Cannot find member Missing")))
     }
 
@@ -129,6 +130,7 @@ func Use(v int32) int32 -> v
 
 func F(c C?, g C) int32? {
     let a = c.N + 1
+    let u = -c.N
     let b = Use(c.N)
     let d = c.N.ToString()
     c.N += 1
