@@ -94,6 +94,74 @@ open class Issue6082LocalFunctionValueTests {
         )
     }
 
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func NestedConditionalForwardTargets_DoNotMultiplyBindingWork(capturingShadow bool) {
+        let allocations = List[int64]()
+        for limit in[]int32{4, 4, 8, 12} {
+            var body = if capturingShadow {
+                "return calls + n"
+            } else {
+                "return 0"
+            }
+            for var depth = 0; depth < limit; depth++ {
+                if capturingShadow {
+                    body = "let callback$depth = func(n int32) int32 {\n" +
+                        "    calls++\n" +
+                        "    let helper$depth = func(x int32) int32 { return x }\n" +
+                        "    let later$depth = func(x int32) int32 {\n" +
+                        "        $body\n" +
+                        "    }\n" +
+                        "    return helper$depth(later$depth(0))\n" +
+                        "}\n" +
+                        "let later$depth = func(n int32) int32 { return n + 100 }\n" +
+                        "return callback$depth(1)"
+                } else {
+                    body = "let callback$depth = func(n int32) int32 {\n" +
+                        "    let helper$depth = func(x object) int32 { return 0 }\n" +
+                        "    let later$depth = func(x object) int32 {\n" +
+                        "        let ignored = helper$depth(x)\n" +
+                        "        $body\n" +
+                        "    }\n" +
+                        "    return later$depth(n) + later$depth(cast[object](n))\n" +
+                        "}\n" +
+                        "let later$depth = func(n int32) int32 { return n + 1 }\n" +
+                        "return callback$depth(0)"
+                }
+            }
+            let prefix = if capturingShadow {
+                "var calls = 0\n"
+            } else {
+                ""
+            }
+            let expected = if capturingShadow {
+                "${limit + 1}:$limit"
+            } else {
+                limit.ToString()
+            }
+            let suffix = if capturingShadow {
+                "return result.ToString() + \":\" + calls.ToString()"
+            } else {
+                "return result.ToString()"
+            }
+            allocations.Add(
+                CompileAndRun(
+                    "nested-conditional-forward-bounded-$capturingShadow-$limit",
+                    "",
+                    prefix + "let start = func() int32 {\n" + body + "\n}\nlet result = start()\n" + suffix,
+                    expected,
+                    true
+                )
+            )
+        }
+        allocations.RemoveAt(0)
+        Assert.True(
+            allocations[2] - allocations[1] < Math.Max(allocations[1] - allocations[0], 1024 * 1024) * 6,
+            "Nested conditional forward allocation curve (depth 4/8/12): " + string.Join(", ", allocations)
+        )
+    }
+
     @Fact
     func CapturingCallbacks_RetryCacheWorkGrowsWithWrites() {
         using let contract = CSharpFixture(`using System;
