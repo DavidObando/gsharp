@@ -68,6 +68,20 @@ open class Issue6126And6127AssignmentAndFailedReceiverTests {
     }
 
     @Fact
+    func ReceiverOfAFieldWrite_DefinitionAndReferences_AreTheParameter() {
+        let content = LanguageServerTestHelpers.Content(FieldWrites)
+        let uri = DocumentUri.From("file:///issue6126.gs")!!
+        let position = LanguageServerTestHelpers.PositionOf(FieldWrites, "b.Count")
+        let location Location? = DefinitionComputer.ComputeDefinition(uri, content, position)
+        Assert.NotNull(location)
+        let declaration = LanguageServerTestHelpers.PositionOf(FieldWrites, "b Box")
+        Assert.Equal(declaration.Line, location!!.Range.Start.Line)
+        Assert.Equal(declaration.Character, location!!.Range.Start.Character)
+        let references = ReferencesComputer.ComputeReferences(uri, content, position, includeDeclaration: true)
+        Assert.Equal(2, references.Count)
+    }
+
+    @Fact
     func NullableReceiverOfAFailedAccess_HoverIsTheParameterAtItsNullableType() {
         let content = LanguageServerTestHelpers.Content(FailedAccess)
         let hover Hover? = HoverComputer.ComputeHover(

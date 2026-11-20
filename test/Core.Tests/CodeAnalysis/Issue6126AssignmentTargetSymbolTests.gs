@@ -69,6 +69,27 @@ open class Issue6126AssignmentTargetSymbolTests {
         Assert.Equal("P", property.Name)
     }
 
+    @Theory
+    @InlineData("N = 2", "N", "FieldSymbol")
+    @InlineData("x = 2", "x", "LocalVariableSymbol")
+    @InlineData("this.N = 3", "N", "FieldSymbol")
+    @InlineData("this.N = 3", "this", "ParameterSymbol")
+    @InlineData("c.N = 5", "N", "FieldSymbol")
+    @InlineData("c.N = 5", "c", "ParameterSymbol")
+    @InlineData("c.P = 8", "P", "PropertySymbol")
+    @InlineData("c.P = 8", "c", "ParameterSymbol")
+    func AssignmentTokens_AnswerTheTargetAndTheReceiver(statement string, token string, kind string) {
+        let (model, tree) = CreateModel(Source)
+        let target = Statement(tree, statement)
+        let identifier = tree.Root.FindToken(target.Span.Start + statement.IndexOf(token, StringComparison.Ordinal))
+        Assert.NotNull(identifier)
+        Assert.Equal(token, identifier!!.Text)
+        let symbol = model.GetSymbolInfo(identifier!!).Symbol
+        Assert.NotNull(symbol)
+        Assert.Equal(kind, symbol!!.GetType().Name)
+        Assert.Equal(token, symbol!!.Name)
+    }
+
     @Fact
     func LocalAssignment_StillAnswersTheLocal() {
         let (model, tree) = CreateModel(Source)

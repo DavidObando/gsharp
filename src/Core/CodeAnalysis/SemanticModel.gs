@@ -534,6 +534,13 @@ partial class SemanticModel {
             // The receiver of a member access that did not bind keeps its own anchors (#6127).
             if error.FailedReceiver is {} receiver {
                 VisitExpression(receiver)
+                if literalDepth == 0 && error.FailedReceiverSyntax is {} receiverSyntax && object.ReferenceEquals(
+                    receiverSyntax.SyntaxTree,
+                    tree
+                ) &&
+                    !boundBySyntax.ContainsKey(receiverSyntax) {
+                    boundBySyntax.Add(receiverSyntax, receiver)
+                }
             }
             if error.CallSyntax is {} callSyntax && !error.MemberGroup.IsDefaultOrEmpty && object.ReferenceEquals(
                 callSyntax.SyntaxTree,

@@ -62,14 +62,26 @@ class BoundErrorExpression : BoundExpression {
         set;
     }
 
+    /// Gets or sets the syntax of (cref:FailedReceiver) when the binder built the receiver from a
+    /// token or an expression it did not anchor (the `c` of a failed write `c.N = 1`).
+    internal prop FailedReceiverSyntax SyntaxNode? {
+        get;
+        set;
+    }
+
     shared {
         /// Creates the error of a member access whose member did not bind, keeping its receiver.
         /// @param receiver The bound receiver, or null.
+        /// @param receiverSyntax The receiver's syntax, when the receiver does not carry it.
         /// @returns The error expression.
-        internal func ForFailedMemberAccess(receiver BoundExpression?) BoundErrorExpression {
+        internal func ForFailedMemberAccess(
+            receiver BoundExpression?,
+            receiverSyntax SyntaxNode? = nil
+        ) BoundErrorExpression {
             let error = BoundErrorExpression(nil)
             if receiver != nil && !(receiver is BoundErrorExpression) {
                 error.FailedReceiver = receiver
+                error.FailedReceiverSyntax = receiverSyntax
             }
             return error
         }

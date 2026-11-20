@@ -253,7 +253,8 @@ class ProgramFixProvider : GSharpCodeFixProvider {
 
     // The symbol of a capture: GetSymbolInfo of its node, else the one symbol that its name finds
     // in scope. The fallback covers the code the semantic model does not answer for: a function
-    // literal body, and an argument of a call that fails.
+    // literal body (#6149), an argument of a call that fails (#6150), and the receiver of a call
+    // that reports GS0159 (#6151).
     private func SymbolOf(model SemanticModel, node SyntaxNode, ct CancellationToken) Symbol? {
         // An identifier token answers its own symbol: a declared parameter, or the variable of a
         // called function value rather than the call's member. Another token asks its parent.

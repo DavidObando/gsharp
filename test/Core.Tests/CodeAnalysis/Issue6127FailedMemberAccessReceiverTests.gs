@@ -52,6 +52,14 @@ open class Issue6127FailedMemberAccessReceiverTests {
     }
 
     @Fact
+    func NullableReceiverOfAFailedWrite_TokenAnswersTheParameter() {
+        let (model, tree) = CreateModel()
+        let write = tree.Root.DescendantNodes().OfType[FieldAssignmentExpressionSyntax]().Single()
+        let parameter = Assert.IsType[ParameterSymbol](model.GetSymbolInfo(write.Receiver).Symbol)
+        Assert.Equal("c", parameter.Name)
+    }
+
+    @Fact
     func Diagnostics_AreOnePerFailedAccess() {
         let tree = SyntaxTree.Parse(SourceText.From(Source, "issue6127.gs"))
         let compilation = Compilation(tree)
@@ -61,7 +69,7 @@ open class Issue6127FailedMemberAccessReceiverTests {
         Assert.NotNull(model.GetSymbolInfo(Receiver(tree, "c", 0)).Symbol)
         let after = compilation.GetDiagnostics().Select((d Diagnostic) -> d.ToString()).ToArray()
         Assert.Equal(before, after)
-        Assert.Equal(5, before.Count((d string) -> d.Contains("because receiver 'c' may be nil")))
+        Assert.Equal(6, before.Count((d string) -> d.Contains("because receiver 'c' may be nil")))
         Assert.Single(before.Where((d string) -> d.Contains("Cannot find member Missing")))
     }
 
@@ -79,6 +87,7 @@ func F(c C?, g C) int32? {
     let b = Use(c.N)
     let d = c.N.ToString()
     c.N += 1
+    c.N = 7
     let m = g.Missing
     return c.N
 }
