@@ -4,9 +4,11 @@
 
 package GSharp.Core.CodeAnalysis.Binding
 
+import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import System
+import System.Collections.Concurrent
 import System.Collections.Generic
 import System.Collections.Immutable
 import System.Reflection
@@ -60,6 +62,30 @@ internal class BindingServices {
     /// Gets or sets the incremental body-binding options (body cache and dirty syntax trees)
     /// for a (cref:Binder.BindProgram) pass (ADR-0212 slice S8, issue #5312).
     var BodyBindingOptions BodyBindingOptions
+
+    /// Gets or sets the per-member body diagnostics of this pass, keyed by the member, for the
+    /// body-local check of the diagnostic-delta gate (ADR-0227 D4, issue #6128). Independent-body
+    /// workers share the instance of the coordinator.
+    var RecordedBodyDiagnostics ConcurrentDictionary[FunctionSymbol, ImmutableArray[Diagnostic]]?
+
+    /// Gets or sets the member bodies that a speculative pass binds in place of the declared ones
+    /// (ADR-0227 D4, issue #6128). The call-effect analysis reads a callee's body through
+    /// (cref:BodyOf), so a recursive call in an edited body sees the edited body. `null` outside a
+    /// speculative pass.
+    /// The key is the declaration whose body is replaced, so a constructed generic member, which
+    /// shares the declaration of its definition, sees the replacement too.
+    var SpeculativeBodies Dictionary[FunctionDeclarationSyntax, BlockStatementSyntax]?
+
+    /// Returns the body of [`function`](paramref) that this pass binds: the speculative body when
+    /// one replaces the declared body, else the declared body.
+    func BodyOf(function FunctionSymbol) BlockStatementSyntax? {
+        let declaration FunctionDeclarationSyntax? = function.Declaration
+        if declaration != nil && SpeculativeBodies != nil &&
+            SpeculativeBodies!!.TryGetValue(declaration, out var replacement) {
+            return replacement
+        }
+        return declaration?.Body
+    }
 
     /// Issue #5326: cached direct call-effect summaries by original function symbol.
     var CachedCallEffectSummaries Dictionary[FunctionSymbol, CallEffectSummary]?

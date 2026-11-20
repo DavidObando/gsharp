@@ -523,6 +523,30 @@ open class Compilation {
         buildGate.Release()
     }
 
+    /// Holds the build gate like (cref:EnterBuildGate), or returns `false` when this compilation
+    /// cannot build: a successor retired it or its lifetime token is cancelled (ADR-0227 D4).
+    internal func TryEnterBuildGate(cancellationToken CancellationToken) bool {
+        buildGate.Wait(cancellationToken)
+        if retired || WorkBudget.CancellationToken.IsCancellationRequested {
+            buildGate.Release()
+            return false
+        }
+        return true
+    }
+
+    /// Returns the documentation diagnostics of this compilation's trees for the members of
+    /// [`program`](paramref), with source suppressions applied: the pass of (cref:GetDiagnostics),
+    /// which the body-local delta runs over the program of the compilation before the edit
+    /// (ADR-0227 D4, issue #6128).
+    internal func GetDocumentationDiagnostics(program BoundProgram) ImmutableArray[Diagnostic] ->
+    ApplySourceSuppressions(ValidateDocumentation(program).ToImmutableArray())
+
+    /// Gets the global scope when a caller has bound it, else `null`.
+    internal prop PublishedGlobalScope BoundGlobalScope? -> Volatile.Read[BoundGlobalScope?](&this.globalScope)
+
+    /// Gets the bound program when a caller has bound it, else `null`.
+    internal prop PublishedBoundProgram BoundProgram? -> Volatile.Read[BoundProgram?](&this.boundProgram)
+
     /// Returns the diagnostics of the declarations: every tree's parse diagnostics in tree order,
     /// then the global scope's diagnostics, with source suppressions applied (ADR-0212 §7a).
     /// @remarks The result is built once and cached. It forces the declaration bind, not the body bind.
@@ -923,7 +947,7 @@ open class Compilation {
     }
 
     // ADR-0225: the cut of the prefix tree that this compilation binds, or null.
-    private func FindPrefixCut() PrefixCut? {
+    internal func FindPrefixCut() PrefixCut? {
         for tree in SyntaxTrees {
             if tree.Prefix is {} prefixCut {
                 return prefixCut

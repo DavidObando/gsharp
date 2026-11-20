@@ -647,7 +647,7 @@ internal shared class IncrementalGlobalScopeReuse {
     /// bodies and explicit event accessor bodies. Bodies nested inside another
     /// collected body (e.g. a local function) are naturally subsumed by the
     /// outer span and skipped by (cref:BuildSkeleton).
-    private func CollectBodySpans(tree SyntaxTree) List[TextSpan] {
+    internal func CollectBodySpans(tree SyntaxTree) List[TextSpan] {
         let spans = List[TextSpan]()
         for node in Descendants(tree.Root) {
             switch node {
@@ -672,7 +672,7 @@ internal shared class IncrementalGlobalScopeReuse {
         return spans
     }
 
-    private func BuildSkeleton(text SourceText, bodySpans List[TextSpan]) string {
+    internal func BuildSkeleton(text SourceText, bodySpans List[TextSpan]) string {
         let builder = StringBuilder()
         var position = 0
         for span in bodySpans {

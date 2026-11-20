@@ -7387,6 +7387,32 @@ internal partial class StatementBinder {
         }
     }
 
+    /// Computes the call-effect summary of [`function`](paramref) as the root of a traversal, for
+    /// the body-local check of the diagnostic-delta gate (ADR-0227 D4, issue #6128).
+    internal func GetFunctionEffectSummaryForSpeculation(
+        function FunctionSymbol,
+        includeOverrides bool,
+        out hitCycle bool
+    ) CallEffectSummary -> GetFunctionEffectSummaryCore(
+        function,
+        includeOverrides,
+        HashSet[FunctionSymbol](),
+        out hitCycle
+    )
+
+    /// Returns a value that tells whether the call-effect analysis treats a call named
+    /// [`name`](paramref) as a deferred LINQ operator (ADR-0227 D4, issue #6128).
+    internal func IsDeferredLinqOperatorNameForSpeculation(name string) bool -> IsDeferredLinqOperatorName(name)
+
+    /// Returns a value that tells whether [`node`](paramref) takes a reference to the member
+    /// [`memberName`](paramref), as the narrowing analysis decides it for the members of a
+    /// struct (ADR-0227 D4, issue #6128).
+    internal func TakesReferenceToNameForSpeculation(
+        node SyntaxNode?,
+        memberName string,
+        enclosingReturnsByRef bool
+    ) bool -> SyntaxTreeTakesReferenceToName(node, memberName, enclosingReturnsByRef)
+
     private var activeTraversalDirectMemo Dictionary[FunctionSymbol, CallEffectSummary]? = nil
     private var activeTraversalOverridesMemo Dictionary[FunctionSymbol, CallEffectSummary]? = nil
     private var activeRootVisitingFunction FunctionSymbol? = nil
@@ -9714,9 +9740,8 @@ internal partial class StatementBinder {
                 }
             }
         }
-        var body BlockStatementSyntax? = orig
-            .Declaration
-            ?.Body ??
+        // ADR-0227 D4 (issue #6128): a speculative pass reads the replaced body of an edited member.
+        var body BlockStatementSyntax? = binderCtx.Services.BodyOf(orig) ??
             (orig.LocalDeclaration?.Initializer as FunctionLiteralExpressionSyntax)?.Body
         if body == nil && orig.AssociatedSymbol is PropertySymbol assocProp {
             let origProp = assocProp.OriginalDefinition ?? assocProp

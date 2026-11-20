@@ -25,6 +25,11 @@ class CodeActionClientOptions {
     /// Gets or sets a value that tells whether the client applies versioned `documentChanges`.
     prop SupportsDocumentChanges bool
 
+    /// Gets or sets a value that tells whether the client applies LSP 3.18 snippet edits
+    /// (`workspace.workspaceEdit.snippetEditSupport`). The server then sends the placeholders of a
+    /// fix as tab stops, in `documentChanges` only (ADR-0227 D5).
+    prop SupportsSnippetEdits bool
+
     /// Gets or sets a value that tells whether the client resolves the `edit` of an action lazily.
     prop SupportsResolveEdit bool
 
@@ -364,15 +369,12 @@ shared class CodeActionComputer {
                 }
                 otherVersions[documentUri.ToString()] = version
             }
-            let edits = document
-                .Changes
-                .Select(
-                (c TextChange) -> GSharp
-                    .LanguageServer
-                    .Protocol
-                    .TextEdit{Range: SemanticLookup.ToRange(document.Tree.Text, c.Span), NewText: c.NewText}
-            )
-                .ToList()
+            let edits = if client.SupportsDocumentChanges && client.SupportsSnippetEdits &&
+                !document.Placeholders.IsEmpty {
+                SnippetEdits(document)
+            } else {
+                PlainEdits(document)
+            }
             documentEdits.Add(
                 TextDocumentEdit{
                     TextDocument: OptionalVersionedTextDocumentIdentifier{Uri: documentUri, Version: version},
@@ -388,6 +390,81 @@ shared class CodeActionComputer {
             byUri[d.TextDocument.Uri] = d.Edits
         }
         return WorkspaceEdit{Changes: byUri}
+    }
+
+    private func PlainEdits(document DocumentChanges) List[GSharp.LanguageServer.Protocol.TextEdit] -> document
+        .Changes
+        .Select(
+        (c TextChange) -> GSharp
+            .LanguageServer
+            .Protocol
+            .TextEdit{Range: SemanticLookup.ToRange(document.Tree.Text, c.Span), NewText: c.NewText}
+    )
+        .ToList()
+
+    // ADR-0227 D5: each placeholder becomes a tab stop `${n:text}`, numbered in document order. A
+    // change without a placeholder stays a plain edit. A placeholder that is not inside the new text
+    // of one change cannot be placed, so the document gets plain edits.
+    internal func SnippetEdits(document DocumentChanges) List[GSharp.LanguageServer.Protocol.TextEdit] {
+        let placeholders = document.Placeholders.OrderBy((p TextSpan) -> p.Start).ToList()
+        let edits = List[GSharp.LanguageServer.Protocol.TextEdit]()
+        var used = 0
+        var delta = 0
+        var stop = 1
+        for change in document.Changes {
+            // The new text of the change in the changed document.
+            let start = change.Span.Start + delta
+            let end = start + change.NewText.Length
+            delta += change.NewText.Length - change.Span.Length
+            let $range = SemanticLookup.ToRange(document.Tree.Text, change.Span)
+            let inside = List[TextSpan]()
+            while used < placeholders.Count && placeholders[used].Start >= start && placeholders[used].End <= end {
+                inside.Add(placeholders[used])
+                used++
+            }
+            if inside.Count == 0 {
+                edits.Add(GSharp.LanguageServer.Protocol.TextEdit{Range: $range, NewText: change.NewText})
+                continue
+            }
+            let snippet = System.Text.StringBuilder()
+            var position = 0
+            for placeholder in inside {
+                let offset = placeholder.Start - start
+                if offset < position {
+                    return PlainEdits(document)
+                }
+                snippet.Append(EscapeSnippet(change.NewText.Substring(position, offset - position)))
+                snippet.Append('$').Append('{').Append(stop).Append(':')
+                snippet.Append(EscapeSnippet(change.NewText.Substring(offset, placeholder.Length)))
+                snippet.Append('}')
+                stop++
+                position = offset + placeholder.Length
+            }
+            snippet.Append(EscapeSnippet(change.NewText.Substring(position)))
+            edits.Add(
+                SnippetTextEdit{
+                    Range: $range,
+                    NewText: change.NewText,
+                    Snippet: StringValue{Value: snippet.ToString()}
+                }
+            )
+        }
+        if used != placeholders.Count {
+            return PlainEdits(document)
+        }
+        return edits
+    }
+
+    // LSP snippet syntax: a backslash escapes `$`, `}` and `\`.
+    internal func EscapeSnippet(text string) string {
+        let builder = System.Text.StringBuilder(text.Length)
+        for c in text {
+            if c == '$' || c == '}' || c == '\\' {
+                builder.Append('\\')
+            }
+            builder.Append(c)
+        }
+        return builder.ToString()
     }
 
     // The compilation that holds the document's tree: the project's, else a one-tree compilation.

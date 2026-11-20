@@ -70,6 +70,19 @@ class DiagnosticDelta {
         get;
     }
 
+    /// Gets a value that tells whether the check bound only the edited function body (ADR-0227 D4).
+    internal prop BodyLocal bool {
+        get;
+        init;
+    }
+
+    /// Gets the reason why the check bound the whole compilation for an edit that a body-local
+    /// check considered, or `null`.
+    internal prop BodyLocalFallbackReason string? {
+        get;
+        init;
+    }
+
     /// Gets the time that the check took.
     prop Elapsed TimeSpan {
         get;

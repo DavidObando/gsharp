@@ -1342,6 +1342,15 @@ class LspServer {
                     documentChanges.ValueKind == JsonValueKind.True {
                     this.codeActionClientOptions.SupportsDocumentChanges = true
                 }
+                // ADR-0227 D5: LSP 3.18 snippet edits for fixes with placeholders.
+                if capabilities.TryGetProperty("workspace", out var snippetWorkspace) &&
+                    snippetWorkspace.ValueKind == JsonValueKind.Object &&
+                    snippetWorkspace.TryGetProperty("workspaceEdit", out var snippetEdit) &&
+                    snippetEdit.ValueKind == JsonValueKind.Object &&
+                    snippetEdit.TryGetProperty("snippetEditSupport", out var snippetSupport) &&
+                    snippetSupport.ValueKind == JsonValueKind.True {
+                    this.codeActionClientOptions.SupportsSnippetEdits = true
+                }
                 if capabilities.TryGetProperty("textDocument", out var textDocumentActions) &&
                     textDocumentActions.ValueKind == JsonValueKind.Object &&
                     textDocumentActions.TryGetProperty("codeAction", out var codeAction) &&
