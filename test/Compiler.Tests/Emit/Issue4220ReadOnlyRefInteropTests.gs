@@ -23,6 +23,24 @@ open class Issue4220ReadOnlyRefInteropTests : IDisposable {
     )
 
     @Fact
+    func CapturingOverloadedLocalRefReturn_StillRequiresDirectCall() {
+        let directory = NewDirectory()
+        let imported = CompileCSharp(Imported, directory, "Imported")
+        let result = Issue4220ReadOnlyRefInteropTests.CompileResult(`package Consumer
+import Imported
+func Run() {
+    var data = []int32{41}
+    let first = func(ref value int32) ref readonly int32 { return ref second(ref value, 0) }
+    let first = func(ref value int32, index int32) ref readonly int32 { return ref data[index] }
+    let second = func(ref value int32, index int32) ref readonly int32 { return ref first(ref value, index) }
+    let callback Reader = first
+}`, directory, "Consumer", imported)
+        Assert.NotEqual(0, result.ExitCode)
+        Assert.Contains("error GS0588", result.Diagnostics, StringComparison.Ordinal)
+        Assert.DoesNotContain("error GS9998", result.Diagnostics, StringComparison.Ordinal)
+    }
+
+    @Fact
     func EmittedContractsMatchRoslyn_AndCSharpRetainsLiveAliases() {
         let directory = NewDirectory()
         let library = Compile(Source, directory, "Parity")

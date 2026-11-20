@@ -288,7 +288,7 @@ internal partial class ExpressionBinder {
                 fpParamTypes.MoveToImmutable(),
                 target.Type ?? TypeSymbol.Void
             )
-            return BoundFunctionPointerFromMethodExpression(nil, target, fpType)
+            return BoundFunctionPointerFromMethodExpression(syntax, target, fpType)
         }
         // GS9005: cannot take address of a constant binding. General block
         // expressions preserve the trailing lvalue's mutability contract.
@@ -3389,13 +3389,25 @@ internal partial class ExpressionBinder {
         var leftDelegate TypeSymbol? = GetConcreteDelegateType(left.Type)
         var rightDelegate TypeSymbol? = GetConcreteDelegateType(right.Type)
         var target TypeSymbol? = nil
-        if leftDelegate != nil && IsUnresolvedMethodGroup(right) {
+        if leftDelegate != nil &&
+            (
+            IsUnresolvedMethodGroup(right) || ConversionClassifier.CanAdaptSynthesizedRefDelegateValue(
+                right,
+                leftDelegate
+            )
+        ) {
             right = conversions.BindConversion(rightLocation, right, leftDelegate)
             if right is BoundErrorExpression {
                 return false
             }
             rightDelegate = GetConcreteDelegateType(right.Type)
-        } else if rightDelegate != nil && IsUnresolvedMethodGroup(left) {
+        } else if rightDelegate != nil &&
+            (
+            IsUnresolvedMethodGroup(left) || ConversionClassifier.CanAdaptSynthesizedRefDelegateValue(
+                left,
+                rightDelegate
+            )
+        ) {
             left = conversions.BindConversion(leftLocation, left, rightDelegate)
             if left is BoundErrorExpression {
                 return false

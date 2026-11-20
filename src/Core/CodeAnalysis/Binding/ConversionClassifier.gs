@@ -3387,6 +3387,18 @@ internal class ConversionClassifier {
             )
             return BoundErrorExpression(nil)
         }
+        if MethodGroupDiagnostics.ReportUnsupportedLocalRefReturn(Diagnostics, pick, diagnosticLocation) {
+            return BoundErrorExpression(group.Syntax)
+        }
+        if pick.LocalDeclaration != nil && !pick.IsGeneric {
+            binderCtx.RootScope.GetLocalFunctionValue(
+                pick,
+                FunctionTypeSymbol.Get(
+                    pick.Parameters.Select((parameter ParameterSymbol) -> parameter.Type).ToImmutableArray(),
+                    getMethodGroupObservableReturnType(pick, pick.Type)
+                )
+            )
+        }
         let pickFnType = FunctionTypeSymbol.Get(
             ImmutableArray.CreateRange(
                 Invariant.Required(
@@ -7081,6 +7093,9 @@ internal class ConversionClassifier {
                 (bareTarget?.ClrType is not Type targetClrType || !ClrTypeUtilities.IsDelegateType(targetClrType)) {
                 return false
             }
+            if !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(bareTarget, out _) {
+                return false
+            }
             if !DelegateRefKindUtilities.TryGetSourceParameterRefKinds(expression, out var sourceRefKinds) {
                 return false
             }
@@ -7262,9 +7277,9 @@ internal class ConversionClassifier {
 
         private func CanAdaptSynthesizedRefDelegateBranch(branch BoundExpression, target TypeSymbol) bool {
             switch branch {
-                case literal is BoundFunctionLiteralExpression {
-                    return !HasDelegateParameterRefKindMismatch(target, literal) && Conversion.Classify(
-                        literal.Type,
+                case BoundFunctionLiteralExpression or BoundMethodGroupExpression{FunctionType: not nil} {
+                    return !HasDelegateParameterRefKindMismatch(target, branch) && Conversion.Classify(
+                        branch.Type,
                         target
                     )
                         .IsImplicit

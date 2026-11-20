@@ -248,6 +248,34 @@ internal partial class MethodBodyEmitter {
             this.EmitExpression(conv.Expression)
             return
         }
+        // Synthesized ref-kind function values use a named delegate, not Func/Action.
+        if delegateSourceType is DelegateTypeSymbol{Declaration: nil} refSource && !object.ReferenceEquals(
+            delegateSourceType,
+            delegateTargetType
+        ) &&
+            !IsSystemDelegateHostType(delegateTargetType.ClrType) &&
+            (delegateTargetType is DelegateTypeSymbol || ClrTypeUtilities.IsDelegateType(delegateTargetType.ClrType)) {
+            let ctor = if delegateTargetType is DelegateTypeSymbol namedTarget {
+                this.outer.userTokens.ResolveDelegateCtorToken(namedTarget)
+            } else if delegateTargetType is ImportedTypeSymbol{OpenDefinition: not nil} importedTarget {
+                this.outer.memberRefs.GetConstructedDelegateCtorRef(importedTarget)
+            } else {
+                EntityHandle(
+                    this
+                        .outer
+                        .memberRefs
+                        .GetDelegateCtorReference(
+                        this.outer.signatures.ResolveTargetDelegateClrType(delegateTargetType.ClrType!!)
+                    )
+                )
+            }
+            this.EmitNullGuardedDelegateToDelegateAdaptation(
+                conv.Expression,
+                this.outer.userTokens.ResolveDelegateInvokeToken(refSource),
+                ctor
+            )
+            return
+        }
         this.EmitExpression(conv.Expression)
         var from = conv.Expression.Type
         var to = conv.Type
