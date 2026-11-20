@@ -5899,10 +5899,13 @@ internal class ConversionClassifier {
                 return BoundDefaultExpression(nil, parameterType)
             }
             let valueType = GetOptionalDefaultValueType(parameterType)
-            if valueType.StripToBareShape() == TypeSymbol.Object {
+            if valueType.StripToBareShape() == TypeSymbol.Object ||
+                valueType == TypeSymbol.NInt ||
+                valueType == TypeSymbol
+                .NUInt {
                 let literal = BoundLiteralExpression(nil, value)
                 if literal.Type != valueType {
-                    return BoundConversionExpression(nil, parameterType, literal)
+                    return LiftOptionalDefaultValue(BoundConversionExpression(nil, valueType, literal), parameterType)
                 }
             }
             return LiftOptionalDefaultValue(BoundLiteralExpression(nil, value, valueType), parameterType)
@@ -7920,6 +7923,13 @@ internal class ConversionClassifier {
                     NullabilityFreeReason.TypeStructure
                 )
             }
+            // ECMA-335 has no native-int Constant element type; match Roslyn's
+            // int32 / uint32 Constant-table encoding and 32-bit range rules.
+            if target == TypeSymbol.NInt {
+                target = TypeSymbol.Int32
+            } else if target == TypeSymbol.NUInt {
+                target = TypeSymbol.UInt32
+            }
             return target == TypeSymbol.Char || ExpressionBinder.IsIntegerType(target)
         }
 
@@ -7939,22 +7949,21 @@ internal class ConversionClassifier {
                 parameterType
             }
             try {
-                if target.ClrType is Type clrType && TryNormalizeClrConstant(value, clrType, out normalized) {
+                if (target == TypeSymbol.NInt || target == TypeSymbol.NUInt) &&
+                    TryNormalizeClrConstant(
+                    value,
+                    if target == TypeSymbol.NInt {
+                        typeof(int32)
+                    } else {
+                        typeof(uint32)
+                    },
+                    out normalized
+                ) {
+                    return true
+                } else if target.ClrType is Type clrType && TryNormalizeClrConstant(value, clrType, out normalized) {
                     return true
                 } else if target is EnumSymbol {
                     normalized = Convert.ToInt32(value, CultureInfo.InvariantCulture)
-                } else if (target == TypeSymbol.NInt || target == TypeSymbol.NUInt) &&
-                    (
-                    value is int8 ||
-                        value is uint8 ||
-                        value is int16 ||
-                        value is uint16 ||
-                        value is int32 ||
-                        value is uint32 ||
-                        value is int64 ||
-                        value is uint64
-                ) {
-                    normalized = value
                 }
             } catch (Exception) {
                 normalized = nil
@@ -7979,6 +7988,10 @@ internal class ConversionClassifier {
             let typeCode = Type.GetTypeCode(targetType)
             let convertible = if value is char ch && typeCode != TypeCode.Char {
                 cast[object](uint16(ch))
+            } else if value is nint ni {
+                cast[object](int64(ni))
+            } else if value is nuint nu {
+                cast[object](uint64(nu))
             } else {
                 value
             }
