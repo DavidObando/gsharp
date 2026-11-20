@@ -5,8 +5,10 @@
 package GSharp.Core.CodeAnalysis.Binding
 
 import GSharp.Core.CodeAnalysis.Symbols
+import System
 import System.Collections.Generic
 import System.Collections.Immutable
+import System.Linq
 import System.Text
 
 /// Per-compile-pass cache of synthesized anonymous-class types (issue #2224,
@@ -56,7 +58,8 @@ internal class AnonymousTypeCache {
     func GetOrCreate(
         members IReadOnlyList[(Name string, Type TypeSymbol)],
         packageName string?,
-        useFields bool
+        useFields bool,
+        mapClrType((Type) -> Type)? = nil
     ) StructSymbol {
         let key = (
             if useFields {
@@ -69,10 +72,31 @@ internal class AnonymousTypeCache {
         if byShape.TryGetValue(key, out var existing) {
             return existing
         }
+        let memberTypes = [members.Count]TypeSymbol
+        for var i = 0; i < members.Count; i++ {
+            memberTypes[i] = members[i].Type
+        }
+        let origTPs = SynthesizedClosureReifier.CollectOrdered(memberTypes)
+        var clones = ImmutableArray[TypeParameterSymbol].Empty
+        var subst Dictionary[TypeParameterSymbol, TypeSymbol]? = nil
+        if !origTPs.IsDefaultOrEmpty {
+            clones = SynthesizedClosureReifier.CloneWithRemappedConstraints(origTPs, preserveVariance: false)
+            subst = Dictionary[TypeParameterSymbol, TypeSymbol](origTPs.Length)
+            for var i = 0; i < origTPs.Length; i++ {
+                subst[origTPs[i]] = clones[i]
+            }
+        }
+        let SubstituteMemberType = func (type TypeSymbol) TypeSymbol {
+            if subst == nil {
+                return type
+            }
+            return Binder.SubstituteType(type, subst, mapClrType)
+        }
         // Roslyn-style synthesized name; unique per distinct shape within
         // this cache (one per compile pass).
         let typeName = "<>AnonymousType${counter++}"
         let ctorParams = ImmutableArray.CreateBuilder[ParameterSymbol](members.Count)
+        var definition StructSymbol? = nil
         if useFields {
             // ADR-0146 / issue #2243: a `data object { ... }` gets public,
             // read-only FIELDS (data-class style, ADR-0029). Fields are what
@@ -83,11 +107,12 @@ internal class AnonymousTypeCache {
             // composite struct literal (initobj + stfld) exactly like an
             // ordinary `data struct Foo(x int32)`.
             let dataFields = ImmutableArray.CreateBuilder[FieldSymbol](members.Count)
-            for (name, type) in members {
+            for (name, rawType) in members {
+                let type = SubstituteMemberType(rawType)
                 dataFields.Add(FieldSymbol(name, type, Accessibility.Public, isReadOnly: true))
                 ctorParams.Add(ParameterSymbol(name, type))
             }
-            let dataSymbol = StructSymbol(
+            definition = StructSymbol(
                 typeName,
                 dataFields.MoveToImmutable(),
                 Accessibility.Public,
@@ -98,67 +123,74 @@ internal class AnonymousTypeCache {
                 isClass: false,
                 primaryConstructorParameters: ctorParams.MoveToImmutable()
             )
-            dataSymbol.IsAnonymousLiteral = true
-            dataSymbol.SetImplementedClrInterfaces(
-                ImmutableArray.Create(DataEqualityMemberModel.CreateSelfEquatable(dataSymbol))
-            )
-            byShape[key] = dataSymbol
-            symbols.Add(dataSymbol)
-            return dataSymbol
-        }
-        let properties = ImmutableArray.CreateBuilder[PropertySymbol](members.Count)
-        for (name, type) in members {
-            // Get-only auto-property (C# anonymous-type parity, issue #2224
-            // rubber-duck follow-up): a private readonly backing field plus a
-            // public get-only property wrapping it — mirroring the real IL
-            // shape of a C# anonymous type (and required so EF Core's
-            // reflection-based model building, which filters for
-            // PropertyInfo, recognizes the synthesized member; see
-            // ExpressionTreeLowerer.BuildUserConstructorExpression's 3-arg
-            // Expression.New(ctor, args, members) using these PropertySymbols).
-            // The synthesized primary constructor assigns the backing field
-            // directly (ReflectionMetadataEmitter.EmitClassPrimaryConstructorBodyBytes
-            // / TypeDefEmitter.EmitClassPrimaryConstructor fall back to a
-            // property's BackingField when no same-named field exists), and
-            // DataStructSynthesizer's Equals/GetHashCode/ToString/Deconstruct
-            // (ADR-0029) read the backing fields via
-            // DataStructSynthesizer.GetSynthesisFields.
-            let backingField = FieldSymbol("<$name>k__BackingField", type, Accessibility.Private, isReadOnly: true)
-            let property = PropertySymbol(
-                name,
-                type,
+        } else {
+            let properties = ImmutableArray.CreateBuilder[PropertySymbol](members.Count)
+            for (name, rawType) in members {
+                let type = SubstituteMemberType(rawType)
+                // Get-only auto-property (C# anonymous-type parity, issue #2224
+                // rubber-duck follow-up): a private readonly backing field plus a
+                // public get-only property wrapping it — mirroring the real IL
+                // shape of a C# anonymous type (and required so EF Core's
+                // reflection-based model building, which filters for
+                // PropertyInfo, recognizes the synthesized member; see
+                // ExpressionTreeLowerer.BuildUserConstructorExpression's 3-arg
+                // Expression.New(ctor, args, members) using these PropertySymbols).
+                // The synthesized primary constructor assigns the backing field
+                // directly (ReflectionMetadataEmitter.EmitClassPrimaryConstructorBodyBytes
+                // / TypeDefEmitter.EmitClassPrimaryConstructor fall back to a
+                // property's BackingField when no same-named field exists), and
+                // DataStructSynthesizer's Equals/GetHashCode/ToString/Deconstruct
+                // (ADR-0029) read the backing fields via
+                // DataStructSynthesizer.GetSynthesisFields.
+                let backingField = FieldSymbol("<$name>k__BackingField", type, Accessibility.Private, isReadOnly: true)
+                let property = PropertySymbol(
+                    name,
+                    type,
+                    Accessibility.Public,
+                    hasGetter: true,
+                    hasSetter: false,
+                    isAutoProperty: true,
+                    isVirtual: false,
+                    isOverride: false
+                ){BackingField = backingField}
+                properties.Add(property)
+                ctorParams.Add(ParameterSymbol(name, type))
+            }
+            // A plain `object { ... }` keeps the proven issue-#2224 shape:
+            // isData:true so the emitter reserves a real newobj-callable primary
+            // constructor row (see ReflectionMetadataEmitter's classPrimaryCtorRows
+            // branch) and the literal compiles to a BoundConstructorCallExpression.
+            let plainSymbol = StructSymbol(
+                typeName,
+                ImmutableArray[FieldSymbol].Empty,
                 Accessibility.Public,
-                hasGetter: true,
-                hasSetter: false,
-                isAutoProperty: true,
-                isVirtual: false,
-                isOverride: false
-            ){BackingField = backingField}
-            properties.Add(property)
-            ctorParams.Add(ParameterSymbol(name, type))
+                declaration: nil,
+                packageName: packageName ?? string.Empty,
+                isData: true,
+                isInline: false,
+                isClass: false,
+                primaryConstructorParameters: ctorParams.MoveToImmutable()
+            )
+            plainSymbol.HasAnonymousConstructorMembers = true
+            plainSymbol.SetProperties(properties.MoveToImmutable())
+            definition = plainSymbol
         }
-        // A plain `object { ... }` keeps the proven issue-#2224 shape:
-        // isData:true so the emitter reserves a real newobj-callable primary
-        // constructor row (see ReflectionMetadataEmitter's classPrimaryCtorRows
-        // branch) and the literal compiles to a BoundConstructorCallExpression.
-        let symbol = StructSymbol(
-            typeName,
-            ImmutableArray[FieldSymbol].Empty,
-            Accessibility.Public,
-            declaration: nil,
-            packageName: packageName ?? string.Empty,
-            isData: true,
-            isInline: false,
-            isClass: false,
-            primaryConstructorParameters: ctorParams.MoveToImmutable()
+        definition.IsAnonymousLiteral = true
+        if !clones.IsDefaultOrEmpty {
+            definition.SetTypeParameters(clones)
+            definition.SetReifiedFromTypeParameters(origTPs)
+        }
+        definition.SetImplementedClrInterfaces(
+            ImmutableArray.Create(DataEqualityMemberModel.CreateSelfEquatable(definition))
         )
-        symbol.HasAnonymousConstructorMembers = true
-        symbol.IsAnonymousLiteral = true
-        symbol.SetImplementedClrInterfaces(ImmutableArray.Create(DataEqualityMemberModel.CreateSelfEquatable(symbol)))
-        symbol.SetProperties(properties.MoveToImmutable())
-        byShape[key] = symbol
-        symbols.Add(symbol)
-        return symbol
+        symbols.Add(definition)
+        let result = if origTPs.IsDefaultOrEmpty {
+            definition
+        } else {
+            StructSymbol.Construct(definition, origTPs.Cast[TypeSymbol]().ToImmutableArray(), mapClrType)!!
+        }
+        byShape[key] = result
+        return result
     }
 
     shared {

@@ -84,6 +84,18 @@ class CodeFix {
         registeringProvider = provider
     }
 
+    /// Gets a value that tells whether a data-defined provider made the fix (ADR-0227 D6). A host
+    /// runs the full delta gate on such a fix (decision Q4).
+    prop IsDataDefined bool {
+        get -> dataDefined
+    }
+
+    private var dataDefined bool
+
+    internal func MarkDataDefined() {
+        dataDefined = true
+    }
+
     /// Gets the changes of the fix. The first call computes them. Later calls return the same object.
     /// @param cancellationToken Cancels the computation.
     /// @returns The changes.
@@ -109,7 +121,7 @@ class CodeFix {
         if Rank(applicability) <= Rank(Applicability) {
             return this
         }
-        return CodeFix(
+        let lowered = CodeFix(
             Title,
             EquivalenceKey,
             applicability,
@@ -117,6 +129,10 @@ class CodeFix {
             ProviderId,
             (ct CancellationToken) -> GetChanges(ct)
         )
+        // The copy keeps where the fix came from, so a host still gates a data-defined fix fully.
+        lowered.registeringProvider = registeringProvider
+        lowered.dataDefined = dataDefined
+        return lowered
     }
 
     /// Returns the title.

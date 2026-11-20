@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?><Project Sdk="Gsharp.NET.Sdk">
+
+  <!-- ADR-0227 D6: data-defined transformation programs (a pattern, guards over syntax and
+       semantic facts, and edit operations) and the provider that interprets them. A separate
+       assembly by the maintainer's provisional decision Q7; GSharp.Core keeps the provider API. -->
+  <PropertyGroup>
+    <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
+    <RootNamespace>GSharp.CodeAnalysis.Transformations</RootNamespace>
+    <AssemblyName>GSharp.CodeAnalysis.Transformations</AssemblyName>
+    <!-- The default DocumentationFile is computed from GSharp.$(MSBuildProjectName); see
+         GSharp.CodeAnalysis.Analyzers.Testing.gsproj for the same override. -->
+    <DocumentationFile>$(OutputPath)/$(AssemblyName).xml</DocumentationFile>
+    <!-- Not packed yet: a host references the project or the built assembly. -->
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../Core/Core.gsproj" />
+  </ItemGroup>
+
+</Project>

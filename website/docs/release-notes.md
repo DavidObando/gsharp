@@ -14,6 +14,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ## Unreleased (0.5 line)
 
+- **Data-defined transformation programs** (Part of #6119; ADR-0227 D6). The new assembly `GSharp.CodeAnalysis.Transformations` reads a `TransformationProgram` from JSON (schema: `transformation-program.schema.json`): a diagnostic trigger, a tree pattern anchored at the diagnostic with named captures, guards from a closed set of syntax and semantic predicates, and replace/delete/insert edits with `${capture}` templates. Unknown properties, predicates and operations are rejected at load time, and a program's `Version` is the SHA-256 of its canonical JSON. `ProgramFixProvider` interprets programs as a data-defined code-fix provider; the language server runs the full delta gate on data-defined fixes. The assembly is not packed yet.
+
 - **Compiler suggestions on diagnostics** (Part of #6119; ADR-0227 D2 option b). `Diagnostic.Suggestions` holds the fixes that the compiler already knows at the report site, as `DiagnosticSuggestion` (message, equivalence key, applicability, text changes). GS0273 suggests `nil` for `null`, and GS0302 suggests `:` for the deprecated `->` switch arm. `CodeFixService` offers each suggestion as a fix before the providers' fixes. Suggestions do not take part in diagnostic equality.
 
 - **Numeric-conversion and cross-file code fixes** (Part of #6119; ADR-0227 phase 2). GS0156 between two numeric types (including `nint`, `nuint` and `char`) gets `Convert to 'T'`, which wraps a simple operand in `checked(cast[T](expr))`, so an out-of-range value throws instead of wrapping; compound assignments and tuple elements get no fix. `CodeFixContext.RegisterMultiDocumentFix` and `MultiDocumentEditor` let a fix edit several trees of the compilation; the `let` → `var` fix now edits a field declared in another file of a partial type.
@@ -37,6 +39,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 ### Bug Fixes
 
 - Report targetless method groups (`GS0582`) and inapplicable nullable-receiver member reads (`GS0158`) instead of discarding them to `BoundErrorExpression` across operators, indexers, switches, and assignments, avoiding silent `?`-typed locals and `GS9998` crashes in emit. (Fixes #6077)
+
+- Reify synthesized anonymous object types over referenced generic type parameters from generic local functions, methods, classes, and nested generic scopes. Preserve deterministic parameter ordering, same-shape deduplication, `data object` value semantics, and rich anonymous object enclosing-scope mappings. (Fixes #6109)
 
 - Convert capturing forward-recursive local functions to function values and compatible delegates. Preserve callback identity and shared capture cells across direct calls, escaped callbacks, and loop iterations. (Fixes #6105)
 

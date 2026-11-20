@@ -1632,9 +1632,13 @@ partial class Binder {
             .TypeParameters
             .Length
         for classParameter in classSymbol.TypeParameters.Take(shellParameterCount) {
-            let match TypeParameterSymbol? = outer.LastOrDefault(
-                (candidate TypeParameterSymbol) -> candidate.Name == classParameter.Name
-            )
+            var match TypeParameterSymbol? = nil
+            if binderCtx.CurrentTypeParameters == nil || !binderCtx.CurrentTypeParameters!!.TryGetValue(
+                classParameter.Name,
+                out match
+            ) {
+                match = outer.LastOrDefault((candidate TypeParameterSymbol) -> candidate.Name == classParameter.Name)
+            }
             if match == nil {
                 continue
             }
