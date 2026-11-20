@@ -100,6 +100,14 @@ internal class BatchFixer {
             var changes FixChanges? = nil
             try {
                 changes = fix.GetChanges(cancellationToken)
+                // A fix built by hand can carry changes that do not apply: a tree of another
+                // compilation, a span outside the text, or overlapping changes. It fails here.
+                for document in changes.Documents {
+                    if !compilation.SyntaxTrees.Contains(document.Tree) {
+                        throw ArgumentException("The fix changes a tree of another compilation.")
+                    }
+                    document.Tree.Text.WithChanges(document.Changes)
+                }
             } catch (ex OperationCanceledException) when cancellationToken.IsCancellationRequested {
                 rethrow
             } catch (ex Exception) when !(ex is OutOfMemoryException) && !(ex is StackOverflowException) {
@@ -193,10 +201,8 @@ internal class BatchFixer {
             if equivalenceKey != nil && fix.EquivalenceKey != equivalenceKey {
                 continue
             }
-            let provider GSharpCodeFixProvider? = service
-                .Registry
-                .Providers
-                .FirstOrDefault((p GSharpCodeFixProvider) -> p.Id == fix.ProviderId)
+            // The provider instance that registered the fix decides; provider IDs can repeat.
+            let provider GSharpCodeFixProvider? = fix.Provider
             if provider != nil && !provider.SupportsFixAll {
                 dropped.Add(DroppedFix(diagnostic, fix, FixDropReason.NotSupported, round))
                 return nil
@@ -211,9 +217,15 @@ internal class BatchFixer {
         Diagnostic
     ] {
         let texts = HashSet[SourceText](trees.Select((t SyntaxTree) -> t.Text), ReferenceEqualityComparer.Instance)
+        // The document order is the ordinal order of the file names, then the tree order, so the
+        // winner of a conflict does not depend on the order of the compilation's trees.
         let order = Dictionary[SourceText, int32](ReferenceEqualityComparer.Instance)
-        for var index = 0; index < compilation.SyntaxTrees.Length; index++ {
-            order.TryAdd(compilation.SyntaxTrees[index].Text, index)
+        let ranked = List[SyntaxTree](compilation.SyntaxTrees)
+        ranked.Sort(CompareByFileName(compilation))
+        for var rank = 0; rank < ranked.Count; rank++ {
+            if !order.ContainsKey(ranked[rank].Text) {
+                order.Add(ranked[rank].Text, rank)
+            }
         }
         let result = List[Diagnostic]()
         for d in compilation.GetDiagnostics(cancellationToken) {
@@ -267,6 +279,20 @@ internal class BatchFixer {
             }
         }
         return false
+    }
+
+    // Ordinal file name, then the position in the compilation.
+    private func CompareByFileName(compilation Compilation) Comparison[SyntaxTree] -> (
+        x SyntaxTree,
+        y SyntaxTree
+    ) -> CompareTrees(compilation, x, y)
+
+    private func CompareTrees(compilation Compilation, x SyntaxTree, y SyntaxTree) int32 {
+        let byName = string.CompareOrdinal(x.Text.FileName, y.Text.FileName)
+        if byName != 0 {
+            return byName
+        }
+        return compilation.SyntaxTrees.IndexOf(x) - compilation.SyntaxTrees.IndexOf(y)
     }
 
     private func InsertionRank(change TextChange) int32 -> if change.Span.Length == 0 {

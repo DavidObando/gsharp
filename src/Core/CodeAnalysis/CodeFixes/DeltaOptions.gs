@@ -24,7 +24,13 @@ class DeltaOptions {
         copy.StopOnNewSyntaxError = StopOnNewSyntaxError
         copy.DiagnosticFilter = DiagnosticFilter
         copy.SyntaxOnly = SyntaxOnly
-        copy.AnalyzerOptions = AnalyzerOptions
+        // AnalyzerOptions is mutable, so the snapshot gets its own copy.
+        let analyzerOptions AnalyzerOptions? = AnalyzerOptions
+        copy.AnalyzerOptions = if analyzerOptions == nil {
+            default(AnalyzerOptions?)
+        } else {
+            AnalyzerOptions{TimeBudgetMilliseconds: analyzerOptions.TimeBudgetMilliseconds}
+        }
         return copy
     }
 

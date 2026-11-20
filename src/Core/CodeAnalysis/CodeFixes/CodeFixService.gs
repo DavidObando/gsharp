@@ -196,7 +196,10 @@ class CodeFixService {
             let context = CodeFixContext(diagnostic, tree, compilation, provider.Id, cancellationToken)
             try {
                 provider.RegisterCodeFixes(context)
-                fixes.AddRange(context.Fixes)
+                for fix in context.Fixes {
+                    fix.MarkProvider(provider)
+                    fixes.Add(fix)
+                }
             } catch (OperationCanceledException) when cancellationToken.IsCancellationRequested {
                 rethrow
             } catch (ex Exception) when !(ex is OutOfMemoryException) && !(ex is StackOverflowException) {

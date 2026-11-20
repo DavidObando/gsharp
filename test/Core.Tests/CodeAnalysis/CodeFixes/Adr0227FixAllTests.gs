@@ -187,6 +187,154 @@ open class Adr0227FixAllTests {
         Assert.Contains("package Q", Assert.Single(result.Documents).Changed.Text.ToString())
     }
 
+    @Fact
+    func InvalidRawEdits_AreProviderFailures_AndTheOtherFixesApply() {
+        const source = "package P\n\nfunc F() string? -> null\n\nfunc G() int32 -> missing\n"
+        let tree = SyntaxTree.Parse(source)
+        let registry = CodeFixRegistry()
+        registry.Add(OutOfBoundsProvider())
+        registry.Add(MissingToOneProvider())
+        let result = CodeFixService(registry).FixAll(FixAllScope.Document(Compilation(tree), tree), nil)
+        Assert.Equal(FixDropReason.ProviderFailed, Assert.Single(result.Dropped).Reason)
+        Assert.Contains("func G() int32 -> 1", Assert.Single(result.Documents).Changed.Text.ToString())
+    }
+
+    @Fact
+    func SupportsFixAll_IsReadFromTheRegisteringProvider() {
+        let tree = SyntaxTree.Parse(TwoNulls)
+        let registry = CodeFixRegistry()
+        registry.Add(NamedNilProvider("shared.id", true))
+        registry.Add(NamedNilProvider("other.id", false, "shared.id"))
+        let result = CodeFixService(registry).FixAll(FixAllScope.Document(Compilation(tree), tree), "opted-out")
+        Assert.Empty(result.Applied)
+        Assert.All(result.Dropped, (d DroppedFix) -> Assert.Equal(FixDropReason.NotSupported, d.Reason))
+        Assert.NotEmpty(result.Dropped)
+    }
+
+    @Fact
+    func ConflictWinner_DoesNotDependOnTheTreeOrder() {
+        let a = SyntaxTree.Parse(SourceText.From("package P\n\nfunc A() string? -> null\n", "a.gs"))
+        let b = SyntaxTree.Parse(SourceText.From("package P\n\nfunc B() string? -> null\n", "b.gs"))
+        let forward = Registry(CrossFileProvider()).FixAll(FixAllScope.Project(Compilation(a, b)), "cross")
+        let reversed = Registry(CrossFileProvider()).FixAll(FixAllScope.Project(Compilation(b, a)), "cross")
+        Assert.Equal("a.gs", Assert.Single(forward.Applied).Diagnostics[0].Location.Text!!.FileName)
+        Assert.Equal("a.gs", Assert.Single(reversed.Applied).Diagnostics[0].Location.Text!!.FileName)
+    }
+
+    // Every fix inserts a marker at the start of both files, so any two fixes conflict.
+    private class CrossFileProvider : GSharpCodeFixProvider {
+        override prop FixableDiagnosticIds ImmutableArray[string] -> ImmutableArray.Create("GS0273")
+
+        override func RegisterCodeFixes(context CodeFixContext) {
+            let trees = context.Compilation.SyntaxTrees
+            context.RegisterFix(
+                CodeFix(
+                    "cross",
+                    "cross",
+                    Applicability.MachineApplicable,
+                    ImmutableArray.Create(context.Diagnostic),
+                    "test.cross",
+                    (ct CancellationToken) -> FixChanges(
+                        trees.Select(
+                            (t SyntaxTree) -> DocumentChanges(
+                                t,
+                                ImmutableArray.Create(TextChange(TextSpan(0, 0), "// x\n")),
+                                ImmutableArray[TextSpan].Empty
+                            )
+                        )
+                            .ToImmutableArray()
+                    )
+                )
+            )
+        }
+    }
+
+    // A fix whose change ends after the end of the text.
+    private class OutOfBoundsProvider : GSharpCodeFixProvider {
+        override prop FixableDiagnosticIds ImmutableArray[string] -> ImmutableArray.Create("GS0273")
+
+        override func RegisterCodeFixes(context CodeFixContext) {
+            let tree = context.Tree
+            context.RegisterFix(
+                CodeFix(
+                    "bounds",
+                    "bounds",
+                    Applicability.MachineApplicable,
+                    ImmutableArray.Create(context.Diagnostic),
+                    "test.bounds",
+                    (ct CancellationToken) -> FixChanges(
+                        ImmutableArray.Create(
+                            DocumentChanges(
+                                tree,
+                                ImmutableArray.Create(TextChange(TextSpan(tree.Text.Length - 1, 10), "x")),
+                                ImmutableArray[TextSpan].Empty
+                            )
+                        )
+                    )
+                )
+            )
+        }
+    }
+
+    private class MissingToOneProvider : GSharpCodeFixProvider {
+        override prop FixableDiagnosticIds ImmutableArray[string] -> ImmutableArray.Create("GS0125")
+
+        override func RegisterCodeFixes(context CodeFixContext) {
+            let token = context.Tree.Root.FindToken(context.Diagnostic.Location.Span.Start)!!
+            context.RegisterFix(
+                "one",
+                "one",
+                Applicability.MachineApplicable,
+                (editor SyntaxEditor) -> editor.ReplaceToken(token, "1")
+            )
+        }
+    }
+
+    // A provider with a chosen ID and FixAll support, whose fixes can claim another provider's ID.
+    private class NamedNilProvider : GSharpCodeFixProvider {
+        private let name string
+        private let fixAll bool
+        private let claimedId string?
+
+        init(name string, fixAll bool, claimedId string? = nil) {
+            this.name = name
+            this.fixAll = fixAll
+            this.claimedId = claimedId
+        }
+
+        override prop FixableDiagnosticIds ImmutableArray[string] -> ImmutableArray.Create("GS0273")
+
+        override prop Id string -> name
+
+        override prop SupportsFixAll bool -> fixAll
+
+        override func RegisterCodeFixes(context CodeFixContext) {
+            if claimedId == nil {
+                return
+            }
+            let tree = context.Tree
+            let token = tree.Root.FindToken(context.Diagnostic.Location.Span.Start)!!
+            context.RegisterFix(
+                CodeFix(
+                    "opted-out",
+                    "opted-out",
+                    Applicability.MachineApplicable,
+                    ImmutableArray.Create(context.Diagnostic),
+                    claimedId!!,
+                    (ct CancellationToken) -> FixChanges(
+                        ImmutableArray.Create(
+                            DocumentChanges(
+                                tree,
+                                ImmutableArray.Create(TextChange(token.Span, "nil")),
+                                ImmutableArray[TextSpan].Empty
+                            )
+                        )
+                    )
+                )
+            )
+        }
+    }
+
     private func Registry(provider GSharpCodeFixProvider) CodeFixService {
         let registry = CodeFixRegistry()
         registry.Add(provider)
