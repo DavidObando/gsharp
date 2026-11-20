@@ -47,7 +47,11 @@
         "if": {
           "properties": { "predicate": { "enum": ["textEquals", "kindIs", "symbolKind", "declaredWith", "typeIs"] } }
         },
-        "then": { "required": ["value"] }
+        "then": { "required": ["value"] },
+        "else": {
+          "if": { "properties": { "predicate": { "const": "sameLine" } } },
+          "then": { "required": ["other"] }
+        }
       }
     },
     "edits": {

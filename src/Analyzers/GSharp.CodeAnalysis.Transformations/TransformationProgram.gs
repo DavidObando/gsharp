@@ -172,6 +172,10 @@ class GuardPredicate {
         if value == nil && ComparisonPredicates.Contains(predicate) {
             throw FormatException("The guard predicate '${predicate}' needs a 'value' (ADR-0227 D6).")
         }
+        // A line comparison of a capture with itself always holds.
+        if predicate == "sameLine" && (other == nil || other == capture) {
+            throw FormatException("The guard predicate 'sameLine' needs an 'other' capture (ADR-0227 D6).")
+        }
         Predicate = predicate
         Capture = capture
         Other = other

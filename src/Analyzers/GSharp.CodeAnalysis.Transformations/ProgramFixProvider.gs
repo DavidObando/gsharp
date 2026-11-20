@@ -292,16 +292,21 @@ class ProgramFixProvider : GSharpCodeFixProvider {
     }
 
     // Whether a capture is the name of a member access (`N` in `c.N`, `M` in `c.M()`).
+    // In a chain, a name is a member name when it lies in the right part of any enclosing access:
+    // `b` in `a.b.c` is, whichever way the parser nests the chain.
     private func IsMemberName(node SyntaxNode) bool {
-        let expression SyntaxNode? = if node is SyntaxToken {
+        var current SyntaxNode? = if node is SyntaxToken {
             node.Parent
         } else {
             node
         }
-        return expression?.Parent is AccessorExpressionSyntax access && !object.ReferenceEquals(
-            access.LeftPart,
-            expression
-        )
+        while current?.Parent is AccessorExpressionSyntax access {
+            if !object.ReferenceEquals(access.LeftPart, current) {
+                return true
+            }
+            current = access
+        }
+        return false
     }
 
     // The type of a capture: GetTypeInfo of its node, else the type of its variable. An identifier

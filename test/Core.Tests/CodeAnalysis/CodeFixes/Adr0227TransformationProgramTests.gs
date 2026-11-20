@@ -261,6 +261,26 @@ open class Adr0227TransformationProgramTests {
         Assert.Empty(wrong)
     }
 
+    @Fact
+    func AMemberNameInsideAChain_DoesNotResolveToALocalOfTheSameName() {
+        const program = `{"id":"m","title":"T","trigger":{"diagnosticIds":["IDS"]},"pattern":{"capture":"member","previous":{"text":"."}},"guards":[{"predicate":"symbolKind","capture":"member","value":"local"}],"edits":[{"op":"delete","capture":"member"}],"applicability":"MaybeIncorrect","provenance":{"origin":"HandWritten"}}`
+        const source = "package P\n\nclass C { }\n\nfunc F(c C) int32 {\n    let B = 1\n    return c.B.N\n}\n"
+        let compilation = Compilation(SyntaxTree.Parse(source))
+        let target = compilation.GetDiagnostics().First((d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+        Assert.Equal(source.IndexOf("B.N", StringComparison.Ordinal), target.Location.Span.Start)
+        Assert.Empty(ProgramService(program.Replace("IDS", target.Id)).GetFixes(compilation, target))
+    }
+
+    @Fact
+    func SameLineWithoutAnOtherCapture_IsRejectedAtLoadTime() {
+        Assert.Throws[FormatException](
+            () -> TransformationProgram.FromJson(OrToPipes.Replace(",\"other\":\"right\"", ""))
+        )
+        Assert.Throws[FormatException](
+            () -> TransformationProgram.FromJson(OrToPipes.Replace("\"other\":\"right\"", "\"other\":\"left\""))
+        )
+    }
+
     private func ProgramService(programs ...string) CodeFixService {
         let registry = CodeFixRegistry()
         registry.Add(
