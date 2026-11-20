@@ -32,6 +32,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Allow overloaded explicit interface indexers with distinct parameter signatures on the same interface while still reporting `GS0495` for duplicate signatures, and align metadata-only explicit property accessor names with emitted runtime accessors. (Fixes #6125)
+
 - Preserve `ref` and `in` contracts across primitive/value-type extension receivers, non-identifier `in` operands (`in this`, `in x.Value`, `in xs[0]`), and source `ref readonly` parameter declarations and calls in `cs2gs` without copying storage operands. (Fixes #6063, #6052, #6047)
 
 - Replace recursive closure-chain traversal and full callable-state copies in `StatementBinder.AssignedRootsCollector` with an explicit heap work stack and immutable persistent state. Deep closure-call chains no longer overflow the compiler host stack or allocate quadratically, while preserving callable provenance, argument-dependent effects, cycles, and captured-write invalidation. (Fixes #6111)
