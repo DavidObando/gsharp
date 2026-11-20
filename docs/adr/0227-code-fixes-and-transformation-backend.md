@@ -445,9 +445,13 @@ The implementation follows the decision, with these differences and results:
 - **Programs edit only their captures.** A program cannot express an edit at a declaration that the pattern does not reach, such as `let` → `var` at the declaration of a reassigned variable. That fix stays a provider.
 - **Semantic-model gaps.** `GetSymbolInfo` on an implicit-receiver field assignment answers the `this` parameter (#6126), and the receiver of a member access that reports GS0158 has no symbol or type (#6127). The `let` → `var` provider and the program interpreter fall back to `LookupSymbols` and the variable's declared type.
 - **Deferred.** The body-local speculative bind (#6128), snippet edits for `HasPlaceholders` fixes (#6129), and packaging of `GSharp.CodeAnalysis.Transformations` (#6130).
-- **Extra fix.** GS0156 between two numeric types gets `Convert to 'T'` (`MaybeIncorrect`, a checked conversion).
+- **Extra fix.** GS0156 between two numeric types (the sized integers, `nint`, `nuint`, `char`, the floating types and `decimal`) gets `Convert to 'T'`, which writes `checked(cast[T](expr))` (`MaybeIncorrect`). The fix applies only to a name, a member access of names, or one of these in parentheses, whose type is the source type of the diagnostic. It declines a constant (an unchecked constant conversion does not compile), the operand of a compound assignment (the cast would change the operator's result), range bounds and function-literal bodies (the semantic model gives no type there). A conversion out of range throws at run time instead of changing the value.
+- **`let` → `var` rules.** The provider declines member assignments, parameters and instance fields of an inline struct. A field declared in another file gets a fix that edits that file. A bare field assignment in the same class gets the fix, which closes the gap of #6126 for this provider.
+- **FixAll order.** Changes apply in source order: by file name, then by position.
+- **Data-defined fixes in the language server.** The resolve step runs the full delta for a fix from a transformation program, and the syntax-only check for a built-in fix. A resolved code action is found by an opaque id in a cache per document version.
+- **Compiler bugs found.** `LookupSymbols` on a `let` whose initializer is an `if` expression (#6140), and an internal error for `OrderBy` with a key selector and a `StringComparer` (#6142). The implementation avoids both.
 
-**Measured** over the 327 broken programs of the Oats S0 dev repair log, with the built-in providers and suggestions, in one process at low priority while another benchmark ran:
+**Measured** before the numeric fix was narrowed to simple operands (so the `GS0156.NumericConversion` count is an upper bound for the merged provider), over the 327 broken programs of the Oats S0 dev repair log, with the built-in providers and suggestions, in one process at low priority while another benchmark ran:
 
 | Measure | Result |
 | --- | --- |
