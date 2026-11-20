@@ -187,6 +187,43 @@ open class Adr0227BodyLocalDeltaTests {
     }
 
     @Fact
+    func EditThatCallsASuspendingFunction_FallsBack() {
+        const source = "package P\n\nsuspend func S() int32 -> 1\n\nfunc F() int32 {\n    return 1\n}\n"
+        let (full, local) = Both(ImmutableArray.Create(source), 0, "    return 1\n", "    return S()\n")
+        Assert.False(local.BodyLocal)
+        Assert.Equal("a body names a suspending function", local.BodyLocalFallbackReason)
+        AssertSameDelta(full, local, "suspending call")
+    }
+
+    @Fact
+    func EditInAProgramWithASuspendingFunction_ThatTheBodyDoesNotName_IsBodyLocal() {
+        const source = "package P\n\nsuspend func S() int32 -> 1\n\nfunc F() int32 {\n    return 1\n}\n\nfunc G() int32 -> missing\n"
+        let (full, local) = Both(ImmutableArray.Create(source), 0, "    return 1\n", "    let a = 2\n    return a\n")
+        Assert.True(local.BodyLocal, local.BodyLocalFallbackReason)
+        AssertSameDelta(full, local, "suspending program")
+    }
+
+    @Fact
+    func EditThatTakesAReferenceToAMember_FallsBack() {
+        // The narrowing of N in Use reads every body of C for a reference to N.
+        const source = "package P\n\nimport System.Threading\n\nclass C {\n    var N int32 = 0\n    var S string? = nil\n\n    func Touch() {\n        N = 1\n    }\n\n    func Use() int32 {\n        if S != nil {\n            Touch()\n            return S.Length + N\n        }\n        return N\n    }\n}\n"
+        let (full, local) = Both(
+            ImmutableArray.Create(source),
+            0,
+            "        N = 1\n",
+            "        Interlocked.Increment(ref N)\n"
+        )
+        Assert.False(local.BodyLocal)
+        let reason = local.BodyLocalFallbackReason ?? ""
+        Assert.True(
+            reason == "the edit changes a reference to the member 'N'" ||
+                reason == "the edit changes the call-effect summary of the member",
+            reason
+        )
+        AssertSameDelta(full, local, "member reference")
+    }
+
+    @Fact
     func EditOfASignature_FallsBack() {
         const source = "package P\n\nfunc F(a int32) int32 {\n    return a\n}\n\nfunc G() int32 -> F(1)\n"
         let (full, local) = Both(ImmutableArray.Create(source), 0, "F(a int32)", "F(a int64)")
@@ -334,7 +371,8 @@ open class Adr0227BodyLocalDeltaTests {
     // Edits the first bodies of the program four ways and computes each delta both ways.
     private func CompareBodyEdits(sources ImmutableArray[string], maxBodies int32) int32 {
         let trees = Parse(sources)
-        let compilation = Compilation(trees.ToArray())
+        // A body cache, as in the language server, so the integrity check below covers a successor.
+        let compilation = Compilation(trees.ToArray()){IncrementalBodyReuse = true}
         let service = CodeFixService(CodeFixRegistry())
         let full = DeltaBaseline.Create(compilation, DeltaOptions{BodyLocalBind: false, StopOnNewSyntaxError: false})
         let local = DeltaBaseline.Create(compilation, DeltaOptions{StopOnNewSyntaxError: false})
@@ -385,6 +423,14 @@ open class Adr0227BodyLocalDeltaTests {
                 }
             }
         }
+        // The body-local checks leave the compilation and its successors as a fresh compilation would be.
+        Assert.Equal(Keys(Compilation(trees.ToArray()).GetDiagnostics()), Keys(compilation.GetDiagnostics()))
+        let first = trees[0]
+        let edited = SyntaxTree.Parse(SourceText.From(first.Text.ToString() + "\n", first.Text.FileName))
+        let successor = compilation.ReplaceSyntaxTree(first, edited)
+        let freshTrees = List[SyntaxTree](trees)
+        freshTrees[0] = edited
+        Assert.Equal(Keys(Compilation(freshTrees.ToArray()).GetDiagnostics()), Keys(successor.GetDiagnostics()))
         return bodyLocal
     }
 

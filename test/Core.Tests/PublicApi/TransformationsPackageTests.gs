@@ -74,23 +74,20 @@ class TransformationsPackageTests {
         .FirstOrDefault((e XElement) -> e.Name.LocalName == name)
         ?.Value
 
-    // The package that the build of this test run packed: the newest one under out/bin/<config>/nupkgs.
+    // The package that the build of this test run packed: the newest one in out/bin/<config>/nupkgs,
+    // where <config> is the configuration of this test assembly (out/bin/<config>/Core.Tests).
     private func LatestPackage() string {
-        let bin = Path.Combine(RepoRoot(), "out", "bin")
+        let testDirectory = DirectoryInfo(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar))
+        let nupkgs = Path.Combine(testDirectory.Parent!!.FullName, "nupkgs")
         let packages = List[FileInfo]()
-        if Directory.Exists(bin) {
-            for directory in Directory.GetDirectories(bin) {
-                let nupkgs = Path.Combine(directory, "nupkgs")
-                if Directory.Exists(nupkgs) {
-                    for file in Directory.GetFiles(nupkgs, "GSharp.CodeAnalysis.Transformations.*.nupkg") {
-                        if !file.EndsWith(".symbols.nupkg", StringComparison.Ordinal) {
-                            packages.Add(FileInfo(file))
-                        }
-                    }
+        if Directory.Exists(nupkgs) {
+            for file in Directory.GetFiles(nupkgs, "GSharp.CodeAnalysis.Transformations.*.nupkg") {
+                if !file.EndsWith(".symbols.nupkg", StringComparison.Ordinal) {
+                    packages.Add(FileInfo(file))
                 }
             }
         }
-        Assert.True(packages.Count > 0, "No GSharp.CodeAnalysis.Transformations package under ${bin}; the build packs it.")
+        Assert.True(packages.Count > 0, "No GSharp.CodeAnalysis.Transformations package in ${nupkgs}; the build packs it.")
         return packages.OrderByDescending((f FileInfo) -> f.LastWriteTimeUtc).First().FullName
     }
 

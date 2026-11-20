@@ -8,12 +8,14 @@ import GSharp.Core.CodeAnalysis.CodeFixes
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.LanguageServer
 import GSharp.LanguageServer.Protocol
+import GSharp.LanguageServer.Server
 import Range = GSharp.LanguageServer.Protocol.Range
 import System
 import System.Collections.Generic
 import System.Linq
 import System.Text.Json
 import System.Threading
+import System.Threading.Tasks
 import Xunit
 
 /// ADR-0227 D5 (issue #6129): a fix with placeholders becomes an LSP 3.18 snippet edit when the client
@@ -81,6 +83,36 @@ open class Adr0227SnippetEditTests {
             .Single((a CommandOrCodeAction) -> a.CodeAction.Title == "Use 'nil'")
             .CodeAction
         Assert.IsNotType[SnippetTextEdit](Assert.Single(Assert.Single(action.Edit!!.DocumentChanges!!).Edits))
+    }
+
+    @Theory
+    @InlineData("{\"workspace\":{\"workspaceEdit\":{\"documentChanges\":true,\"snippetEditSupport\":true}}}", true)
+    @InlineData("{\"workspace\":{\"workspaceEdit\":{\"documentChanges\":true,\"snippetEditSupport\":false}}}", false)
+    @InlineData("{\"workspace\":{\"workspaceEdit\":{\"documentChanges\":true}}}", false)
+    async func Initialize_ReadsSnippetEditSupport(capabilities string, expected bool) {
+        let server = LspServer(DocumentContentService(), WorkspaceState())
+        using let document = JsonDocument.Parse(capabilities)
+        await server.InitializeAsync(InitializeParams{Capabilities: document.RootElement.Clone()})
+        Assert.Equal(expected, server.CodeActionOptions.SupportsSnippetEdits)
+        Assert.True(server.CodeActionOptions.SupportsDocumentChanges)
+    }
+
+    @Fact
+    func LazyClient_ResolvesTheSnippetEdit() {
+        let client = CodeActionClientOptions{SupportsDocumentChanges: true, SupportsSnippetEdits: true, SupportsResolveEdit: true}
+        let content = LanguageServerTestHelpers.Content(Source).WithVersion(1)
+        let uri = DocumentUri.From("file:///a.gs")!!
+        let at = LanguageServerTestHelpers.PositionOf(Source, "null")
+        let registry = CodeFixRegistry()
+        registry.Add(PlaceholderProvider())
+        let listed = CodeActionComputer
+            .ComputeCodeActions(uri, content, Range(at, at), nil, client, registry, default(CancellationToken))
+            .Single((a CommandOrCodeAction) -> a.CodeAction.Title == "Write a value")
+            .CodeAction
+        Assert.Null(listed.Edit)
+        let resolved = CodeActionComputer.ResolveCodeAction(listed, content, client)
+        let edit = Assert.IsType[SnippetTextEdit](Assert.Single(Assert.Single(resolved.Edit!!.DocumentChanges!!).Edits))
+        Assert.Equal("$${1:value} /* $${2:\\$$\\}} \\\\ */", edit.Snippet.Value)
     }
 
     @Fact

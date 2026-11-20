@@ -72,6 +72,9 @@ class LspServer {
 
     // ADR-0227 D7: what the client supports for code-action edits, from initialize.
     private let codeActionClientOptions CodeActionClientOptions = CodeActionClientOptions()
+
+    // Tests read what initialize detected.
+    internal prop CodeActionOptions CodeActionClientOptions -> codeActionClientOptions
     private var refreshTimer Timer?
     private var initializationOptions LanguageServerInitializationOptions = LanguageServerInitializationOptions()
     private var pendingWorkspaceRootPath string?
