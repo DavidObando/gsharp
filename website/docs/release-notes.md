@@ -38,6 +38,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Parse nested indexers followed by member access (`samples[jobs[slot]].Key`) as indexers instead of generic type names unless an inner type argument is unambiguously type-shaped, and reshape index-shaped nested generic static receivers (`Box[List[int32]].Create()`) in the binder. (Fixes #6071)
+
 - Normalize `nint` and `nuint` optional parameter default values to `int32` and `uint32` CLR Constant metadata, rejecting out-of-range defaults with GS0265 and converting omitted call-site arguments to native-width integers. (Fixes #6073)
 
 - Report targetless method groups (`GS0582`) and inapplicable nullable-receiver member reads (`GS0158`) instead of discarding them to `BoundErrorExpression` across operators, indexers, switches, and assignments, avoiding silent `?`-typed locals and `GS9998` crashes in emit. (Fixes #6077)

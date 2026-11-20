@@ -5147,9 +5147,10 @@ internal partial class ExpressionBinder {
         }
 
         /// ADR-0089 / issue #1030: reshapes a type-name expression (a simple name
-        /// such as `int32` or a dotted name such as
-        /// `System.Collections.Immutable.ImmutableArray`) into a
-        /// (cref:TypeClauseSyntax) so it can be bound by the shared
+        /// such as `int32`, a dotted name such as
+        /// `System.Collections.Immutable.ImmutableArray`, or an ambiguous
+        /// generic-shaped index expression such as `List[int32]` from #6071)
+        /// into a (cref:TypeClauseSyntax) so it can be bound by the shared
         /// type-clause binder. Returns `false` for non-type shapes.
         /// @param expr The candidate type expression.
         /// @param typeClause The synthesized type clause on success.
@@ -5159,82 +5160,209 @@ internal partial class ExpressionBinder {
             @NotNullWhen(true) out typeClause TypeClauseSyntax?
         ) bool {
             typeClause = nil
+            var expr = expr
+            while expr is ParenthesizedExpressionSyntax parenthesized {
+                expr = parenthesized.Expression
+            }
             if expr is NameExpressionSyntax ne && !ne.IdentifierToken.IsMissing {
                 typeClause = TypeClauseSyntax(ne.SyntaxTree, ne.IdentifierToken)
                 return true
             }
-            // Issue #3658: a type argument written as a dotted name
-            // (`ImmutableArray[GSharp.Core.CodeAnalysis.Diagnostic].Empty`) reaches
-            // the binder as an accessor chain, not a bare name. Flatten the chain
-            // into the type clause's qualifier tokens so it binds exactly as the
-            // same spelling does in type position.
-            if expr is AccessorExpressionSyntax accessor {
-                return TryBuildQualifiedTypeClauseFromAccessor(accessor, out typeClause)
+            // Issue #3658 / #6071: a type argument written as a dotted name or
+            // nested generic (`List[int32]`, `Outer.Inner[int32]`,
+            // `Outer[int32].Inner`, `Outer[int32, string].Inner`) reaches the
+            // binder as an accessor/index/generic-name chain when syntactically
+            // indistinguishable from indexing. Flatten the chain into the type
+            // clause's qualifier/argument tokens so it binds identically to
+            // type position.
+            if expr is IndexExpressionSyntax or AccessorExpressionSyntax or GenericNameExpressionSyntax {
+                return TryBuildQualifiedTypeClauseFromExpression(expr, out typeClause)
             }
             return false
         }
 
-        /// Issue #3658: flattens a dotted accessor chain whose every segment is a
-        /// plain identifier (`A.B.C`) into a qualified
-        /// (cref:TypeClauseSyntax). Returns `false` when any segment is
-        /// null-conditional or is not a simple name, so genuine value expressions
-        /// fall back to ordinary expression binding.
-        /// @param accessor The candidate dotted type name.
-        /// @param typeClause The synthesized qualified type clause on success.
-        /// @returns Whether the accessor chain spells a dotted type name.
-        private func TryBuildQualifiedTypeClauseFromAccessor(
-            accessor AccessorExpressionSyntax,
+        private func TryBuildQualifiedTypeClauseFromExpression(
+            expr ExpressionSyntax,
             @NotNullWhen(true) out typeClause TypeClauseSyntax?
         ) bool {
             typeClause = nil
             let dots = ImmutableArray.CreateBuilder[SyntaxToken]()
-            let segments = ImmutableArray.CreateBuilder[SyntaxToken]()
-            if !TryCollectDottedNameSegments(accessor, dots, segments) || segments.Count < 2 {
+            let segments = List[
+                (
+                    Identifier SyntaxToken,
+                    OpenBracket SyntaxToken?,
+                    TypeArguments GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[TypeClauseSyntax]?,
+                    CloseBracket SyntaxToken?
+                )
+            ]()
+            if !TryCollectTypeClauseSegments(expr, dots, segments) || segments.Count == 0 {
                 return false
             }
-            let head = segments[0]
-            segments.RemoveAt(0)
+            if segments.Count == 1 {
+                let seg = segments[0]
+                if seg.OpenBracket == nil {
+                    return false
+                }
+                typeClause = TypeClauseSyntax(
+                    expr.SyntaxTree,
+                    openBracketToken: nil,
+                    lengthToken: nil,
+                    closeBracketToken: nil,
+                    seg.Identifier,
+                    seg.OpenBracket,
+                    seg.TypeArguments,
+                    seg.CloseBracket,
+                    questionToken: nil
+                )
+                return true
+            }
+            let head = segments[0].Identifier
+            let lastIndex = segments.Count - 1
+            let qualifierIdentifiers = ImmutableArray.CreateBuilder[SyntaxToken](lastIndex)
+            var hasOuterTypeArguments = false
+            for var i = 0; i < lastIndex; i++ {
+                hasOuterTypeArguments |= segments[i].OpenBracket != nil
+                qualifierIdentifiers.Add(segments[i + 1].Identifier)
+            }
+            let last = segments[lastIndex]
+            if !hasOuterTypeArguments {
+                typeClause = TypeClauseSyntax(
+                    expr.SyntaxTree,
+                    openBracketToken: nil,
+                    lengthToken: nil,
+                    closeBracketToken: nil,
+                    head,
+                    dots.ToImmutable(),
+                    qualifierIdentifiers.ToImmutable(),
+                    last.OpenBracket,
+                    last.TypeArguments,
+                    last.CloseBracket,
+                    questionToken: nil
+                )
+                return true
+            }
+            let outerOpens = ImmutableArray.CreateBuilder[SyntaxToken?](lastIndex)
+            let outerLists = ImmutableArray.CreateBuilder[
+                GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[TypeClauseSyntax]?
+            ](lastIndex)
+            let outerCloses = ImmutableArray.CreateBuilder[SyntaxToken?](lastIndex)
+            for var i = 0; i < lastIndex; i++ {
+                outerOpens.Add(segments[i].OpenBracket)
+                outerLists.Add(segments[i].TypeArguments)
+                outerCloses.Add(segments[i].CloseBracket)
+            }
             typeClause = TypeClauseSyntax(
-                accessor.SyntaxTree,
+                expr.SyntaxTree,
                 openBracketToken: nil,
                 lengthToken: nil,
                 closeBracketToken: nil,
                 head,
                 dots.ToImmutable(),
-                segments.ToImmutable(),
-                typeArgumentOpenBracketToken: nil,
-                typeArguments: default(GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[TypeClauseSyntax]?),
-                typeArgumentCloseBracketToken: nil,
-                questionToken: nil
+                qualifierIdentifiers.ToImmutable(),
+                last.OpenBracket,
+                last.TypeArguments,
+                last.CloseBracket,
+                questionToken: nil,
+                arrayQuestionToken: nil,
+                outerOpens.ToImmutable(),
+                outerLists.ToImmutable(),
+                outerCloses.ToImmutable()
             )
             return true
         }
 
-        /// Issue #3658: appends the identifier tokens of a dotted-name expression to
-        /// [`segments`](paramref) in source order, and the `.` tokens that
-        /// separate them to [`dots`](paramref). The parser nests accessor
-        /// chains to the right (`A.B.C` is `A.(B.C)`) in expression
-        /// position but to the left elsewhere, so both leanings are walked.
-        /// @param expr The candidate dotted name.
-        /// @param dots Receives the separating `.` tokens.
-        /// @param segments Receives the identifier tokens.
-        /// @returns Whether every node in the chain is a plain identifier or a non-null-conditional dot.
-        private func TryCollectDottedNameSegments(
+        private func TryBuildTypeArgumentListFromExpressions(
+            indices GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax],
+            out typeArguments GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[TypeClauseSyntax]
+        ) bool {
+            typeArguments = default(GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[TypeClauseSyntax])
+            if indices.Count == 0 {
+                return false
+            }
+            let withSeparators = indices.GetWithSeparators()
+            let nodesAndSeparators = ImmutableArray.CreateBuilder[SyntaxNode](withSeparators.Length)
+            for node in withSeparators {
+                if node is SyntaxToken separatorToken {
+                    nodesAndSeparators.Add(separatorToken)
+                } else if node is ExpressionSyntax argExpr &&
+                    TryBuildTypeClauseFromExpression(argExpr, out var argTypeClause) {
+                    nodesAndSeparators.Add(argTypeClause)
+                } else {
+                    return false
+                }
+            }
+            typeArguments = GSharp
+                .Core
+                .CodeAnalysis
+                .Syntax
+                .SeparatedSyntaxList[TypeClauseSyntax](nodesAndSeparators.ToImmutable())
+            return true
+        }
+
+        /// Issue #3658 / #6071: appends the segments of a dotted/generic type-name
+        /// expression to [`segments`](paramref) in source order, and the `.` tokens
+        /// that separate them to [`dots`](paramref).
+        private func TryCollectTypeClauseSegments(
             expr ExpressionSyntax,
             dots ImmutableArray[SyntaxToken].Builder,
-            segments ImmutableArray[SyntaxToken].Builder
+            segments List[
+                (
+                    Identifier SyntaxToken,
+                    OpenBracket SyntaxToken?,
+                    TypeArguments GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[TypeClauseSyntax]?,
+                    CloseBracket SyntaxToken?
+                )
+            ]
         ) bool {
             switch expr {
                 case name is NameExpressionSyntax when !name.IdentifierToken.IsMissing {
-                    segments.Add(name.IdentifierToken)
+                    segments.Add(
+                        (
+                            name.IdentifierToken,
+                            nil,
+                            default(GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[TypeClauseSyntax]?),
+                            nil
+                        )
+                    )
+                    return true
+                }
+                case generic is GenericNameExpressionSyntax when !generic
+                    .Identifier
+                    .IsMissing &&
+                    generic.ReadOnlySliceModifier == nil &&
+                    generic.ReadOnlySpanModifier == nil &&
+                    generic.ReadOnlyManagedModifier == nil {
+                    segments.Add(
+                        (
+                            generic.Identifier,
+                            generic.TypeArgumentList.OpenBracketToken,
+                            generic.TypeArgumentList.Arguments,
+                            generic.TypeArgumentList.CloseBracketToken
+                        )
+                    )
+                    return true
+                }
+                case index is IndexExpressionSyntax when !index.IsNullConditional && index.Indices.Count > 0 {
+                    if !TryBuildTypeArgumentListFromExpressions(index.Indices, out var typeArgs) {
+                        return false
+                    }
+                    if !TryCollectTypeClauseSegments(index.Target, dots, segments) || segments.Count == 0 {
+                        return false
+                    }
+                    let lastIndex = segments.Count - 1
+                    let last = segments[lastIndex]
+                    if last.OpenBracket != nil {
+                        return false
+                    }
+                    segments[lastIndex] = (last.Identifier, index.OpenBracketToken, typeArgs, index.CloseBracketToken)
                     return true
                 }
                 case step is AccessorExpressionSyntax when !step.IsNullConditional {
-                    if !TryCollectDottedNameSegments(step.LeftPart, dots, segments) {
+                    if !TryCollectTypeClauseSegments(step.LeftPart, dots, segments) {
                         return false
                     }
                     dots.Add(step.DotToken)
-                    return TryCollectDottedNameSegments(step.RightPart, dots, segments)
+                    return TryCollectTypeClauseSegments(step.RightPart, dots, segments)
                 }
                 default {
                     return false

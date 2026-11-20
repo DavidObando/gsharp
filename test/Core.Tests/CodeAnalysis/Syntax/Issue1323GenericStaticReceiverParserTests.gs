@@ -45,6 +45,12 @@ class C { func F() int32 { return Box[[]int32].Make(5) } }
 
     @Fact
     func NestedGenericTypeArg_StaticCall_ParsesWithoutDiagnostics() {
+        // Issue #6071: `Box[List[int32]].Make(5)` has the same syntax as a
+        // nested indexer (`samples[jobs[slot]].Key`), so it takes the
+        // indexer-then-member parse path (matching `Box[int32].Make(5)`) and
+        // resolves in the binder. When the inner argument is unambiguously
+        // type-shaped (`List[int32?]`), the parser still commits to
+        // GenericNameExpressionSyntax.
         const source = `
 package p
 import System.Collections.Generic
@@ -53,9 +59,22 @@ class C { func F() int32 { return Box[List[int32]].Make(5) } }
 `
         let tree = SyntaxTree.Parse(source)
         Assert.Empty(tree.Diagnostics)
-        let receiver = Assert.IsType[GenericNameExpressionSyntax](GetReturnedAccessorReceiver(tree))
-        Assert.Equal("Box", receiver.Identifier.Text)
-        Assert.Single(receiver.TypeArgumentList.Arguments)
+        let receiver = Assert.IsType[IndexExpressionSyntax](GetReturnedAccessorReceiver(tree))
+        let target = Assert.IsType[NameExpressionSyntax](receiver.Target)
+        Assert.Equal("Box", target.IdentifierToken.Text)
+        Assert.Single(receiver.Indices)
+
+        const unambiguousSource = `
+package p
+import System.Collections.Generic
+struct Box[T] { shared { func Make(x int32) int32 { return x } } }
+class C { func F() int32 { return Box[List[int32?]].Make(5) } }
+`
+        let unambiguousTree = SyntaxTree.Parse(unambiguousSource)
+        Assert.Empty(unambiguousTree.Diagnostics)
+        let genericReceiver = Assert.IsType[GenericNameExpressionSyntax](GetReturnedAccessorReceiver(unambiguousTree))
+        Assert.Equal("Box", genericReceiver.Identifier.Text)
+        Assert.Single(genericReceiver.TypeArgumentList.Arguments)
     }
 
     @Fact
