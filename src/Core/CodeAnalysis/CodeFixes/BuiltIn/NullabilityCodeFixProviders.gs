@@ -36,6 +36,16 @@ internal class NullConditionalAccessCodeFixProvider : GSharpCodeFixProvider {
         if accessor == nil || accessor.IsNullConditional || !FixSyntax.IsReal(accessor.DotToken) {
             return
         }
+        // GS0158 also reports a member that does not exist; `?.` fixes only a member of a receiver
+        // that may be nil.
+        let message = if context.Diagnostic.MessageArguments.IsEmpty {
+            context.Diagnostic.Message
+        } else {
+            context.Diagnostic.MessageArguments[0]
+        }
+        if !message.Contains("may be nil", StringComparison.Ordinal) {
+            return
+        }
         // `?.` reads a member. An assignment target (`c.N += 1`, `c.Child.N += 1`, `c.N ??= 1`) is
         // a write, where `?.` is not valid.
         if IsAssignmentTarget(accessor) {
@@ -68,7 +78,7 @@ internal class NullConditionalAccessCodeFixProvider : GSharpCodeFixProvider {
     // Whether the access, or a chain, parentheses or indexing around it, is written: the target of a
     // compound or null-coalescing assignment, the receiver of a member write (`c.Child.N = 1`), or
     // the indexed target of an index write (`c.Items[0] = 1`), or a target of a multi-assignment
-    // (`c.N, x = 1, 2`). A right-hand value and an index
+    // (`c.N, x = 1, 2`), and the storage of an indirect write (`*c.P = 1`). A right-hand value and an index
     // argument are reads.
     private func IsAssignmentTarget(accessor AccessorExpressionSyntax) bool {
         var current SyntaxNode = accessor
@@ -82,6 +92,11 @@ internal class NullConditionalAccessCodeFixProvider : GSharpCodeFixProvider {
                 current = parent
             } else if parent is IndexExpressionSyntax indexed && object.ReferenceEquals(indexed.Target, current) {
                 current = indexed
+            } else if parent is UnaryExpressionSyntax dereference &&
+                dereference
+                .OperatorToken
+                .Kind == SyntaxKind.StarToken {
+                current = dereference
             } else {
                 break
             }
@@ -96,6 +111,11 @@ internal class NullConditionalAccessCodeFixProvider : GSharpCodeFixProvider {
             case index is MemberIndexAssignmentExpressionSyntax: object.ReferenceEquals(index.Target, current)
             case compoundIndex is CompoundIndexAssignmentExpressionSyntax: object.ReferenceEquals(
                 compoundIndex.Target,
+                current
+            )
+            case indirect is IndirectAssignmentExpressionSyntax: object.ReferenceEquals(indirect.Target, current)
+            case indirectCompound is IndirectCompoundAssignmentExpressionSyntax: object.ReferenceEquals(
+                indirectCompound.Target,
                 current
             )
             case multi is MultiAssignmentStatementSyntax: multi.Targets.Any(

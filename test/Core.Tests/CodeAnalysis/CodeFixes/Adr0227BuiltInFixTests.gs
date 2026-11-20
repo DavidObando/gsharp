@@ -228,6 +228,20 @@ open class Adr0227BuiltInFixTests {
         }
     }
 
+    @Fact
+    func NullConditionalAccess_ToAMissingMemberOfANullableReceiver_HasNoFix() {
+        const source = "package P\n\nclass C {\n    var N int32\n}\n\nfunc F(c C?) int32? {\n    return c.Missing\n}\n"
+        let tree = SyntaxTree.Parse(SourceText.From(source, "a.gs"))
+        let compilation = Compilation(tree)
+        let target = compilation.GetDiagnostics().Single((d Diagnostic) -> d.Id == "GS0158")
+        Assert.DoesNotContain("may be nil", target.Message, StringComparison.Ordinal)
+        Assert.Empty(
+            CodeFixService(CodeFixRegistry.CreateDefault()).GetFixes(compilation, target).Where(
+                (f CodeFix) -> f.ProviderId == "GSharp.CodeFixes.NullConditionalAccess"
+            )
+        )
+    }
+
     @Theory
     @InlineData("d.N = c.N")
     @InlineData("d.Items[c.N] = 1")
