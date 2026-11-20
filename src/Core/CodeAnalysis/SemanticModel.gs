@@ -30,7 +30,10 @@ partial class SemanticModel {
     internal init(compilation Compilation, syntaxTree SyntaxTree) {
         this.compilation = compilation
         this.syntaxTree = syntaxTree
-        index = IndexCell((token CancellationToken) -> BuildIndex(compilation, syntaxTree, token))
+        index = IndexCell(
+            () -> compilation.BindingGeneration,
+            (token CancellationToken) -> BuildIndex(compilation, syntaxTree, token)
+        )
     }
 
     /// Gets the compilation this model answers queries against.
@@ -333,10 +336,13 @@ partial class SemanticModel {
     /// A cancelled build publishes nothing, so a failed attempt is never cached.
     private class IndexCell {
         private let gate SemaphoreSlim = SemaphoreSlim(1, 1)
+        private let getGeneration Func[int64]
         private let build Func[CancellationToken, SemanticModel.Index]
         private var value SemanticModel.Index?
+        private var valueGeneration int64 = -1
 
-        internal init(build Func[CancellationToken, SemanticModel.Index]) {
+        internal init(getGeneration Func[int64], build Func[CancellationToken, SemanticModel.Index]) {
+            this.getGeneration = getGeneration
             this.build = build
         }
 
@@ -344,17 +350,26 @@ partial class SemanticModel {
 
         internal func Get(cancellationToken CancellationToken) SemanticModel.Index {
             let published = Volatile.Read[SemanticModel.Index?](&this.value)
-            if published != nil {
-                return published
+            let publishedGeneration = Volatile.Read(&this.valueGeneration)
+            if published is {} existing && publishedGeneration == getGeneration() {
+                return existing
             }
             gate.Wait(cancellationToken)
             try {
-                if value != nil {
-                    return value!!
+                while true {
+                    let generation = getGeneration()
+                    if value != nil && valueGeneration == generation {
+                        return value!!
+                    }
+                    let built = build(cancellationToken)
+                    if getGeneration() != generation {
+                        value = nil
+                        continue
+                    }
+                    Volatile.Write(&this.valueGeneration, generation)
+                    Volatile.Write[SemanticModel.Index?](&this.value, built)
+                    return built
                 }
-                let built = build(cancellationToken)
-                Volatile.Write[SemanticModel.Index?](&this.value, built)
-                return built
             } finally {
                 gate.Release()
             }

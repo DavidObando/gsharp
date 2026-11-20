@@ -56,9 +56,18 @@ internal shared class PinningShapes {
     /// @param references The compilation's reference closure.
     /// @param asPointer The open generic method definition.
     /// @returns `true` when the target declares it.
-    func TryGetUnsafeAsPointer(references ReferenceResolver, @NotNullWhen(true) out asPointer MethodInfo?) bool {
+    func TryGetUnsafeAsPointer(
+        references ReferenceResolver,
+        @NotNullWhen(true) out asPointer MethodInfo?
+    ) bool -> TryGetUnsafeAsPointer(references, references.CurrentAssemblyName, out asPointer)
+
+    func TryGetUnsafeAsPointer(
+        references ReferenceResolver,
+        consumerAssemblyName string?,
+        @NotNullWhen(true) out asPointer MethodInfo?
+    ) bool {
         asPointer = nil
-        if !references.TryResolveType(UnsafeTypeFullName, out var unsafeType) {
+        if !references.TryResolveType(UnsafeTypeFullName, consumerAssemblyName, out var unsafeType) {
             return false
         }
         for candidate in unsafeType.GetMethods(BindingFlags.Public | BindingFlags.Static) {

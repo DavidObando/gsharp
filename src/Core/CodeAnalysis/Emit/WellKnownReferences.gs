@@ -351,10 +351,7 @@ internal class WellKnownReferences {
     }
 
     func GetInAttributeTypeRef() EntityHandle {
-        let attrType = if this
-            .emitCtx
-            .References
-            .TryResolveType(
+        let attrType = if this.emitCtx.TryResolveType(
             "System.Runtime.InteropServices.InAttribute",
             requireExternalVisibility: false,
             out var resolved
@@ -452,10 +449,11 @@ internal class WellKnownReferences {
         if (this.paramArrayAttributeCtorRef != nil) {
             return this.paramArrayAttributeCtorRef!!
         }
-        let attrType = if this
-            .emitCtx
-            .References
-            .TryResolveType("System.ParamArrayAttribute", requireExternalVisibility: false, out var resolved) {
+        let attrType = if this.emitCtx.TryResolveType(
+            "System.ParamArrayAttribute",
+            requireExternalVisibility: false,
+            out var resolved
+        ) {
             resolved
         } else {
             typeof(ParamArrayAttribute)
@@ -482,10 +480,7 @@ internal class WellKnownReferences {
         if (this.isByRefLikeAttributeCtorRef != nil) {
             return this.isByRefLikeAttributeCtorRef!!
         }
-        let attrType = if this
-            .emitCtx
-            .References
-            .TryResolveType(
+        let attrType = if this.emitCtx.TryResolveType(
             "System.Runtime.CompilerServices.IsByRefLikeAttribute",
             requireExternalVisibility: false,
             out var resolved
@@ -529,10 +524,7 @@ internal class WellKnownReferences {
         if (this.suspendingAttributeCtorRef != nil) {
             return this.suspendingAttributeCtorRef!!
         }
-        if !this
-            .emitCtx
-            .References
-            .TryResolveType(
+        if !this.emitCtx.TryResolveType(
             "Gsharp.Concurrency.SuspendingAttribute",
             requireExternalVisibility: false,
             out var attrType
@@ -563,10 +555,7 @@ internal class WellKnownReferences {
         if (this.extensionAttributeCtorRef != nil) {
             return this.extensionAttributeCtorRef!!
         }
-        let attrType Type? = if this
-            .emitCtx
-            .References
-            .TryResolveType(
+        let attrType Type? = if this.emitCtx.TryResolveType(
             "System.Runtime.CompilerServices.ExtensionAttribute",
             requireExternalVisibility: false,
             out var resolved
@@ -605,10 +594,7 @@ internal class WellKnownReferences {
         if (this.asyncStateMachineAttributeCtorRef != nil) {
             return this.asyncStateMachineAttributeCtorRef!!
         }
-        let attrType = if this
-            .emitCtx
-            .References
-            .TryResolveType(
+        let attrType = if this.emitCtx.TryResolveType(
             "System.Runtime.CompilerServices.AsyncStateMachineAttribute",
             requireExternalVisibility: false,
             out var resolved
@@ -617,10 +603,11 @@ internal class WellKnownReferences {
         } else {
             typeof(AsyncStateMachineAttribute)
         }
-        let systemType = if this
-            .emitCtx
-            .References
-            .TryResolveType("System.Type", requireExternalVisibility: false, out var resolvedSystemType) {
+        let systemType = if this.emitCtx.TryResolveType(
+            "System.Type",
+            requireExternalVisibility: false,
+            out var resolvedSystemType
+        ) {
             resolvedSystemType
         } else {
             typeof(Type)
@@ -653,10 +640,7 @@ internal class WellKnownReferences {
         if (this.debuggerStepThroughAttributeCtorRef != nil) {
             return this.debuggerStepThroughAttributeCtorRef!!
         }
-        let attrType = if this
-            .emitCtx
-            .References
-            .TryResolveType(
+        let attrType = if this.emitCtx.TryResolveType(
             "System.Diagnostics.DebuggerStepThroughAttribute",
             requireExternalVisibility: false,
             out var resolved
@@ -692,10 +676,7 @@ internal class WellKnownReferences {
         if (this.compilerGeneratedAttributeCtorRef != nil) {
             return this.compilerGeneratedAttributeCtorRef!!
         }
-        let attrType = if this
-            .emitCtx
-            .References
-            .TryResolveType(
+        let attrType = if this.emitCtx.TryResolveType(
             "System.Runtime.CompilerServices.CompilerGeneratedAttribute",
             requireExternalVisibility: false,
             out var resolved
@@ -731,10 +712,7 @@ internal class WellKnownReferences {
         if (this.preserveBaseOverridesAttributeCtorRef != nil) {
             return this.preserveBaseOverridesAttributeCtorRef!!
         }
-        let attrType = if this
-            .emitCtx
-            .References
-            .TryResolveType(
+        let attrType = if this.emitCtx.TryResolveType(
             "System.Runtime.CompilerServices.PreserveBaseOverridesAttribute",
             requireExternalVisibility: false,
             out var resolved
@@ -770,10 +748,7 @@ internal class WellKnownReferences {
         if (this.unsafeValueTypeAttributeCtorRef != nil) {
             return this.unsafeValueTypeAttributeCtorRef!!
         }
-        let attrType = if this
-            .emitCtx
-            .References
-            .TryResolveType(
+        let attrType = if this.emitCtx.TryResolveType(
             "System.Runtime.CompilerServices.UnsafeValueTypeAttribute",
             requireExternalVisibility: false,
             out var resolved
@@ -808,10 +783,7 @@ internal class WellKnownReferences {
         if (this.fixedBufferAttributeCtorRef != nil) {
             return this.fixedBufferAttributeCtorRef!!
         }
-        let attrType = if this
-            .emitCtx
-            .References
-            .TryResolveType(
+        let attrType = if this.emitCtx.TryResolveType(
             "System.Runtime.CompilerServices.FixedBufferAttribute",
             requireExternalVisibility: false,
             out var resolved
@@ -938,10 +910,7 @@ internal class WellKnownReferences {
         if (this.paramCollectionAttributeCtorRef != nil) {
             return this.paramCollectionAttributeCtorRef!!
         }
-        if !this
-            .emitCtx
-            .References
-            .TryResolveType(
+        if !this.emitCtx.TryResolveType(
             "System.Runtime.CompilerServices.ParamCollectionAttribute",
             requireExternalVisibility: false,
             out var attrType
@@ -977,10 +946,7 @@ internal class WellKnownReferences {
         if (this.tupleElementNamesAttributeCtorRef != nil) {
             return this.tupleElementNamesAttributeCtorRef!!
         }
-        if !this
-            .emitCtx
-            .References
-            .TryResolveType(
+        if !this.emitCtx.TryResolveType(
             "System.Runtime.CompilerServices.TupleElementNamesAttribute",
             requireExternalVisibility: false,
             out var attrType
@@ -1053,10 +1019,11 @@ internal class WellKnownReferences {
         if (this.obsoleteAttributeStringBoolCtorRef != nil) {
             return this.obsoleteAttributeStringBoolCtorRef!!
         }
-        let obsoleteType = if this
-            .emitCtx
-            .References
-            .TryResolveType("System.ObsoleteAttribute", requireExternalVisibility: false, out var obsoleteResolved) {
+        let obsoleteType = if this.emitCtx.TryResolveType(
+            "System.ObsoleteAttribute",
+            requireExternalVisibility: false,
+            out var obsoleteResolved
+        ) {
             obsoleteResolved
         } else {
             typeof(ObsoleteAttribute)
@@ -1084,10 +1051,11 @@ internal class WellKnownReferences {
 
     func GetSystemAttributeTypeRef() EntityHandle {
         if !(this.systemAttributeTypeRef != nil) {
-            let t = if this
-                .emitCtx
-                .References
-                .TryResolveType("System.Attribute", requireExternalVisibility: false, out var resolved) {
+            let t = if this.emitCtx.TryResolveType(
+                "System.Attribute",
+                requireExternalVisibility: false,
+                out var resolved
+            ) {
                 resolved
             } else {
                 typeof(Attribute)
@@ -1124,10 +1092,11 @@ internal class WellKnownReferences {
         if !this.nullRefExceptionCtorRef.IsNil {
             return this.nullRefExceptionCtorRef
         }
-        let nreType = if this
-            .emitCtx
-            .References
-            .TryResolveType("System.NullReferenceException", requireExternalVisibility: false, out var resolved) {
+        let nreType = if this.emitCtx.TryResolveType(
+            "System.NullReferenceException",
+            requireExternalVisibility: false,
+            out var resolved
+        ) {
             resolved
         } else {
             typeof(NullReferenceException)
@@ -1165,10 +1134,11 @@ internal class WellKnownReferences {
         if !this.nullRefExceptionMessageCtorRef.IsNil {
             return this.nullRefExceptionMessageCtorRef
         }
-        let nreType = if this
-            .emitCtx
-            .References
-            .TryResolveType("System.NullReferenceException", requireExternalVisibility: false, out var resolved) {
+        let nreType = if this.emitCtx.TryResolveType(
+            "System.NullReferenceException",
+            requireExternalVisibility: false,
+            out var resolved
+        ) {
             resolved
         } else {
             typeof(NullReferenceException)

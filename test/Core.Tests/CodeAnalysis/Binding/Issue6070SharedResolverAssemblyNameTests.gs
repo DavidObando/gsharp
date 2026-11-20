@@ -5,6 +5,7 @@
 package GSharp.Core.Tests.CodeAnalysis.Binding
 
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
@@ -16,6 +17,8 @@ import System.Reflection
 import System.Reflection.Metadata
 import System.Reflection.PortableExecutable
 import System.Runtime.Loader
+import System.Threading
+import System.Threading.Tasks
 import Xunit
 
 /// Issue #6070: sharing one (cref:ReferenceResolver) across compilations with different
@@ -703,6 +706,157 @@ public func Use() int32 -> Api.Secret()
         Assert.False(emitResult.Success)
         let errors = emitResult.Diagnostics.Where((d Diagnostic) -> d.IsError).ToArray()
         Assert.Contains(errors, (d Diagnostic) -> d.Id == "GS0159")
+    }
+
+    @Fact
+    func EmitWithoutAssemblyNameOverride_UsesCompilationAssemblyNameAndExecutesFriendCall() {
+        using let fixture = CSharpFixture(SharedLibrarySource)
+        let source = `package Probe
+import Lib
+public func Run() int32 -> Api.Secret()
+`
+        using let shared = ReferenceResolver.WithReferences([]string{fixture.AssemblyPath})
+        let compilation = Compilation(shared, SyntaxTree.Parse(SourceText.From(source, "probe.gs"))){
+            AssemblyName = "Friend"
+        }
+        using let pe = MemoryStream()
+        let emitResult = compilation.Emit(pe)
+        Assert.True(emitResult.Success, Describe(emitResult.Diagnostics))
+        let peBytes = pe.ToArray()
+        pe.Position = 0
+        using let reader = PEReader(pe)
+        let md = reader.GetMetadataReader()
+        Assert.Equal("Friend", md.GetString(md.GetAssemblyDefinition().Name))
+        Assert.Equal(42, InvokeRunMethod(peBytes, fixture.AssemblyPath, "Probe.<Program>", "Run"))
+    }
+
+    @Fact
+    func DownlevelPinningUnsafe_UsesCompilationAssemblyNameOverResolverName() {
+        let refDir = typeof(Issue6070SharedResolverAssemblyNameTests)
+            .Assembly
+            .GetCustomAttributes[AssemblyMetadataAttribute]()
+            .Single((attribute AssemblyMetadataAttribute) -> attribute.Key == "NetStandard20ReferenceDirectory")
+            .Value!!
+        Assert.True(Directory.Exists(refDir))
+        using let unsafeShim = CSharpFixture(`using System.Runtime.CompilerServices;
+[assembly: InternalsVisibleTo("Friend")]
+namespace System.Runtime.CompilerServices {
+    internal static class Unsafe {
+        public static unsafe void* AsPointer<T>(ref T value) => null;
+    }
+}`, assemblyName: "FriendOnlyUnsafe", allowUnsafe: true)
+        let paths = Directory.EnumerateFiles(refDir, "*.dll").Prepend(unsafeShim.AssemblyPath).ToArray()
+        using let resolver = ReferenceResolver.WithReferences(paths)
+        resolver.CurrentAssemblyName = "Stranger"
+        let source = `package Probe
+public unsafe func Pin(values []int32) int32 {
+    fixed p *int32 = values {
+        return *p
+    }
+}
+`
+        let friend = Compilation(resolver, SyntaxTree.Parse(SourceText.From(source, "friend.gs"))){
+            AssemblyName = "Friend"
+        }
+        using let friendPe = MemoryStream()
+        let friendEmit = friend.Emit(friendPe)
+        Assert.True(friendEmit.Success, Describe(friendEmit.Diagnostics))
+
+        resolver.CurrentAssemblyName = "Friend"
+        let stranger = Compilation(resolver, SyntaxTree.Parse(SourceText.From(source, "stranger.gs"))){
+            AssemblyName = "Stranger"
+        }
+        using let strangerPe = MemoryStream()
+        let strangerEmit = stranger.Emit(strangerPe)
+        Assert.False(strangerEmit.Success)
+        Assert.Contains(strangerEmit.Diagnostics.Where((d Diagnostic) -> d.IsError), (d Diagnostic) -> d.Id == "GS0546")
+    }
+
+    @Fact
+    func RetainedSemanticModel_InvalidatesBoundIndexAfterCompilationRename() {
+        using let fixture = CSharpFixture(SharedLibrarySource)
+        let source = `package Probe
+import Lib
+public func Use() int32 -> Api.Secret()
+`
+        let tree = SyntaxTree.Parse(SourceText.From(source, "probe.gs"))
+        let callNode = tree.Root.DescendantNodes().OfType[AccessorExpressionSyntax]().Single()
+        using let shared = ReferenceResolver.WithReferences([]string{fixture.AssemblyPath})
+        let compilation = Compilation(shared, tree){AssemblyName = "Friend"}
+        let model = compilation.GetSemanticModel(tree)
+        Assert.Empty(model.GetDiagnostics().Where((d Diagnostic) -> d.IsError))
+        Assert.NotNull(model.GetBoundNode(callNode))
+        Assert.NotNull(model.GetSymbolInfo(callNode).Symbol)
+
+        compilation.AssemblyName = "Stranger"
+        let renamedErrors = model.GetDiagnostics().Where((d Diagnostic) -> d.IsError).ToArray()
+        Assert.Contains(renamedErrors, (d Diagnostic) -> d.Id == "GS0159")
+        Assert.Null(model.GetBoundNode(callNode))
+        Assert.Null(model.GetSymbolInfo(callNode).Symbol)
+    }
+
+    @Fact
+    func ConcurrentRename_DoesNotRepublishStaleFriendDiagnosticsOrProgram() {
+        using let fixture = CSharpFixture(SharedLibrarySource)
+        let source = `package Probe
+import Lib
+public func Use() int32 -> Api.Secret()
+`
+        let tree = SyntaxTree.Parse(SourceText.From(source, "probe.gs"))
+        using let shared = ReferenceResolver.WithReferences([]string{fixture.AssemblyPath})
+        for var i = 0; i < 16; i++ {
+            let compilation = Compilation(shared, tree){AssemblyName = "Friend"}
+            let _ = compilation.GlobalScope
+            using let start = ManualResetEventSlim(false)
+            let readerTask = Task.Run(
+                () -> {
+                    start.Wait()
+                    return compilation.GetDiagnostics()
+                }
+            )
+            let renameTask = Task.Run(
+                () -> {
+                    start.Wait()
+                    compilation.AssemblyName = "Stranger"
+                }
+            )
+            start.Set()
+            Task.WaitAll(readerTask, renameTask)
+            let postErrors = compilation.GetDiagnostics().Where((d Diagnostic) -> d.IsError).ToArray()
+            Assert.Contains(postErrors, (d Diagnostic) -> d.Id == "GS0159")
+        }
+    }
+
+    @Fact
+    func WellKnownNullReferenceException_UsesCompilationAssemblyNameForCtorAndCatch() {
+        using let customNre = CSharpFixture(`using System;
+using System.Runtime.CompilerServices;
+[assembly: InternalsVisibleTo("Friend")]
+namespace System {
+    internal sealed class NullReferenceException : Exception {
+        public NullReferenceException() : base("custom") {}
+        public NullReferenceException(string message) : base(message) {}
+    }
+}`, assemblyName: "FriendOnlyNre")
+        using let resolver = ReferenceResolver.WithReferences([]string{customNre.AssemblyPath})
+        resolver.CurrentAssemblyName = "Stranger"
+        let source = `package Probe
+public func Run() int32 {
+    try {
+        var s string? = nil
+        return s!!.Length
+    } catch (ex NullReferenceException) {
+        return 42
+    }
+}
+`
+        let friend = Compilation(resolver, SyntaxTree.Parse(SourceText.From(source, "friend.gs"))){
+            AssemblyName = "Friend"
+        }
+        using let pe = MemoryStream()
+        let emitResult = friend.Emit(pe)
+        Assert.True(emitResult.Success, Describe(emitResult.Diagnostics))
+        Assert.Equal(42, InvokeRunMethod(pe.ToArray(), customNre.AssemblyPath, "Probe.<Program>", "Run"))
     }
 
     shared {

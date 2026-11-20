@@ -39,6 +39,7 @@ open class Compilation {
     private var diagnosticSuppressions DiagnosticSuppressionMap?
     private var preprocessorSymbols ImmutableHashSet[string] = ImmutableHashSet[string].Empty
     private var assemblyName string?
+    private var bindingGeneration int64 = 0
     private var debugInformation DebugInformationOptions = DebugInformationOptions()
     // ADR-0212 §8: one gate serialises the lazy builds (single flight) and the repoint that
     // ReplaceSyntaxTree performs on the symbols. Compilations that share symbols share the gate. Waiters take it with their
@@ -282,7 +283,10 @@ open class Compilation {
 
     internal prop EffectiveConsumerAssemblyName string? -> assemblyName ?? References?.CurrentAssemblyName
 
+    internal prop BindingGeneration int64 -> Volatile.Read(&this.bindingGeneration)
+
     private func ResetConsumerBindingState_Locked() {
+        Volatile.Write(&this.bindingGeneration, this.bindingGeneration + 1)
         globalScope = nil
         boundProgram = nil
         ReusedGlobalScope = nil
@@ -381,37 +385,43 @@ open class Compilation {
     /// Returns the bound program, binding it first when no caller has.
     /// @param cancellationToken Cancels this caller's wait for a build in flight, never the build itself.
     internal func GetBoundProgram(cancellationToken CancellationToken) BoundProgram {
-        let published = Volatile.Read[BoundProgram?](&this.boundProgram)
-        if published != nil {
-            return published
-        }
-        // The declaration bind takes the gate itself, so it must finish before this thread holds it.
-        let declarations = GetGlobalScope(cancellationToken)
-        buildGate.Wait(cancellationToken)
-        try {
-            if boundProgram != nil {
-                return boundProgram!!
+        while true {
+            let published = Volatile.Read[BoundProgram?](&this.boundProgram)
+            if published != nil {
+                return published
             }
-            using let measurement = CompilationMeasurements.BeginPhase("bodies")
-            // ADR-0186: body binding reads imported member signatures too.
-            using let nullabilityScope = NullabilityOptions.Enter(Nullability, PlatformNilChecks)
-            using let recordingScope = CallCandidateRecorder.Enter(RecordMemberGroups, FailedCalls)
-            using let prefixScope = PrefixBindingContext.Enter(FindPrefixCut())
-            ThrowIfCannotBuild_Locked()
-            BodyBindProbe?.Invoke()
-            let bp = Binder.BindProgram(
-                declarations,
-                References,
-                BodyBindingOptions(BodyCache, DirtyBodyTrees),
-                WorkBudget
-            )
-            CompilationMeasurements.Count("input.methods", bp.Functions.Count)
-            // A cancelled build publishes nothing: the compilation is dead (ADR-0212 §8).
-            WorkBudget.CancellationToken.ThrowIfCancellationRequested()
-            Volatile.Write[BoundProgram?](&this.boundProgram, bp)
-            return bp
-        } finally {
-            buildGate.Release()
+            let generation = Volatile.Read(&this.bindingGeneration)
+            // The declaration bind takes the gate itself, so it must finish before this thread holds it.
+            let declarations = GetGlobalScope(cancellationToken)
+            buildGate.Wait(cancellationToken)
+            try {
+                if Volatile.Read(&this.bindingGeneration) != generation {
+                    continue
+                }
+                if boundProgram != nil {
+                    return boundProgram!!
+                }
+                using let measurement = CompilationMeasurements.BeginPhase("bodies")
+                // ADR-0186: body binding reads imported member signatures too.
+                using let nullabilityScope = NullabilityOptions.Enter(Nullability, PlatformNilChecks)
+                using let recordingScope = CallCandidateRecorder.Enter(RecordMemberGroups, FailedCalls)
+                using let prefixScope = PrefixBindingContext.Enter(FindPrefixCut())
+                ThrowIfCannotBuild_Locked()
+                BodyBindProbe?.Invoke()
+                let bp = Binder.BindProgram(
+                    declarations,
+                    References,
+                    BodyBindingOptions(BodyCache, DirtyBodyTrees),
+                    WorkBudget
+                )
+                CompilationMeasurements.Count("input.methods", bp.Functions.Count)
+                // A cancelled build publishes nothing: the compilation is dead (ADR-0212 §8).
+                WorkBudget.CancellationToken.ThrowIfCancellationRequested()
+                Volatile.Write[BoundProgram?](&this.boundProgram, bp)
+                return bp
+            } finally {
+                buildGate.Release()
+            }
         }
     }
 
@@ -521,24 +531,30 @@ open class Compilation {
     func GetDeclarationDiagnostics(cancellationToken CancellationToken = default(CancellationToken)) ImmutableArray[
         Diagnostic
     ] {
-        let published = Volatile.Read[DiagnosticList?](&this.declarationDiagnostics)
-        if published != nil {
-            return published.Items
-        }
-        let declarations = GetGlobalScope(cancellationToken)
-        buildGate.Wait(cancellationToken)
-        try {
-            if declarationDiagnostics != nil {
-                return declarationDiagnostics!!.Items
+        while true {
+            let published = Volatile.Read[DiagnosticList?](&this.declarationDiagnostics)
+            if published != nil {
+                return published.Items
             }
-            ThrowIfCannotBuild_Locked()
-            let parse = SyntaxTrees.SelectMany((st SyntaxTree) -> st.Diagnostics.AsEnumerable())
-            let items = ApplySourceSuppressions(parse.Concat(declarations.Diagnostics).ToImmutableArray())
-            WorkBudget.CancellationToken.ThrowIfCancellationRequested()
-            Volatile.Write[DiagnosticList?](&this.declarationDiagnostics, DiagnosticList(items))
-            return items
-        } finally {
-            buildGate.Release()
+            let generation = Volatile.Read(&this.bindingGeneration)
+            let declarations = GetGlobalScope(cancellationToken)
+            buildGate.Wait(cancellationToken)
+            try {
+                if Volatile.Read(&this.bindingGeneration) != generation {
+                    continue
+                }
+                if declarationDiagnostics != nil {
+                    return declarationDiagnostics!!.Items
+                }
+                ThrowIfCannotBuild_Locked()
+                let parse = SyntaxTrees.SelectMany((st SyntaxTree) -> st.Diagnostics.AsEnumerable())
+                let items = ApplySourceSuppressions(parse.Concat(declarations.Diagnostics).ToImmutableArray())
+                WorkBudget.CancellationToken.ThrowIfCancellationRequested()
+                Volatile.Write[DiagnosticList?](&this.declarationDiagnostics, DiagnosticList(items))
+                return items
+            } finally {
+                buildGate.Release()
+            }
         }
     }
 
@@ -550,23 +566,29 @@ open class Compilation {
     func GetBodyDiagnostics(cancellationToken CancellationToken = default(CancellationToken)) ImmutableArray[
         Diagnostic
     ] {
-        let published = Volatile.Read[DiagnosticList?](&this.bodyDiagnostics)
-        if published != nil {
-            return published.Items
-        }
-        let program = GetBoundProgram(cancellationToken)
-        buildGate.Wait(cancellationToken)
-        try {
-            if bodyDiagnostics != nil {
-                return bodyDiagnostics!!.Items
+        while true {
+            let published = Volatile.Read[DiagnosticList?](&this.bodyDiagnostics)
+            if published != nil {
+                return published.Items
             }
-            ThrowIfCannotBuild_Locked()
-            let items = ApplySourceSuppressions(program.Diagnostics)
-            WorkBudget.CancellationToken.ThrowIfCancellationRequested()
-            Volatile.Write[DiagnosticList?](&this.bodyDiagnostics, DiagnosticList(items))
-            return items
-        } finally {
-            buildGate.Release()
+            let generation = Volatile.Read(&this.bindingGeneration)
+            let program = GetBoundProgram(cancellationToken)
+            buildGate.Wait(cancellationToken)
+            try {
+                if Volatile.Read(&this.bindingGeneration) != generation {
+                    continue
+                }
+                if bodyDiagnostics != nil {
+                    return bodyDiagnostics!!.Items
+                }
+                ThrowIfCannotBuild_Locked()
+                let items = ApplySourceSuppressions(program.Diagnostics)
+                WorkBudget.CancellationToken.ThrowIfCancellationRequested()
+                Volatile.Write[DiagnosticList?](&this.bodyDiagnostics, DiagnosticList(items))
+                return items
+            } finally {
+                buildGate.Release()
+            }
         }
     }
 
@@ -578,29 +600,35 @@ open class Compilation {
     /// @param cancellationToken Cancels this caller's wait for a build in flight, never the build.
     /// @returns The diagnostics, or an empty array.
     func GetDiagnostics(cancellationToken CancellationToken = default(CancellationToken)) ImmutableArray[Diagnostic] {
-        let published = Volatile.Read[DiagnosticList?](&this.allDiagnostics)
-        if published != nil {
-            return published.Items
-        }
-        let declaration = GetDeclarationDiagnostics(cancellationToken)
-        let body = GetBodyDiagnostics(cancellationToken)
-        let program = GetBoundProgram(cancellationToken)
-        buildGate.Wait(cancellationToken)
-        try {
-            if allDiagnostics != nil {
-                return allDiagnostics!!.Items
+        while true {
+            let published = Volatile.Read[DiagnosticList?](&this.allDiagnostics)
+            if published != nil {
+                return published.Items
             }
-            ThrowIfCannotBuild_Locked()
-            var items = declaration.AddRange(body)
-            if !items.Any((d Diagnostic) -> d.IsError) {
-                let documentation = ValidateDocumentation(program)
-                items = items.AddRange(ApplySourceSuppressions(documentation.ToImmutableArray()))
+            let generation = Volatile.Read(&this.bindingGeneration)
+            let declaration = GetDeclarationDiagnostics(cancellationToken)
+            let body = GetBodyDiagnostics(cancellationToken)
+            let program = GetBoundProgram(cancellationToken)
+            buildGate.Wait(cancellationToken)
+            try {
+                if Volatile.Read(&this.bindingGeneration) != generation {
+                    continue
+                }
+                if allDiagnostics != nil {
+                    return allDiagnostics!!.Items
+                }
+                ThrowIfCannotBuild_Locked()
+                var items = declaration.AddRange(body)
+                if !items.Any((d Diagnostic) -> d.IsError) {
+                    let documentation = ValidateDocumentation(program)
+                    items = items.AddRange(ApplySourceSuppressions(documentation.ToImmutableArray()))
+                }
+                WorkBudget.CancellationToken.ThrowIfCancellationRequested()
+                Volatile.Write[DiagnosticList?](&this.allDiagnostics, DiagnosticList(items))
+                return items
+            } finally {
+                buildGate.Release()
             }
-            WorkBudget.CancellationToken.ThrowIfCancellationRequested()
-            Volatile.Write[DiagnosticList?](&this.allDiagnostics, DiagnosticList(items))
-            return items
-        } finally {
-            buildGate.Release()
         }
     }
 
@@ -1120,7 +1148,8 @@ open class Compilation {
         assemblyVersion string? = nil,
         targetFrameworkMoniker string? = nil
     ) EmitResult {
-        AssemblyName = assemblyName ?? AssemblyName
+        let effectiveAssemblyName = assemblyName ?? AssemblyName
+        AssemblyName = effectiveAssemblyName
         // ADR-0186: emit re-reads declaration nullability through
         // `NullableFlagsBuilder`, so the mode must still be installed here and
         // not only around the lazy binding properties above.
@@ -1140,7 +1169,7 @@ open class Compilation {
                     program,
                     stagedPe,
                     References,
-                    assemblyName,
+                    effectiveAssemblyName,
                     assemblyVersion,
                     metadataOnly: false,
                     asyncRewriteResult: lowered.AsyncRewriteResult,
@@ -1165,7 +1194,7 @@ open class Compilation {
                     program,
                     stagedReference,
                     References,
-                    assemblyName,
+                    effectiveAssemblyName,
                     assemblyVersion,
                     metadataOnly: true,
                     asyncRewriteResult: lowered.AsyncRewriteResult,
@@ -1178,7 +1207,11 @@ open class Compilation {
             }
             if docStream != nil {
                 using let measurement = CompilationMeasurements.BeginPhase("documentation.emit")
-                DocumentationFileEmitter.Emit(stagedDocumentation, assemblyName ?? program.PackageName, program)
+                DocumentationFileEmitter.Emit(
+                    stagedDocumentation,
+                    effectiveAssemblyName ?? program.PackageName,
+                    program
+                )
             }
             WorkBudget.CancellationToken.ThrowIfCancellationRequested()
             using let publication = CompilationMeasurements.BeginPhase("emit.publication")
