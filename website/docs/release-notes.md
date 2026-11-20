@@ -14,6 +14,10 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ## Unreleased (0.5 line)
 
+- **Compiler suggestions on diagnostics** (Part of #6119; ADR-0227 D2 option b). `Diagnostic.Suggestions` holds the fixes that the compiler already knows at the report site, as `DiagnosticSuggestion` (message, equivalence key, applicability, text changes). GS0273 suggests `nil` for `null`, and GS0302 suggests `:` for the deprecated `->` switch arm. `CodeFixService` offers each suggestion as a fix before the providers' fixes. Suggestions do not take part in diagnostic equality.
+
+- **Numeric-conversion and cross-file code fixes** (Part of #6119; ADR-0227 phase 2). GS0156 between two numeric types (including `nint`, `nuint` and `char`) gets `Convert to 'T'`, which wraps a simple operand in `checked(cast[T](expr))`, so an out-of-range value throws instead of wrapping; compound assignments and tuple elements get no fix. `CodeFixContext.RegisterMultiDocumentFix` and `MultiDocumentEditor` let a fix edit several trees of the compilation; the `let` → `var` fix now edits a field declared in another file of a partial type.
+
 - **FixAll for code fixes** (Part of #6119; ADR-0227 D3). `CodeFixService.FixAll` applies every fix with an equivalence key (or the first fix of each diagnostic) at `FixAllScope.Document`, `Project` or `Solution` scope, like Roslyn's batch fixer: each round computes the fixes against one snapshot and keeps the fixes whose changes do not overlap or touch. `FixAllOptions` sets the minimum applicability (machine-applicable by default), the number of rounds and an optional delta gate. `FixAllResult` lists applied and dropped fixes with the reason, the changed documents and the new compilations. The language server offers `source.fixAll.gsharp` when the client asks for it.
 
 - **Language-server code actions use the code-fix service** (Part of #6119; ADR-0227 D7). `textDocument/codeAction` returns the Core and analyzer-assembly fixes for the diagnostics in range (syntax, declaration, body and, when a provider fixes them, analyzer diagnostics), with `diagnostics`, `isPreferred` and `context.only` filtering. Each fix passes the syntax stage of the delta gate. The server now declares `resolveProvider` and handles `codeAction/resolve`, records the client's document version, and emits versioned `documentChanges` when the client supports them. The ADR-0099 nullability fixes moved to Core with the same titles and edits.
@@ -33,6 +37,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 ### Bug Fixes
 
 - Convert capturing forward-recursive local functions to function values and compatible delegates. Preserve callback identity and shared capture cells across direct calls, escaped callbacks, and loop iterations. (Fixes #6105)
+
+- Report `GS0325` at the declaration for bodyless top-level functions, extension functions, receiver-clause operators, and conversion operators without `@DllImport` or `@LibraryImport`, and skip body binding when `Body` is absent so `gsc` exits with diagnostics instead of `GS9998` or emitting an empty method. (Fixes #6116)
 
 - Allow overloaded explicit interface indexers with distinct parameter signatures on the same interface while still reporting `GS0495` for duplicate signatures, and align metadata-only explicit property accessor names with emitted runtime accessors. (Fixes #6125)
 

@@ -22,6 +22,7 @@ class Diagnostic {
         AdditionalLocations = ImmutableArray[TextLocation].Empty
         Properties = ImmutableDictionary[string, string?].Empty
         MessageArguments = ImmutableArray[string].Empty
+        Suggestions = ImmutableArray[DiagnosticSuggestion].Empty
     }
 
     /// Initializes a new instance of the (cref:Diagnostic) class with
@@ -40,7 +41,8 @@ class Diagnostic {
         message string,
         additionalLocations ImmutableArray[TextLocation],
         properties ImmutableDictionary[string, string?],
-        messageArguments ImmutableArray[string]
+        messageArguments ImmutableArray[string],
+        suggestions ImmutableArray[DiagnosticSuggestion]
     ) {
         Descriptor = descriptor
         Location = location
@@ -50,6 +52,7 @@ class Diagnostic {
         AdditionalLocations = additionalLocations
         Properties = properties
         MessageArguments = messageArguments
+        Suggestions = suggestions
     }
 
     // ADR-0225: a copy that keeps every field and sets the prefix finality.
@@ -67,6 +70,7 @@ class Diagnostic {
         AdditionalLocations = source.AdditionalLocations
         Properties = source.Properties
         MessageArguments = source.MessageArguments
+        Suggestions = source.Suggestions
         PrefixFinality = prefixFinality
         this.prefixReason = prefixReason
     }
@@ -95,6 +99,12 @@ class Diagnostic {
     /// order (ADR-0227 D2). A code fix reads them instead of the message text. Empty when the
     /// producer did not record them.
     prop MessageArguments ImmutableArray[string] {
+        get;
+    }
+
+    /// Gets the fixes that the compiler attached when it reported the diagnostic (ADR-0227 D2).
+    /// Empty for most diagnostics. Equality and de-duplication do not read them.
+    prop Suggestions ImmutableArray[DiagnosticSuggestion] {
         get;
     }
 
@@ -209,7 +219,8 @@ class Diagnostic {
                     additionalLocations
                 },
                 properties ?? ImmutableDictionary[string, string?].Empty,
-                FormatArguments(messageArguments)
+                FormatArguments(messageArguments),
+                ImmutableArray[DiagnosticSuggestion].Empty
             )
         }
 
@@ -219,7 +230,8 @@ class Diagnostic {
             descriptor DiagnosticDescriptor,
             location TextLocation,
             severity DiagnosticSeverity,
-            messageArguments[]object?
+            messageArguments[]object?,
+            suggestions ImmutableArray[DiagnosticSuggestion] = default(ImmutableArray[DiagnosticSuggestion])
         ) Diagnostic -> Diagnostic(
             descriptor,
             location,
@@ -227,7 +239,12 @@ class Diagnostic {
             string.Format(descriptor.MessageFormat, messageArguments),
             ImmutableArray[TextLocation].Empty,
             ImmutableDictionary[string, string?].Empty,
-            FormatArguments(messageArguments)
+            FormatArguments(messageArguments),
+            if suggestions.IsDefault {
+                ImmutableArray[DiagnosticSuggestion].Empty
+            } else {
+                suggestions
+            }
         )
 
         // Each argument formatted as string.Format formats it in the message.

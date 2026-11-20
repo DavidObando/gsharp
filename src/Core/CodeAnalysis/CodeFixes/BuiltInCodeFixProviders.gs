@@ -12,11 +12,11 @@ internal shared class BuiltInCodeFixProviders {
     /// Creates the built-in providers.
     /// @returns The providers, in source order.
     func Create() ImmutableArray[GSharpCodeFixProvider] -> ImmutableArray.Create[GSharpCodeFixProvider](
-        UseNilCodeFixProvider(),
         DropNewCodeFixProvider(),
         LetToVarCodeFixProvider(),
         LogicalWordCodeFixProvider(),
         NullConditionalAccessCodeFixProvider(),
-        NullableValueCodeFixProvider()
+        NullableValueCodeFixProvider(),
+        NumericConversionCodeFixProvider()
     )
 }
