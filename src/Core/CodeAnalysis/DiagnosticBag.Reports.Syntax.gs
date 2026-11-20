@@ -7,6 +7,7 @@ package GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
+import System
 import System.Collections
 import System.Collections.Generic
 import System.Collections.Immutable
@@ -456,7 +457,32 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// literal `nil` is required. G# does not recognise `null` as
     /// a keyword — the correct spelling is `nil` (ADR-0081).
     /// @param location The source location of the `null` identifier.
-    func ReportUseNilInsteadOfNull(location TextLocation) -> Report(location, DiagnosticDescriptors.UseNilInsteadOfNull)
+    func ReportUseNilInsteadOfNull(location TextLocation) -> ReportWithSuggestions(
+        location,
+        DiagnosticDescriptors.UseNilInsteadOfNull,
+        DiagnosticDescriptors.UseNilInsteadOfNull.Severity,
+        ImmutableArray.Create(
+            DiagnosticSuggestion(
+                "Use 'nil'",
+                "GS0273.UseNil",
+                GSharp.Core.CodeAnalysis.CodeFixes.Applicability.MachineApplicable,
+                ImmutableArray.Create(TextChange(location.Span, "nil"))
+            )
+        ),
+        Array.Empty[object]()
+    )
+
+    // The span of a token and the spaces or tabs before it on its line: `case 0 ->` becomes `case 0:`.
+    private func WithSpacesBefore(location TextLocation) TextSpan {
+        let text SourceText? = location.Text
+        var start = location.Span.Start
+        if text != nil {
+            while start > 0 && (text[start - 1] == ' ' || text[start - 1] == '\t') {
+                start--
+            }
+        }
+        return TextSpan.FromBounds(start, location.Span.End)
+    }
 
     /// ADR-0074 / issue #714: GS0302 (warning) — a switch-expression arm
     /// used the deprecated `->` separator. The token is being
@@ -464,9 +490,19 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// One release of overlap is provided; the `->` form is removed
     /// in a later release.
     /// @param location The source location of the offending `->` token.
-    func ReportSwitchExpressionArmArrowDeprecated(location TextLocation) -> Report(
+    func ReportSwitchExpressionArmArrowDeprecated(location TextLocation) -> ReportWithSuggestions(
         location,
-        DiagnosticDescriptors.SwitchExpressionArmArrowDeprecated
+        DiagnosticDescriptors.SwitchExpressionArmArrowDeprecated,
+        DiagnosticDescriptors.SwitchExpressionArmArrowDeprecated.Severity,
+        ImmutableArray.Create(
+            DiagnosticSuggestion(
+                "Use ':'",
+                "GS0302.ArmColon",
+                GSharp.Core.CodeAnalysis.CodeFixes.Applicability.MachineApplicable,
+                ImmutableArray.Create(TextChange(WithSpacesBefore(location), ":"))
+            )
+        ),
+        Array.Empty[object]()
     )
 
     /// ADR-0075 / issue #715: GS0303 (warning) — a type-clause slot used the

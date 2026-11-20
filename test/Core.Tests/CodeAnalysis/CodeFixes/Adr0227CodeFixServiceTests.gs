@@ -20,14 +20,14 @@ import Xunit
 /// ADR-0227 D2: providers register by diagnostic ID, the service lists and applies their fixes,
 /// and a provider that throws gives GS9308 instead of a fix.
 open class Adr0227CodeFixServiceTests {
-    const Source string = "package P\n\nfunc F() string? {\n    // keep\n    return null\n}\n"
+    const Source string = "package P\n\nfunc F() string? {\n    // keep\n    return missing\n}\n"
 
     @Fact
     func GetFixes_ForADiagnostic_ReturnsTheProviderFix_AndApplyEditsTheText() {
         let tree = SyntaxTree.Parse(SourceText.From(Source, "a.gs"))
         let compilation = Compilation(tree)
         let diagnostic = Assert.Single(compilation.GetDiagnostics())
-        Assert.Equal("GS0273", diagnostic.Id)
+        Assert.Equal("GS0125", diagnostic.Id)
         let service = CodeFixService(Registry(TestNilProvider()))
         let fix = Assert.Single(service.GetFixes(compilation, diagnostic))
         Assert.Equal("Use 'nil'", fix.Title)
@@ -73,13 +73,13 @@ open class Adr0227CodeFixServiceTests {
         let tree = SyntaxTree.Parse(Source)
         let compilation = Compilation(tree)
         let service = CodeFixService(Registry(TestNilProvider()))
-        let at = Source.IndexOf("null", StringComparison.Ordinal)
+        let at = Source.IndexOf("missing", StringComparison.Ordinal)
         Assert.Single(service.GetFixes(compilation, tree, TextSpan(at + 2, 0), ImmutableArray[Diagnostic].Empty, out _))
         Assert.Empty(service.GetFixes(compilation, tree, TextSpan(0, 3), ImmutableArray[Diagnostic].Empty, out _))
         // A non-empty selection next to the diagnostic does not hit it.
         Assert.Empty(service.GetFixes(compilation, tree, TextSpan(at - 1, 1), ImmutableArray[Diagnostic].Empty, out _))
-        Assert.Empty(service.GetFixes(compilation, tree, TextSpan(at + 4, 1), ImmutableArray[Diagnostic].Empty, out _))
-        Assert.Single(service.GetFixes(compilation, tree, TextSpan(at + 4, 0), ImmutableArray[Diagnostic].Empty, out _))
+        Assert.Empty(service.GetFixes(compilation, tree, TextSpan(at + 7, 1), ImmutableArray[Diagnostic].Empty, out _))
+        Assert.Single(service.GetFixes(compilation, tree, TextSpan(at + 7, 0), ImmutableArray[Diagnostic].Empty, out _))
     }
 
     @Fact
@@ -128,8 +128,8 @@ open class Adr0227CodeFixServiceTests {
         let first = TestNilProvider()
         let second = TestNilProvider()
         let registry = Registry(first, second)
-        Assert.Equal(2, registry.GetProviders("GS0273").Length)
-        Assert.Same(first, registry.GetProviders("GS0273")[0])
+        Assert.Equal(2, registry.GetProviders("GS0125").Length)
+        Assert.Same(first, registry.GetProviders("GS0125")[0])
         Assert.Empty(registry.GetProviders("GS0001"))
     }
 
@@ -204,7 +204,7 @@ open class Adr0227CodeFixServiceTests {
             set;
         }
 
-        override prop FixableDiagnosticIds ImmutableArray[string] -> ImmutableArray.Create("GS0273")
+        override prop FixableDiagnosticIds ImmutableArray[string] -> ImmutableArray.Create("GS0125")
 
         override func RegisterCodeFixes(context CodeFixContext) {
             let span = context.Diagnostic.Location.Span
@@ -222,7 +222,7 @@ open class Adr0227CodeFixServiceTests {
     }
 
     private class ThrowingProvider : GSharpCodeFixProvider {
-        override prop FixableDiagnosticIds ImmutableArray[string] -> ImmutableArray.Create("GS0273")
+        override prop FixableDiagnosticIds ImmutableArray[string] -> ImmutableArray.Create("GS0125")
 
         override func RegisterCodeFixes(context CodeFixContext) {
             throw InvalidOperationException("broken")

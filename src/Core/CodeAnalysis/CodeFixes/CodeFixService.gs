@@ -191,6 +191,22 @@ class CodeFixService {
         failures ImmutableArray[Diagnostic].Builder,
         cancellationToken CancellationToken
     ) {
+        // ADR-0227 D2 option b: the suggestions that the compiler attached come first.
+        for suggestion in diagnostic.Suggestions {
+            let changes = suggestion.Changes
+            fixes.Add(
+                CodeFix(
+                    suggestion.Message,
+                    suggestion.EquivalenceKey,
+                    suggestion.Applicability,
+                    ImmutableArray.Create(diagnostic),
+                    SuggestionProviderId,
+                    (ct CancellationToken) -> FixChanges(
+                        ImmutableArray.Create(DocumentChanges(tree, changes, ImmutableArray[TextSpan].Empty))
+                    )
+                )
+            )
+        }
         for provider in Registry.GetProviders(diagnostic.Id) {
             cancellationToken.ThrowIfCancellationRequested()
             let context = CodeFixContext(diagnostic, tree, compilation, provider.Id, cancellationToken)
@@ -217,6 +233,9 @@ class CodeFixService {
     }
 
     shared {
+        /// The provider name of the fixes that come from (cref:Diagnostic.Suggestions).
+        const SuggestionProviderId string = "GSharp.CodeFixes.Suggestion"
+
         // Two non-empty spans overlap when they share a character. A zero-length span (a caret)
         // hits a span that contains or touches it.
         internal func Overlaps(a TextSpan, b TextSpan) bool {

@@ -3351,6 +3351,7 @@ type sealed class GSharp.Core.CodeAnalysis.CodeFixes.CodeFixRegistry : System.Ob
   method public static GSharp.Core.CodeAnalysis.CodeFixes.CodeFixRegistry CreateDefault()
   property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.CodeFixes.GSharpCodeFixProvider> Providers { get; }
 type sealed class GSharp.Core.CodeAnalysis.CodeFixes.CodeFixService : System.Object
+  field public const String SuggestionProviderId = "GSharp.CodeFixes.Suggestion"
   method public GSharp.Core.CodeAnalysis.CodeFixes.CodeFixRegistry get_Registry()
   method public GSharp.Core.CodeAnalysis.CodeFixes.DiagnosticDelta ComputeDelta(GSharp.Core.CodeAnalysis.CodeFixes.DeltaBaseline baseline, GSharp.Core.CodeAnalysis.CodeFixes.CodeFix fix, System.Threading.CancellationToken cancellationToken = null)
   method public GSharp.Core.CodeAnalysis.CodeFixes.DiagnosticDelta ComputeDelta(GSharp.Core.CodeAnalysis.CodeFixes.DeltaBaseline baseline, GSharp.Core.CodeAnalysis.CodeFixes.FixChanges changes, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> targets, System.Threading.CancellationToken cancellationToken = null)
@@ -3517,6 +3518,7 @@ type sealed class GSharp.Core.CodeAnalysis.Diagnostic : System.Object
   method public GSharp.Core.CodeAnalysis.Text.TextLocation get_Location()
   method public String get_Id()
   method public String get_Message()
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.DiagnosticSuggestion> get_Suggestions()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Text.TextLocation> get_AdditionalLocations()
   method public System.Collections.Immutable.ImmutableArray`1<String> get_MessageArguments()
   method public System.Collections.Immutable.ImmutableDictionary`2<String, String> get_Properties()
@@ -3531,6 +3533,7 @@ type sealed class GSharp.Core.CodeAnalysis.Diagnostic : System.Object
   property public GSharp.Core.CodeAnalysis.Text.TextLocation Location { get; }
   property public String Id { get; }
   property public String Message { get; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.DiagnosticSuggestion> Suggestions { get; }
   property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Text.TextLocation> AdditionalLocations { get; }
   property public System.Collections.Immutable.ImmutableArray`1<String> MessageArguments { get; }
   property public System.Collections.Immutable.ImmutableDictionary`2<String, String> Properties { get; }
@@ -4036,6 +4039,17 @@ type sealed class GSharp.Core.CodeAnalysis.DiagnosticDescriptor : System.Object
   property public String Id { get; }
   property public String MessageFormat { get; }
   property public String Title { get; }
+type sealed class GSharp.Core.CodeAnalysis.DiagnosticSuggestion : System.Object
+  method public GSharp.Core.CodeAnalysis.CodeFixes.Applicability get_Applicability()
+  method public String get_EquivalenceKey()
+  method public String get_Message()
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Text.TextChange> get_Changes()
+  method public Void .ctor(String message, String equivalenceKey, GSharp.Core.CodeAnalysis.CodeFixes.Applicability applicability, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Text.TextChange> changes)
+  method public virtual override String ToString()
+  property public GSharp.Core.CodeAnalysis.CodeFixes.Applicability Applicability { get; }
+  property public String EquivalenceKey { get; }
+  property public String Message { get; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Text.TextChange> Changes { get; }
 type sealed class GSharp.Core.CodeAnalysis.Diagnostics.FileLogger : System.Object, GSharp.Core.CodeAnalysis.Diagnostics.ILogger, System.IDisposable
   method public Void .ctor(String filePath)
   method public sealed Boolean IsEnabled(GSharp.Core.CodeAnalysis.Diagnostics.LogLevel level)
