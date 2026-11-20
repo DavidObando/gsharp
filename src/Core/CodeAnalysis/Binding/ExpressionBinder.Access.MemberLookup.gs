@@ -1607,7 +1607,8 @@ internal partial class ExpressionBinder {
                 return BoundMethodGroupExpression(name, receiver, userCandidates)
             }
             let importedCandidates = this.memberLookup.CollectImportedExtensionMethods(name.IdentifierToken.ValueText)
-            if importedCandidates.Count > 0 {
+            if importedCandidates.Count > 0 &&
+                ImportedExtensionMayApply(receiver.Type, name.IdentifierToken.ValueText, callSyntax: nil) {
                 return BoundClrMethodGroupExpression(
                     name,
                     receiver,
@@ -2226,6 +2227,9 @@ internal partial class ExpressionBinder {
             }
         )
         ApplySubExpressionNarrowingEffects(targetAnchor, target)
+        if ReportUnresolvedTargetlessValues(target, targetLocation) {
+            return BoundErrorExpression(nil)
+        }
         let rectangular RectangularArrayTypeSymbol? = GetRectangularArrayTypeForBinding(target.Type)
         var preBoundMultiArguments = default(ImmutableArray[BoundExpression])
         if rectangular == nil && (target.Type is StructSymbol or InterfaceSymbol) {
@@ -2420,6 +2424,9 @@ internal partial class ExpressionBinder {
         receiver BoundExpression,
         syntax IndexExpressionSyntax
     ) BoundExpression {
+        if ReportUnresolvedTargetlessValues(receiver, syntax.Target.Location) {
+            return BoundErrorExpression(nil)
+        }
         let receiverType = receiver.Type
         var underlying TypeSymbol
         if receiverType is NullableTypeSymbol nullable {
@@ -2510,6 +2517,9 @@ internal partial class ExpressionBinder {
             (indexSyntax.Parent as IndexExpressionSyntax)?.Target ??
             indexSyntax
         ApplySubExpressionNarrowingEffects(targetAnchor, target)
+        if ReportUnresolvedTargetlessValues(target, targetLocation) {
+            return BoundErrorExpression(nil)
+        }
         // ADR-0122 / issue #1014: pointer indexing `p[i]` == `*(p + i)`.
         if target.Type is PointerTypeSymbol pointerTarget {
             // ADR-0122 §3 / issue #1033: a `*void` pointer has no element type,
@@ -2838,6 +2848,9 @@ internal partial class ExpressionBinder {
             }
             clrIndexerOutcome = outcome
         }
+        if boundIndex != nil && ReportUnresolvedTargetlessValues(boundIndex, indexSyntax.Location) {
+            return BoundErrorExpression(nil)
+        }
         if !ReportClrIndexerResolutionFailure(clrIndexerOutcome, indexSyntax.Location) &&
             target.Type != TypeSymbol.Error {
             Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type)
@@ -3047,6 +3060,7 @@ internal partial class ExpressionBinder {
             binderCtx.AllowedMovableFixedBufferSyntax = previousAllowedFixedBuffer
         }
         if boundReceiver is BoundErrorExpression || boundReceiver.Type == TypeSymbol.Error {
+            let _ = ReportUnresolvedTargetlessValues(boundReceiver, remainingChain.Location)
             return BoundErrorExpression(nil)
         }
         if GetRectangularArrayTypeForBinding(boundReceiver.Type) is {} rectangularReceiver {
@@ -4114,6 +4128,9 @@ internal partial class ExpressionBinder {
                 return BoundErrorExpression(nil)
             }
             clrIndexerOutcome = outcome
+        }
+        if cachedIndexValue != nil && ReportUnresolvedTargetlessValues(cachedIndexValue, indexSyntax.Location) {
+            return BoundErrorExpression(nil)
         }
         if !ReportClrIndexerResolutionFailure(clrIndexerOutcome, indexSyntax.Location) &&
             targetType != TypeSymbol.Error {

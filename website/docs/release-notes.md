@@ -38,6 +38,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Report targetless method groups (`GS0582`) and inapplicable nullable-receiver member reads (`GS0158`) instead of discarding them to `BoundErrorExpression` across operators, indexers, switches, and assignments, avoiding silent `?`-typed locals and `GS9998` crashes in emit. (Fixes #6077)
+
 - Reify synthesized anonymous object types over referenced generic type parameters from generic local functions, methods, classes, and nested generic scopes. Preserve deterministic parameter ordering, same-shape deduplication, `data object` value semantics, and rich anonymous object enclosing-scope mappings. (Fixes #6109)
 
 - Convert capturing forward-recursive local functions to function values and compatible delegates. Preserve callback identity and shared capture cells across direct calls, escaped callbacks, and loop iterations. (Fixes #6105)

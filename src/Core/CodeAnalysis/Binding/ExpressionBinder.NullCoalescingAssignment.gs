@@ -86,6 +86,7 @@ internal partial class ExpressionBinder {
             )
         }
         if boundRead is BoundErrorExpression || boundRead.Type == TypeSymbol.Error {
+            let _ = ReportUnresolvedTargetlessValues(boundRead)
             let _ = BindExpression(syntax.Value)
             return (nil, nil, nil, nil, false, nil)
         }
@@ -125,6 +126,7 @@ internal partial class ExpressionBinder {
         MergeBranchExpressionNarrowingFrames(beforeRhsFrames)
         intersectNarrowingWithSnapshot?(preRhsSnapshot)
         if boundRhs is BoundErrorExpression || boundRhs.Type == TypeSymbol.Error {
+            let _ = ReportUnresolvedTargetlessValues(boundRhs)
             return (nil, nil, nil, nil, false, nil)
         }
         return (
