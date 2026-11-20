@@ -176,6 +176,56 @@ open class Adr0227TransformationProgramTests {
         Assert.True(lowered.IsDataDefined)
     }
 
+    @Fact
+    func ArgumentEqualsWithoutAnIndex_AndComparisonsWithoutAValue_AreRejectedAtLoadTime() {
+        Assert.Throws[FormatException](
+            () -> TransformationProgram.FromJson(DropNew.Replace("\"argumentIndex\":0,", ""))
+        )
+        for predicate in[]string{"textEquals", "kindIs", "symbolKind", "declaredWith", "typeIs"} {
+            Assert.Throws[FormatException](
+                () -> TransformationProgram.FromJson(
+                    DropNew.Replace("\"predicate\":\"constructsReferenceType\"", "\"predicate\":\"" + predicate + "\"")
+                )
+            )
+        }
+    }
+
+    @Fact
+    func ConstructsReferenceType_IsFalseForAnEscapedFunctionValue() {
+        let source = "package P\n\nclass C { }\n\nfunc F(" +
+            "$" +
+            "make () -> C) C {\n    return new " +
+            "$" +
+            "make()\n}\n"
+        let compilation = Compilation(SyntaxTree.Parse(source))
+        let target = compilation.GetDiagnostics().First((d Diagnostic) -> d.Id == "GS0125")
+        Assert.Empty(ProgramService(DropNew).GetFixes(compilation, target))
+    }
+
+    @Fact
+    func SymbolKind_OfACalledDelegate_IsItsParameter() {
+        const program = `{"id":"p","title":"Remove 'new'","trigger":{"diagnosticIds":["GS0125"],"argumentIndex":0,"argumentEquals":"new"},"pattern":{"capture":"kw","text":"new","next":{"capture":"callee","kind":"IdentifierToken"}},"guards":[{"predicate":"symbolKind","capture":"callee","value":"parameter"}],"edits":[{"op":"delete","capture":"kw"}],"applicability":"MaybeIncorrect","provenance":{"origin":"HandWritten"}}`
+        const source = "package P\n\nimport System\n\nclass C { }\n\nfunc F(make Func[C]) C {\n    return new make()\n}\n"
+        let compilation = Compilation(SyntaxTree.Parse(source))
+        let target = compilation.GetDiagnostics().First((d Diagnostic) -> d.Id == "GS0125")
+        Assert.Single(ProgramService(program).GetFixes(compilation, target))
+    }
+
+    @Fact
+    func Guards_FindAnEscapedReceiver_AndAPropertyReceiver() {
+        const program = `{"id":"safe-dot","title":"Use '?.'","trigger":{"diagnosticIds":["GS0158"]},"pattern":{"capture":"member","previous":{"capture":"dot","text":".","previous":{"capture":"receiver"}}},"guards":[{"predicate":"isNullable","capture":"receiver"},{"predicate":"typeIs","capture":"receiver","value":"C?"}],"edits":[{"op":"replace","capture":"dot","template":"?."}],"applicability":"MaybeIncorrect","provenance":{"origin":"HandWritten"}}`
+        let declaration = "package P\n\nclass C {\n    var N int32\n}\n\n"
+        for source in[]string{
+            declaration + "func F(" + "$" + "c C?) int32? {\n    return " + "$" + "c.N\n}\n",
+            declaration +
+                "class D {\n    prop Current C? {\n        get;\n    }\n\n    func F() int32? {\n        return Current.N\n    }\n}\n"
+        } {
+            let compilation = Compilation(SyntaxTree.Parse(source))
+            let target = compilation.GetDiagnostics().Single((d Diagnostic) -> d.Id == "GS0158")
+            Assert.Single(ProgramService(program).GetFixes(compilation, target))
+        }
+    }
+
     private func ProgramService(programs ...string) CodeFixService {
         let registry = CodeFixRegistry()
         registry.Add(

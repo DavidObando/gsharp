@@ -234,7 +234,7 @@ class ProgramFixProvider : GSharpCodeFixProvider {
                 // A call of a function value (`make()` with a parameter `make () -> C`) has no
                 // symbol either. The callee's name must not name a variable or a function in scope.
                 let callee = call.Identifier
-                return !model.LookupSymbols(call.Span.Start, callee.Text, ct).Any((s Symbol) -> !(s is TypeSymbol))
+                return !model.LookupSymbols(call.Span.Start, callee.ValueText, ct).Any((s Symbol) -> !(s is TypeSymbol))
             }
             case "typeIs" {
                 return TypeOf(model, node, ct)?.ToString() == rule.Value
@@ -252,7 +252,11 @@ class ProgramFixProvider : GSharpCodeFixProvider {
     // The symbol of a capture: GetSymbolInfo of its node, else the one symbol that its name finds
     // in scope. The fallback covers a receiver whose member access did not bind (#6127).
     private func SymbolOf(model SemanticModel, node SyntaxNode, ct CancellationToken) Symbol? {
-        let target SyntaxNode? = if node is SyntaxToken {
+        // An identifier token answers its own symbol: a declared parameter, or the variable of a
+        // called function value rather than the call's member. Another token asks its parent.
+        let target SyntaxNode? = if node is SyntaxToken{Kind: SyntaxKind.IdentifierToken} {
+            node
+        } else if node is SyntaxToken {
             node.Parent
         } else {
             node
@@ -264,9 +268,10 @@ class ProgramFixProvider : GSharpCodeFixProvider {
         if bound != nil {
             return bound
         }
+        // The semantic name: `$c` names `c`.
         let name string? = switch node {
-            case token is SyntaxToken when token.Kind == SyntaxKind.IdentifierToken: token.Text
-            case nameExpression is NameExpressionSyntax: nameExpression.IdentifierToken.Text
+            case token is SyntaxToken when token.Kind == SyntaxKind.IdentifierToken: token.ValueText
+            case nameExpression is NameExpressionSyntax: nameExpression.IdentifierToken.ValueText
             default: default(string?)
         }
         if name == nil {
@@ -297,6 +302,7 @@ class ProgramFixProvider : GSharpCodeFixProvider {
         return switch SymbolOf(model, node, ct) {
             case variable is VariableSymbol: variable.Type
             case field is FieldSymbol: field.Type
+            case property is PropertySymbol: property.Type
             default: default(TypeSymbol?)
         }
     }

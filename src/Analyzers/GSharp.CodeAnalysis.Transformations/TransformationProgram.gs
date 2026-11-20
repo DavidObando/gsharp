@@ -54,6 +54,9 @@ class ProgramTrigger {
         if diagnosticIds.IsDefaultOrEmpty {
             throw FormatException("A trigger needs at least one diagnostic ID.")
         }
+        if argumentEquals != nil && argumentIndex == nil {
+            throw FormatException("A trigger with 'argumentEquals' needs 'argumentIndex'.")
+        }
         DiagnosticIds = diagnosticIds
         ArgumentIndex = argumentIndex
         ArgumentEquals = argumentEquals
@@ -149,6 +152,15 @@ class GuardPredicate {
             "typeIs",
             "isNullable"
         )
+
+        let ComparisonPredicates ImmutableHashSet[string] = ImmutableHashSet.Create(
+            StringComparer.Ordinal,
+            "textEquals",
+            "kindIs",
+            "symbolKind",
+            "declaredWith",
+            "typeIs"
+        )
     }
 
     init(predicate string, capture string, other string?, value string?) {
@@ -156,6 +168,10 @@ class GuardPredicate {
             throw FormatException("Unknown guard predicate '${predicate}' (ADR-0227 D6).")
         }
         ArgumentException.ThrowIfNullOrEmpty(capture)
+        // A comparison without a value would compare an unknown fact with nothing and pass.
+        if value == nil && ComparisonPredicates.Contains(predicate) {
+            throw FormatException("The guard predicate '${predicate}' needs a 'value' (ADR-0227 D6).")
+        }
         Predicate = predicate
         Capture = capture
         Other = other
