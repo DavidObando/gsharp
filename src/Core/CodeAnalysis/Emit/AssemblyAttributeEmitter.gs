@@ -70,10 +70,7 @@ internal class AssemblyAttributeEmitter {
     /// loaders treat it as metadata-only and refuse to execute its (absent)
     /// method bodies.
     func EmitReferenceAssemblyAttribute(assemblyHandle AssemblyDefinitionHandle) {
-        let attrType = if this
-            .emitCtx
-            .References
-            .TryResolveType(
+        let attrType = if this.emitCtx.TryResolveType(
             "System.Runtime.CompilerServices.ReferenceAssemblyAttribute",
             requireExternalVisibility: false,
             out var resolved
@@ -546,10 +543,7 @@ internal class AssemblyAttributeEmitter {
     /// Emits the CLR debugging flags for an optimized or non-optimized runtime
     /// assembly.
     func EmitDebuggableAttribute(assemblyHandle AssemblyDefinitionHandle, optimize bool) {
-        let attrType = if this
-            .emitCtx
-            .References
-            .TryResolveType(
+        let attrType = if this.emitCtx.TryResolveType(
             "System.Diagnostics.DebuggableAttribute",
             requireExternalVisibility: false,
             out var resolved

@@ -36,7 +36,7 @@ internal partial class ExpressionBinder {
         if !SubmissionBinding.TryFindMemberContainer($scope, name, out var programType) {
             return false
         }
-        let classSymbol = ImportedClassSymbol(programType, syntax, references: $scope.References)
+        let classSymbol = $scope.CreateImportedClassSymbol(programType, syntax)
         result = BindAccessorStep(receiver: nil, classSymbol, syntax)
         if result is BoundClrPropertyAccessExpression{Receiver: nil, Member: FieldInfo globalField} fieldRead &&
             SubmissionBinding
@@ -49,7 +49,9 @@ internal partial class ExpressionBinder {
                     fieldRead.Type,
                     globalField.FieldType,
                     declaredGlobal?.Type,
-                    $scope.References!!
+                    $scope.References!!,
+                    $scope.ConsumerAssemblyName,
+                    $scope.HasExplicitConsumerAssemblyName
                 ),
                 fieldRead.StaticContainerType,
                 isAddressableStaticField: true,
@@ -81,7 +83,7 @@ internal partial class ExpressionBinder {
         ) {
             return false
         }
-        let classSymbol = ImportedClassSymbol(resolvedProgramType, declaration: nil, references: $scope.References)
+        let classSymbol = $scope.CreateImportedClassSymbol(resolvedProgramType, declaration: nil)
         if !classSymbol.TryLookupMember(name, ne: nil, out var member) ||
             !TryGetWritableClrMember(member, out _, out var targetSymbol, out _) {
             Diagnostics.ReportCannotAssign(operatorLocation, name)
@@ -96,7 +98,9 @@ internal partial class ExpressionBinder {
                 targetSymbol,
                 globalField.FieldType,
                 resolvedDeclared.Type,
-                $scope.References!!
+                $scope.References!!,
+                $scope.ConsumerAssemblyName,
+                $scope.HasExplicitConsumerAssemblyName
             )
         }
         let value = BindAssignmentRhs(valueSyntax, targetSymbol)
@@ -127,7 +131,7 @@ internal partial class ExpressionBinder {
         ) {
             return false
         }
-        let classSymbol = ImportedClassSymbol(resolvedProgramType, declaration: nil, references: $scope.References)
+        let classSymbol = $scope.CreateImportedClassSymbol(resolvedProgramType, declaration: nil)
         if !classSymbol.TryLookupMember(name, ne: nil, out var member) ||
             !TryGetWritableClrMember(member, out _, out var targetSymbol, out _) {
             Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, name)
@@ -253,7 +257,7 @@ internal partial class ExpressionBinder {
         ) != nil {
             return false
         }
-        let container = ImportedClassSymbol(resolvedProgramType, declaration: nil, references: $scope.References)
+        let container = $scope.CreateImportedClassSymbol(resolvedProgramType, declaration: nil)
         if !container.TryLookupMember(name, ne: nil, out var globalMember) ||
             globalMember is not FieldInfo globalField {
             return false

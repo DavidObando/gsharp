@@ -255,7 +255,11 @@ internal partial class MethodBodyEmitter {
         // emitted `System.Runtime.CompilerServices.Unsafe` scoped to the host's
         // `System.Private.CoreLib` while the compile reported success. That is
         // #3730's defect, on a different member.
-        if !PinningShapes.TryGetUnsafeAsPointer(this.outer.emitCtx.References, out var openAsPointer) {
+        if !PinningShapes.TryGetUnsafeAsPointer(
+            this.outer.emitCtx.References,
+            this.outer.emitCtx.ConsumerAssemblyName,
+            out var openAsPointer
+        ) {
             EmitDiagnosticException.ThrowTargetFrameworkMemberUnavailable(
                 anchor,
                 PinningShapes.UnsafeAsPointerSignature
@@ -267,7 +271,14 @@ internal partial class MethodBodyEmitter {
         // belongs to the reference closure, and closing across contexts yields
         // a MethodBuilderInstantiation whose GetParameters() answers the
         // unsubstituted `T` (the #3752 artefact) instead of failing loudly.
-        let closedAsPointer = PinningShapes.CloseOver(openAsPointer!!, pointeeType.ClrType ?? typeof(object))
+        let rawPointeeType = pointeeType.ClrType ?? typeof(object)
+        let projectedPointeeType = this
+            .outer
+            .emitCtx
+            .References
+            .ProjectClrType(rawPointeeType, this.outer.emitCtx.ConsumerAssemblyName) ??
+            rawPointeeType
+        let closedAsPointer = PinningShapes.CloseOver(openAsPointer!!, projectedPointeeType)
         let symbolicTypeArguments = ImmutableArray.Create[TypeSymbol?](pointeeType)
         this.il.Call(
             this.outer.memberRefs.GetMethodEntityHandle(closedAsPointer, typeArgSymbols: symbolicTypeArguments)
@@ -466,7 +477,6 @@ internal partial class MethodBodyEmitter {
         if !this
             .outer
             .emitCtx
-            .References
             .TryResolveType(
             "Gsharp.Concurrency.GoroutineRuntime",
             requireExternalVisibility: false,

@@ -408,7 +408,7 @@ internal partial class OverloadResolver {
         get -> if binderCtx.References == nil {
             default(((Type) -> Type)?)
         } else {
-            binderCtx.References.MapClrTypeToReferences
+            binderCtx.ClrTypeProjector
         }
     }
 

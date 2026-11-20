@@ -38,7 +38,12 @@ import System.Reflection
 /// members are (cref:System.Reflection.MetadataLoadContext) types on
 /// every real `/reference:` compile.
 internal class DefaultInterpolatedStringHandlerShape {
+    private let references ReferenceResolver
+    private let consumerAssemblyName string?
+
     private init(
+        references ReferenceResolver,
+        consumerAssemblyName string?,
         handlerType Type,
         constructor ConstructorInfo,
         appendLiteral MethodInfo,
@@ -48,6 +53,8 @@ internal class DefaultInterpolatedStringHandlerShape {
         appendFormattedFormat MethodInfo?,
         appendFormattedAlignFormat MethodInfo?
     ) {
+        this.references = references
+        this.consumerAssemblyName = consumerAssemblyName
         this.HandlerType = handlerType
         this.HandlerTypeSymbol = TypeSymbol.FromClrTypeWithoutNullability(
             handlerType,
@@ -165,11 +172,12 @@ internal class DefaultInterpolatedStringHandlerShape {
     /// context, tolerating types the reference closure cannot name.
     /// @param typeArgument The type to project.
     /// @returns The projected type, or the original when projection is impossible.
-    func ProjectTypeArgument(typeArgument Type) Type -> ClrTypeUtilities.RemapHostCoreTypeToContext(
-        typeArgument,
-        this.HandlerType
-    ) ??
-        typeArgument
+    func ProjectTypeArgument(typeArgument Type) Type {
+        if this.references.TryMapClrTypeToReferences(typeArgument, this.consumerAssemblyName, out var projected) {
+            return projected
+        }
+        return ClrTypeUtilities.RemapHostCoreTypeToContext(typeArgument, this.HandlerType) ?? typeArgument
+    }
 
     shared {
         /// The handler's metadata name, as spelled in the target framework.
@@ -187,17 +195,23 @@ internal class DefaultInterpolatedStringHandlerShape {
         func TryResolve(
             references ReferenceResolver,
             @NotNullWhen(true) out shape DefaultInterpolatedStringHandlerShape?,
-            @NotNullWhen(false) out missingMember string?
+            @NotNullWhen(false) out missingMember string?,
+            consumerAssemblyName string? = nil,
+            hasExplicitConsumerAssemblyName bool = false
         ) bool {
             shape = nil
             missingMember = nil
-            if !references.TryResolveType(HandlerTypeFullName, out var handlerType) ||
+            let effectiveConsumer = if hasExplicitConsumerAssemblyName {
+                consumerAssemblyName
+            } else {
+                consumerAssemblyName ?? references.CurrentAssemblyName
+            }
+            if !references.TryResolveType(HandlerTypeFullName, effectiveConsumer, out var handlerType) ||
                 (
                 references.IsHostFallback(handlerType) &&
                     (
-                    !references.TryResolveType("System.Object", out var objectType) || !references.IsHostFallback(
-                        objectType
-                    )
+                    !references.TryResolveType("System.Object", effectiveConsumer, out var objectType) ||
+                        !references.IsHostFallback(objectType)
                 )
             ) {
                 missingMember = HandlerTypeFullName
@@ -219,6 +233,8 @@ internal class DefaultInterpolatedStringHandlerShape {
                 return false
             }
             shape = DefaultInterpolatedStringHandlerShape(
+                references,
+                effectiveConsumer,
                 handlerType,
                 constructor,
                 appendLiteral,

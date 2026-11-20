@@ -37,11 +37,22 @@ class SubmissionImports {
     /// @param name The bare function name.
     /// @param programType The container CLR type on success.
     /// @returns Whether a prior submission declares the function.
-    func TryFindFunctionContainer(references ReferenceResolver, name string, out programType Type?) bool {
+    func TryFindFunctionContainer(
+        references ReferenceResolver,
+        name string,
+        out programType Type?
+    ) bool -> TryFindFunctionContainer(references, name, references.CurrentAssemblyName, out programType)
+
+    internal func TryFindFunctionContainer(
+        references ReferenceResolver,
+        name string,
+        consumerAssemblyName string?,
+        out programType Type?
+    ) bool {
         programType = nil
         for submission in NewestFirst {
             if DeclaresFunction(submission, name) {
-                return TryResolveProgramType(references, submission, out programType)
+                return TryResolveProgramType(references, submission, consumerAssemblyName, out programType)
             }
             // A same-named global in a newer submission shadows an older
             // submission's function, mirroring the evaluator scope chain
@@ -66,6 +77,14 @@ class SubmissionImports {
         name string,
         out programType Type?,
         out declared VariableSymbol?
+    ) bool -> TryFindGlobalVariable(references, name, references.CurrentAssemblyName, out programType, out declared)
+
+    internal func TryFindGlobalVariable(
+        references ReferenceResolver,
+        name string,
+        consumerAssemblyName string?,
+        out programType Type?,
+        out declared VariableSymbol?
     ) bool {
         programType = nil
         declared = nil
@@ -73,7 +92,7 @@ class SubmissionImports {
             let match VariableSymbol? = FindGlobal(submission, name)
             if match != nil {
                 declared = match
-                return TryResolveProgramType(references, submission, out programType)
+                return TryResolveProgramType(references, submission, consumerAssemblyName, out programType)
             }
             // A same-named function in a newer submission shadows an older
             // submission's global (newest declaration wins regardless of kind).
@@ -92,11 +111,22 @@ class SubmissionImports {
     /// @param name The bare member name.
     /// @param programType The container CLR type on success.
     /// @returns Whether a prior submission declares the member.
-    func TryFindMemberContainer(references ReferenceResolver, name string, out programType Type?) bool {
+    func TryFindMemberContainer(
+        references ReferenceResolver,
+        name string,
+        out programType Type?
+    ) bool -> TryFindMemberContainer(references, name, references.CurrentAssemblyName, out programType)
+
+    internal func TryFindMemberContainer(
+        references ReferenceResolver,
+        name string,
+        consumerAssemblyName string?,
+        out programType Type?
+    ) bool {
         programType = nil
         for submission in NewestFirst {
             if DeclaresFunction(submission, name) || DeclaresGlobal(submission, name) {
-                return TryResolveProgramType(references, submission, out programType)
+                return TryResolveProgramType(references, submission, consumerAssemblyName, out programType)
             }
         }
         return false
@@ -115,6 +145,14 @@ class SubmissionImports {
         name string,
         preferredArity int32,
         @NotNullWhen(true) out clrType Type?
+    ) bool -> TryResolveType(references, name, preferredArity, references.CurrentAssemblyName, out clrType)
+
+    internal func TryResolveType(
+        references ReferenceResolver,
+        name string,
+        preferredArity int32,
+        consumerAssemblyName string?,
+        @NotNullWhen(true) out clrType Type?
     ) bool {
         clrType = nil
         for submission in NewestFirst {
@@ -130,6 +168,7 @@ class SubmissionImports {
             return references.TryResolveTypeInAssembly(
                 submission.AssemblyName,
                 submission.PackageName + "." + metadataName,
+                consumerAssemblyName,
                 out clrType
             )
         }
@@ -269,10 +308,13 @@ class SubmissionImports {
         private func TryResolveProgramType(
             references ReferenceResolver,
             submission SubmissionReference,
+            consumerAssemblyName string?,
             out programType Type?
-        ) bool -> references.TryResolveTypeInAssembly(
+        ) bool -> references
+            .TryResolveTypeInAssembly(
             submission.AssemblyName,
             GetProgramTypeName(submission.PackageName),
+            consumerAssemblyName,
             out programType
         )
     }

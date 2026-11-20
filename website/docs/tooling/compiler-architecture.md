@@ -67,7 +67,7 @@ A host that uses `GSharp.Core` as a library must obey these rules ([ADR-0223](ht
 
 - A host can query one `Compilation` from more than one thread. Diagnostics, the global scope, and the bound program take the compilation's build gate, so concurrent first readers wait for one bind. Do not call `Emit` on one compilation from two threads at the same time.
 - `SyntaxTree` and `SourceText` objects do not change after `Parse` and `From`. Threads can share them.
-- Use one `ReferenceResolver` for each assembly name, and serialize the compilations that share it. Run each compilation from construction to its last query before you create the next compilation. The resolver keeps the assembly name of the current compilation, and it caches some imported types with the internal members that one assembly name can see. Compilations with different assembly names can therefore get incorrect `InternalsVisibleTo` results ([#6070](https://github.com/DavidObando/gsharp/issues/6070)). For concurrent compilations, use one resolver for each compilation.
+- Concurrent `Compilation` objects — including compilations with different `AssemblyName` values — can share one `ReferenceResolver` ([#6068](https://github.com/DavidObando/gsharp/issues/6068), [#6070](https://github.com/DavidObando/gsharp/issues/6070)). Each compilation passes its own consumer assembly name explicitly into binding and emit instead of mutating `ReferenceResolver.CurrentAssemblyName`.
 - Do not call `ReferenceResolver.Dispose()` while a compilation runs in the process. It clears caches that all compilations in the process use.
 - Do not change process-wide state, such as the `GSHARP_SDK_TOOLS_DIR` variable, while a compilation runs.
 

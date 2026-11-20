@@ -78,7 +78,8 @@ internal shared class ExternalClrOverrideResolver {
         isAsyncVoid bool,
         isValueTask bool,
         isSuspending bool,
-        references ReferenceResolver
+        references ReferenceResolver,
+        consumerAssemblyName string? = nil
     ) MatchResult[MethodInfo] {
         var sawName = false
         let externalBase = FindExternalBaseType(derivedType)
@@ -86,7 +87,7 @@ internal shared class ExternalClrOverrideResolver {
         let typeSubstitutions = BuildTypeArgumentSubstitutions(externalBase)
         let methodTypeArguments = BuildMethodTypeArguments(typeParameters)
         for method in EnumerateMethods(reflectionBaseType, name) {
-            if !IsAccessibleOverrideTarget(method, accessibility, references) {
+            if !IsAccessibleOverrideTarget(method, accessibility, references, consumerAssemblyName) {
                 continue
             }
             sawName = true
@@ -135,7 +136,8 @@ internal shared class ExternalClrOverrideResolver {
         getterAccessibility Accessibility,
         setterAccessibility Accessibility,
         references ReferenceResolver,
-        returnRefKind RefKind = RefKind.None
+        returnRefKind RefKind = RefKind.None,
+        consumerAssemblyName string? = nil
     ) MatchResult[PropertyInfo] {
         var sawName = false
         let externalBase = FindExternalBaseType(derivedType)
@@ -151,8 +153,14 @@ internal shared class ExternalClrOverrideResolver {
                 (hasSetter && setter == nil) ||
                 (!hasGetter && getter != nil) ||
                 (!hasSetter && setter != nil) ||
-                (getter != nil && !IsAccessibleOverrideTarget(getter, getterAccessibility, references)) ||
-                (setter != nil && !IsAccessibleOverrideTarget(setter, setterAccessibility, references)) {
+                (
+                getter != nil &&
+                    !IsAccessibleOverrideTarget(getter, getterAccessibility, references, consumerAssemblyName)
+            ) ||
+                (
+                setter != nil &&
+                    !IsAccessibleOverrideTarget(setter, setterAccessibility, references, consumerAssemblyName)
+            ) {
                 continue
             }
             sawName = true
@@ -196,7 +204,8 @@ internal shared class ExternalClrOverrideResolver {
         name string,
         handlerType TypeSymbol,
         accessibility Accessibility,
-        references ReferenceResolver
+        references ReferenceResolver,
+        consumerAssemblyName string? = nil
     ) MatchResult[EventInfo] {
         var sawName = false
         let externalBase = FindExternalBaseType(derivedType)
@@ -207,9 +216,11 @@ internal shared class ExternalClrOverrideResolver {
             let remove MethodInfo? = eventInfo.GetRemoveMethod(nonPublic: true)
             let raise MethodInfo? = eventInfo.GetRaiseMethod(nonPublic: true)
             if (add == nil && remove == nil) ||
-                (add != nil && !IsAccessibleOverrideTarget(add, accessibility, references)) ||
-                (remove != nil && !IsAccessibleOverrideTarget(remove, accessibility, references)) ||
-                (raise != nil && !IsAccessibleOverrideTarget(raise, accessibility, references)) {
+                (add != nil && !IsAccessibleOverrideTarget(add, accessibility, references, consumerAssemblyName)) ||
+                (
+                remove != nil && !IsAccessibleOverrideTarget(remove, accessibility, references, consumerAssemblyName)
+            ) ||
+                (raise != nil && !IsAccessibleOverrideTarget(raise, accessibility, references, consumerAssemblyName)) {
                 continue
             }
             sawName = true
@@ -1155,7 +1166,8 @@ internal shared class ExternalClrOverrideResolver {
     private func IsAccessibleOverrideTarget(
         method MethodInfo,
         accessibility Accessibility,
-        references ReferenceResolver
+        references ReferenceResolver,
+        consumerAssemblyName string? = nil
     ) bool {
         if method.IsPublic {
             return accessibility == Accessibility.Public
@@ -1165,7 +1177,8 @@ internal shared class ExternalClrOverrideResolver {
         }
         if method.IsAssembly {
             return accessibility == Accessibility.Internal && references.CanAccessInternalMembers(
-                method.DeclaringType?.Assembly
+                method.DeclaringType?.Assembly,
+                consumerAssemblyName ?? references.CurrentAssemblyName
             )
         }
         // FamANDAssem requires private-protected visibility. G# cannot emit

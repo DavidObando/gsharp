@@ -129,7 +129,13 @@ class ImportedFunctionSymbol : Symbol {
 
     private func GetMethodType(method MethodInfo) TypeSymbol {
         let returnType = ClrNullability.GetReturnTypeSymbol(method)
-        return ImportedTypeSymbol.NormalizeSemanticAggregate(returnType, method.ReturnType, ImportedClass.References)
+        return ImportedTypeSymbol.NormalizeSemanticAggregate(
+            returnType,
+            method.ReturnType,
+            ImportedClass.References,
+            ImportedClass.EffectiveConsumerAssemblyName,
+            ImportedClass.HasExplicitConsumerAssemblyName
+        )
     }
 
     shared {

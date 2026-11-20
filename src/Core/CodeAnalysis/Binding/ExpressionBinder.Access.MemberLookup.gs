@@ -2101,7 +2101,7 @@ internal partial class ExpressionBinder {
                 return false
             }
             if $scope.References!!.TryResolveNestedType(classSymbol.ClassType, name, out var nestedType) {
-                let nested = ImportedClassSymbol(nestedType, nameExpr, references: $scope.References)
+                let nested = $scope.CreateImportedClassSymbol(nestedType, nameExpr)
                 nestedClassSymbol = CloseImportedNestedType(
                     classSymbol.ClassType,
                     nested,
@@ -4253,11 +4253,7 @@ internal partial class ExpressionBinder {
         if method == nil {
             return TypeSymbol.Void
         }
-        return ImportedTypeSymbol.NormalizeSemanticAggregate(
-            ClrNullability.GetReturnTypeSymbol(method),
-            method.ReturnType,
-            $scope.References
-        )
+        return $scope.NormalizeSemanticAggregate(ClrNullability.GetReturnTypeSymbol(method), method.ReturnType)
     }
 
     private func NormalizeImportedSemanticAggregate(type TypeSymbol, member MemberInfo) TypeSymbol {
@@ -4266,7 +4262,7 @@ internal partial class ExpressionBinder {
             case field is FieldInfo: field.FieldType
             default: default(Type?)
         }
-        return ImportedTypeSymbol.NormalizeSemanticAggregate(type, clrType, $scope.References)
+        return $scope.NormalizeSemanticAggregate(type, clrType)
     }
 
     // Issue #1016: bind a range/slice expression `target[lo..hi]` (and the

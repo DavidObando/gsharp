@@ -5038,7 +5038,7 @@ internal class ReflectionMetadataEmitter {
     }
 
     private func ResolveCoreType(fullName string, fallback Type) Type {
-        if this.emitCtx.References.TryResolveType(fullName, requireExternalVisibility: false, out var t) {
+        if this.emitCtx.TryResolveType(fullName, requireExternalVisibility: false, out var t) {
             return t
         }
         return fallback

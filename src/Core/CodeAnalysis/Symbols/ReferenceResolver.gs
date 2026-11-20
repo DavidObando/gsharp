@@ -48,6 +48,7 @@ import SystemObject = System.Object
 /// suite where cross-targeting is not relevant.
 class ReferenceResolver : IDisposable {
     private let assemblies ImmutableArray[Assembly]
+    private let ownAssemblies ImmutableHashSet[Assembly]
     private let metadataContext MetadataLoadContext?
     // ADR-0209 PR 1: the handle-backed reference set, built beside the MetadataLoadContext
     // when GSHARP_METADATA_MODEL is `handles` or `compare`. No binder code reads it yet.
@@ -59,23 +60,27 @@ class ReferenceResolver : IDisposable {
     private let resolveCache ConcurrentDictionary[string, Type] = ConcurrentDictionary[string, Type](
         StringComparer.Ordinal
     )
-
-    // Issue #2263 / #2269: per-compilation cache of imported data-type semantic
-    // aggregates (see ImportedTypeSymbol.TryCreateSemanticAggregate). This MUST
-    // be an instance field, not a process-wide static: the cached StructSymbol
-    // graphs strongly reference the CLR Type objects — and therefore the
-    // MetadataLoadContext / assemblies — of this resolver. Scoping the cache to
-    // the resolver ties that graph's lifetime to the MLC, so it is released when
-    // this resolver is disposed (ResourceLeakRegressionTests) and never pins a
-    // disposed context's memory. A single resolver serves an entire compilation
-    // (one consumer assembly), so keying by Type alone still yields one
-    // consistent aggregate identity per type in every binding position, and
-    // avoids the cross-thread cache churn a shared static cache suffered when
-    // xUnit ran compilations in parallel.
-    private let semanticAggregateCache ConcurrentDictionary[Type, StructSymbol] = ConcurrentDictionary[
-        Type,
-        StructSymbol
+    private let visibleResolveCache ConcurrentDictionary[ScopedResolveKey, Type] = ConcurrentDictionary[
+        ScopedResolveKey,
+        Type
     ]()
+
+    private data struct SemanticAggregateKey(Type Type, ConsumerAssemblyName string) : IEquatable[
+        SemanticAggregateKey
+    ] { }
+
+    private data struct ScopedResolveKey(ConsumerAssemblyName string, FullName string) : IEquatable[
+        ScopedResolveKey
+    ] { }
+
+    // Issue #2263 / #2269 / #6070: resolver-scoped cache of imported data-type
+    // semantic aggregates (see ImportedTypeSymbol.TryCreateSemanticAggregate).
+    // Must remain an instance field so the cached StructSymbol graphs tie their
+    // lifetime to this resolver's MetadataLoadContext, and must key by both Type
+    // and consumer assembly name so concurrent compilations with different
+    // AssemblyName values do not share InternalsVisibleTo visibility results.
+    private let semanticAggregateCache ConcurrentDictionary[SemanticAggregateKey, StructSymbol] =
+    ConcurrentDictionary[SemanticAggregateKey, StructSymbol]()
 
     // Issue #854: a lazily-built, full-name -> Type index over every assembly in
     // `assemblies`. The previous TryResolveType implementation scanned all
@@ -154,7 +159,12 @@ class ReferenceResolver : IDisposable {
         type Type,
         consumerAssemblyName string,
         factory(Type, string) -> StructSymbol
-    ) StructSymbol -> semanticAggregateCache.GetOrAdd(type, factory, consumerAssemblyName)
+    ) StructSymbol -> semanticAggregateCache
+        .GetOrAdd(
+        SemanticAggregateKey(type, consumerAssemblyName),
+        (key SemanticAggregateKey, build(Type, string) -> StructSymbol) -> build(key.Type, key.ConsumerAssemblyName),
+        factory
+    )
 
     private convenience init(assemblies ImmutableArray[Assembly], metadataContext MetadataLoadContext?) {
         init(assemblies, metadataContext, ImmutableArray[string].Empty, nil, nil, nil)
@@ -170,6 +180,7 @@ class ReferenceResolver : IDisposable {
         explicitReferenceAssemblies ImmutableHashSet[Assembly]? = nil
     ) {
         this.assemblies = assemblies
+        this.ownAssemblies = ImmutableHashSet.CreateRange[Assembly](ReferenceEqualityComparer.Instance, assemblies)
         this.metadataContext = metadataContext
         this.runtimeContext = runtimeContext
         this.missingTransitiveReferences = missingTransitiveReferences
@@ -358,10 +369,12 @@ class ReferenceResolver : IDisposable {
     /// `InternalsVisibleTo`.
     /// @param assembly The referenced assembly to inspect.
     /// @returns `true` when internal members are visible.
-    func CanAccessInternalMembers(assembly Assembly?) bool -> ImportedAssemblySemantics.GrantsInternalAccessTo(
-        assembly,
-        CurrentAssemblyName
-    )
+    func CanAccessInternalMembers(assembly Assembly?) bool -> CanAccessInternalMembers(assembly, CurrentAssemblyName)
+
+    internal func CanAccessInternalMembers(
+        assembly Assembly?,
+        consumerAssemblyName string?
+    ) bool -> ImportedAssemblySemantics.GrantsInternalAccessTo(assembly, consumerAssemblyName)
 
     /// Returns per-reference metadata needed to emit a
     /// `CompilationMetadataReferences` `CustomDebugInformation` blob
@@ -433,8 +446,15 @@ class ReferenceResolver : IDisposable {
     func TryResolveType(fullName string, @NotNullWhen(true) out type Type?) bool -> TryResolveType(
         fullName,
         requireExternalVisibility: true,
+        CurrentAssemblyName,
         out type
     )
+
+    internal func TryResolveType(
+        fullName string,
+        consumerAssemblyName string?,
+        @NotNullWhen(true) out type Type?
+    ) bool -> TryResolveType(fullName, requireExternalVisibility: true, consumerAssemblyName, out type)
 
     /// Tries to resolve a fully-qualified type name across the referenced
     /// assemblies, optionally enforcing external visibility.
@@ -445,51 +465,47 @@ class ReferenceResolver : IDisposable {
     /// callers may resolve internal well-known types by exact name.
     /// @param type The resolved (cref:Type), if found.
     /// @returns `true` if a matching type was found; otherwise `false`.
-    func TryResolveType(fullName string, requireExternalVisibility bool, @NotNullWhen(true) out type Type?) bool {
+    func TryResolveType(
+        fullName string,
+        requireExternalVisibility bool,
+        @NotNullWhen(true) out type Type?
+    ) bool -> TryResolveType(fullName, requireExternalVisibility, CurrentAssemblyName, out type)
+
+    internal func TryResolveType(
+        fullName string,
+        requireExternalVisibility bool,
+        consumerAssemblyName string?,
+        @NotNullWhen(true) out type Type?
+    ) bool {
         type = nil
         if !TryResolveTypeRaw(fullName, out var resolved) {
             return false
         }
-        if !IsExternallyResolvable(resolved) {
-            // Issue #3445 follow-through, issue #4233: dependency assemblies
-            // can carry internal compatibility shims with the same full name
-            // as a public framework type (e.g. Microsoft.TestPlatform.Utilities
-            // embeds a private System.Diagnostics.CodeAnalysis.NotNullWhenAttribute
-            // polyfill for its own netstandard2.0 build). The raw index
-            // intentionally keeps first-writer precedence for infrastructure
-            // lookups, so an ambiguous name can land on the inaccessible shim
-            // even when an accessible duplicate exists elsewhere in the
-            // reference set. Prefer that accessible duplicate unconditionally —
-            // both the user-facing (`requireExternalVisibility: true`) path and
-            // infrastructure's well-known-type lookups (`false`) must agree
-            // with what the binder already accepted, or gsc can emit a TypeRef
-            // the CLR refuses to load (MethodAccessException) despite a clean
-            // compile. `requireExternalVisibility` only controls the fallback
-            // when NO accessible duplicate exists: infrastructure still
-            // resolves genuinely internal well-known types (e.g.
-            // IsReadOnlyAttribute) by exact name; user-written names fail.
-            //
-            // Scan with `resolved.FullName` — the type's raw CLR metadata
-            // name — rather than the caller-supplied `fullName`. `fullName`
-            // may be a G#-canonical spelling (reserved segments gain `_`,
-            // nested types may use `.` instead of `+`) that `TryResolveTypeRaw`
-            // mapped through `emittedTypeNameIndex` to reach `resolved`;
-            // `Assembly.GetType(fullName)` on that canonical spelling finds no
-            // duplicate at all, silently skipping this whole preference.
+        if !IsExternallyResolvable(resolved, consumerAssemblyName) {
+            let scopedKey = ScopedResolveKey(consumerAssemblyName ?? string.Empty, fullName)
+            if visibleResolveCache.TryGetValue(scopedKey, out var cached) {
+                if !object.ReferenceEquals(cached, MissTypeSentinel) {
+                    type = cached
+                    return true
+                }
+                if requireExternalVisibility {
+                    return false
+                }
+                type = resolved
+                return true
+            }
+            // Issue #3445 / #4233 / #6070: scan for an externally-resolvable
+            // duplicate without overwriting the shared raw resolveCache entry.
             let scanName = resolved.FullName ?? fullName
             for assembly in this.assemblies {
                 let candidate Type? = SafeGetType(assembly, scanName)
-                if candidate != nil && IsExternallyResolvable(candidate) {
-                    // The raw first-writer-wins result is already cached under
-                    // `fullName` (by TryResolveTypeRaw, above) — overwrite it
-                    // with the preferred accessible candidate so repeated
-                    // lookups hit the O(1) cache instead of re-scanning the
-                    // whole reference closure every time.
-                    resolveCache[fullName] = candidate
+                if candidate != nil && IsExternallyResolvable(candidate, consumerAssemblyName) {
+                    visibleResolveCache.TryAdd(scopedKey, candidate)
                     type = candidate
                     return true
                 }
             }
+            visibleResolveCache.TryAdd(scopedKey, MissTypeSentinel)
             if requireExternalVisibility {
                 return false
             }
@@ -541,8 +557,17 @@ class ReferenceResolver : IDisposable {
     /// @param fullName The attribute's fully-qualified metadata name.
     /// @param type The resolved declaration, if the target publishes one.
     /// @returns `true` when the target publishes the attribute.
-    internal func TryResolvePublishedEmbeddableAttribute(fullName string, @NotNullWhen(true) out type Type?) bool {
-        if !TryResolveType(fullName, requireExternalVisibility: true, out type) {
+    internal func TryResolvePublishedEmbeddableAttribute(
+        fullName string,
+        @NotNullWhen(true) out type Type?
+    ) bool -> TryResolvePublishedEmbeddableAttribute(fullName, CurrentAssemblyName, out type)
+
+    internal func TryResolvePublishedEmbeddableAttribute(
+        fullName string,
+        consumerAssemblyName string?,
+        @NotNullWhen(true) out type Type?
+    ) bool {
+        if !TryResolveType(fullName, requireExternalVisibility: true, consumerAssemblyName, out type) {
             return false
         }
         if IsHostFallback(type!!) && TargetsDownlevelFramework() {
@@ -570,37 +595,48 @@ class ReferenceResolver : IDisposable {
     /// @param type The resolved (cref:Type), if found.
     /// @returns `true` if the named assembly defines a matching, externally visible type; otherwise
     /// `false`.
-    func TryResolveTypeInAssembly(assemblySimpleName string, fullName string, @NotNullWhen(true) out type Type?) bool {
+    func TryResolveTypeInAssembly(
+        assemblySimpleName string,
+        fullName string,
+        @NotNullWhen(true) out type Type?
+    ) bool -> TryResolveTypeInAssembly(assemblySimpleName, fullName, CurrentAssemblyName, out type)
+
+    internal func TryResolveTypeInAssembly(
+        assemblySimpleName string,
+        fullName string,
+        consumerAssemblyName string?,
+        @NotNullWhen(true) out type Type?
+    ) bool {
         type = nil
         if string.IsNullOrEmpty(assemblySimpleName) || string.IsNullOrEmpty(fullName) {
             return false
         }
         // "::" cannot occur in a CLR type full name (nested types use '+',
         // generics use '`'), so these keys never collide with the flat
-        // full-name keys sharing the cache.
+        // full-name keys sharing the cache. Cache raw lookup only; check
+        // consumer visibility on each call (#6070).
         let cacheKey = assemblySimpleName + "::" + fullName
+        var resolved Type? = nil
         if resolveCache.TryGetValue(cacheKey, out var cached) {
             if object.ReferenceEquals(cached, MissTypeSentinel) {
                 return false
             }
-            type = cached
-            return true
-        }
-        var resolved Type? = nil
-        for asm in assemblies {
-            if !string.Equals(asm.GetName().Name, assemblySimpleName, StringComparison.Ordinal) {
-                continue
+            resolved = cached
+        } else {
+            for asm in assemblies {
+                if !string.Equals(asm.GetName().Name, assemblySimpleName, StringComparison.Ordinal) {
+                    continue
+                }
+                resolved = SafeGetType(asm, fullName)
+                if resolved != nil {
+                    break
+                }
             }
-            resolved = SafeGetType(asm, fullName)
-            if resolved != nil {
-                break
-            }
+            resolveCache.TryAdd(cacheKey, resolved ?? MissTypeSentinel)
         }
-        if resolved == nil || !IsExternallyResolvable(resolved) {
-            resolveCache.TryAdd(cacheKey, MissTypeSentinel)
+        if resolved == nil || !IsExternallyResolvable(resolved, consumerAssemblyName) {
             return false
         }
-        resolveCache.TryAdd(cacheKey, resolved)
         type = resolved
         return true
     }
@@ -687,13 +723,22 @@ class ReferenceResolver : IDisposable {
     /// @param hostType The CLR type to project.
     /// @param projected The projected type on success.
     /// @returns `true` when projection succeeded.
-    internal func TryMapClrTypeToReferences(hostType Type?, @NotNullWhen(true) out projected Type?) bool {
+    internal func TryMapClrTypeToReferences(
+        hostType Type?,
+        @NotNullWhen(true) out projected Type?
+    ) bool -> TryMapClrTypeToReferences(hostType, CurrentAssemblyName, out projected)
+
+    internal func TryMapClrTypeToReferences(
+        hostType Type?,
+        consumerAssemblyName string?,
+        @NotNullWhen(true) out projected Type?
+    ) bool {
         projected = nil
         if hostType == nil {
             return false
         }
         try {
-            projected = MapClrTypeToReferences(hostType)
+            projected = ProjectClrType(hostType, consumerAssemblyName)
             return projected != nil
         } catch (ex Exception) when IsProjectionFailure(ex) {
             return false
@@ -715,6 +760,11 @@ class ReferenceResolver : IDisposable {
         }
         return downlevelTarget == 1
     }
+
+    internal func OwnsType(type Type?) bool -> type != nil && ownAssemblies.Contains(type.Assembly)
+
+    internal func GetTypeProjector(consumerAssemblyName string?) Func[Type, Type] ->
+    (hostType Type) -> ProjectClrType(hostType, consumerAssemblyName)!!
 
     /// Projects a CLR (cref:Type) that may originate from the gsc host
     /// runtime onto the equivalent (cref:Type) from this resolver's
@@ -743,7 +793,10 @@ class ReferenceResolver : IDisposable {
     /// set's (cref:MetadataLoadContext) (it is not resolvable by name and
     /// is not a recognised array/byref/pointer/generic shape).
     @return: NotNullIfNotNull("hostType")
-    func MapClrTypeToReferences(hostType Type?) Type? {
+    func MapClrTypeToReferences(hostType Type?) Type? -> ProjectClrType(hostType, CurrentAssemblyName)
+
+    @return: NotNullIfNotNull("hostType")
+    internal func ProjectClrType(hostType Type?, consumerAssemblyName string?) Type? {
         if hostType == nil {
             return nil
         }
@@ -780,7 +833,7 @@ class ReferenceResolver : IDisposable {
             // when IsArray/IsByRef/IsPointer is true (or the type is a generic
             // parameter, handled separately below) — guaranteed here by the
             // IsArray check on this line.
-            let mappedElement = MapClrTypeToReferences(hostType.GetElementType()!!)
+            let mappedElement = ProjectClrType(hostType.GetElementType()!!, consumerAssemblyName)
             let rank = hostType.GetArrayRank()
             return if rank == 1 {
                 mappedElement!!.MakeArrayType()
@@ -796,19 +849,19 @@ class ReferenceResolver : IDisposable {
         if hostType.IsByRef {
             // See the IsArray branch above: GetElementType() is non-null here
             // because IsByRef is true.
-            return MapClrTypeToReferences(hostType.GetElementType()!!)!!.MakeByRefType()
+            return ProjectClrType(hostType.GetElementType()!!, consumerAssemblyName)!!.MakeByRefType()
         }
         if hostType.IsPointer {
             // See the IsArray branch above: GetElementType() is non-null here
             // because IsPointer is true.
-            return MapClrTypeToReferences(hostType.GetElementType()!!)!!.MakePointerType()
+            return ProjectClrType(hostType.GetElementType()!!, consumerAssemblyName)!!.MakePointerType()
         }
         if hostType.IsGenericType && !hostType.IsGenericTypeDefinition {
-            let mappedDefinition = MapClrTypeToReferences(hostType.GetGenericTypeDefinition())
+            let mappedDefinition = ProjectClrType(hostType.GetGenericTypeDefinition(), consumerAssemblyName)
             let hostArguments = hostType.GetGenericArguments()
             let mappedArgs = [hostArguments.Length]Type
             for var i = 0; i < hostArguments.Length; i++ {
-                mappedArgs[i] = MapClrTypeToReferences(hostArguments[i])!!
+                mappedArgs[i] = ProjectClrType(hostArguments[i], consumerAssemblyName)!!
             }
             return mappedDefinition!!.MakeGenericType(mappedArgs)
         }
@@ -820,9 +873,14 @@ class ReferenceResolver : IDisposable {
         if hostType.IsGenericParameter {
             return hostType
         }
+        // A leaf type already declared by one of this resolver's own assemblies
+        // keeps its exact identity without name re-resolution (#6070).
+        if ownAssemblies.Contains(hostType.Assembly) {
+            return hostType
+        }
         let fullName = hostType.FullName
         if !string.IsNullOrEmpty(fullName) &&
-            TryResolveType(fullName, requireExternalVisibility: false, out var mapped) &&
+            TryResolveType(fullName, requireExternalVisibility: false, consumerAssemblyName, out var mapped) &&
             mapped != nil {
             return mapped
         }
@@ -871,6 +929,7 @@ class ReferenceResolver : IDisposable {
     /// The comparison mode calls it, so that its lookups leave no state behind.
     internal func DiscardResolutionCache() {
         resolveCache.Clear()
+        visibleResolveCache.Clear()
     }
 
     /// Gives, for each assembly in search order, the type names that this resolver indexes.
@@ -986,17 +1045,28 @@ class ReferenceResolver : IDisposable {
         .Value
         .Contains(namespaceName)
 
-    internal func HasTypeNameAtAnyArity(fullName string) bool -> (
-        if warmNameIndex == nil {
-            typeNameIndex.Value.ArityInsensitiveNames
+    internal func HasTypeNameAtAnyArity(
+        fullName string,
+        consumerAssemblyName string? = nil,
+        hasExplicitConsumerAssemblyName bool = false
+    ) bool {
+        let effectiveConsumer = if hasExplicitConsumerAssemblyName {
+            consumerAssemblyName
         } else {
-            arityInsensitiveTypeNames
+            consumerAssemblyName ?? CurrentAssemblyName
         }
-    )
-        .Value
-        .TryGetValue(fullName, out var candidates) && candidates.Any(
-        (candidate string) -> TryResolveType(candidate, out _)
-    )
+        return (
+            if warmNameIndex == nil {
+                typeNameIndex.Value.ArityInsensitiveNames
+            } else {
+                arityInsensitiveTypeNames
+            }
+        )
+            .Value
+            .TryGetValue(fullName, out var candidates) && candidates.Any(
+            (candidate string) -> TryResolveType(candidate, effectiveConsumer, out _)
+        )
+    }
 
     private func BuildArityInsensitiveTypeNames() Dictionary[string, ImmutableArray[string]] ->
     BuildArityInsensitiveTypeNamesForNames(cast[IEnumerable[string]](CurrentNameIndex().Keys))
@@ -1074,7 +1144,7 @@ class ReferenceResolver : IDisposable {
     // externally visible, or when its declaring assembly grants this compilation
     // internal access via `InternalsVisibleTo`. `Type.IsVisible` already encodes
     // "public, and — for nested types — every enclosing type is public too".
-    private func IsExternallyResolvable(type Type?) bool {
+    private func IsExternallyResolvable(type Type?, consumerAssemblyName string?) bool {
         if type == nil {
             return false
         }
@@ -1082,7 +1152,7 @@ class ReferenceResolver : IDisposable {
             return true
         }
         try {
-            return CanAccessInternalMembers(type.Assembly)
+            return CanAccessInternalMembers(type.Assembly, consumerAssemblyName)
         } catch (Exception) {
             // A type whose assembly cannot be inspected is conservatively
             // treated as inaccessible by name.

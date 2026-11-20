@@ -805,7 +805,7 @@ internal partial class DeclarationBinder {
             if resolved != nil {
                 return resolved
             }
-            if $scope.References!!.TryResolveType(name, out var clrType) && clrType != nil {
+            if $scope.TryResolveType(name, out var clrType) && clrType != nil {
                 return TypeSymbol.FromClrTypeWithoutNullability(clrType, NullabilityFreeReason.ResolvedTypeName)
             }
         }

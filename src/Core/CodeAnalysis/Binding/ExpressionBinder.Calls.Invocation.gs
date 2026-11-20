@@ -2850,7 +2850,7 @@ internal partial class ExpressionBinder {
         // candidate — the msbuild `<InternalsVisibleTo>` item the SDK turns
         // into that attribute is how every migrated test app reaches the
         // internals of the project under test.
-        let receiverGrantsInternals = $scope.References!!.CanAccessInternalMembers(clrType!!.Assembly)
+        let receiverGrantsInternals = $scope.CanAccessInternalMembers(clrType!!.Assembly)
         // Issue #4013: an author-written call no longer reaches an
         // explicitly-implemented interface member; a synthesized
         // collection-initializer `Add` still does, because ADR-0117 literals

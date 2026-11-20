@@ -73,30 +73,42 @@ internal shared class EmbeddedAttributeSource {
     /// @param trees The user's syntax trees.
     /// @param references The compilation's references, or `null`.
     /// @returns The input, or the input followed by the synthetic tree.
-    func AddEmbeddedAttributes(trees ImmutableArray[SyntaxTree], references ReferenceResolver?) ImmutableArray[
-        SyntaxTree
-    ] {
+    func AddEmbeddedAttributes(
+        trees ImmutableArray[SyntaxTree],
+        references ReferenceResolver?,
+        consumerAssemblyName string? = nil,
+        hasExplicitConsumerAssemblyName bool = false
+    ) ImmutableArray[SyntaxTree] {
         if references == nil || trees.IsDefaultOrEmpty || !references.TargetsDownlevelFramework() {
             return trees
         }
+        let effectiveConsumer = if hasExplicitConsumerAssemblyName {
+            consumerAssemblyName
+        } else {
+            consumerAssemblyName ?? references.CurrentAssemblyName
+        }
         let needNullable = !references.TryResolvePublishedEmbeddableAttribute(
             NullableFullName,
+            effectiveConsumer,
             out var publishedNullable
         ) &&
             !DeclaresType(trees, CompilerServicesPackage, NullableName)
         let needContext = !references.TryResolvePublishedEmbeddableAttribute(
             NullableContextFullName,
+            effectiveConsumer,
             out var publishedContext
         ) &&
             !DeclaresType(trees, CompilerServicesPackage, NullableContextName)
         let needReadOnly = !references.TryResolvePublishedEmbeddableAttribute(
             IsReadOnlyFullName,
+            effectiveConsumer,
             out var _publishedReadOnly
         ) &&
             !DeclaresType(trees, CompilerServicesPackage, IsReadOnlyName) &&
             MayNeedIsReadOnlyAttribute(trees)
         let needExternalInit = !references.TryResolvePublishedEmbeddableAttribute(
             IsExternalInitFullName,
+            effectiveConsumer,
             out var _publishedExternalInit
         ) &&
             !DeclaresType(trees, CompilerServicesPackage, IsExternalInitName) &&

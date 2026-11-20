@@ -324,11 +324,7 @@ partial class Binder {
                 return Expressions.BindUserTypeStaticCall(structSym, ce, arguments, preArgumentsNarrowing)
             },
             bindImportedClrStaticCall: (clrType Type, ce CallExpressionSyntax) -> {
-                return Expressions.BindAccessorCall(
-                    receiver: nil,
-                    ImportedClassSymbol(clrType, ce, references: $scope.References),
-                    ce
-                )
+                return Expressions.BindAccessorCall(receiver: nil, $scope.CreateImportedClassSymbol(clrType, ce), ce)
             },
             applySubExpressionEffects: (syntax SyntaxNode?, operand BoundExpression?) ->
             Statements.ApplySubExpressionNarrowingEffects(syntax, operand),
@@ -4155,7 +4151,7 @@ partial class Binder {
             let conventionClrTypes = ImmutableArray.CreateBuilder[Type](conventionTokens.Count)
             for conventionToken in conventionTokens {
                 let metadataName = "System.Runtime.CompilerServices.CallConv" + conventionToken.Text
-                if !binderCtx.References.TryResolveType(metadataName, out var callConvType) {
+                if !binderCtx.TryResolveType(metadataName, out var callConvType) {
                     Diagnostics.ReportFunctionPointerUnknownCallingConvention(
                         conventionToken.Location,
                         conventionToken.Text
@@ -5660,20 +5656,20 @@ partial class Binder {
         // resolves to its open definition (closed later by ConstructIfGeneric).
         if lastSegmentArity > 0 {
             let mangled = prefix + "`" + lastSegmentArity.ToString()
-            if $scope.References!!.TryResolveType(mangled, out var directGeneric) {
+            if $scope.TryResolveType(mangled, out var directGeneric) {
                 return directGeneric
             }
             for import_ in $scope.GetDeclaredImports() {
-                if $scope.References!!.TryResolveType(import_.Target + "." + mangled, out var viaImportGeneric) {
+                if $scope.TryResolveType(import_.Target + "." + mangled, out var viaImportGeneric) {
                     return viaImportGeneric
                 }
             }
         }
-        if $scope.References!!.TryResolveType(prefix, out var direct) {
+        if $scope.TryResolveType(prefix, out var direct) {
             return direct
         }
         for import_ in $scope.GetDeclaredImports() {
-            if $scope.References!!.TryResolveType(import_.Target + "." + prefix, out var viaImport) {
+            if $scope.TryResolveType(import_.Target + "." + prefix, out var viaImport) {
                 return viaImport
             }
         }
@@ -5874,11 +5870,11 @@ partial class Binder {
         if arity > 0 {
             prefix += "`" + arity.ToString()
         }
-        if $scope.References!!.TryResolveType(prefix, out var direct) {
+        if $scope.TryResolveType(prefix, out var direct) {
             return direct
         }
         for import_ in $scope.GetDeclaredImports() {
-            if $scope.References!!.TryResolveType(import_.Target + "." + prefix, out var viaImport) {
+            if $scope.TryResolveType(import_.Target + "." + prefix, out var viaImport) {
                 return viaImport
             }
         }
@@ -6090,18 +6086,17 @@ partial class Binder {
                     type is NullableTypeSymbol ||
                     type is ImportedTypeSymbol
             ) &&
-                MemberLookup
-                .TryProjectErasedClrType(type, out var projected) {
-                return $scope.References!!.MapClrTypeToReferences(projected)!!
+                MemberLookup.TryProjectErasedClrType(type, out var projected) {
+                return $scope.MapClrTypeToReferences(projected)!!
             }
             return if TypeSymbol.ContainsTypeParameter(type) || TypeSymbol.ContainsSameCompilationUserType(type) ||
                 type.ClrType == nil {
-                $scope.References!!.MapClrTypeToReferences(erasedArgument)!!
+                $scope.MapClrTypeToReferences(erasedArgument)!!
             } else {
-                (ResolveClrTypeForGenericArg(type) ?? $scope.References!!.MapClrTypeToReferences(type.ClrType))!!
+                (ResolveClrTypeForGenericArg(type) ?? $scope.MapClrTypeToReferences(type.ClrType))!!
             }
         }
-        return (ResolveClrTypeForGenericArg(type) ?? $scope.References!!.MapClrTypeToReferences(type.ClrType))!!
+        return (ResolveClrTypeForGenericArg(type) ?? $scope.MapClrTypeToReferences(type.ClrType))!!
     }
 
     /// Issues #4089/#4090: asks both constraint questions of a G#-declared
@@ -6272,7 +6267,11 @@ partial class Binder {
     /// when the symbol has no CLR type.
     private func ResolveClrTypeForGenericArg(
         typeSymbol TypeSymbol
-    ) Type? -> NullableLifting.ResolveClrTypeForGenericArg(this.$scope.References!!, typeSymbol)
+    ) Type? -> NullableLifting.ResolveClrTypeForGenericArg(
+        this.$scope.References!!,
+        typeSymbol,
+        this.$scope.ConsumerAssemblyName
+    )
 
     /// Resolves a CLR type used in a type clause to its semantic aggregate when
     /// it is an imported data class/data struct. This keeps simple, qualified,
@@ -6281,7 +6280,7 @@ partial class Binder {
     /// @returns The semantic aggregate when [`type`](paramref) is a marked data type; otherwise the
     /// ordinary imported-type projection.
     private func ResolveClrTypeClauseSymbol(type Type) TypeSymbol {
-        return if ImportedTypeSymbol.TryCreateSemanticAggregate(type, this.$scope.References, out var aggregate) {
+        return if this.$scope.TryCreateSemanticAggregate(type, out var aggregate) {
             cast[TypeSymbol](aggregate)
         } else {
             TypeSymbol.FromClrTypeWithoutNullability(type, NullabilityFreeReason.ResolvedTypeName)
@@ -6484,11 +6483,7 @@ partial class Binder {
                 function,
                 importedType.ClassType
             ) {
-                if ImportedTypeSymbol.TryCreateSemanticAggregate(
-                    importedType.ClassType,
-                    $scope.References,
-                    out var importedAggregate
-                ) {
+                if $scope.TryCreateSemanticAggregate(importedType.ClassType, out var importedAggregate) {
                     return importedAggregate
                 }
                 return TypeSymbol.FromClrTypeWithoutNullability(
@@ -6521,11 +6516,7 @@ partial class Binder {
             return priorCellType
         }
         if $scope.TryLookupImportedClass(name, declaration: nil, out var importedClass, out importedTypeAmbiguity) {
-            if ImportedTypeSymbol.TryCreateSemanticAggregate(
-                importedClass.ClassType,
-                $scope.References,
-                out var aggregate
-            ) {
+            if $scope.TryCreateSemanticAggregate(importedClass.ClassType, out var aggregate) {
                 return aggregate
             }
             return TypeSymbol.FromClrTypeWithoutNullability(
@@ -6546,12 +6537,8 @@ partial class Binder {
         // generalized to any namespace depth.
         if $scope.TryLookupImport(name, out var aliasImport) && aliasImport.IsAlias {
             let aliasTarget = aliasImport.Target
-            if $scope.References!!.TryResolveType(aliasTarget, out var clrAliasType) {
-                if ImportedTypeSymbol.TryCreateSemanticAggregate(
-                    clrAliasType,
-                    $scope.References,
-                    out var clrAggregate
-                ) {
+            if $scope.TryResolveType(aliasTarget, out var clrAliasType) {
+                if $scope.TryCreateSemanticAggregate(clrAliasType, out var clrAggregate) {
                     return clrAggregate
                 }
                 return TypeSymbol.FromClrTypeWithoutNullability(clrAliasType, NullabilityFreeReason.ResolvedTypeName)
@@ -6593,7 +6580,7 @@ partial class Binder {
         var candidate Type? = LookupType(name)?.ClrType
         // Fully-qualified fallback against the reference set
         // (e.g. `System.IDisposable`).
-        if candidate == nil && $scope.References!!.TryResolveType(name, out var resolved) {
+        if candidate == nil && $scope.TryResolveType(name, out var resolved) {
             candidate = resolved
         }
         // Issue #526: dotted-qualifier names such as `Outer.INested` or
@@ -6631,7 +6618,7 @@ partial class Binder {
         var candidate Type? = LookupType(baseName)?.ClrType
         // Fully-qualified name, e.g. `System.IO.MemoryStream`, resolved directly
         // against the reference set.
-        if candidate == nil && $scope.References!!.TryResolveType(baseName, out var resolvedType) {
+        if candidate == nil && $scope.TryResolveType(baseName, out var resolvedType) {
             candidate = resolvedType
         }
         // Issue #526: dotted-qualifier names such as `Outer.NestedClass` mean a
@@ -6665,12 +6652,12 @@ partial class Binder {
                 outer = LookupType(segments[0])?.ClrType
             } else {
                 let prefix = $scope.ExpandQualifiedTypeName(segments, outerLen)
-                if !$scope.References!!.TryResolveType(prefix, out outer) {
+                if !$scope.TryResolveType(prefix, out outer) {
                     outer = nil
                 }
                 if outer == nil {
                     for import_ in $scope.GetDeclaredImports() {
-                        if $scope.References!!.TryResolveType(import_.Target + "." + prefix, out var viaImport) {
+                        if $scope.TryResolveType(import_.Target + "." + prefix, out var viaImport) {
                             outer = viaImport
                             break
                         }
@@ -7072,7 +7059,7 @@ partial class Binder {
                 // so `Chan.Unbounded[T]()`, `ch.Close()` (an extension on a
                 // `chan[T]`), and the D9 helpers resolve with no import — the
                 // syntax (`go`, `chan[T]`, `<-`, `select`) never needed one.
-                if binder.$scope.References!!.TryResolveType(ChannelRuntimeBinder.ChanTypeName, out _) {
+                if binder.$scope.TryResolveType(ChannelRuntimeBinder.ChanTypeName, out _) {
                     binder.$scope.TryImport(
                         ImportSymbol("Gsharp.Concurrency", "Gsharp.Concurrency", declaration: nil, hoistsStatics: true)
                     )
@@ -7669,6 +7656,8 @@ partial class Binder {
                 statements.ToImmutable()
             )
             result.References = references ?? binder.$scope.References
+            result.ConsumerAssemblyName = binder.$scope.ConsumerAssemblyName
+            result.HasExplicitConsumerAssemblyName = binder.$scope.HasExplicitConsumerAssemblyName
             result.SourceNullableAnnotationErrors = binder.binderCtx.SourceNullableAnnotationErrors
             result.PreprocessorSymbols = preprocessorSymbols ?? ImmutableHashSet[string].Empty
             result.DeclaredTypeAliases = declaredTypeAliases.ToImmutable()
@@ -7723,6 +7712,8 @@ partial class Binder {
                     statements.ToImmutable()
                 ){
                     References = result.References,
+                    ConsumerAssemblyName = result.ConsumerAssemblyName,
+                    HasExplicitConsumerAssemblyName = result.HasExplicitConsumerAssemblyName,
                     SourceNullableAnnotationErrors = result.SourceNullableAnnotationErrors,
                     PreprocessorSymbols = result.PreprocessorSymbols,
                     DeclaredTypeAliases = result.DeclaredTypeAliases,
@@ -8454,6 +8445,8 @@ partial class Binder {
                 FriendAssemblies = globalScope.FriendAssemblies,
                 AssemblyAttributes = globalScope.AssemblyAttributes,
                 ModuleAttributes = globalScope.ModuleAttributes,
+                ConsumerAssemblyName = parentScope.ConsumerAssemblyName,
+                HasExplicitConsumerAssemblyName = parentScope.HasExplicitConsumerAssemblyName,
                 NativeProtocols = NativeProtocolCompilationPlan(
                     parentScope.GetStructuralAdapterRegistry().ProtocolOperations.ToImmutableDictionary(),
                     parentScope.GetStructuralAdapterRegistry().ImportedProtocolEntries.ToImmutableArray()
@@ -11955,6 +11948,9 @@ partial class Binder {
             preserveLatestImportSyntaxTrees bool
         ) BoundScope {
             let parent = CreateRootScope(references ?? globalScope?.References, preprocessorSymbols)
+            if globalScope?.HasExplicitConsumerAssemblyName == true {
+                parent.SetConsumerAssemblyName(globalScope.ConsumerAssemblyName)
+            }
             parent.GetBindingServices().SourceNullableAnnotationErrors = globalScope.SourceNullableAnnotationErrors
             CopyPriorCellImports(globalScope, parent)
             let scope_ = BoundScope(parent)

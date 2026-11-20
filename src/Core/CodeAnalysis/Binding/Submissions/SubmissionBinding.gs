@@ -24,7 +24,7 @@ internal shared class SubmissionBinding {
     }
 
     internal func HasTypeName($scope BoundScope, name string) bool -> $scope.SubmissionImports is {} submissions &&
-        submissions.TryResolveType($scope.References!!, name, -1, out _)
+        submissions.TryResolveType($scope.References!!, name, -1, $scope.ConsumerAssemblyName, out _)
 
     internal func TryLookupGenericClass(
         $scope BoundScope,
@@ -36,7 +36,7 @@ internal shared class SubmissionBinding {
             type = nil
             return false
         }
-        return submissions.TryResolveType($scope.References!!, name, arity, out type)
+        return submissions.TryResolveType($scope.References!!, name, arity, $scope.ConsumerAssemblyName, out type)
     }
 
     internal func TryLookupClassByArity(
@@ -51,12 +51,13 @@ internal shared class SubmissionBinding {
             $scope.References!!,
             name,
             preferredArity,
+            $scope.ConsumerAssemblyName,
             out var submissionType
         ) ||
             submissionType.IsGenericTypeDefinition {
             return false
         }
-        importedClass = ImportedClassSymbol(submissionType, declaration, references: $scope.References)
+        importedClass = $scope.CreateImportedClassSymbol(submissionType, declaration)
         return true
     }
 
@@ -71,15 +72,12 @@ internal shared class SubmissionBinding {
             $scope.References!!,
             name,
             preferredArity,
+            $scope.ConsumerAssemblyName,
             out var submissionClrType
         ) {
             return false
         }
-        if ImportedTypeSymbol.TryCreateSemanticAggregate(
-            submissionClrType,
-            $scope.References,
-            out var submissionAggregate
-        ) {
+        if $scope.TryCreateSemanticAggregate(submissionClrType, out var submissionAggregate) {
             type = submissionAggregate
             return true
         }
@@ -88,7 +86,7 @@ internal shared class SubmissionBinding {
     }
 
     internal func HasMember($scope BoundScope, name string) bool -> $scope.SubmissionImports is {} submissions &&
-        submissions.TryFindMemberContainer($scope.References!!, name, out _)
+        submissions.TryFindMemberContainer($scope.References!!, name, $scope.ConsumerAssemblyName, out _)
 
     internal func TryFindMemberContainer(
         $scope BoundScope,
@@ -99,6 +97,7 @@ internal shared class SubmissionBinding {
         return $scope.SubmissionImports is {} submissions && submissions.TryFindMemberContainer(
             $scope.References!!,
             name,
+            $scope.ConsumerAssemblyName,
             out programType
         ) &&
             programType != nil
@@ -113,6 +112,7 @@ internal shared class SubmissionBinding {
         return $scope.SubmissionImports is {} submissions && submissions.TryFindFunctionContainer(
             $scope.References!!,
             name,
+            $scope.ConsumerAssemblyName,
             out programType
         ) &&
             programType != nil
@@ -129,6 +129,7 @@ internal shared class SubmissionBinding {
         return $scope.SubmissionImports is {} submissions && submissions.TryFindGlobalVariable(
             $scope.References!!,
             name,
+            $scope.ConsumerAssemblyName,
             out programType,
             out declared
         ) &&
@@ -147,10 +148,16 @@ internal shared class SubmissionBinding {
         if $scope.SubmissionImports is not{} submissions {
             return false
         }
-        if submissions.TryFindFunctionContainer($scope.References!!, name, out _) {
+        if submissions.TryFindFunctionContainer($scope.References!!, name, $scope.ConsumerAssemblyName, out _) {
             return true
         }
-        return submissions.TryFindGlobalVariable($scope.References!!, name, out _, out var declared) &&
+        return submissions.TryFindGlobalVariable(
+            $scope.References!!,
+            name,
+            $scope.ConsumerAssemblyName,
+            out _,
+            out var declared
+        ) &&
             declared is {} previous &&
             (
             previous.Type is FunctionPointerTypeSymbol || MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(

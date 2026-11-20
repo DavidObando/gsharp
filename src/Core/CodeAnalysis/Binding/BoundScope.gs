@@ -174,6 +174,9 @@ partial class BoundScope {
         PreprocessorSymbols = preprocessorSymbols ?? parent?.PreprocessorSymbols ?? ImmutableHashSet[string].Empty
     }
 
+    private var explicitConsumerAssemblyName string?
+    private var hasExplicitConsumerAssemblyName bool
+
     /// Gets the parent scope, or `null` for a root scope (see
     /// (cref:Binder.CreateRootScope), which passes `parent: null`).
     prop Parent BoundScope? {
@@ -183,6 +186,78 @@ partial class BoundScope {
     /// Gets the reference resolver used to look up imported CLR types.
     prop References ReferenceResolver? {
         get;
+    }
+
+    internal func SetConsumerAssemblyName(consumerAssemblyName string?) {
+        explicitConsumerAssemblyName = consumerAssemblyName
+        hasExplicitConsumerAssemblyName = true
+    }
+
+    internal prop HasExplicitConsumerAssemblyName bool {
+        get {
+            if hasExplicitConsumerAssemblyName {
+                return true
+            }
+            if Parent != nil {
+                return Parent.HasExplicitConsumerAssemblyName
+            }
+            return false
+        }
+    }
+
+    internal prop ConsumerAssemblyName string? {
+        get {
+            if hasExplicitConsumerAssemblyName {
+                return explicitConsumerAssemblyName
+            }
+            if Parent != nil {
+                return Parent.ConsumerAssemblyName
+            }
+            return References?.CurrentAssemblyName
+        }
+    }
+
+    internal func CanAccessInternalMembers(assembly System.Reflection.Assembly?) bool ->
+    References?.CanAccessInternalMembers(assembly, ConsumerAssemblyName) == true
+
+    internal func TryResolveType(fullName string, @NotNullWhen(true) out type Type?) bool {
+        type = nil
+        if References == nil {
+            return false
+        }
+        return References.TryResolveType(fullName, ConsumerAssemblyName, out type)
+    }
+
+    internal func TryCreateSemanticAggregate(
+        type Type?,
+        @NotNullWhen(true) out aggregate StructSymbol?
+    ) bool -> ImportedTypeSymbol
+        .TryCreateSemanticAggregate(
+        type,
+        References,
+        out aggregate,
+        ConsumerAssemblyName,
+        HasExplicitConsumerAssemblyName
+    )
+
+    internal func NormalizeSemanticAggregate(type TypeSymbol, clrType Type?) TypeSymbol -> ImportedTypeSymbol
+        .NormalizeSemanticAggregate(type, clrType, References, ConsumerAssemblyName, HasExplicitConsumerAssemblyName)
+
+    internal func MapClrTypeToReferences(hostType Type?) Type? -> References?.ProjectClrType(
+        hostType,
+        ConsumerAssemblyName
+    )
+
+    internal prop ClrTypeProjector Func[Type, Type] -> References!!.GetTypeProjector(ConsumerAssemblyName)
+
+    internal func CreateImportedClassSymbol(
+        type Type,
+        declaration ExpressionSyntax?,
+        symbolicReceiver ImportedTypeSymbol? = nil,
+        constructedReceiver ImportedTypeSymbol? = nil
+    ) ImportedClassSymbol -> ImportedClassSymbol(type, declaration, symbolicReceiver, References, constructedReceiver){
+        ConsumerAssemblyName = ConsumerAssemblyName,
+        HasExplicitConsumerAssemblyName = HasExplicitConsumerAssemblyName
     }
 
     /// Gets the active preprocessor symbol set (ADR-0047 §6 / issue #176).
@@ -629,12 +704,18 @@ partial class BoundScope {
         }
         for import_ in EnumerateImports() {
             if (import_.IsAlias && import_.Name == name) || References!!.HasTypeNameAtAnyArity(
-                import_.Target + "." + name
+                import_.Target + "." + name,
+                ConsumerAssemblyName,
+                HasExplicitConsumerAssemblyName
             ) {
                 return true
             }
         }
-        return GetCurrentDeclaringPackage() is {} package_ && References!!.HasTypeNameAtAnyArity(package_ + "." + name)
+        return GetCurrentDeclaringPackage() is {} package_ && References!!.HasTypeNameAtAnyArity(
+            package_ + "." + name,
+            ConsumerAssemblyName,
+            HasExplicitConsumerAssemblyName
+        )
     }
 
     /// Tries to lookup an imported generic open type by simple name and arity (Phase 4.4 / ADR-0020).
@@ -694,10 +775,8 @@ partial class BoundScope {
         // has failed: it can resolve previously-unresolvable names but never
         // introduces a new ambiguity or changes source-package
         // disambiguation.
-        if GetCurrentDeclaringPackage() is {Length: > 0} declaringPackage && References!!.TryResolveType(
-            declaringPackage + "." + mangled,
-            out var selfPackageType
-        ) {
+        if GetCurrentDeclaringPackage() is {Length: > 0} declaringPackage &&
+            TryResolveType(declaringPackage + "." + mangled, out var selfPackageType) {
             type = selfPackageType
             return true
         }
@@ -743,7 +822,7 @@ partial class BoundScope {
         ambiguity = nil
         if preferredArity > 0 {
             if TryLookupImportedGenericClass(name, preferredArity, out var importedGeneric, out ambiguity) {
-                importedClass = ImportedClassSymbol(importedGeneric, declaration, references: References)
+                importedClass = CreateImportedClassSymbol(importedGeneric, declaration)
                 return true
             }
             importedClass = nil
@@ -755,24 +834,21 @@ partial class BoundScope {
             return true
         }
         if TryResolveImportedTypeAlias(name, preferredArity, out var aliasedType) {
-            importedClass = ImportedClassSymbol(aliasedType, declaration, references: References)
+            importedClass = CreateImportedClassSymbol(aliasedType, declaration)
             return true
         }
         if TryScanImportsForClrType(name, requireNonGenericDefinition: true, out var scanned, out ambiguity) {
-            importedClass = ImportedClassSymbol(scanned, declaration, references: References)
+            importedClass = CreateImportedClassSymbol(scanned, declaration)
             return true
         }
         // Issue #3595 (#3501): same self-package fallback as
         // TryLookupImportedGenericClass — a file in `package X` sees a
         // referenced assembly's namespace-X types after every explicit
         // import has failed to resolve the name.
-        if GetCurrentDeclaringPackage() is {Length: > 0} declaringPackage && References!!.TryResolveType(
-            declaringPackage + "." + name,
-            out var selfPackageType
-        ) &&
-            !selfPackageType
-            .IsGenericTypeDefinition {
-            importedClass = ImportedClassSymbol(selfPackageType, declaration, references: References)
+        if GetCurrentDeclaringPackage() is {Length: > 0} declaringPackage &&
+            TryResolveType(declaringPackage + "." + name, out var selfPackageType) &&
+            !selfPackageType.IsGenericTypeDefinition {
+            importedClass = CreateImportedClassSymbol(selfPackageType, declaration)
             return true
         }
         importedClass = nil
@@ -822,8 +898,8 @@ partial class BoundScope {
             if (import_.IsImplicit && !import_.HoistsStatics) || import_.IsAlias {
                 continue
             }
-            if !References!!.TryResolveType(import_.Target, out var type) {
-                References!!.TryResolveType(SubmissionImports.GetProgramTypeName(import_.Target), out type)
+            if !TryResolveType(import_.Target, out var type) {
+                TryResolveType(SubmissionImports.GetProgramTypeName(import_.Target), out type)
             }
             if type != nil {
                 seen ??= HashSet[Type]()
@@ -2191,7 +2267,7 @@ partial class BoundScope {
         } else {
             import_.Target
         }
-        return References!!.TryResolveType(target, out type) && (preferredArity > 0 || !type.IsGenericTypeDefinition)
+        return TryResolveType(target, out type) && (preferredArity > 0 || !type.IsGenericTypeDefinition)
     }
 
     /// Issue #2455: tries to resolve ([`name`](paramref), [`arity`](paramref))
@@ -3008,7 +3084,7 @@ partial class BoundScope {
         var firstExplicit Type? = nil
         var firstImplicit Type? = nil
         for import_ in EnumerateImports() {
-            if !References!!.TryResolveType(import_.Target + "." + lookupName, out var candidate) {
+            if !TryResolveType(import_.Target + "." + lookupName, out var candidate) {
                 continue
             }
             if requireNonGenericDefinition && candidate.IsGenericTypeDefinition {

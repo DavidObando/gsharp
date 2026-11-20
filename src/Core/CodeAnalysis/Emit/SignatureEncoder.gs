@@ -1099,11 +1099,18 @@ internal class SignatureEncoder {
         }
         if hostType.IsConstructedGenericType {
             let openDef = hostType.GetGenericTypeDefinition()
-            if openDef.FullName != nil &&
-                this
-                .emitCtx
-                .References
-                .TryResolveType(openDef.FullName!!, requireExternalVisibility: false, out var openRef) {
+            let openRef = if this.emitCtx.References.OwnsType(openDef) {
+                openDef
+            } else if openDef.FullName != nil && this.emitCtx.TryResolveType(
+                openDef.FullName!!,
+                requireExternalVisibility: false,
+                out var resolvedOpen
+            ) {
+                resolvedOpen
+            } else {
+                default(Type?)
+            }
+            if openRef != nil {
                 let hostArgs = hostType.GetGenericArguments()
                 let refArgs = [hostArgs.Length]Type
                 for var i = 0; i < hostArgs.Length; i++ {
@@ -1113,10 +1120,14 @@ internal class SignatureEncoder {
             }
             return hostType
         }
-        if this
-            .emitCtx
-            .References
-            .TryResolveType(hostType.FullName ?? hostType.Name, requireExternalVisibility: false, out var mapped) {
+        if this.emitCtx.References.OwnsType(hostType) {
+            return hostType
+        }
+        if this.emitCtx.TryResolveType(
+            hostType.FullName ?? hostType.Name,
+            requireExternalVisibility: false,
+            out var mapped
+        ) {
             return mapped
         }
         return hostType

@@ -700,7 +700,7 @@ internal partial class ExpressionBinder {
     /// validate the operand of a throw-expression. Mirrors
     /// (cref:StatementBinder.ResolveExceptionType).
     private func ResolveExceptionType() TypeSymbol? {
-        if $scope.References!!.TryResolveType("System.Exception", out var t) {
+        if $scope.TryResolveType("System.Exception", out var t) {
             return TypeSymbol.FromClrTypeWithoutNullability(t, NullabilityFreeReason.TypeLiteral)
         }
         return nil

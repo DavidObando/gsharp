@@ -442,9 +442,7 @@ internal partial class OverloadResolver {
         if !derived.IsClass || ExpressionBinder.GetInheritedClrBaseType(derived) is not{} importedBase {
             return nil
         }
-        let probe = ImportedClassSymbol(importedBase, nil, references: Scope.References).WithFamilyAccessBase(
-            importedBase
-        )
+        let probe = Scope.CreateImportedClassSymbol(importedBase, nil).WithFamilyAccessBase(importedBase)
         return if probe.HasVisibleStaticMethod(name) {
             importedBase
         } else {

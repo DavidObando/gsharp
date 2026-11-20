@@ -235,20 +235,15 @@ internal partial class ExpressionBinder {
             NullableLifting.IsAnyValueTypeNullable(receiverType.StripToBareShape() as NullableTypeSymbol) {
             return nil
         }
-        let normalized = ImportedTypeSymbol.NormalizeSemanticAggregate(
-            receiverType,
-            receiverType.ClrType,
-            $scope.References
-        )
+        let normalized = $scope.NormalizeSemanticAggregate(receiverType, receiverType.ClrType)
         var aggregate StructSymbol? = switch normalized {
             case structType is StructSymbol: structType
             case NullabilityAnnotatedTypeSymbol{BaseType: StructSymbol structType}: structType
             default: default(StructSymbol?)
         }
         // Admission needs a data shape; lowering retains the exact receiver type.
-        if aggregate == nil && receiverType.ClrType is {} clrType && ImportedTypeSymbol.TryCreateSemanticAggregate(
+        if aggregate == nil && receiverType.ClrType is {} clrType && $scope.TryCreateSemanticAggregate(
             clrType,
-            $scope.References,
             out var importedAggregate
         ) {
             aggregate = importedAggregate
@@ -1171,9 +1166,10 @@ internal partial class ExpressionBinder {
             if $scope.TryLookupTypeAlias(name, preferredArity: 0, out var typeAlias) &&
                 typeAlias is ImportedTypeSymbol{ClrType: not nil} importedAlias {
                 clrType = importedAlias.ClrType
-            } else if $scope.TryLookupImport(name, out var aliasImport) &&
-                aliasImport.IsAlias &&
-                $scope.References!!.TryResolveType(aliasImport.Target, out var aliasedType) {
+            } else if $scope.TryLookupImport(name, out var aliasImport) && aliasImport.IsAlias && $scope.TryResolveType(
+                aliasImport.Target,
+                out var aliasedType
+            ) {
                 clrType = aliasedType
             } else if $scope.TryLookupImportedClass(name, declaration: nil, out var importedClass, out var ambiguity) {
                 // Issue #3734: `Thing()` with two imports each exporting a
@@ -1214,9 +1210,8 @@ internal partial class ExpressionBinder {
             } else {
                 TypeSymbol.FromClrTypeWithoutNullability(resolvedClrType, NullabilityFreeReason.TypeStructure)
             }
-            if openGenericDefinition == nil && ImportedTypeSymbol.TryCreateSemanticAggregate(
+            if openGenericDefinition == nil && $scope.TryCreateSemanticAggregate(
                 resolvedClrType,
-                $scope.References,
                 out var nullableAggregate
             ) {
                 checkedTarget = nullableAggregate
@@ -1246,11 +1241,7 @@ internal partial class ExpressionBinder {
         // `with`/copy. Generalize the check to both kinds (drop the
         // `IsClass`-only restriction) so a data class AND a data struct both
         // resolve construction through the one semantic aggregate.
-        if syntax.Arguments.Count == 0 && ImportedTypeSymbol.TryCreateSemanticAggregate(
-            resolvedClrType,
-            $scope.References,
-            out var zeroAggregate
-        ) &&
+        if syntax.Arguments.Count == 0 && $scope.TryCreateSemanticAggregate(resolvedClrType, out var zeroAggregate) &&
             zeroAggregate is {IsData: true, IsClass: false, HasDataConstructionPrimary: false} zeroData &&
             !BoundStructLiteralExpression
             .ValidateDataConstructor(
@@ -1258,14 +1249,13 @@ internal partial class ExpressionBinder {
             Diagnostics,
             syntax,
             this.function,
-            binderCtx.References.CanAccessInternalMembers(resolvedClrType.Assembly)
+            binderCtx.CanAccessInternalMembers(resolvedClrType.Assembly)
         ) {
             result = BoundErrorExpression(syntax)
             return true
         }
-        if openGenericDefinition == nil && ImportedTypeSymbol.TryCreateSemanticAggregate(
+        if openGenericDefinition == nil && $scope.TryCreateSemanticAggregate(
             resolvedClrType,
-            $scope.References,
             out var dataClassAggregate
         ) &&
             dataClassAggregate.IsData &&
@@ -1364,11 +1354,7 @@ internal partial class ExpressionBinder {
         ) {
             return true
         }
-        if openGenericDefinition == nil && ImportedTypeSymbol.TryCreateSemanticAggregate(
-            resolvedClrType,
-            $scope.References,
-            out var aggregate
-        ) &&
+        if openGenericDefinition == nil && $scope.TryCreateSemanticAggregate(resolvedClrType, out var aggregate) &&
             aggregate.HasPrimaryConstructor {
             result = overloads.BindConstructorCallExpression(syntax, aggregate)
             return true
@@ -1687,7 +1673,7 @@ internal partial class ExpressionBinder {
         // and fails to match the `Func<...>` parameter; the call then misroutes
         // to the single-arg conversion path and reports the misleading GS0162
         // "named arguments are only supported for data-struct .copy(...)".
-        let canAccessInternalConstructors = $scope.References!!.CanAccessInternalMembers(clrType.Assembly)
+        let canAccessInternalConstructors = $scope.CanAccessInternalMembers(clrType.Assembly)
         var constructorFlags = BindingFlags.Public | BindingFlags.Instance
         if canAccessInternalConstructors {
             constructorFlags |= BindingFlags.NonPublic

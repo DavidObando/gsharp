@@ -102,7 +102,16 @@ shared class NullableLifting {
     /// @param typeSymbol The type symbol to resolve.
     /// @returns The CLR type projected onto the reference load context, or `null`
     /// when the symbol has no CLR type.
-    func ResolveClrTypeForGenericArg(references ReferenceResolver, typeSymbol TypeSymbol?) Type? {
+    func ResolveClrTypeForGenericArg(
+        references ReferenceResolver,
+        typeSymbol TypeSymbol?
+    ) Type? -> ResolveClrTypeForGenericArg(references, typeSymbol, references?.CurrentAssemblyName)
+
+    internal func ResolveClrTypeForGenericArg(
+        references ReferenceResolver,
+        typeSymbol TypeSymbol?,
+        consumerAssemblyName string?
+    ) Type? {
         if typeSymbol is NullableTypeSymbol nullable {
             let innerVt = nullable.UnderlyingType?.ClrType
             if innerVt?.IsValueType == true && TryConstructNullable(references, innerVt, out var nullableClr) {
@@ -111,7 +120,7 @@ shared class NullableLifting {
         }
         let clr Type? = typeSymbol?.ClrType
         return if clr != nil {
-            references.MapClrTypeToReferences(clr)
+            references.ProjectClrType(clr, consumerAssemblyName)
         } else {
             default(Type?)
         }

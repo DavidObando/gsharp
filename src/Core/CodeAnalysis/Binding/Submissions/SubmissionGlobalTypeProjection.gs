@@ -46,13 +46,22 @@ internal shared class SubmissionGlobalTypeProjection {
         projected TypeSymbol,
         clrFieldType Type,
         declaredType TypeSymbol?,
-        references ReferenceResolver
+        references ReferenceResolver,
+        consumerAssemblyName string? = nil,
+        hasExplicitConsumerAssemblyName bool = false
     ) TypeSymbol {
         switch declaredType {
             case declaredChannel is ChannelTypeSymbol {
                 if TryGetChannelElement(clrFieldType, out var elementClr, out var direction) &&
                     direction == declaredChannel.Direction &&
-                    TryProjectComponent(elementClr, declaredChannel.ElementType, references, out var element) {
+                    TryProjectComponent(
+                    elementClr,
+                    declaredChannel.ElementType,
+                    references,
+                    consumerAssemblyName,
+                    hasExplicitConsumerAssemblyName,
+                    out var element
+                ) {
                     return ChannelTypeSymbol.Get(element, direction)
                 }
             }
@@ -63,6 +72,8 @@ internal shared class SubmissionGlobalTypeProjection {
                     clrFieldType.GetElementType(),
                     declaredSlice.ElementType,
                     references,
+                    consumerAssemblyName,
+                    hasExplicitConsumerAssemblyName,
                     out var sliceElement
                 ) {
                     return SliceTypeSymbol.Get(sliceElement)
@@ -78,6 +89,8 @@ internal shared class SubmissionGlobalTypeProjection {
                     clrFieldType.GetElementType(),
                     declaredArray.ElementType,
                     references,
+                    consumerAssemblyName,
+                    hasExplicitConsumerAssemblyName,
                     out var arrayElement
                 ) {
                     return ArrayTypeSymbol.Get(arrayElement, declaredArray.Length)
@@ -94,6 +107,8 @@ internal shared class SubmissionGlobalTypeProjection {
         clrType Type?,
         declaredComponent TypeSymbol,
         references ReferenceResolver,
+        consumerAssemblyName string?,
+        hasExplicitConsumerAssemblyName bool,
         @NotNullWhen(true) out component TypeSymbol?
     ) bool {
         component = nil
@@ -103,12 +118,21 @@ internal shared class SubmissionGlobalTypeProjection {
         let projected TypeSymbol? = ImportedTypeSymbol.NormalizeSemanticAggregate(
             TypeSymbol.FromClrTypeWithoutNullability(clrType, NullabilityFreeReason.CompilerProduced),
             clrType,
-            references
+            references,
+            consumerAssemblyName,
+            hasExplicitConsumerAssemblyName
         )
         if projected == nil || projected == TypeSymbol.Error || projected == TypeSymbol.Void {
             return false
         }
-        component = ReverseProject(projected, clrType, declaredComponent, references)
+        component = ReverseProject(
+            projected,
+            clrType,
+            declaredComponent,
+            references,
+            consumerAssemblyName,
+            hasExplicitConsumerAssemblyName
+        )
         return true
     }
 

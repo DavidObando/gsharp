@@ -297,7 +297,7 @@ internal partial class ExpressionBinder {
         //
         // A namespace prefix with no source homonym has neither second chance,
         // so there the fallthrough can only ever produce GS0157.
-        if !handled && noApplicableOverload && namespacePrefix.Length > 0 && !$scope.References!!.TryResolveType(
+        if !handled && noApplicableOverload && namespacePrefix.Length > 0 && !$scope.TryResolveType(
             namespacePrefix,
             out _
         ) &&
@@ -765,7 +765,7 @@ internal partial class ExpressionBinder {
                     return false
                 }
                 let mangled = prefix + "." + typeSimpleName + "`" + arity.ToString()
-                if $scope.References!!.TryResolveType(mangled, out var openType) {
+                if $scope.TryResolveType(mangled, out var openType) {
                     if !TryResolveClrConstructionTypeArgs(
                         typeArgumentList,
                         out var clrArgs,
@@ -804,7 +804,7 @@ internal partial class ExpressionBinder {
                 }
             } else {
                 let fullName = prefix + "." + typeSimpleName
-                if $scope.References!!.TryResolveType(fullName, out var resolved) && !resolved.IsGenericTypeDefinition {
+                if $scope.TryResolveType(fullName, out var resolved) && !resolved.IsGenericTypeDefinition {
                     clrType = resolved
                     return true
                 }
@@ -860,11 +860,11 @@ internal partial class ExpressionBinder {
             let outerName = string.Join(".", prefixSegments, 0, outerLen)
             var outerType Type? = nil
             // Try resolving the outer name directly.
-            if !$scope.References!!.TryResolveType(outerName, out outerType) {
+            if !$scope.TryResolveType(outerName, out outerType) {
                 // Try with each import prefix.
                 for import_ in $scope.GetDeclaredImports() {
                     let qualified = import_.Target + "." + outerName
-                    if $scope.References!!.TryResolveType(qualified, out outerType) {
+                    if $scope.TryResolveType(qualified, out outerType) {
                         break
                     }
                 }

@@ -78,6 +78,22 @@ class ImportedClassSymbol : Symbol {
         get;
     }
 
+    internal prop ConsumerAssemblyName string? {
+        get;
+        init;
+    }
+
+    internal prop HasExplicitConsumerAssemblyName bool {
+        get;
+        init;
+    }
+
+    internal prop EffectiveConsumerAssemblyName string? -> if HasExplicitConsumerAssemblyName {
+        ConsumerAssemblyName
+    } else {
+        ConsumerAssemblyName ?? References?.CurrentAssemblyName
+    }
+
     /// Gets the imported class declaration.
     prop Declaration ExpressionSyntax? {
         get;
@@ -104,7 +120,9 @@ class ImportedClassSymbol : Symbol {
             return this
         }
         return ImportedClassSymbol(ClassType, Declaration, SymbolicReceiver, References, ConstructedReceiver){
-            FamilyAccessBase = familyAccessBase
+            FamilyAccessBase = familyAccessBase,
+            ConsumerAssemblyName = ConsumerAssemblyName,
+            HasExplicitConsumerAssemblyName = HasExplicitConsumerAssemblyName
         }
     }
 
@@ -840,7 +858,8 @@ class ImportedClassSymbol : Symbol {
                 nested.IsNestedPublic ||
                     (
                     (nested.IsNestedAssembly || nested.IsNestedFamORAssem) && References?.CanAccessInternalMembers(
-                        nested.Assembly
+                        nested.Assembly,
+                        EffectiveConsumerAssemblyName
                     ) == true
                 )
             )
@@ -850,7 +869,10 @@ class ImportedClassSymbol : Symbol {
     }
 
     private func IsVisibleToCurrentCompilation(method MethodBase) bool {
-        let includeInternal = References?.CanAccessInternalMembers(method.DeclaringType?.Assembly) == true
+        let includeInternal = References?.CanAccessInternalMembers(
+            method.DeclaringType?.Assembly,
+            EffectiveConsumerAssemblyName
+        ) == true
         return ClrMemberVisibility.IsVisible(method, includeInternal) ||
             (
             ClrMemberVisibility.IsVisibleFromDerived(method, includeInternal) &&
@@ -859,7 +881,10 @@ class ImportedClassSymbol : Symbol {
     }
 
     private func IsVisibleToCurrentCompilation(field FieldInfo) bool {
-        let includeInternal = References?.CanAccessInternalMembers(field.DeclaringType?.Assembly) == true
+        let includeInternal = References?.CanAccessInternalMembers(
+            field.DeclaringType?.Assembly,
+            EffectiveConsumerAssemblyName
+        ) == true
         return ClrMemberVisibility.IsVisible(field, includeInternal) ||
             (
             ClrMemberVisibility.IsVisibleFromDerived(field, includeInternal) && IsFamilyAccessible(field.DeclaringType)

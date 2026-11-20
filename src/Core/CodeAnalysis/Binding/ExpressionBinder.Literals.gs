@@ -202,7 +202,7 @@ internal partial class ExpressionBinder {
                 var resolved bool
                 var isAmbiguous bool
                 if typeClause.HasQualifier {
-                    resolved = $scope.References!!.TryResolveType(
+                    resolved = $scope.TryResolveType(
                         typeClause.DottedName + "`" + arity.ToString(),
                         out var qualifiedType
                     )
@@ -302,7 +302,7 @@ internal partial class ExpressionBinder {
             var foundAtThisArity = false
             for import_ in $scope.GetDeclaredImports() {
                 let candidateName = import_.Target + "." + name + "`" + arity.ToString()
-                if $scope.References!!.TryResolveType(candidateName, out var candidate) {
+                if $scope.TryResolveType(candidateName, out var candidate) {
                     foundAtThisArity = true
                     if match != nil && match != candidate {
                         // Ambiguous across imports/arities — defer to the
@@ -675,7 +675,7 @@ internal partial class ExpressionBinder {
                     .Append(segments[i])
             }
             reflectionName = builder.ToString()
-            if $scope.References!!.TryResolveType(reflectionName, out var direct) && direct != nil {
+            if $scope.TryResolveType(reflectionName, out var direct) && direct != nil {
                 return direct
             }
             let imported Type? = ResolveImportedReflectionType(reflectionName, out isAmbiguous)
@@ -693,7 +693,7 @@ internal partial class ExpressionBinder {
         isAmbiguous = false
         var match Type? = nil
         for import_ in $scope.GetDeclaredImports() {
-            if !$scope.References!!.TryResolveType(import_.Target + "." + reflectionName, out var candidate) {
+            if !$scope.TryResolveType(import_.Target + "." + reflectionName, out var candidate) {
                 continue
             }
             if match != nil && match != candidate {
@@ -789,7 +789,7 @@ internal partial class ExpressionBinder {
         var match Type? = nil
         for import_ in $scope.GetDeclaredImports() {
             let candidateName = import_.Target + "." + name + "`" + arity.ToString()
-            if $scope.References!!.TryResolveType(candidateName, out var candidate) {
+            if $scope.TryResolveType(candidateName, out var candidate) {
                 if match != nil && match != candidate {
                     // Ambiguous across imports — let the caller raise the
                     // ambiguity diagnostic rather than "type doesn't exist".
@@ -998,7 +998,9 @@ internal partial class ExpressionBinder {
                     $scope.References is {} interpolationRefs && DefaultInterpolatedStringHandlerShape.TryResolve(
                         interpolationRefs,
                         out _,
-                        out _
+                        out _,
+                        $scope.ConsumerAssemblyName,
+                        $scope.HasExplicitConsumerAssemblyName
                     )
                 )
                 if usesIncrementalHandler {
@@ -2017,11 +2019,7 @@ internal partial class ExpressionBinder {
                     hasImportedCandidate &&
                     importedCandidate != nil &&
                     importedCandidate.ClassType is {IsGenericTypeDefinition: false} {
-                    if ImportedTypeSymbol.TryCreateSemanticAggregate(
-                        importedCandidate.ClassType,
-                        $scope.References,
-                        out var importedAggregate
-                    ) {
+                    if $scope.TryCreateSemanticAggregate(importedCandidate.ClassType, out var importedAggregate) {
                         structSymbol = importedAggregate
                     } else {
                         return BindImportedTypeLiteralExpression(
@@ -2063,11 +2061,7 @@ internal partial class ExpressionBinder {
                         Diagnostics.ReportUnableToFindType(syntax.TypeIdentifier.Location, typeName)
                         return BoundErrorExpression(nil)
                     }
-                    if ImportedTypeSymbol.TryCreateSemanticAggregate(
-                        closedImportedType,
-                        $scope.References,
-                        out var dataClass
-                    ) &&
+                    if $scope.TryCreateSemanticAggregate(closedImportedType, out var dataClass) &&
                         dataClass is StructSymbol{IsClass: true} {
                         return BindImportedTypeLiteralExpression(
                             syntax,
@@ -2110,9 +2104,8 @@ internal partial class ExpressionBinder {
                             resolveTypeOnly
                         )
                     }
-                    if !hasSymbolicArgument && ImportedTypeSymbol.TryCreateSemanticAggregate(
+                    if !hasSymbolicArgument && $scope.TryCreateSemanticAggregate(
                         closedImportedType,
-                        $scope.References,
                         out var importedAggregate
                     ) {
                         return BindStructLiteralExpression(syntax, importedAggregate, resolveTypeOnly: resolveTypeOnly)
@@ -2485,17 +2478,13 @@ internal partial class ExpressionBinder {
             // substitute both levels and the emitter encodes the reified nested
             // type (`Outer`1+Middle`2<int32, string>`).
             structSymbol = if enclosingTypeArguments.IsDefaultOrEmpty {
-                StructSymbol.Construct(
-                    structSymbol,
-                    typeArgs.MoveToImmutable(),
-                    $scope.References!!.MapClrTypeToReferences
-                )
+                StructSymbol.Construct(structSymbol, typeArgs.MoveToImmutable(), $scope.ClrTypeProjector)
             } else {
                 StructSymbol.ConstructNestedGeneric(
                     structSymbol,
                     enclosingTypeArguments,
                     typeArgs.MoveToImmutable(),
-                    $scope.References!!.MapClrTypeToReferences
+                    $scope.ClrTypeProjector
                 )
             }
         } else if syntax.TypeArgumentList != nil && initialStructSymbol.ClrType is not{IsConstructedGenericType: true} {
@@ -2511,11 +2500,7 @@ internal partial class ExpressionBinder {
             // enclosing type (`Box[int32].Tag{…}`) threads only the enclosing
             // arguments so member types typed as an enclosing parameter surface
             // closed and the emitter encodes `Box`1+Tag`1<int32>`.
-            structSymbol = StructSymbol.ConstructNested(
-                structSymbol,
-                enclosingTypeArguments,
-                $scope.References!!.MapClrTypeToReferences
-            )
+            structSymbol = StructSymbol.ConstructNested(structSymbol, enclosingTypeArguments, $scope.ClrTypeProjector)
         }
         if binderCtx.HasUnclosedEnclosingTypeParameters(structSymbol, getCurrentFunction()) {
             Diagnostics.ReportUnableToFindType(syntax.TypeIdentifier.Location, typeName)
@@ -2577,9 +2562,7 @@ internal partial class ExpressionBinder {
             Diagnostics,
             syntax,
             this.function,
-            structSymbol!!.ClrType is {} constructorType && binderCtx.References.CanAccessInternalMembers(
-                constructorType.Assembly
-            )
+            structSymbol!!.ClrType is {} constructorType && binderCtx.CanAccessInternalMembers(constructorType.Assembly)
         ) {
             return BoundErrorExpression(syntax)
         }
@@ -3370,7 +3353,7 @@ internal partial class ExpressionBinder {
             enclosingTypeArguments: default(ImmutableArray[TypeSymbol]),
             resolvedTarget: resultTypeOverride ??
                 (
-                if ImportedTypeSymbol.TryCreateSemanticAggregate(clrType, $scope.References, out var aggregate) {
+                if $scope.TryCreateSemanticAggregate(clrType, out var aggregate) {
                     cast[TypeSymbol](aggregate)
                 } else {
                     TypeSymbol.FromClrTypeWithoutNullability(clrType, NullabilityFreeReason.TypeStructure)
@@ -3379,7 +3362,7 @@ internal partial class ExpressionBinder {
         )
     } else if clrType.IsValueType {
         BindImportedValueTypeLiteralExpression(syntax, clrType, resultTypeOverride)
-    } else if ImportedTypeSymbol.TryCreateSemanticAggregate(clrType, $scope.References, out var aggregateClass) &&
+    } else if $scope.TryCreateSemanticAggregate(clrType, out var aggregateClass) &&
         aggregateClass is StructSymbol{IsClass: true} dataClass {
         BindImportedDataClassLiteral(
             syntax,
@@ -3605,7 +3588,7 @@ internal partial class ExpressionBinder {
         let arguments = ImmutableArray.CreateBuilder[BoundExpression]()
         let argumentStatements = ImmutableArray.CreateBuilder[BoundStatement]()
         let constructorMembers = HashSet[string](StringComparer.Ordinal)
-        if ImportedTypeSymbol.TryCreateSemanticAggregate(clrType, binderCtx.References, out var aggregate) &&
+        if binderCtx.TryCreateSemanticAggregate(clrType, out var aggregate) &&
             aggregate
             .UsesConstructorOwnedDataConstruction {
             if !BoundStructLiteralExpression.ValidateDataConstructor(
@@ -3613,7 +3596,7 @@ internal partial class ExpressionBinder {
                 Diagnostics,
                 syntax,
                 getCurrentFunction(),
-                binderCtx.References.CanAccessInternalMembers(clrType.Assembly)
+                binderCtx.CanAccessInternalMembers(clrType.Assembly)
             ) {
                 return BoundErrorExpression(syntax)
             }
@@ -4699,10 +4682,10 @@ internal partial class ExpressionBinder {
         elementType TypeSymbol,
         out listType ImportedTypeSymbol
     ) BoundExpression {
-        let openListType = $scope.References!!.MapClrTypeToReferences(typeof(List[_]))
+        let openListType = $scope.MapClrTypeToReferences(typeof(List[_]))
         var clrElementType Type? = resolveClrTypeForGenericArg(elementType)
         if clrElementType == nil && MemberLookup.TryProjectErasedClrType(elementType, out var projectedElementType) {
-            clrElementType = $scope.References!!.MapClrTypeToReferences(projectedElementType)
+            clrElementType = $scope.MapClrTypeToReferences(projectedElementType)
         }
         clrElementType ??= $scope.References!!.GetCoreType("System.Object")
         var closedListType Type
@@ -4837,9 +4820,9 @@ internal partial class ExpressionBinder {
         // type and concrete reflection argument in the resolver's load context;
         // retain the bound element symbol so open/same-compilation arguments
         // remain symbolic for emit.
-        let spanOpen = this.binderCtx.References.MapClrTypeToReferences(typeof(System.Span[_]))
+        let spanOpen = $scope.MapClrTypeToReferences(typeof(System.Span[_]))
         let elementClr = if elementType.ClrType != nil {
-            this.binderCtx.References.MapClrTypeToReferences(elementType.ClrType)!!
+            $scope.MapClrTypeToReferences(elementType.ClrType)!!
         } else if elementType is EnumSymbol {
             this.binderCtx.References.GetCoreType("System.Int32")
         } else {

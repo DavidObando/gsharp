@@ -5153,12 +5153,9 @@ internal class ConversionClassifier {
             Diagnostics,
             constructionSyntax ?? expression.Syntax,
             getCurrentFunction(),
-            resolvedPlan
-                .Construction
-                .UserType!!.ClrType is {} constructorType &&
-                binderCtx
-                .References
-                .CanAccessInternalMembers(constructorType.Assembly),
+            resolvedPlan.Construction.UserType!!.ClrType is {} constructorType && binderCtx.CanAccessInternalMembers(
+                constructorType.Assembly
+            ),
             suppliedPrimaryInputs: resolvedPlan
                 .ConstructorSlots
                 .Where(

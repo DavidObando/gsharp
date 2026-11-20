@@ -301,6 +301,37 @@ internal class BinderContext {
     /// don't need to reach through (cref:RootScope).
     prop References ReferenceResolver -> RootScope.References!!
 
+    internal func CanAccessInternalMembers(assembly Assembly?) bool -> RootScope.CanAccessInternalMembers(assembly)
+
+    internal func TryResolveType(fullName string, @NotNullWhen(true) out type Type?) bool -> RootScope.TryResolveType(
+        fullName,
+        out type
+    )
+
+    internal func TryCreateSemanticAggregate(
+        type Type?,
+        @NotNullWhen(true) out aggregate StructSymbol?
+    ) bool -> RootScope.TryCreateSemanticAggregate(type, out aggregate)
+
+    internal func NormalizeSemanticAggregate(
+        type TypeSymbol,
+        clrType Type?
+    ) TypeSymbol -> RootScope.NormalizeSemanticAggregate(type, clrType)
+
+    internal prop ClrTypeProjector Func[Type, Type] -> RootScope.ClrTypeProjector
+
+    internal func CreateImportedClassSymbol(
+        type Type,
+        declaration ExpressionSyntax?,
+        symbolicReceiver ImportedTypeSymbol? = nil,
+        constructedReceiver ImportedTypeSymbol? = nil
+    ) ImportedClassSymbol -> RootScope.CreateImportedClassSymbol(
+        type,
+        declaration,
+        symbolicReceiver,
+        constructedReceiver
+    )
+
     /// Gets a value indicating whether binding is currently inside an
     /// `unsafe` context (ADR-0122 / issue #1014). When true the prefix
     /// `*T` type clause binds to an unmanaged pointer

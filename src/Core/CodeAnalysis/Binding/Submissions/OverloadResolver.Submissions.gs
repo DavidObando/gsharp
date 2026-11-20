@@ -22,6 +22,7 @@ internal partial class OverloadResolver {
         if bindImportedClrStaticCall != nil && submissionImports.TryFindFunctionContainer(
             Scope.References!!,
             syntax.Identifier.ValueText,
+            Scope.ConsumerAssemblyName,
             out var submissionProgramType
         ) &&
             submissionProgramType != nil {
@@ -46,7 +47,13 @@ internal partial class OverloadResolver {
     ) bool {
         result = nil
         let name = syntax.Identifier.ValueText
-        if !submissionImports.TryFindGlobalVariable(Scope.References!!, name, out var programType, out _) {
+        if !submissionImports.TryFindGlobalVariable(
+            Scope.References!!,
+            name,
+            Scope.ConsumerAssemblyName,
+            out var programType,
+            out _
+        ) {
             return false
         }
         if programType == nil {

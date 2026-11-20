@@ -2237,7 +2237,7 @@ internal partial class ExpressionBinder {
         if declaringType == nil {
             return false
         }
-        let importedClass = ImportedClassSymbol(declaringType, ce, references: $scope.References)
+        let importedClass = $scope.CreateImportedClassSymbol(declaringType, ce)
         // Issue #833: for an extension call the symbolic-argument vector
         // includes the receiver as slot 0 to mirror the static-dispatch
         // shape (`Class.Method(this receiver, args…)`). The inferred
