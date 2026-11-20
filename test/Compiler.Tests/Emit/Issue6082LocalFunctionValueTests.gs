@@ -7,6 +7,7 @@ import System
 import System.Collections.Generic
 import System.Diagnostics
 import System.IO
+import System.Text.RegularExpressions
 import Xunit
 import Xunit.Abstractions
 
@@ -149,6 +150,25 @@ public static class CallbackContract {
         verifyIl bool
     ) {
         CompileAndRun(name, declarations, body, expected, verifyIl)
+    }
+
+    @Fact
+    func CaptureFreeInnerSameSignature_WithOuterCallable_StillReportsGS0266() {
+        const source = `package Issue6082
+func later(n int32) int32 { return n + 100 }
+shared class Probe {
+    func Run() int32 {
+        let helper = func(x int32) int32 { return x }
+        let later = func(x int32) int32 { return helper(x + 1) }
+        return later(41)
+    }
+}`
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile(source, "Issue6082CaptureFreeShadow", executable: false)
+        Assert.NotEqual(0, code)
+        let error = Assert.Single(Regex.Matches(output, `\((\d+),(\d+),(\d+),(\d+)\): error (GS\d+):`))
+        Assert.Equal("GS0266", error.Groups[5].Value)
+        Assert.Equal("7", error.Groups[1].Value)
     }
 
     private func CompileAndRun(
@@ -332,6 +352,19 @@ class Holder { shared { func second() int32 { return 42 } } }
                 }`), ("qualified-member", `func(n int32) int32 {
                     calls++
                     return first(holder.later(n))
+                }`), ("nested-conditional-capturing-value", `func(n int32) int32 {
+                    calls++
+                    let helper = func(x int32) int32 { return x }
+                    let later = func(x int32) int32 { return helper(n + x + 1) }
+                    return first(later(0))
+                }`), ("nested-self-recursive-capturing-value", `func(n int32) int32 {
+                    calls++
+                    let helper = func(x int32) int32 { return x }
+                    let later = func(x int32) int32 {
+                        if x == 0 { return helper(n + 1) }
+                        return later(x - 1)
+                    }
+                    return first(later(1))
                 }`)} {
                 yield []object{"shadowed-forward-" + variation.Name, `
 class Holder { func later(n int32) int32 { return n + 1 } }
@@ -698,6 +731,49 @@ class B {
         let next = func(n int32) int32 { return helper(n) }
         return "${next(41)}"
 `, "42", true}
+            yield []object{"nested-conditional-capturing-shadows-outer-declared-function", `
+func later(n int32) int32 { return n + 100 }
+`, `
+        let n = 41
+        let helper = func(x int32) int32 { return x }
+        let later = func(x int32) int32 { return helper(n + x + 1) }
+        return later(0).ToString()
+`, "42", true}
+            yield []object{"nested-conditional-capture-free-avoids-delegate-allocation", "", `
+        let first = func(n int32) int32 { return n + 1 }
+        let callback = func(n int32) int32 {
+            let helper = func(x int32) int32 { return x }
+            let later = func(x int32) int32 { return helper(x + 1) }
+            return first(later(n))
+        }
+        let later = func(n int32) int32 { return first(n) }
+        let next = func(n int32) int32 { return callback(n) }
+        let warm = next(40)
+        let before = GC.GetAllocatedBytesForCurrentThread()
+        let result = next(40)
+        let allocated = GC.GetAllocatedBytesForCurrentThread() - before
+        return "$warm:$result:$allocated"
+`, "42:42:0", true}
+            yield []object{"nested-conditional-distinct-overload-preserves-outer-forward", "", `
+        var calls = 0
+        let callback = func(n int32) int32 {
+            calls++
+            let helper = func(x object) int32 { return 0 }
+            let later = func(x object) int32 { return helper(x) + calls }
+            return later(n) + later("hi")
+        }
+        let later = func(n int32) int32 { return n + 100 }
+        return "${List[int32](){41}.Select(callback).Single()}:$calls"
+`, "142:1", true}
+            yield []object{"nested-conditional-capture-free-distinct-overload-prefers-outer-forward", "", `
+        let callback = func(n int32) int32 {
+            let helper = func(x object) int32 { return 0 }
+            let later = func(x object) int32 { return helper(x) }
+            return later(n)
+        }
+        let later = func(n int32) int32 { return n + 100 }
+        return callback(41).ToString()
+`, "141", true}
         }
     }
 }

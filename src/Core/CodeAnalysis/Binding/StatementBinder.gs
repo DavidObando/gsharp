@@ -495,7 +495,8 @@ internal partial class StatementBinder {
     }
 
     private func BindOptionalLocalFunctionLiteral(syntax VariableDeclarationSyntax) BoundStatement {
-        let hasOverloads = !$scope.TryLookupFunctions(syntax.Identifier.ValueText).IsEmpty
+        let outerFunctions = $scope.TryLookupFunctions(syntax.Identifier.ValueText)
+        let hasOverloads = !outerFunctions.IsEmpty
         if !hasOverloads && closureValueDecisions.TryGetValue(syntax, out var previousDecision) &&
             previousDecision.IsValid(enclosingScope: $scope) {
             return BindOrdinaryVariableDeclaration(syntax)
@@ -515,19 +516,19 @@ internal partial class StatementBinder {
         } finally {
             $scope = enclosingScope
         }
-        if bound is BoundLocalFunctionDeclaration{Literal: {} literal} &&
-            (literal.CapturedVariables.IsEmpty || hasOverloads) &&
-            !Diagnostics
-            .HasErrorSince(diagnosticCount) {
+        if bound is BoundLocalFunctionDeclaration{Literal: {} literal} && !Diagnostics.HasErrorSince(diagnosticCount) {
             literal.Function.HasCaptures = !literal.CapturedVariables.IsEmpty
-            reconcileGenericLocalFunctionGroupCaptures?(List[BoundFunctionLiteralExpression](){literal})
-            if !Diagnostics.HasErrorSince(diagnosticCount) && (literal.CapturedVariables.IsEmpty || hasOverloads) {
-                literal.Function.HasCaptures = !literal.CapturedVariables.IsEmpty
-                if !stagingScope.TryPublishStagedFunction(literal.Function) {
-                    Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, syntax.Identifier.ValueText)
+            if literal.CapturedVariables.IsEmpty || HasDistinctOuterOverload(outerFunctions, literal.Function) {
+                reconcileGenericLocalFunctionGroupCaptures?(List[BoundFunctionLiteralExpression](){literal})
+                if !Diagnostics.HasErrorSince(diagnosticCount) &&
+                    (literal.CapturedVariables.IsEmpty || HasDistinctOuterOverload(outerFunctions, literal.Function)) {
+                    literal.Function.HasCaptures = !literal.CapturedVariables.IsEmpty
+                    if !stagingScope.TryPublishStagedFunction(literal.Function) {
+                        Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, syntax.Identifier.ValueText)
+                    }
+                    retriedBindings.Commit()
+                    return bound
                 }
-                retriedBindings.Commit()
-                return bound
             }
         }
         if bound is BoundLocalFunctionDeclaration{Literal: {} capturing} {
@@ -543,6 +544,21 @@ internal partial class StatementBinder {
         rollbackNarrowing()
         retriedBindings.Dispose()
         return BindOrdinaryVariableDeclaration(syntax)
+    }
+
+    private func HasDistinctOuterOverload(
+        outerFunctions ImmutableArray[FunctionSymbol],
+        candidate FunctionSymbol
+    ) bool {
+        if outerFunctions.IsEmpty {
+            return false
+        }
+        for outer in outerFunctions {
+            if BoundScope.FunctionSignaturesEqual(outer, candidate) {
+                return false
+            }
+        }
+        return true
     }
 
     // Keep source-level proof dependencies, not speculative symbols or bodies. Revalidate each
@@ -666,6 +682,7 @@ internal partial class StatementBinder {
         var nonGenericRunStart = startIndex
         var nonGenericRunEnd = startIndex
         var nonGenericDirect = Array.Empty[bool]()
+        var nonGenericConditionalTargets = Array.Empty[List[int32]?]()
         var nonGenericHasCrossReference = false
         let nonGenericBodies = Dictionary[int32, () -> BoundStatement]()
         let nonGenericLiterals = List[BoundFunctionLiteralExpression]()
@@ -713,6 +730,7 @@ internal partial class StatementBinder {
                         }
                         let plan = PlanNonGenericLocalFunctionLiterals(statementSyntaxes, i, nonGenericRunEnd)
                         nonGenericDirect = plan.Direct
+                        nonGenericConditionalTargets = plan.ConditionalTargets
                         nonGenericHasCrossReference = plan.HasCrossReference
                         nonGenericBodies.Clear()
                         for var member = i; member < nonGenericRunEnd; member++ {
@@ -723,6 +741,17 @@ internal partial class StatementBinder {
                                 )
                             }
                         }
+                    }
+                    if nonGenericConditionalTargets[i - nonGenericRunStart] is {} conditionalTargets {
+                        ResolveConditionalNonGenericForwardTargets(
+                            statementSyntaxes,
+                            i,
+                            nonGenericRunStart,
+                            conditionalTargets,
+                            nonGenericDirect,
+                            nonGenericBodies,
+                            beforeBind
+                        )
                     }
                     if nonGenericDirect[i - nonGenericRunStart] {
                         let bindBody = nonGenericBodies[i]
@@ -1143,6 +1172,132 @@ internal partial class StatementBinder {
         return BoundTryStatement(nil, tryBlock, ImmutableArray[BoundCatchClause].Empty, finallyBlock)
     }
 
+    private enum LocalFunctionShadowKind {
+        None,
+        Conditional,
+        Definite
+    }
+
+    private sealed class LocalFunctionTargetReferenceFinder : BoundTreeWalker {
+        private let targets Dictionary[VariableDeclarationSyntax, int32]
+
+        init(targets Dictionary[VariableDeclarationSyntax, int32]) {
+            this.targets = targets
+            MaxTargetIndex = -1
+        }
+
+        prop MaxTargetIndex int32 {
+            get;
+            private set;
+        }
+
+        private func Observe(function FunctionSymbol?) {
+            if function?.LocalDeclaration is {} declaration && targets.TryGetValue(declaration, out var index) &&
+                index > MaxTargetIndex {
+                MaxTargetIndex = index
+            }
+        }
+
+        override func VisitExpression(node BoundExpression?) {
+            if node is BoundFunctionLiteralExpression literal {
+                VisitStatement(literal.Body)
+            } else if node is BoundFunctionPointerFromMethodExpression pointer {
+                Observe(pointer.Method)
+            } else {
+                base.VisitExpression(node)
+            }
+        }
+
+        protected override func VisitCallExpression(node BoundCallExpression) {
+            Observe(node.Function)
+            base.VisitCallExpression(node)
+        }
+
+        protected override func VisitMethodGroupExpression(node BoundMethodGroupExpression) {
+            if !node.Candidates.IsDefaultOrEmpty && node.Candidates.Length == 1 {
+                Observe(node.Candidates[0])
+            } else if node.Candidates.IsDefaultOrEmpty {
+                Observe(node.Function)
+            }
+            base.VisitMethodGroupExpression(node)
+        }
+    }
+
+    // Speculate with conditional forward siblings staged so inner capturing locals shadow same-signature siblings
+    // without hiding distinct outer overloads or forcing capture-free locals into delegates (#6112).
+    private func ResolveConditionalNonGenericForwardTargets(
+        statementSyntaxes ImmutableArray[StatementSyntax],
+        memberIndex int32,
+        runStart int32,
+        conditionalTargets List[int32],
+        direct[]bool,
+        bodies Dictionary[int32, () -> BoundStatement],
+        beforeBind((StatementSyntax) -> void)?
+    ) {
+        var hasUnpreparedTarget = !direct[memberIndex - runStart]
+        if !hasUnpreparedTarget {
+            for targetIndex in conditionalTargets {
+                if !direct[targetIndex - runStart] {
+                    hasUnpreparedTarget = true
+                    break
+                }
+            }
+        }
+        if !hasUnpreparedTarget {
+            return
+        }
+        let targetMap = Dictionary[VariableDeclarationSyntax, int32]()
+        for targetIndex in conditionalTargets {
+            targetMap[cast[VariableDeclarationSyntax](statementSyntaxes[targetIndex])] = targetIndex
+        }
+        let memberSyntax = cast[VariableDeclarationSyntax](statementSyntaxes[memberIndex])
+        let enclosingScope = $scope
+        let diagnosticCount = Diagnostics.Count
+        let suppressionCount = Diagnostics.SuppressionCount
+        let rollbackNarrowing = CaptureCallArgumentPrebindRollback(memberSyntax)
+        using let retriedBindings = binderCtx.BeginRetriedBindingsTransaction()
+        var bound BoundStatement
+        let stagingScope = BoundScope(enclosingScope)
+        $scope = stagingScope
+        try {
+            for targetIndex in conditionalTargets {
+                if !direct[targetIndex - runStart] {
+                    let _ = prepareGenericLocalFunctionDeclaration!!(
+                        cast[VariableDeclarationSyntax](statementSyntaxes[targetIndex])
+                    )
+                }
+            }
+            let bindBody = if direct[memberIndex - runStart] {
+                bodies[memberIndex]
+            } else {
+                prepareGenericLocalFunctionDeclaration!!(memberSyntax)
+            }
+            bound = bindBody()
+        } finally {
+            $scope = enclosingScope
+        }
+        let finder = LocalFunctionTargetReferenceFinder(targetMap)
+        finder.VisitStatement(bound)
+        let maxTarget = finder.MaxTargetIndex
+        Diagnostics.TruncateTo(diagnosticCount)
+        Diagnostics.RestoreSuppressionsTo(suppressionCount)
+        rollbackNarrowing()
+        retriedBindings.Dispose()
+        if maxTarget > memberIndex {
+            for var k = memberIndex; k <= maxTarget; k++ {
+                if !direct[k - runStart] {
+                    direct[k - runStart] = true
+                    if k > memberIndex {
+                        beforeBind?(statementSyntaxes[k])
+                    }
+                    bodies[k] = prepareGenericLocalFunctionDeclaration!!(
+                        cast[VariableDeclarationSyntax](statementSyntaxes[k])
+                    )
+                }
+            }
+        }
+    }
+
     shared {
         private func IsDiscard(token SyntaxToken) bool -> token.Text == "_"
 
@@ -1219,7 +1374,7 @@ internal partial class StatementBinder {
             statementSyntaxes ImmutableArray[StatementSyntax],
             start int32,
             end int32
-        )(Direct[]bool, HasCrossReference bool) {
+        )(Direct[]bool, ConditionalTargets[]List[int32]?, HasCrossReference bool) {
             let siblingIndices = Dictionary[string, List[int32]]()
             let declarations = List[VariableDeclarationSyntax]()
             for var idx = start; idx < end; idx++ {
@@ -1234,6 +1389,7 @@ internal partial class StatementBinder {
             }
             let groupEnds = [end - start]int32
             let direct = [end - start]bool
+            let conditionalTargets = [end - start]List[int32]?
             let scopeIndex = ClosureScopeIndex()
             let hasCrossReference = HasLocalFunctionCrossReference(declarations, siblingIndices.Keys)
             for var idx = start; idx < end; idx++ {
@@ -1254,9 +1410,21 @@ internal partial class StatementBinder {
                                 accessor.RightPart,
                                 node
                             )
-                        ) &&
-                            !IsShadowedInsideLiteral(referencedName, node, literal, scopeIndex) {
-                            groupEnds[idx - start] = Math.Max(groupEnds[idx - start], lastSibling + 1)
+                        ) {
+                            let shadow = ClassifyShadowInsideLiteral(referencedName, node, literal, scopeIndex)
+                            if shadow == LocalFunctionShadowKind.None {
+                                groupEnds[idx - start] = Math.Max(groupEnds[idx - start], lastSibling + 1)
+                            } else if shadow == LocalFunctionShadowKind.Conditional {
+                                let targets = conditionalTargets[idx - start] ?? List[int32]()
+                                conditionalTargets[idx - start] = targets
+                                for overloadIndex in overloads {
+                                    if overloadIndex > idx && overloadIndex <= lastSibling && !targets.Contains(
+                                        overloadIndex
+                                    ) {
+                                        targets.Add(overloadIndex)
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -1270,15 +1438,16 @@ internal partial class StatementBinder {
                     direct[idx - start] = idx < regionEnd || siblingIndices[name].Count > 1
                 }
             }
-            return (direct, hasCrossReference)
+            return (direct, conditionalTargets, hasCrossReference)
         }
 
-        private func IsShadowedInsideLiteral(
+        private func ClassifyShadowInsideLiteral(
             name string,
             site SyntaxNode,
             literal FunctionLiteralExpressionSyntax,
             index ClosureScopeIndex
-        ) bool {
+        ) LocalFunctionShadowKind {
+            var result = LocalFunctionShadowKind.None
             for var ancestor = site.Parent; ancestor != nil; ancestor = ancestor!!.Parent {
                 if ancestor is BlockStatementSyntax or
                     BlockExpressionSyntax or
@@ -1287,29 +1456,38 @@ internal partial class StatementBinder {
                     .DeclarationsOf(ancestor).TryGetValue(name, out var declarations) {
                     for declaration in declarations {
                         // Callable buckets merge parent overloads; only value bindings hide them.
-                        if declaration
+                        let enclosesLiteralBody = declaration.Initializer is FunctionLiteralExpressionSyntax initLit &&
+                            initLit
+                            .Body
                             .Span
-                            .End <= site
+                            .Start <= site
                             .Span
                             .Start &&
+                            site
+                            .Span
+                            .End <= initLit
+                            .Body
+                            .Span
+                            .End
+                        if (declaration.Span.End <= site.Span.Start || enclosesLiteralBody) &&
                             !IsGenericLocalFunctionDeclaration(declaration) &&
-                            (
-                            !IsNonGenericLocalFunctionLiteralDeclaration(declaration) ||
-                                index.IsOrdinaryLocalFunctionValue(declaration)
-                        ) &&
                             !IsRefReturningLocalFunctionDeclaration(declaration) {
-                            return true
+                            if !IsNonGenericLocalFunctionLiteralDeclaration(declaration) ||
+                                index.IsOrdinaryLocalFunctionValue(declaration) {
+                                return LocalFunctionShadowKind.Definite
+                            }
+                            result = LocalFunctionShadowKind.Conditional
                         }
                     }
                 }
                 if IsScopeOwner(ancestor) && index.ParametersOf(ancestor).Contains(name) {
-                    return true
+                    return LocalFunctionShadowKind.Definite
                 }
                 if object.ReferenceEquals(ancestor, literal) {
-                    return false
+                    return result
                 }
             }
-            return false
+            return result
         }
 
         private func LocalFunctionReferenceName(node SyntaxNode) string? -> switch node {
