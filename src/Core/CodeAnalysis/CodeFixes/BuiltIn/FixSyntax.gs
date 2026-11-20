@@ -52,13 +52,28 @@ internal shared class FixSyntax {
     /// Gets a value that tells whether two positions are on one line.
     func SameLine(text SourceText, a int32, b int32) bool -> text.GetLineIndex(a) == text.GetLineIndex(b)
 
-    /// Gets the smallest node whose real-token span is exactly [`span`](paramref), or `null`.
+    /// Gets the deepest node (not a token) whose span is exactly [`span`](paramref), or `null`.
+    /// The search descends from the root through the children that contain the span, so it does
+    /// not visit the whole tree.
     func NodeWithSpan(tree SyntaxTree, span TextSpan) SyntaxNode? {
         var best SyntaxNode? = nil
-        for node in tree.Root.DescendantNodesAndSelf() {
-            let nodeSpan = node.Span
-            if nodeSpan.Start == span.Start && nodeSpan.Length == span.Length {
+        var current SyntaxNode? = tree.Root
+        while current != nil {
+            let node = current
+            if !(node is SyntaxToken) && node.Span.Start == span.Start && node.Span.Length == span.Length {
                 best = node
+            }
+            current = nil
+            for child in node.GetChildren() {
+                let childSpan = child.Span
+                // Tokens are skipped: a string token of an interpolation spans its holes.
+                if !(child is SyntaxToken) &&
+                    childSpan.Length > 0 &&
+                    childSpan.Start <= span.Start &&
+                    span.End <= childSpan.End {
+                    current = child
+                    break
+                }
             }
         }
         return best

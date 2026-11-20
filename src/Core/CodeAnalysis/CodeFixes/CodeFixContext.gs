@@ -95,6 +95,36 @@ class CodeFixContext {
         )
     }
 
+    /// Registers a fix that edits one or more trees of (cref:Compilation) (ADR-0227 D2).
+    /// @param title The title that a person sees.
+    /// @param equivalenceKey The key of the kind of fix.
+    /// @param applicability How safely a host can apply the fix.
+    /// @param compute Records the edits of the fix, with one editor for each tree that it edits.
+    func RegisterMultiDocumentFix(
+        title string,
+        equivalenceKey string,
+        applicability Applicability,
+        compute(MultiDocumentEditor) -> void
+    ) {
+        ArgumentNullException.ThrowIfNull(compute)
+        let compilation = Compilation
+        fixes.Add(
+            CodeFix(
+                title,
+                equivalenceKey,
+                applicability,
+                ImmutableArray.Create(Diagnostic),
+                ProviderId,
+                (ct CancellationToken) -> {
+                    ct.ThrowIfCancellationRequested()
+                    let editor = MultiDocumentEditor(compilation)
+                    compute(editor)
+                    return editor.GetChanges()
+                }
+            )
+        )
+    }
+
     /// Registers a fix that a provider built itself, for example one with changes in more than one tree.
     /// @param fix The fix.
     func RegisterFix(fix CodeFix) {

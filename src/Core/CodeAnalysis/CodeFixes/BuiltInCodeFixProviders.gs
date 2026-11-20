@@ -17,6 +17,7 @@ internal shared class BuiltInCodeFixProviders {
         LetToVarCodeFixProvider(),
         LogicalWordCodeFixProvider(),
         NullConditionalAccessCodeFixProvider(),
-        NullableValueCodeFixProvider()
+        NullableValueCodeFixProvider(),
+        NumericConversionCodeFixProvider()
     )
 }

@@ -317,6 +317,183 @@ open class Adr0227BuiltInFixTests {
     }
 
     @Fact
+    func NarrowingNumericConversion_IsWrapped() {
+        VerifyFix(
+            "package P\n\nfunc F(n int64) int32 {\n    let m int32 = n // keep\n    return m\n}\n",
+            "GS0156",
+            "Convert to 'int32'",
+            Applicability.MaybeIncorrect,
+            "package P\n\nfunc F(n int64) int32 {\n    let m int32 = checked(cast[int32](n)) // keep\n    return m\n}\n"
+        )
+    }
+
+    @Fact
+    func LetField_BareAssignmentInTheSameClass_BecomesVar() {
+        // `N = 2` has an implicit receiver; GetSymbolInfo answers `this` (#6126), so the provider
+        // looks the field up by the name that GS0127 gives.
+        VerifyFix(
+            "package P\n\nclass C {\n    let N int32 = 1\n\n    func Set() {\n        N = 2\n    }\n}\n",
+            "GS0127",
+            "Change 'let' to 'var'",
+            Applicability.MaybeIncorrect,
+            "package P\n\nclass C {\n    var N int32 = 1\n\n    func Set() {\n        N = 2\n    }\n}\n"
+        )
+    }
+
+    @Fact
+    func NumericConversion_OfAnOutOfRangeValue_Throws() {
+        // `var` keeps the value out of constant folding, so the check happens at run time.
+        const source = "var n int64 = 4294967296\nlet m int32 = n\nm\n"
+        let tree = SyntaxTree.Parse(source)
+        let compilation = Compilation(tree)
+        let target = compilation.GetDiagnostics().First((d Diagnostic) -> d.Id == "GS0156")
+        let service = CodeFixService(CodeFixRegistry.CreateDefault())
+        let fixedText = Assert
+            .Single(service.Apply(Assert.Single(service.GetFixes(compilation, target))))
+            .Text
+            .ToString()
+        let result = GSharp.Tests.EmittedOracle.Evaluate(fixedText)
+        // The oracle reports the run-time exception also as a synthesized diagnostic.
+        Assert.IsType[OverflowException](result.UnhandledException)
+        // The unchecked spelling silently gives 0.
+        let unchecked = GSharp
+            .Tests
+            .EmittedOracle
+            .Evaluate(fixedText.Replace("checked(cast[int32](n))", "cast[int32](n)"))
+        Assert.Null(unchecked.UnhandledException)
+        Assert.Equal("0", unchecked.ValueText)
+    }
+
+    @Fact
+    func NumericConversion_IsDeclinedWhereItWouldChangeTheValueOrNotCompile() {
+        for source in[]string{
+            // A compound assignment converts the operation's result, not the right operand.
+            "package P\n\nfunc F(y int64) int32 {\n    var x int32 = 100\n    x /= y\n    return x\n}\n",
+            // The span covers a tuple while the arguments name one element's conversion.
+            "package P\n\nfunc F(n int32) {\n    let values = [](int32, uint8){(1, n)}\n}\n",
+            // An assignment operand is not a simple operand.
+            "package P\n\nfunc F(y int64) int32 {\n    var x int64 = 0\n    return x = y\n}\n",
+            // `&^=` is a compound assignment too.
+            "package P\n\nfunc F(y int64) int32 {\n    var x int32 = 100\n    x &^= y\n    return x\n}\n",
+            // A constant is checked at compile time.
+            "package P\n\nconst Big int64 = 300\n\nfunc F() int8 {\n    let a int8 = Big\n    return a\n}\n"
+        } {
+            let tree = SyntaxTree.Parse(source)
+            let compilation = Compilation(tree)
+            let service = CodeFixService(CodeFixRegistry.CreateDefault())
+            for target in compilation.GetDiagnostics().Where((d Diagnostic) -> d.Id == "GS0156") {
+                Assert.Empty(
+                    service.GetFixes(compilation, target).Where(
+                        (f CodeFix) -> f.ProviderId == "GSharp.CodeFixes.NumericConversion"
+                    )
+                )
+            }
+        }
+    }
+
+    @Fact
+    func NumericConversion_CoversNativeIntegersAndChar() {
+        VerifyFix(
+            "package P\n\nfunc F(n nint) int32 {\n    let m int32 = n\n    return m\n}\n",
+            "GS0156",
+            "Convert to 'int32'",
+            Applicability.MaybeIncorrect,
+            "package P\n\nfunc F(n nint) int32 {\n    let m int32 = checked(cast[int32](n))\n    return m\n}\n"
+        )
+    }
+
+    @Fact
+    func NumericConversion_IsACast_EvenWithAFunctionNamedLikeTheType() {
+        VerifyFix(
+            "package P\n\nfunc int32(n int64) int32 -> 0\n\nfunc F(n int64) int32 {\n    let m int32 = n\n    return m\n}\n",
+            "GS0156",
+            "Convert to 'int32'",
+            Applicability.MaybeIncorrect,
+            "package P\n\nfunc int32(n int64) int32 -> 0\n\nfunc F(n int64) int32 {\n    let m int32 = checked(cast[int32](n))\n    return m\n}\n"
+        )
+    }
+
+    @Fact
+    func NullableValue_InsideAnInterpolationHole_GetsItsFixes() {
+        let source = "package P\n\nfunc Use(s string) int32 -> s.Length\n\nfunc F(t string?) string -> \"x " +
+            "$" +
+            "{Use(t)}\"\n"
+        let tree = SyntaxTree.Parse(SourceText.From(source, "a.gs"))
+        let compilation = Compilation(tree)
+        let diagnostic = compilation.GetDiagnostics().First((d Diagnostic) -> d.Id == "GS0154" || d.Id == "GS0155")
+        let fixes = CodeFixService(CodeFixRegistry.CreateDefault()).GetFixes(compilation, diagnostic)
+        Assert.Contains(fixes, (f CodeFix) -> f.Title == "Assert non-nil with '!!'")
+    }
+
+    @Fact
+    func NumericConversion_LooksThroughParentheses() {
+        VerifyFix(
+            "package P\n\nfunc F(n int64) int32 {\n    let m int32 = (n)\n    return m\n}\n",
+            "GS0156",
+            "Convert to 'int32'",
+            Applicability.MaybeIncorrect,
+            "package P\n\nfunc F(n int64) int32 {\n    let m int32 = checked(cast[int32]((n)))\n    return m\n}\n"
+        )
+    }
+
+    @Fact
+    func LetSharedField_OfAnInlineStruct_BecomesVar() {
+        VerifyFix(
+            "package P\n\ninline struct S {\n    shared {\n        let Count int32 = 0\n\n        func Set() {\n            Count = 2\n        }\n    }\n}\n",
+            "GS0127",
+            "Change 'let' to 'var'",
+            Applicability.MaybeIncorrect,
+            "package P\n\ninline struct S {\n    shared {\n        var Count int32 = 0\n\n        func Set() {\n            Count = 2\n        }\n    }\n}\n"
+        )
+    }
+
+    @Fact
+    func LetField_OfAnInlineStruct_HasNoFix() {
+        const source = "package P\n\ninline struct S {\n    let N int32 = 1\n\n    func Set() {\n        N = 2\n    }\n}\n"
+        let tree = SyntaxTree.Parse(source)
+        let compilation = Compilation(tree)
+        let service = CodeFixService(CodeFixRegistry.CreateDefault())
+        for target in compilation.GetDiagnostics().Where((d Diagnostic) -> d.Id == "GS0127") {
+            Assert.Empty(
+                service.GetFixes(compilation, target).Where((f CodeFix) -> f.ProviderId == "GSharp.CodeFixes.LetToVar")
+            )
+        }
+    }
+
+    @Fact
+    func LetField_WithAnEscapedName_BecomesVar() {
+        // `$yield` is written with a placeholder: `$` starts an interpolation in a G# string.
+        let dollar = "$"
+        VerifyFix(
+            "package P\n\nclass C {\n    let DOLLARyield int32 = 1\n\n    func Set() {\n        DOLLARyield = 2\n    }\n}\n"
+                .Replace("DOLLAR", dollar),
+            "GS0127",
+            "Change 'let' to 'var'",
+            Applicability.MaybeIncorrect,
+            "package P\n\nclass C {\n    var DOLLARyield int32 = 1\n\n    func Set() {\n        DOLLARyield = 2\n    }\n}\n"
+                .Replace("DOLLAR", dollar)
+        )
+    }
+
+    @Fact
+    func LetField_InAnotherFile_BecomesVar_WithAMultiDocumentFix() {
+        let a = SyntaxTree.Parse(SourceText.From("package P\n\npartial class C {\n    let N int32 = 1\n}\n", "a.gs"))
+        let b = SyntaxTree.Parse(
+            SourceText.From("package P\n\npartial class C {\n    func Set() {\n        N = 2\n    }\n}\n", "b.gs")
+        )
+        let compilation = Compilation(a, b)
+        let target = compilation.GetDiagnostics().Single((d Diagnostic) -> d.Id == "GS0127")
+        Assert.Same(b.Text, target.Location.Text)
+        let service = CodeFixService(CodeFixRegistry.CreateDefault())
+        let fix = Assert.Single(service.GetFixes(compilation, target))
+        Assert.Equal(Applicability.MaybeIncorrect, fix.Applicability)
+        let document = Assert.Single(fix.GetChanges().Documents)
+        Assert.Same(a, document.Tree)
+        Assert.Equal("package P\n\npartial class C {\n    var N int32 = 1\n}\n", document.GetChangedText().ToString())
+        Assert.True(DeltaPolicy.NoNewDiagnostics.Accepts(service.ComputeDelta(compilation, fix)))
+    }
+
+    @Fact
     func CompilerDiagnostics_KeepDescriptorAndMessageArguments() {
         let compilation = Compilation(
             SyntaxTree.Parse("package P\n\nfunc F() int32 {\n    let x = 1\n    x = 2\n    return missing\n}\n")
