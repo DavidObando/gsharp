@@ -4,12 +4,14 @@
 
 package GSharp.Core.CodeAnalysis.CodeFixes.BuiltIn
 
+import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.CodeFixes
+import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import System
 import System.Collections.Immutable
 
-/// GS0156 between two numeric types: `expr` → `checked(T(expr))` (ADR-0227 D8 phase 2, ADR-0115 B.17).
+/// GS0156 between two numeric types: `expr` → `checked(cast[T](expr))` (ADR-0227 D8 phase 2, ADR-0115 B.17).
 /// @remarks The diagnostic says that an explicit conversion exists, and its message arguments
 /// name the source and the target type. The conversion is checked, so it can throw at run time:
 /// the fix is (cref:Applicability.MaybeIncorrect). Only a simple operand is converted.
@@ -55,7 +57,12 @@ internal class NumericConversionCodeFixProvider : GSharpCodeFixProvider {
         // In a compound assignment (`x /= y`) the conversion is of the operation's result, so
         // converting the right operand changes the value.
         let previous SyntaxToken? = FixSyntax.PreviousRealToken(context.Tree, node.GetFirstToken())
-        if previous != nil && CompoundAssignmentOperators.Contains(previous.Text) {
+        if previous != nil && SyntaxFacts.TryGetCompoundAssignmentBaseOperator(previous.Kind, out _) {
+            return
+        }
+        // A constant operand is checked at compile time: an out-of-range constant would report an
+        // error under `checked`, so a constant gets no fix.
+        if IsConstant(context, node) {
             return
         }
         let expression = node
@@ -67,30 +74,35 @@ internal class NumericConversionCodeFixProvider : GSharpCodeFixProvider {
             // out-of-range value throw. The operand has no arithmetic, so its own context is unchanged.
             (editor SyntaxEditor) -> editor.ReplaceNode(
                 expression,
-                "checked(${target}(${editor.OriginalText(expression)}))"
+                // `cast[T]` is a conversion even when a function named like the type is in scope.
+                "checked(cast[${target}](${editor.OriginalText(expression)}))"
             )
         )
     }
 
-    private let CompoundAssignmentOperators ImmutableHashSet[string] = ImmutableHashSet.Create(
-        StringComparer.Ordinal,
-        "+=",
-        "-=",
-        "*=",
-        "/=",
-        "%=",
-        "&=",
-        "|=",
-        "^=",
-        "<<=",
-        ">>="
-    )
+    private func IsConstant(context CodeFixContext, node SyntaxNode) bool {
+        let bound = context.SemanticModel.GetBoundNode(node, context.CancellationToken)
+        if bound is BoundExpression boundExpression && boundExpression.ConstantValue.HasValue {
+            return true
+        }
+        let named SyntaxNode = if node is ParenthesizedExpressionSyntax p {
+            p.Expression
+        } else {
+            node
+        }
+        let symbol Symbol? = context.SemanticModel.GetSymbolInfo(named, context.CancellationToken).Symbol
+        return switch symbol {
+            case g is GlobalVariableSymbol: g.IsConst
+            case l is LocalVariableSymbol: l.IsConst
+            case f is FieldSymbol: f.IsConst
+            default: false
+        }
+    }
 
-    // A name, a member access of names, a literal, or one of these in parentheses: no arithmetic,
+    // A name, a member access of names, or one of these in parentheses: no arithmetic,
     // no call and no assignment, so `checked` and the conversion change nothing inside it.
     private func IsSimpleOperand(node SyntaxNode) bool -> switch node {
         case n is NameExpressionSyntax: true
-        case l is LiteralExpressionSyntax: true
         case a is AccessorExpressionSyntax: IsSimpleOperand(a.LeftPart) && IsSimpleOperand(a.RightPart)
         case p is ParenthesizedExpressionSyntax: IsSimpleOperand(p.Expression)
         default: false

@@ -323,7 +323,7 @@ open class Adr0227BuiltInFixTests {
             "GS0156",
             "Convert to 'int32'",
             Applicability.MaybeIncorrect,
-            "package P\n\nfunc F(n int64) int32 {\n    let m int32 = checked(int32(n)) // keep\n    return m\n}\n"
+            "package P\n\nfunc F(n int64) int32 {\n    let m int32 = checked(cast[int32](n)) // keep\n    return m\n}\n"
         )
     }
 
@@ -356,7 +356,10 @@ open class Adr0227BuiltInFixTests {
         // The oracle reports the run-time exception also as a synthesized diagnostic.
         Assert.IsType[OverflowException](result.UnhandledException)
         // The unchecked spelling silently gives 0.
-        let unchecked = GSharp.Tests.EmittedOracle.Evaluate(fixedText.Replace("checked(int32(n))", "int32(n)"))
+        let unchecked = GSharp
+            .Tests
+            .EmittedOracle
+            .Evaluate(fixedText.Replace("checked(cast[int32](n))", "cast[int32](n)"))
         Assert.Null(unchecked.UnhandledException)
         Assert.Equal("0", unchecked.ValueText)
     }
@@ -369,7 +372,11 @@ open class Adr0227BuiltInFixTests {
             // The span covers a tuple while the arguments name one element's conversion.
             "package P\n\nfunc F(n int32) {\n    let values = [](int32, uint8){(1, n)}\n}\n",
             // An assignment operand is not a simple operand.
-            "package P\n\nfunc F(y int64) int32 {\n    var x int64 = 0\n    return x = y\n}\n"
+            "package P\n\nfunc F(y int64) int32 {\n    var x int64 = 0\n    return x = y\n}\n",
+            // `&^=` is a compound assignment too.
+            "package P\n\nfunc F(y int64) int32 {\n    var x int32 = 100\n    x &^= y\n    return x\n}\n",
+            // A constant is checked at compile time.
+            "package P\n\nconst Big int64 = 300\n\nfunc F() int8 {\n    let a int8 = Big\n    return a\n}\n"
         } {
             let tree = SyntaxTree.Parse(source)
             let compilation = Compilation(tree)
@@ -391,7 +398,29 @@ open class Adr0227BuiltInFixTests {
             "GS0156",
             "Convert to 'int32'",
             Applicability.MaybeIncorrect,
-            "package P\n\nfunc F(n nint) int32 {\n    let m int32 = checked(int32(n))\n    return m\n}\n"
+            "package P\n\nfunc F(n nint) int32 {\n    let m int32 = checked(cast[int32](n))\n    return m\n}\n"
+        )
+    }
+
+    @Fact
+    func NumericConversion_IsACast_EvenWithAFunctionNamedLikeTheType() {
+        VerifyFix(
+            "package P\n\nfunc int32(n int64) int32 -> 0\n\nfunc F(n int64) int32 {\n    let m int32 = n\n    return m\n}\n",
+            "GS0156",
+            "Convert to 'int32'",
+            Applicability.MaybeIncorrect,
+            "package P\n\nfunc int32(n int64) int32 -> 0\n\nfunc F(n int64) int32 {\n    let m int32 = checked(cast[int32](n))\n    return m\n}\n"
+        )
+    }
+
+    @Fact
+    func LetSharedField_OfAnInlineStruct_BecomesVar() {
+        VerifyFix(
+            "package P\n\ninline struct S {\n    shared {\n        let Count int32 = 0\n\n        func Set() {\n            Count = 2\n        }\n    }\n}\n",
+            "GS0127",
+            "Change 'let' to 'var'",
+            Applicability.MaybeIncorrect,
+            "package P\n\ninline struct S {\n    shared {\n        var Count int32 = 0\n\n        func Set() {\n            Count = 2\n        }\n    }\n}\n"
         )
     }
 

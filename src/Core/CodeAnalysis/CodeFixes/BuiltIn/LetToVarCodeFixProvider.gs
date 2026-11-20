@@ -61,8 +61,12 @@ internal class LetToVarCodeFixProvider : GSharpCodeFixProvider {
                     keyword = local.Keyword
                 }
                 case field is FieldDeclarationSyntax when symbol is FieldSymbol &&
-                    !(field.FirstAncestorOrSelf[StructDeclarationSyntax]()?.IsInline ?? false) {
-                    // The fields of an inline struct stay read-only even when spelled `var`.
+                    (
+                    cast[FieldSymbol](symbol).IsStatic ||
+                        !(field.FirstAncestorOrSelf[StructDeclarationSyntax]()?.IsInline ?? false)
+                ) {
+                    // The instance fields of an inline struct stay read-only even when spelled `var`;
+                    // its shared fields take their keyword.
                     keyword = field.VarOrLetKeyword
                     applicability = Applicability.MaybeIncorrect
                 }
