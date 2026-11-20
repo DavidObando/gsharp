@@ -464,6 +464,7 @@ passed via `/gsanalyzer:`.
 | GS9305 | Error | `@SuppressDiagnostic` was given an argument that is not a constant string shaped like a diagnostic ID, or no argument at all. |
 | GS9306 | Error | `@ExtensionOwner`, synthesized by cs2gs to preserve a migrated C# static extension class's CLR owner-type identity, was used outside the one shape it supports: a top-level extension function carrying a single `typeof(T)` argument naming a non-generic class declared in the same package. |
 | GS9307 | Error | `@Oblivious` / `@NullabilityEnabled` was written in a shape it does not support: with arguments, with a target specifier, or both annotations on the same declaration. Neither takes arguments; the nearest annotation decides whether the unadorned reference types written inside it are oblivious (`T!`). |
+| GS9308 | Warning | A code-fix provider threw while it registered fixes for a diagnostic. The provider gives no fix for that diagnostic; other providers are not affected (ADR-0227). |
 
 ### Source-generator host diagnostics (GS9200–GS9219)
 

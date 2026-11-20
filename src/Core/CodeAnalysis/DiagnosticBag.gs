@@ -528,9 +528,23 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         descriptor DiagnosticDescriptor,
         severity DiagnosticSeverity,
         messageArguments[]object
+    ) -> ReportWithSuggestions(
+        location,
+        descriptor,
+        severity,
+        ImmutableArray[DiagnosticSuggestion].Empty,
+        messageArguments
+    )
+
+    // ADR-0227 D2: a report with the fixes that the report site already knows.
+    private func ReportWithSuggestions(
+        location TextLocation,
+        descriptor DiagnosticDescriptor,
+        severity DiagnosticSeverity,
+        suggestions ImmutableArray[DiagnosticSuggestion],
+        messageArguments[]object
     ) {
-        let message = string.Format(descriptor.MessageFormat, messageArguments)
-        let created = Diagnostic(location, descriptor.Id, severity, message)
+        let created = Diagnostic.CreateReported(descriptor, location, severity, messageArguments, suggestions)
         // ADR-0225: the binder states the premise when it reports, so the finality is fixed at
         // creation. A copy after Add would break the reference identity that the bag tracks.
         let stack List[PrefixPremise]? = premises

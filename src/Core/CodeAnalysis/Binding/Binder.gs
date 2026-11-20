@@ -7877,7 +7877,10 @@ partial class Binder {
                 // register the function in functionBodies (with an empty
                 // synthetic block) so the emitter's per-package method-row
                 // planner produces a MethodDef handle for it.
-                if function.IsPInvoke {
+                // Issue #6116: bodyless non-P/Invoke top-level functions also
+                // skip body binding because declaration binding already
+                // reported GS0325.
+                if function.IsPInvoke || function.Declaration?.Body == nil {
                     functionBodies.Add(
                         function,
                         BoundBlockStatement(function.Declaration, ImmutableArray[BoundStatement].Empty)
@@ -7919,7 +7922,9 @@ partial class Binder {
                     // abstract virtual slot with no IL body) and skip body binding,
                     // which would otherwise dereference the null `Declaration.Body`
                     // and crash with GS9998 (the original ICE in issue #987).
-                    if method.IsAbstract {
+                    // Issue #6116: bodyless non-abstract instance methods also
+                    // skip body binding after declaration binding reports GS0325.
+                    if method.IsAbstract || method.Declaration?.Body == nil {
                         functionBodies.Add(
                             method,
                             BoundBlockStatement(method.Declaration, ImmutableArray[BoundStatement].Empty)

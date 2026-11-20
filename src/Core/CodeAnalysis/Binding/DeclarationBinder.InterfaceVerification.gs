@@ -1037,13 +1037,33 @@ internal partial class DeclarationBinder {
             }
         }
         if !structSymbol.Properties.IsDefaultOrEmpty {
+            let seenIndexers = List[PropertySymbol]()
             for prop in structSymbol.Properties {
                 if !prop.HasExplicitInterfaceClause || prop.ExplicitInterfaceClauseTarget == nil {
                     continue
                 }
                 let target = prop.ExplicitInterfaceClauseTarget
-                let slot = (target!!, prop.Name)
-                if seenSlots.ContainsKey(slot) {
+                var isDuplicate = false
+                if prop.IsIndexer {
+                    for seen in seenIndexers {
+                        if ConformanceSignaturesEquivalent(seen.ExplicitInterfaceClauseTarget, target!!) &&
+                            HaveSameIndexerSignature(seen.Parameters, prop.Parameters) {
+                            isDuplicate = true
+                            break
+                        }
+                    }
+                    if !isDuplicate {
+                        seenIndexers.Add(prop)
+                    }
+                } else {
+                    let slot = (target!!, prop.Name)
+                    if seenSlots.ContainsKey(slot) {
+                        isDuplicate = true
+                    } else {
+                        seenSlots[slot] = true
+                    }
+                }
+                if isDuplicate {
                     Diagnostics.ReportDuplicateExplicitInterfaceImplementation(
                         Invariant
                             .Required(
@@ -1058,7 +1078,6 @@ internal partial class DeclarationBinder {
                     )
                     continue
                 }
-                seenSlots[slot] = true
                 if prop.ExplicitInterfaceMember == nil &&
                     prop.ExplicitInterfaceGetterSlot == nil &&
                     prop.ExplicitInterfaceSetterSlot == nil {

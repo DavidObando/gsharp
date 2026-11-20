@@ -2522,6 +2522,111 @@ namespace Demo
         Assert.DoesNotContain("?[", printed)
     }
 
+    @Fact
+    func ByRefExtension_PrimitiveAndValueTypes_PreserveWritableReceiverContract() {
+        let printed = Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System.Runtime.CompilerServices;
+using System.Threading;
+using A;
+using B;
+using ExternalRefExt6063;
+public static class IntExt
+{
+    public static void Bump(this ref int value) { value++; }
+    public static string Who(this in int value, [CallerMemberName] string caller = "") => caller + ":" + value;
+}
+public sealed class IntBox { public int Value; }
+public static class Demo
+{
+    private static void PrivateBump(this ref int value) { value += 2; }
+    public static void AtomicBump(this ref int value) { Interlocked.Increment(ref value); }
+    public static void Swap<T>(this ref T left, ref T right) where T : struct { T tmp = left; left = right; right = tmp; }
+    public static bool SameInt(this in int left, in int right) =>
+        Unsafe.AreSame(ref Unsafe.AsRef(in left), ref Unsafe.AsRef(in right));
+    public static string Run()
+    {
+        int[] counters = new int[1];
+        string? s = null;
+        s = "a";
+        counters[0].Bump();
+        var direct = s.Length + ":" + s?[0] + ":" + counters[0];
+        counters[0].PrivateBump();
+        counters[0].AtomicBump();
+        int other = 10;
+        counters[0].Swap(ref other);
+        counters[0].AddExternal(5);
+        IntBox? box = new IntBox { Value = 3 };
+        box?.Value.Bump();
+        IntBox? missing = null;
+        missing?.Value.Bump();
+        return direct + "|" + counters[0] + ":" + other + "|" + other.SameInt(in other) + "|" + other.Who() + "|" + other.ReadA() + ":" + other.ReadB() + "|" + counters[0].Total() + ":" + counters[0].Total(2, 3) + "|" + box.Value;
+    }
+}`, `
+using System.Collections.Generic;
+namespace ExternalRefExt6063
+{
+    public static class ExternalIntExtensions
+    {
+        public static void AddExternal(this ref int value, int delta) { value += delta; }
+        public static int Total(this ref int value, params List<int> rest) { int sum = value; foreach (var item in rest) sum += item; return sum; }
+    }
+}
+namespace A
+{
+    public static class Extensions
+    {
+        public static int ReadA(this in int value) => value + 1;
+    }
+}
+namespace B
+{
+    public static class Extensions
+    {
+        public static int ReadB(this in int value) => value + 2;
+    }
+}`, strictIl: true, rejectConditionalIndexWarnings: true, expectedOutput: "1:a:1|15:4|True|Run:4|5:6|15:20|4")
+        Assert.Contains("func Bump(ref value int32)", printed, StringComparison.Ordinal)
+        Assert.Contains("private func PrivateBump(ref value int32)", printed, StringComparison.Ordinal)
+        Assert.Contains("IntExt.Bump(&counters[0])", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("@ExtensionOwner", printed, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func PermutedReadOnlyDelegate_PointerBackedOperands_PreserveAddressIdentity() {
+        let printed = Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System.Runtime.CompilerServices;
+public struct Pair { public int Value; }
+public static class Demo
+{
+    delegate bool SameDelegate(ref readonly int left, ref readonly int right);
+    delegate string LongDelegate(in long left, in long right);
+    static bool Same(ref readonly int left, ref readonly int right) =>
+        Unsafe.AreSame(ref Unsafe.AsRef(in left), ref Unsafe.AsRef(in right));
+    static string FormatLong(in long left, in long right) => left + ":" + right;
+    public static unsafe string Run()
+    {
+        int x = 7;
+        int* p = &x;
+        Pair pair = new Pair { Value = 9 };
+        Pair* pairPtr = &pair;
+        SameDelegate d = Same;
+        LongDelegate dLong = FormatLong;
+        return Same(in *p, in *p) + "|" +
+            d(right: *p, left: *p) + "|" +
+            d(right: in *p, left: in *p) + "|" +
+            d(right: pairPtr->Value, left: pairPtr->Value) + "|" +
+            d(right: p[0], left: p[0]) + "|" +
+            dLong(right: *p, left: 0L) + "|" +
+            dLong(right: pairPtr->Value, left: 1L) + "|" +
+            dLong(right: p[0], left: 2L);
+    }
+}`, strictIl: false, expectedOutput: "True|True|True|True|True|0:7|1:9|2:7")
+        Assert.Contains("in (*p)", printed, StringComparison.Ordinal)
+        Assert.Contains("let ref readonly", printed, StringComparison.Ordinal)
+    }
+
     shared {
         private func AssertRunsWithoutConditionalIndexWarning(source string, expectedOutput string? = nil) string {
             let printed = Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(source, expectedOutput)

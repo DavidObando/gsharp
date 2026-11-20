@@ -19,13 +19,26 @@ open class DocumentContent {
         syntaxTree SyntaxTree,
         lines IReadOnlyList[int32],
         project ProjectState? = nil,
-        workspace WorkspaceState? = nil
+        workspace WorkspaceState? = nil,
+        version int32? = nil
     ) {
         SyntaxTree = syntaxTree
         Lines = lines
         Project = project
         Workspace = workspace
+        Version = version
     }
+
+    /// Gets the client's version of the document text, captured with the text when the server
+    /// stored it (ADR-0227 D7). `null` when the client gave no version.
+    prop Version int32? {
+        get;
+    }
+
+    /// Returns a copy of this content with another version.
+    /// @param version The client's version of the same text.
+    /// @returns The copy.
+    func WithVersion(version int32?) DocumentContent -> DocumentContent(SyntaxTree, Lines, Project, Workspace, version)
 
     /// Gets the document syntax tree.
     prop SyntaxTree SyntaxTree {

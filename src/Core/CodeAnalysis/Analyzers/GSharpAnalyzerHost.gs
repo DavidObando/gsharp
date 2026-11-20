@@ -13,6 +13,7 @@ import System.Reflection
 import System.Runtime.Loader
 import System.Threading
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.CodeFixes
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Text
 import System.Text
@@ -89,6 +90,83 @@ shared class GSharpAnalyzerHost {
         return analyzers.ToImmutable()
     }
 
+    /// Loads every assembly in [`analyzerPaths`](paramref) and discovers its code-fix providers
+    /// (ADR-0227 D2): the exported, non-abstract (cref:GSharp.Core.CodeAnalysis.CodeFixes.GSharpCodeFixProvider)
+    /// types with (cref:GSharp.Core.CodeAnalysis.CodeFixes.GSharpCodeFixProviderAttribute). The order is
+    /// the order of the paths, then the full type name (ordinal). An assembly with no provider is
+    /// not an error. Load failures surface as GS9301; Core version mismatches as GS9303.
+    /// @param analyzerPaths Analyzer assembly paths.
+    /// @param hostDiagnostics GS9301/GS9303 diagnostics produced while loading.
+    /// @returns The discovered providers.
+    func LoadCodeFixProviders(
+        analyzerPaths IReadOnlyList[string],
+        out hostDiagnostics ImmutableArray[Diagnostic]
+    ) ImmutableArray[GSharpCodeFixProvider] {
+        let diagnostics = ImmutableArray.CreateBuilder[Diagnostic]()
+        let providers = ImmutableArray.CreateBuilder[GSharpCodeFixProvider]()
+        for path in analyzerPaths {
+            try {
+                let fullPath = Path.GetFullPath(path)
+                let assembly = AnalyzerLoadContext(fullPath).LoadFromAssemblyPath(fullPath)
+                CheckCoreVersion(assembly, fullPath, diagnostics)
+                let types = assembly
+                    .GetExportedTypes()
+                    .Where(
+                    (type Type) -> !type.IsAbstract && typeof(GSharpCodeFixProvider).IsAssignableFrom(type) &&
+                        type.GetCustomAttribute[GSharpCodeFixProviderAttribute]() != nil
+                )
+                    .OrderBy((type Type) -> type.FullName, StringComparer.Ordinal)
+                for type in types {
+                    // `!!`: the filter admits only non-abstract reference types.
+                    providers.Add(cast[GSharpCodeFixProvider](Activator.CreateInstance(type)!!))
+                }
+            } catch (ex Exception) when !(ex is OutOfMemoryException) && !(ex is StackOverflowException) {
+                diagnostics.Add(
+                    Diagnostic.Create(
+                        DiagnosticDescriptors.AnalyzerAssemblyLoadFailure,
+                        default(TextLocation),
+                        path,
+                        DescribeLoadException(ex)
+                    )
+                )
+            }
+        }
+        hostDiagnostics = diagnostics.ToImmutable()
+        return providers.ToImmutable()
+    }
+
+    /// Builds a registry of the built-in providers and the providers of [`analyzerPaths`](paramref)
+    /// (ADR-0227 D2). A provider that the registry rejects (no fixable ID, or a getter that throws)
+    /// is left out and reported as GS9301; the other providers stay.
+    /// @param analyzerPaths Analyzer assembly paths.
+    /// @param hostDiagnostics GS9301/GS9303 diagnostics produced while loading and registering.
+    /// @returns The registry.
+    func LoadCodeFixRegistry(
+        analyzerPaths IReadOnlyList[string],
+        out hostDiagnostics ImmutableArray[Diagnostic]
+    ) CodeFixRegistry {
+        let registry = CodeFixRegistry.CreateDefault()
+        let diagnostics = ImmutableArray.CreateBuilder[Diagnostic]()
+        let providers = LoadCodeFixProviders(analyzerPaths, out var loadDiagnostics)
+        diagnostics.AddRange(loadDiagnostics)
+        for provider in providers {
+            try {
+                registry.Add(provider)
+            } catch (ex Exception) when !(ex is OutOfMemoryException) && !(ex is StackOverflowException) {
+                diagnostics.Add(
+                    Diagnostic.Create(
+                        DiagnosticDescriptors.AnalyzerAssemblyLoadFailure,
+                        default(TextLocation),
+                        provider.GetType().Assembly.Location,
+                        "the code-fix provider '${provider.GetType().FullName}' was rejected: ${ex.Message}"
+                    )
+                )
+            }
+        }
+        hostDiagnostics = diagnostics.ToImmutable()
+        return registry
+    }
+
     /// Loads the analyzers in [`analyzerPaths`](paramref) and runs them
     /// over [`compilation`](paramref).
     /// @param compilation The bound compilation to analyze.
@@ -130,7 +208,8 @@ shared class GSharpAnalyzerHost {
                 analyzers.Add(cast[GSharpDiagnosticAnalyzer](Activator.CreateInstance(type)!!))
                 found++
             }
-            if found == 0 {
+            // ADR-0227 D2: an assembly of code-fix providers only is not an analyzer load failure.
+            if found == 0 && !ContainsCodeFixProviders(exportedTypes) {
                 // Issue #3617: a zero-discovery result has three very
                 // different causes — wrong bytes at the path (e.g. a stale
                 // Roslyn-era assembly), a type-identity split (the analyzer's
@@ -250,6 +329,12 @@ shared class GSharpAnalyzerHost {
         }
         return nil
     }
+
+    // Whether the exported types include an attributed code-fix provider.
+    internal func ContainsCodeFixProviders(exportedTypes[]Type) bool -> exportedTypes.Any(
+        (type Type) -> !type.IsAbstract && typeof(GSharpCodeFixProvider).IsAssignableFrom(type) &&
+            type.GetCustomAttribute[GSharpCodeFixProviderAttribute]() != nil
+    )
 
     /// Issue #3617: a load exception's Message alone hid every actionable
     /// detail (two CI runs produced no data). Surface the exception chain and

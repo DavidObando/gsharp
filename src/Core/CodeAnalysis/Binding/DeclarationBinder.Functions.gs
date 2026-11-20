@@ -308,6 +308,10 @@ internal partial class DeclarationBinder {
                 Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, methodName)
                 return
             }
+            // Issue #6116: receiver-clause operators require a body; report GS0325 before the early-return branches.
+            if syntax.HasSemicolonBody {
+                Diagnostics.ReportSemicolonBodyRequiresDllImport(syntax.Identifier.Location, methodName)
+            }
             // Issue #2377: a receiver-clause binary/unary operator
             // (`func (a T) operator +(b T) T { … }`) is syntax sugar over
             // a CLR operator — it must be emitted as the canonical static,
@@ -941,6 +945,10 @@ internal partial class DeclarationBinder {
         } else {
             "op_Implicit"
         }
+        // Issue #6116: conversion operators require a body; report GS0325 before the early-return checks.
+        if syntax.HasSemicolonBody {
+            Diagnostics.ReportSemicolonBodyRequiresDllImport(syntax.Identifier.Location, opName)
+        }
         // A conversion operator has exactly one parameter — the source operand.
         if parameters.Length != 1 {
             Diagnostics.ReportConversionOperatorRequiresSingleParameter(syntax.Identifier.Location, isExplicit)
@@ -1099,7 +1107,7 @@ internal partial class DeclarationBinder {
         }
         let created = symbols.MoveToImmutable()
         if retriedTypeParameters != nil {
-            retriedTypeParameters[syntax] = created
+            binderCtx.SetRetriedBinding(retriedTypeParameters, syntax, created)
         }
         return created
     }
@@ -2104,7 +2112,7 @@ internal partial class DeclarationBinder {
                 cast[VariableSymbol](LocalVariableSymbol(name, isReadOnly, type, declaringSyntax: identifier))
             }
             if !inTopLevelContext && declare && retriedVariables != nil {
-                retriedVariables[identifier] = variable
+                binderCtx.SetRetriedBinding(retriedVariables, cast[SyntaxNode](identifier), variable)
             }
         }
         if declare && !$scope.TryDeclareVariable(variable) {
@@ -2711,33 +2719,11 @@ internal partial class DeclarationBinder {
                 }
                 let typeParamMap = BuildInterfaceTypeParameterMap(iface)
                 // ADR-0149 (issue #944 / #2362 follow-up): an INDEXER's plain
-                // name is always "Item", so distinguishing which of possibly
-                // several explicit indexer slots on the SAME implementer
-                // matches THIS particular interface indexer member requires
-                // comparing the index-parameter list too (types AND count) —
-                // the exact same substitution rules as the element Type check
-                // below. A no-op for an ordinary (non-indexer) property, whose
-                // Parameters is always empty on both sides.
-                if iprop.Parameters.Length != candidate.Parameters.Length {
-                    continue
-                }
-                var parametersMatch = true
-                for var i = 0; i < iprop.Parameters.Length; i++ {
-                    if iprop
-                        .Parameters[i]
-                        .RefKind != candidate
-                        .Parameters[i]
-                        .RefKind ||
-                        !ConformanceSignaturesEquivalent(
-                        iprop.Parameters[i].Type,
-                        candidate.Parameters[i].Type,
-                        typeParamMap
-                    ) {
-                        parametersMatch = false
-                        break
-                    }
-                }
-                if !parametersMatch {
+                // name is always "Item", so distinguishing explicit indexer
+                // slots on the same implementer requires comparing the
+                // index-parameter list via HaveSameIndexerSignature. A no-op
+                // for an ordinary property, whose Parameters is empty.
+                if !HaveSameIndexerSignature(iprop.Parameters, candidate.Parameters, typeParamMap) {
                     continue
                 }
                 if !IsInterfacePropertyTypeCompatible(candidate.Type, iprop.Type, iprop.HasSetter, typeParamMap) {

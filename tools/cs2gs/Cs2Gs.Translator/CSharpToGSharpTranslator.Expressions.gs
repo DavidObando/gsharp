@@ -1706,7 +1706,13 @@ partial class CSharpToGSharpTranslator {
                     out var helperName
                 ) {
                     if member.Parent is ArgumentSyntax nameOfArgument && IsNameOfArgument(nameOfArgument) {
-                        return MemberAccessExpression(IdentifierExpression(helperOwner), helperName)
+                        return MemberAccessExpression(
+                            this.StaticQualifierReceiver(
+                                (memberExtMethod.ReducedFrom ?? memberExtMethod).ContainingType,
+                                member.GetLocation()
+                            ),
+                            helperName
+                        )
                     }
                     return this.TranslateStaticExtensionHelperMethodGroup(
                         member,
@@ -16945,6 +16951,385 @@ partial class CSharpToGSharpTranslator {
             return nil
         }
 
+        // gsc drops by-reference facts at an `if` exit when its condition can mutate member paths (#6124).
+        private func GetExitedConditionIf(
+            $guard Microsoft.CodeAnalysis.SyntaxNode,
+            use Microsoft.CodeAnalysis.SyntaxNode,
+            readPosition int32? = nil
+        ) Microsoft
+            .CodeAnalysis
+            .CSharp
+            .Syntax
+            .IfStatementSyntax? {
+            let readStart = readPosition ?? use.SpanStart
+            for var current Microsoft.CodeAnalysis.SyntaxNode? = $guard; current != nil; current = current!!.Parent {
+                switch current.Parent {
+                    case ifStatement is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .IfStatementSyntax when ifStatement.Condition == current {
+                        return if readStart >= ifStatement.Span.End {
+                            ifStatement
+                        } else {
+                            default(Microsoft.CodeAnalysis.CSharp.Syntax.IfStatementSyntax?)
+                        }
+                    }
+                    case Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ParenthesizedExpressionSyntax,
+                    Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .PrefixUnaryExpressionSyntax,
+                    Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .BinaryExpressionSyntax {
+                        continue
+                    }
+                    default {
+                        return nil
+                    }
+                }
+            }
+            return nil
+        }
+
+        // Mirrors gsc's RestrictConditionalExit (#6124): true for writes, static init, calls, and non-pure accessors.
+        private func ExitedIfConditionNodeMayMutate(node Microsoft.CodeAnalysis.SyntaxNode, symbol ISymbol?) bool {
+            if this.IsUnevaluatedNameOfOperand(node) || this.IsErasedNameOf(node) {
+                return false
+            }
+            if this.NodeRunsStaticTypeInitializer(node) || this.NodeMayWriteReferenceStorage(
+                node,
+                this.ReferenceStorageType(symbol)
+            ) {
+                return true
+            }
+            if node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ExpressionSyntax expr &&
+                this
+                .context
+                .SemanticModel
+                .GetConversion(expr)
+                .IsUserDefined {
+                return true
+            }
+            return switch node {
+                case _ is InvocationExpressionSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .AnonymousObjectCreationExpressionSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .CollectionExpressionSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .WithExpressionSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .AwaitExpressionSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .RangeExpressionSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .SwitchExpressionSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .QueryExpressionSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ThrowExpressionSyntax: true
+                case creation is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .BaseObjectCreationExpressionSyntax: this.CreationEmitsCallOrInitializerEffects(creation)
+                case interpolation is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .InterpolatedStringExpressionSyntax: this.InterpolatedStringRunsUserCode(interpolation)
+                case binary is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax: this.IsLoweredToCall(binary)
+                case _ is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .PrefixUnaryExpressionSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .PostfixUnaryExpressionSyntax: this
+                    .context
+                    .GetSymbolInfo(node)
+                    .Symbol is IMethodSymbol{MethodKind: MethodKind.UserDefinedOperator}
+                case constant is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ConstantPatternSyntax: this.ConstantPatternMayCallEquals(constant)
+                case elementAccess is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ElementAccessExpressionSyntax: this
+                    .context
+                    .SemanticModel
+                    .GetOperation(elementAccess) is not(
+                    IArrayElementReferenceOperation or IPropertyReferenceOperation or IImplicitIndexerReferenceOperation
+                )
+                case member is MemberAccessExpressionSyntax: this
+                    .context
+                    .GetTypeInfo(member)
+                    .Type
+                    ?.TypeKind == TypeKind.Dynamic
+                default: false
+            }
+        }
+
+        private func CreationEmitsCallOrInitializerEffects(creation BaseObjectCreationExpressionSyntax) bool {
+            let typeSymbol = this.context.GetTypeInfo(creation).Type as INamedTypeSymbol
+            if typeSymbol == nil {
+                return true
+            }
+            if typeSymbol.TypeKind == TypeKind.Delegate {
+                return false
+            }
+            let hasObjectInitializer = creation.Initializer != nil && creation.Initializer!!.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.ObjectInitializerExpression
+            )
+            if creation.Initializer != nil && !hasObjectInitializer {
+                return true
+            }
+            if (creation.ArgumentList?.Arguments.Count ?? 0) > 0 {
+                return true
+            }
+            let isStructLiteral = (
+                typeSymbol.TypeKind == TypeKind.Struct &&
+                    typeSymbol.SpecialType == SpecialType.None &&
+                    !typeSymbol.IsTupleType &&
+                    this.IsSourceSymbol(typeSymbol)
+            ) ||
+                (hasObjectInitializer && typeSymbol.SpecialType != SpecialType.System_Object)
+            if !isStructLiteral {
+                return true
+            }
+            return this.SourceTypeHasConstructorOrInitializerEffects(typeSymbol)
+        }
+
+        private func SourceTypeHasConstructorOrInitializerEffects(type INamedTypeSymbol) bool {
+            for var current INamedTypeSymbol? = type; current != nil; current = current!!.BaseType {
+                if current.SpecialType is SpecialType.System_Object or SpecialType.System_ValueType {
+                    break
+                }
+                if !this.IsSourceSymbol(current) {
+                    return true
+                }
+                let definition = current.OriginalDefinition
+                if this.TypeDeclaresStaticInitializer(definition) {
+                    return true
+                }
+                for reference in definition.DeclaringSyntaxReferences {
+                    if reference.GetSyntax() is not Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .TypeDeclarationSyntax declaration {
+                        continue
+                    }
+                    if declaration.ParameterList != nil {
+                        return true
+                    }
+                    for member in declaration.Members {
+                        if member is Microsoft
+                            .CodeAnalysis
+                            .CSharp
+                            .Syntax
+                            .ConstructorDeclarationSyntax ctor &&
+                            !this.HasModifier(ctor.Modifiers, Microsoft.CodeAnalysis.CSharp.SyntaxKind.StaticKeyword) {
+                            return true
+                        }
+                        if member is Microsoft
+                            .CodeAnalysis
+                            .CSharp
+                            .Syntax
+                            .FieldDeclarationSyntax field &&
+                            !this.HasModifier(
+                            field.Modifiers,
+                            Microsoft.CodeAnalysis.CSharp.SyntaxKind.StaticKeyword
+                        ) &&
+                            !this.HasModifier(field.Modifiers, Microsoft.CodeAnalysis.CSharp.SyntaxKind.ConstKeyword) &&
+                            field
+                            .Declaration
+                            .Variables
+                            .Any((v VariableDeclaratorSyntax) -> v.Initializer != nil) {
+                            return true
+                        }
+                        if member is Microsoft
+                            .CodeAnalysis
+                            .CSharp
+                            .Syntax
+                            .PropertyDeclarationSyntax propDecl &&
+                            !this.HasModifier(
+                            propDecl.Modifiers,
+                            Microsoft.CodeAnalysis.CSharp.SyntaxKind.StaticKeyword
+                        ) &&
+                            propDecl.Initializer != nil {
+                            return true
+                        }
+                    }
+                }
+            }
+            return false
+        }
+
+        private func InterpolatedStringRunsUserCode(
+            interpolation Microsoft.CodeAnalysis.CSharp.Syntax.InterpolatedStringExpressionSyntax
+        ) bool {
+            var operation = this.context.SemanticModel.GetOperation(interpolation)
+            while operation != nil && operation.Syntax.Span.Contains(interpolation.Span) {
+                if operation is IInterpolatedStringHandlerCreationOperation {
+                    return true
+                }
+                operation = operation.Parent
+            }
+            for hole in interpolation.Contents.OfType[Microsoft.CodeAnalysis.CSharp.Syntax.InterpolationSyntax]() {
+                let holeType = this.context.GetTypeInfo(hole.Expression).Type
+                if holeType == nil {
+                    return true
+                }
+                if holeType.SpecialType == SpecialType.System_String || holeType.TypeKind == TypeKind.Pointer {
+                    continue
+                }
+                if holeType.TypeKind != TypeKind.Enum &&
+                    (
+                    this.IsBuiltInPrimitive(hole.Expression) ||
+                        holeType.SpecialType is SpecialType.System_IntPtr or
+                        SpecialType.System_UIntPtr
+                ) {
+                    continue
+                }
+                return true
+            }
+            return false
+        }
+
+        // Mirrors gsc's HasMemberStorageWrite (#6124): separate source field and auto-property writes keep facts.
+        private func SiblingOperandHasMemberStorageWrite(node Microsoft.CodeAnalysis.SyntaxNode) bool {
+            let target Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = switch node {
+                case assignment is Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax: assignment.Left
+                case prefix is Microsoft.CodeAnalysis.CSharp.Syntax.PrefixUnaryExpressionSyntax when prefix.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.PreIncrementExpression
+                ) ||
+                    prefix.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.PreDecrementExpression): prefix.Operand
+                case postfix is Microsoft.CodeAnalysis.CSharp.Syntax.PostfixUnaryExpressionSyntax when postfix.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.PostIncrementExpression
+                ) ||
+                    postfix.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.PostDecrementExpression): postfix.Operand
+                default: default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
+            }
+            if target == nil || !this.NodeMayWriteReferenceStorage(node) {
+                return false
+            }
+            return !this.IsSeparateStorageWriteTarget(target)
+        }
+
+        private func IsSeparateStorageWriteTarget(target Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax) bool {
+            let stripped = UnwrapParenthesesAndSuppressions(target)
+            if stripped is not IdentifierNameSyntax && stripped is not MemberAccessExpressionSyntax {
+                return false
+            }
+            let symbol ISymbol? = this.context.GetSymbolInfo(stripped).Symbol
+            if symbol == nil {
+                return false
+            }
+            let receiver Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ExpressionSyntax? = if !symbol.IsStatic &&
+                stripped is MemberAccessExpressionSyntax member {
+                member.Expression
+            } else {
+                default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
+            }
+            if receiver != nil && !this.IsSeparateWriteReceiver(receiver) {
+                return false
+            }
+            return switch symbol {
+                case field is IFieldSymbol: !field.IsReadOnly && this.IsSourceSymbol(field) &&
+                    !ObliviousNullabilityAnalyzer.MayHaveOverlappingFields(field.ContainingType)
+                case property is IPropertySymbol: !property.IsIndexer &&
+                    property.SetMethod is {IsInitOnly: false} &&
+                    this.IsSourceSymbol(property) && this.IsEmittedAsAutoProperty(property) &&
+                    !this.AccessorRunsUserCode(
+                    property,
+                    if receiver != nil {
+                        this.context.GetTypeInfo(receiver).Type
+                    } else {
+                        default(ITypeSymbol?)
+                    }
+                ) &&
+                    !ObliviousNullabilityAnalyzer.MayHaveOverlappingFields(property.ContainingType)
+                default: false
+            }
+        }
+
+        private func IsSeparateWriteReceiver(receiver Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax) bool {
+            let stripped = UnwrapParenthesesAndSuppressions(receiver)
+            if stripped == nil {
+                return false
+            }
+            if this.context.GetTypeInfo(stripped).Type?.IsReferenceType == true {
+                return true
+            }
+            return switch stripped {
+                case _ is ThisExpressionSyntax: true
+                case _ is IdentifierNameSyntax: switch this.context.GetSymbolInfo(stripped).Symbol {
+                    case local is ILocalSymbol: local.RefKind == RefKind.None
+                    case parameter is IParameterSymbol: parameter.RefKind == RefKind.None
+                    case field is IFieldSymbol: this.IsSourceSymbol(field) &&
+                        !ObliviousNullabilityAnalyzer.MayHaveOverlappingFields(field.ContainingType)
+                    default: false
+                }
+                case member is MemberAccessExpressionSyntax: this
+                    .context
+                    .GetSymbolInfo(member)
+                    .Symbol is IFieldSymbol field &&
+                    this.IsSourceSymbol(field) && !ObliviousNullabilityAnalyzer.MayHaveOverlappingFields(
+                    field.ContainingType
+                ) &&
+                    this.IsSeparateWriteReceiver(member.Expression)
+                default: false
+            }
+        }
+
         /// ADR-0213 section 9 (#5650, #5692): gsc scans a loop's region without types, so a `for ... in` nested in the
         /// body of a loop counts as an iteration that runs user code for the enclosing loop, whatever its collection
         /// is, and a conversion emitted as `T(x)` counts as a construction call (`CallIsIndirect`). The loop then
@@ -22283,14 +22668,7 @@ partial class CSharpToGSharpTranslator {
             return scope_ != nil && regions.Any(
                 (region Microsoft.CodeAnalysis.SyntaxNode) -> region.Span.Contains(expression!!.Span)
             ) &&
-                !this.ClosureAssignedLocalLosesNarrowing(
-                field,
-                GetConditionRoot(guardTest),
-                expression!!,
-                scope_,
-                regions,
-                readPosition
-            )
+                !this.ClosureAssignedLocalLosesNarrowing(field, guardTest, expression!!, scope_, regions, readPosition)
         }
 
         private func ClosureAssignedLocalLosesNarrowing(
@@ -22318,14 +22696,31 @@ partial class CSharpToGSharpTranslator {
             }
             // ADR-0208 R15 (#5237): a closure-assigned variable loses its fact at every node that may run source code.
             let RunsSourceCode = func (node Microsoft.CodeAnalysis.SyntaxNode) bool {
-                // Member paths use the same call barriers, limited to their proven non-null regions.
-                return (closureAssigned || memberPath) &&
-                    (
-                    memberRegions == nil || memberRegions.Any(
-                        (region Microsoft.CodeAnalysis.SyntaxNode) -> region.Span.Contains(node.Span)
-                    )
-                ) &&
-                    this.NodeMayRunEscapedClosure(node)
+                if closureAssigned && this.NodeMayRunEscapedClosure(node) {
+                    return true
+                }
+                if !memberPath {
+                    return false
+                }
+                if memberRegions == nil {
+                    return this.NodeMayRunEscapedClosure(node)
+                }
+                // Member paths drop on calls in statements or the use's own region; sibling condition operands
+                // drop a separate-storage field only on member-storage writes (#6124).
+                for region in memberRegions {
+                    if !region.Span.Contains(node.Span) {
+                        continue
+                    }
+                    if region is Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax || region.Span.Contains(
+                        use.Span
+                    ) {
+                        return this.NodeMayRunEscapedClosure(node)
+                    }
+                    if this.SiblingOperandHasMemberStorageWrite(node) {
+                        return true
+                    }
+                }
+                return false
             }
             // ADR-0208 R11, R12, R14, R16 and R17 (#5520, #5617, #5650): a by-reference variable loses its fact at a
             // node that gsc counts as a write of by-reference storage, which includes a loop whose iteration runs user
@@ -22366,6 +22761,13 @@ partial class CSharpToGSharpTranslator {
                 .Pattern
                 .DescendantNodesAndSelf(OutsideNestedFunctions)
                 .Any(WritesReferenceStorage) {
+                return true
+            }
+            if byReference && this.GetExitedConditionIf(narrowingGuard, use, readPosition) is {} exitedIf &&
+                exitedIf
+                .Condition
+                .DescendantNodesAndSelf(OutsideNestedFunctions)
+                .Any((node Microsoft.CodeAnalysis.SyntaxNode) -> this.ExitedIfConditionNodeMayMutate(node, symbol)) {
                 return true
             }
             let exitedLoop = this.GetExitedConditionLoop(narrowingGuard, use)
