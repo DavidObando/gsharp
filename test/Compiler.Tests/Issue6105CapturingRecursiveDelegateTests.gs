@@ -27,16 +27,32 @@ class Issue6105CapturingRecursiveDelegateTests {
         let source = "package CapturingFunctionPointer\nunsafe func Run() int32 {\n    var outer = 41\n" +
             declarations +
             "\n}"
-        using let fixture = NativeSliceLanguageTests.Fixture()
-        let (code, output) = fixture.TryCompile(source, "CapturingFunctionPointer", executable: false)
-        Assert.NotEqual(0, code)
-        let error = Assert.Single(Regex.Matches(output, `\((\d+),(\d+),(\d+),(\d+)\): error (GS\d+):`))
-        Assert.Equal("GS0405", error.Groups[5].Value)
-        let before = source.Substring(0, source.IndexOf("&", StringComparison.Ordinal)).Split('\n')
-        Assert.Equal(before.Length.ToString(), error.Groups[1].Value)
-        Assert.Equal((before[before.Length - 1].Length + 1).ToString(), error.Groups[2].Value)
-        Assert.Equal(error.Groups[1].Value, error.Groups[3].Value)
-        Assert.Equal((before[before.Length - 1].Length + 2).ToString(), error.Groups[4].Value)
+        AssertCapturingPointerRejected(source)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ConstructorArgumentPointers_ReportFinalCaptureDiagnostic(primary bool) {
+        const argument = `(() -> {
+    var outer = seed
+    let first = func(n int32) int32 {
+        unsafe {
+            let pointer = &second
+            return pointer(n)
+        }
+    }
+    let second = func(n int32) int32 { return n == 0 ? outer : first(n - 1) }
+    return first(1)
+})()`
+        let declaration = if primary {
+            "class Derived(seed int32) : Base(" + argument + ") {}"
+        } else {
+            "class Derived : Base {\n    init(seed int32) : base(" + argument + ") {}\n}"
+        }
+        AssertCapturingPointerRejected(
+            "package CapturingFunctionPointer\nopen class Base { init(value int32) {} }\n" + declaration
+        )
     }
 
     @Theory
@@ -71,6 +87,19 @@ System.Console.Write("${Run(true)}|${Run(false)}")`
             nullable ? "True,False,43,2|True,True,43,2" : "True,False,43,2|True,False,43,2",
             "6105"
         )
+    }
+
+    private func AssertCapturingPointerRejected(source string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile(source, "CapturingFunctionPointer", executable: false)
+        Assert.NotEqual(0, code)
+        let error = Assert.Single(Regex.Matches(output, `\((\d+),(\d+),(\d+),(\d+)\): error (GS\d+):`))
+        Assert.Equal("GS0405", error.Groups[5].Value)
+        let before = source.Substring(0, source.IndexOf("&", StringComparison.Ordinal)).Split('\n')
+        Assert.Equal(before.Length.ToString(), error.Groups[1].Value)
+        Assert.Equal((before[before.Length - 1].Length + 1).ToString(), error.Groups[2].Value)
+        Assert.Equal(error.Groups[1].Value, error.Groups[3].Value)
+        Assert.Equal((before[before.Length - 1].Length + 2).ToString(), error.Groups[4].Value)
     }
 
     @Theory
