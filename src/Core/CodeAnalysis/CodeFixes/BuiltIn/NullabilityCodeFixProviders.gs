@@ -42,8 +42,10 @@ internal class NullConditionalAccessCodeFixProvider : GSharpCodeFixProvider {
         }
         // The receiver keeps its type when the member access fails (#6127).
         let model = context.SemanticModel
-        let receiverType = model.GetReceiverTypeInfo(accessor.LeftPart, context.CancellationToken).Type ??
-            model.GetTypeInfo(accessor.LeftPart, context.CancellationToken).Type
+        let receiverType = model.GetReceiverTypeInfo(accessor.LeftPart, context.CancellationToken)
+            .Type ??
+            model
+            .GetTypeInfo(accessor.LeftPart, context.CancellationToken).Type
         if !(receiverType is NullableTypeSymbol) {
             return
         }

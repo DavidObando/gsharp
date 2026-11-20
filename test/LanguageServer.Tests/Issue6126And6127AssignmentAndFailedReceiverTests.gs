@@ -128,7 +128,12 @@ func Read(box Box?) int32? {
 
         /// Asserts that [`ranges`](paramref) are exactly the first [`count`](paramref) occurrences of
         /// [`text`](paramref) in [`source`](paramref).
-        private func AssertAt(ranges IEnumerable[GSharp.LanguageServer.Protocol.Range], source string, text string, count int32) {
+        private func AssertAt(
+            ranges IEnumerable[GSharp.LanguageServer.Protocol.Range],
+            source string,
+            text string,
+            count int32
+        ) {
             let expected = Enumerable
                 .Range(0, count)
                 .Select((i int32) -> LanguageServerTestHelpers.PositionOf(source, text, i))
