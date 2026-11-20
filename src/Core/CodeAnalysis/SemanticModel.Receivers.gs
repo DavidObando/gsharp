@@ -883,6 +883,35 @@ partial class SemanticModel {
         }
     }
 
+    /// Gets the variable, field or property that an assignment writes. The receiver of a field or
+    /// property write (an implicit `this`, or the variable before the dot) is not the target (#6126).
+    private func AssignedSymbol(node BoundExpression) Symbol? -> switch node {
+        case BoundAssignmentExpression{Variable: ImplicitFieldVariableSymbol implicitField}: implicitField.Field
+        case BoundAssignmentExpression{Variable: ImplicitStaticFieldVariableSymbol staticField}: staticField.Field
+        case BoundAssignmentExpression{
+            Variable: ImplicitPropertyVariableSymbol implicitProperty
+        }: implicitProperty.Property
+        case BoundAssignmentExpression{
+            Variable: ImplicitStaticPropertyVariableSymbol staticProperty
+        }: staticProperty.Property
+        case field is BoundFieldAssignmentExpression: TypeMemberModel.PropertyForBackingField(
+            field.StructType,
+            field.Field
+        ) ??
+            cast[Symbol](field.Field)
+        case BoundPropertyAssignmentExpression{
+            SubstitutedType: {} substitutedType
+        } property when !object.ReferenceEquals(substitutedType, property.Property.Type): property
+            .Property
+            .WithSignature(substitutedType, property.Property.Parameters)
+        case property is BoundPropertyAssignmentExpression: property.Property
+        case clr is BoundClrPropertyAssignmentExpression: ImportedMemberSymbol(
+            clr.ConstrainedInterfaceType ?? clr.Receiver?.Type ?? clr.StaticContainerType,
+            clr.Member
+        )
+        default: default(Symbol?)
+    }
+
     private func ReferencedCallSymbol(receiverType TypeSymbol?, function FunctionSymbol?, type TypeSymbol) Symbol? {
         if function == nil {
             return nil

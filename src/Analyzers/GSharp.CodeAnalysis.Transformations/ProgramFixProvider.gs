@@ -251,8 +251,7 @@ class ProgramFixProvider : GSharpCodeFixProvider {
         }
     }
 
-    // The symbol of a capture: GetSymbolInfo of its node, else the one symbol that its name finds
-    // in scope. The fallback covers a receiver whose member access did not bind (#6127).
+    // The symbol of a capture: GetSymbolInfo of its node.
     private func SymbolOf(model SemanticModel, node SyntaxNode, ct CancellationToken) Symbol? {
         // An identifier token answers its own symbol: a declared parameter, or the variable of a
         // called function value rather than the call's member. Another token asks its parent.
@@ -263,54 +262,15 @@ class ProgramFixProvider : GSharpCodeFixProvider {
         } else {
             node
         }
-        if target == nil {
-            return nil
-        }
-        let bound Symbol? = model.GetSymbolInfo(target, ct).Symbol
-        if bound != nil {
-            return bound
-        }
-        // A member name after a dot names a member of its receiver, never a variable in scope.
-        if IsMemberName(node) {
-            return nil
-        }
-        // The semantic name: `$c` names `c`.
-        let name string? = switch node {
-            case token is SyntaxToken when token.Kind == SyntaxKind.IdentifierToken: token.ValueText
-            case nameExpression is NameExpressionSyntax: nameExpression.IdentifierToken.ValueText
-            default: default(string?)
-        }
-        if name == nil {
-            return nil
-        }
-        let found = model.LookupSymbols(node.Span.Start, name, ct)
-        return if found.Length == 1 {
-            found[0]
-        } else {
+        return if target == nil {
             default(Symbol?)
-        }
-    }
-
-    // Whether a capture is the name of a member access (`N` in `c.N`, `M` in `c.M()`).
-    // In a chain, a name is a member name when it lies in the right part of any enclosing access:
-    // `b` in `a.b.c` is, whichever way the parser nests the chain.
-    private func IsMemberName(node SyntaxNode) bool {
-        var current SyntaxNode? = if node is SyntaxToken {
-            node.Parent
         } else {
-            node
+            model.GetSymbolInfo(target, ct).Symbol
         }
-        while current?.Parent is AccessorExpressionSyntax access {
-            if !object.ReferenceEquals(access.LeftPart, current) {
-                return true
-            }
-            current = access
-        }
-        return false
     }
 
-    // The type of a capture: GetTypeInfo of its node, else the type of its variable. An identifier
-    // token asks about itself first; the callee of a call is not the call, whose type is the result.
+    // The type of a capture: GetTypeInfo of its node. An identifier token asks about itself first;
+    // the callee of a call is not the call, whose type is the result.
     private func TypeOf(model SemanticModel, node SyntaxNode, ct CancellationToken) TypeSymbol? {
         if node is SyntaxToken{Kind: SyntaxKind.IdentifierToken} {
             let own TypeSymbol? = model.GetTypeInfo(node, ct).Type
@@ -328,19 +288,10 @@ class ProgramFixProvider : GSharpCodeFixProvider {
         } else {
             node
         }
-        let bound TypeSymbol? = if target == nil {
-            nil
+        return if target == nil {
+            default(TypeSymbol?)
         } else {
             model.GetTypeInfo(target, ct).Type
-        }
-        if bound != nil {
-            return bound
-        }
-        return switch SymbolOf(model, node, ct) {
-            case variable is VariableSymbol: variable.Type
-            case field is FieldSymbol: field.Type
-            case property is PropertySymbol: property.Type
-            default: default(TypeSymbol?)
         }
     }
 

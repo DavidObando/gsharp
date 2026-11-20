@@ -897,7 +897,7 @@ internal partial class ExpressionBinder {
                         },
                         compoundSyntax: syntax
                     )
-                    return BoundErrorExpression(nil)
+                    return BoundErrorExpression.ForFailedMemberAccess(boundReceiver)
                 }
             }
             flags = BindingFlags.Public | BindingFlags.Instance

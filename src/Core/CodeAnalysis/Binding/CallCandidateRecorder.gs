@@ -95,6 +95,15 @@ internal shared class CallCandidateRecorder {
         return frame
     }
 
+    /// Keeps a member access that did not bind (GS0158) as a failed child of the call being bound,
+    /// so the semantic model reaches its receiver when that call fails too (#6127).
+    /// @param error The error of the member access.
+    func RecordFailedMemberAccess(error BoundErrorExpression) {
+        if enabled.Value && current.Value is {} frame {
+            frame.AddFailedChild(error)
+        }
+    }
+
     /// Stops collecting for [`frame`](paramref).
     /// @param frame The frame (cref:Begin) returned.
     func End(frame Frame?) {

@@ -32,15 +32,15 @@ internal class LetToVarCodeFixProvider : GSharpCodeFixProvider {
         if assignment == nil {
             return
         }
-        // A member assignment (`c.N = 1`, `a[i] = 1`) has a receiver that can have the same name as
-        // the read-only member. The provider cannot tell them apart, so it declines.
+        // A member assignment (`c.N = 1`, `a[i] = 1`) can report GS0127 for the read-only member or
+        // for a read-only receiver of value type, which can have the same name. The provider
+        // declines rather than choose.
         let target = tree.Text.ToString(TextSpan.FromBounds(assignment.Span.Start, token.Span.Start))
         if target.Contains('.') || target.Contains('[') {
             return
         }
         let symbol Symbol? = TargetSymbol(context.SemanticModel, assignment, context)
-        // GS0127 names the read-only variable. A symbol with another name is the receiver of a
-        // member assignment (`c.N = 1`), not the variable to change.
+        // GS0127 names the read-only variable; a symbol with another name is not the one to change.
         let arguments = context.Diagnostic.MessageArguments
         if symbol == nil || arguments.IsEmpty || symbol.Name != arguments[0] {
             return
@@ -85,38 +85,16 @@ internal class LetToVarCodeFixProvider : GSharpCodeFixProvider {
         )
     }
 
-    // A local or a field. A parameter, `this` included, is not a `let` declaration.
-    private func IsAssignable(symbol Symbol?) bool -> !(symbol is ParameterSymbol) &&
-        (symbol is LocalVariableSymbol || symbol is FieldSymbol)
-
-    // The assigned variable: the symbol of the assignment, or of its first child (a compound
-    // assignment such as `x += 1`). For a field with an implicit receiver, GetSymbolInfo answers
-    // the `this` parameter (#6126), so the name is looked up at the assignment instead.
+    // The assigned variable: the symbol of the assignment, or of its first child (the target name of
+    // a compound assignment such as `x += 1`). For a bare field write (`N = 2`) the assignment
+    // answers the field, not the implicit `this` receiver.
     private func TargetSymbol(model SemanticModel, assignment SyntaxNode, context CodeFixContext) Symbol? {
         let direct Symbol? = model.GetSymbolInfo(assignment, context.CancellationToken).Symbol
-        if IsAssignable(direct) {
+        if direct != nil {
             return direct
         }
         for child in assignment.GetChildren() {
-            let first Symbol? = model.GetSymbolInfo(child, context.CancellationToken).Symbol
-            if IsAssignable(first) {
-                return first
-            }
-            let name = if child is SyntaxToken token && token.Kind == SyntaxKind.IdentifierToken {
-                token.ValueText
-            } else if child is NameExpressionSyntax nameExpression {
-                nameExpression.IdentifierToken.ValueText
-            } else {
-                default(string?)
-            }
-            if name == nil {
-                return nil
-            }
-            let found = model.LookupSymbols(assignment.Span.Start, name, context.CancellationToken)
-            if found.Length == 1 && found[0] is FieldSymbol {
-                return found[0]
-            }
-            return nil
+            return model.GetSymbolInfo(child, context.CancellationToken).Symbol
         }
         return nil
     }

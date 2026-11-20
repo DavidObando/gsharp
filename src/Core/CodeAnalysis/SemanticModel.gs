@@ -216,6 +216,11 @@ partial class SemanticModel {
                 bound = operand
                 continue
             }
+            // An assignment answers the variable, field or property it writes, never the receiver
+            // of the write (#6126).
+            if current is BoundExpression written && AssignedSymbol(written) is {} assigned {
+                return SymbolInfo(assigned)
+            }
             if current is BoundExpression expression &&
                 (
                 current is BoundLiteralExpression ||
@@ -522,6 +527,10 @@ partial class SemanticModel {
         }
 
         private func RecordFailedCall(error BoundErrorExpression) {
+            // The receiver of a member access that did not bind keeps its own anchors (#6127).
+            if error.FailedReceiver is {} receiver {
+                VisitExpression(receiver)
+            }
             if error.CallSyntax is {} callSyntax && !error.MemberGroup.IsDefaultOrEmpty && object.ReferenceEquals(
                 callSyntax.SyntaxTree,
                 tree

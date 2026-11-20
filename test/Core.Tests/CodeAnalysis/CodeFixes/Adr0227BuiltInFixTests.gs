@@ -176,6 +176,45 @@ open class Adr0227BuiltInFixTests {
     }
 
     @Fact
+    func NullConditionalAccess_OnANullableCallResult_UsesTheReceiverType() {
+        // The receiver is not a name: only its type in the semantic model says it is nullable (#6127).
+        VerifyFix(
+            "package P\n\nclass C {\n    var N int32\n}\n\nfunc Get() C? -> nil\n\nfunc F() int32? {\n    return Get().N\n}\n",
+            "GS0158",
+            "Use null-conditional access '?.'",
+            Applicability.MaybeIncorrect,
+            "package P\n\nclass C {\n    var N int32\n}\n\nfunc Get() C? -> nil\n\nfunc F() int32? {\n    return Get()?.N\n}\n"
+        )
+    }
+
+    @Fact
+    func NullConditionalAccess_ReceiverNamedLikeANullableElsewhere_HasNoFix() {
+        // `c` is `C` here; another function's `c` is `C?`. The receiver's own type decides.
+        const source = "package P\n\nclass C {\n    var N int32\n}\n\nfunc G(c C?) {\n}\n\nfunc F(c C) int32 {\n    return c.Missing\n}\n"
+        let tree = SyntaxTree.Parse(SourceText.From(source, "a.gs"))
+        let compilation = Compilation(tree)
+        let target = compilation.GetDiagnostics().Single((d Diagnostic) -> d.Id == "GS0158")
+        Assert.Empty(
+            CodeFixService(CodeFixRegistry.CreateDefault()).GetFixes(compilation, target).Where(
+                (f CodeFix) -> f.ProviderId == "GSharp.CodeFixes.NullConditionalAccess"
+            )
+        )
+    }
+
+    @Fact
+    func NullConditionalAccess_OnACompoundAssignmentTarget_HasNoFix() {
+        const source = "package P\n\nclass C {\n    var N int32\n}\n\nfunc F(c C?) {\n    c.N += 1\n}\n"
+        let tree = SyntaxTree.Parse(SourceText.From(source, "a.gs"))
+        let compilation = Compilation(tree)
+        let target = compilation.GetDiagnostics().Single((d Diagnostic) -> d.Id == "GS0158")
+        Assert.Empty(
+            CodeFixService(CodeFixRegistry.CreateDefault()).GetFixes(compilation, target).Where(
+                (f CodeFix) -> f.ProviderId == "GSharp.CodeFixes.NullConditionalAccess"
+            )
+        )
+    }
+
+    @Fact
     func NullableValue_GetsDefaultAndAssertionFixes() {
         const source = "package P\n\nfunc Use(s string) int32 -> s.Length\n\nfunc F(t string?) int32 {\n    return Use(t)\n}\n"
         let tree = SyntaxTree.Parse(SourceText.From(source, "a.gs"))
@@ -377,8 +416,7 @@ open class Adr0227BuiltInFixTests {
 
     @Fact
     func LetField_BareAssignmentInTheSameClass_BecomesVar() {
-        // `N = 2` has an implicit receiver; GetSymbolInfo answers `this` (#6126), so the provider
-        // looks the field up by the name that GS0127 gives.
+        // `N = 2` has an implicit receiver; GetSymbolInfo on the assignment answers the field (#6126).
         VerifyFix(
             "package P\n\nclass C {\n    let N int32 = 1\n\n    func Set() {\n        N = 2\n    }\n}\n",
             "GS0127",

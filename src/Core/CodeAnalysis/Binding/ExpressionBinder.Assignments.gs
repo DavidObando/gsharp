@@ -1387,7 +1387,7 @@ internal partial class ExpressionBinder {
                     NameExpressionSyntax(syntax.SyntaxTree, syntax.Receiver),
                     kind: NilableMemberAccessKind.Write
                 )
-                return BoundErrorExpression(nil)
+                return BoundErrorExpression.ForFailedMemberAccess(assignmentReceiver)
             }
             if tpVarType.UnwrappedClassConstraintStruct is StructSymbol tpClassConstraint {
                 let hasNearestTpProperty = TypeMemberModel.TryGetProperty(
@@ -1604,7 +1604,7 @@ internal partial class ExpressionBinder {
                 NameExpressionSyntax(syntax.SyntaxTree, syntax.Receiver),
                 kind: NilableMemberAccessKind.Write
             )
-            return BoundErrorExpression(nil)
+            return BoundErrorExpression.ForFailedMemberAccess(assignmentReceiver)
         }
         let hasNearestProperty = TypeMemberModel.TryGetProperty(
             structSymbol,
@@ -4922,7 +4922,7 @@ internal partial class ExpressionBinder {
                     syntax.Receiver,
                     kind: NilableMemberAccessKind.Write
                 )
-                return BoundErrorExpression(nil)
+                return BoundErrorExpression.ForFailedMemberAccess(receiver)
             }
             if tpReceiver.UnwrappedClassConstraintStruct is StructSymbol tpClassConstraint {
                 let hasNearestTpProperty = TypeMemberModel.TryGetProperty(
@@ -5214,7 +5214,7 @@ internal partial class ExpressionBinder {
             syntax.Receiver,
             kind: NilableMemberAccessKind.Write
         )
-        return BoundErrorExpression(nil)
+        return BoundErrorExpression.ForFailedMemberAccess(receiver)
     }
 
     private func RecoverDeclaredMemberWriteReceiver(
