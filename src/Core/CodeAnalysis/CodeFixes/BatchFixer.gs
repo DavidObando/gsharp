@@ -220,11 +220,17 @@ internal class BatchFixer {
         // The document order is the ordinal order of the file names, then the tree order, so the
         // winner of a conflict does not depend on the order of the compilation's trees.
         let order = Dictionary[SourceText, int32](ReferenceEqualityComparer.Instance)
-        let ranked = List[SyntaxTree](compilation.SyntaxTrees)
-        ranked.Sort(CompareByFileName(compilation))
+        let names = compilation.SyntaxTrees.Select((t SyntaxTree) -> t.Text.FileName).ToList()
+        let ranked List[int32] = Enumerable
+            .Range(0, names.Count)
+            .OrderBy((i int32) -> names[i], StringComparer.Ordinal)
+            .ThenBy((i int32) -> i)
+            .ToList()
         for var rank = 0; rank < ranked.Count; rank++ {
-            if !order.ContainsKey(ranked[rank].Text) {
-                order.Add(ranked[rank].Text, rank)
+            let tree = compilation.SyntaxTrees[ranked[rank]]
+            let text SourceText = tree.Text
+            if !order.ContainsKey(text) {
+                order.Add(text, rank)
             }
         }
         let result = List[Diagnostic]()
@@ -279,20 +285,6 @@ internal class BatchFixer {
             }
         }
         return false
-    }
-
-    // Ordinal file name, then the position in the compilation.
-    private func CompareByFileName(compilation Compilation) Comparison[SyntaxTree] -> (
-        x SyntaxTree,
-        y SyntaxTree
-    ) -> CompareTrees(compilation, x, y)
-
-    private func CompareTrees(compilation Compilation, x SyntaxTree, y SyntaxTree) int32 {
-        let byName = string.CompareOrdinal(x.Text.FileName, y.Text.FileName)
-        if byName != 0 {
-            return byName
-        }
-        return compilation.SyntaxTrees.IndexOf(x) - compilation.SyntaxTrees.IndexOf(y)
     }
 
     private func InsertionRank(change TextChange) int32 -> if change.Span.Length == 0 {
