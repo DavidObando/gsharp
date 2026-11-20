@@ -394,6 +394,17 @@ open class Adr0227DiagnosticDeltaTests {
         Assert.True(DeltaPolicy.NoNewDiagnostics.Accepts(delta))
     }
 
+    @Fact
+    func Baseline_CopiesTheAnalyzerOptions() {
+        let compilation = Compilation(SyntaxTree.Parse(NullSource))
+        let options = DeltaOptions()
+        options.AnalyzerOptions = GSharp.Core.CodeAnalysis.Analyzers.AnalyzerOptions{TimeBudgetMilliseconds: 100}
+        let baseline = DeltaBaseline.Create(compilation, options)
+        options.AnalyzerOptions!!.TimeBudgetMilliseconds = 5
+        baseline.Options.AnalyzerOptions!!.TimeBudgetMilliseconds = 7
+        Assert.Equal(100, baseline.EffectiveOptions.AnalyzerOptions!!.TimeBudgetMilliseconds)
+    }
+
     private func service() CodeFixService -> CodeFixService(CodeFixRegistry())
 
     @Fact

@@ -12,9 +12,14 @@ import System.Reflection
 import System.Reflection.Metadata
 import System.Reflection.PortableExecutable
 import GSharp.Tests
+import Microsoft.CodeAnalysis
+import Microsoft.CodeAnalysis.CSharp
 import Xunit
 import GSharp.Compiler
 import GSharp.Compiler.Tests
+import GsCompilation = GSharp.Core.CodeAnalysis.Compilation.Compilation
+import GsSyntaxTree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree
+import SourceText = GSharp.Core.CodeAnalysis.Text.SourceText
 
 /// ADR-0149 follow-up (issue #2362/PR #2370): generalizes the
 /// explicit-interface `(IFoo)` qualifier clause — previously supported
@@ -472,7 +477,416 @@ public var result = asIface[0] + asIface[1]`
         Assert.Equal(119, RunAndGetIntResult(source))
     }
 
+    @Fact
+    func Issue6125_OverloadedExplicitInterfaceIndexers_MetadataMethodImplAndRefAssemblyParity() {
+        let peStream = MemoryStream()
+        let refStream = MemoryStream()
+        let compilation = GsCompilation(GsSyntaxTree.Parse(SourceText.From(OverloadedExplicitIndexerLibrarySource))){
+            IsLibrary = true
+        }
+        let emitResult = compilation.Emit(
+            peStream,
+            pdbStream: nil,
+            refStream: refStream,
+            assemblyName: "OverloadedExplicitIndexerLib"
+        )
+        Assert.True(emitResult.Success, string.Join(Environment.NewLine, emitResult.Diagnostics))
+
+        peStream.Position = 0
+        refStream.Position = 0
+        using let runtimePe = PEReader(peStream, PEStreamOptions.LeaveOpen)
+        using let refPe = PEReader(refStream, PEStreamOptions.LeaveOpen)
+        let runtimeReader = runtimePe.GetMetadataReader()
+        let refReader = refPe.GetMetadataReader()
+
+        let runtimeType = FindType(runtimeReader, "C")
+        let refType = FindType(refReader, "C")
+
+        Assert.Equal(2, CountMethodsNamed(runtimeReader, runtimeType, "GapCheck.IOverloadedIndexer[string].get_Item"))
+        Assert.Equal(2, CountMethodsNamed(runtimeReader, runtimeType, "GapCheck.IOverloadedIndexer[string].set_Item"))
+        Assert.Equal(2, CountMethodsNamed(refReader, refType, "GapCheck.IOverloadedIndexer[string].get_Item"))
+        Assert.Equal(2, CountMethodsNamed(refReader, refType, "GapCheck.IOverloadedIndexer[string].set_Item"))
+        Assert.Equal(2, CountPropertiesNamed(runtimeReader, runtimeType, "GapCheck.IOverloadedIndexer[string].Item"))
+        Assert.Equal(2, CountPropertiesNamed(refReader, refType, "GapCheck.IOverloadedIndexer[string].Item"))
+        Assert.Equal(4, CountMethodImplRows(runtimeReader, runtimeType))
+
+        for mh in runtimeType.GetMethods() {
+            let md = runtimeReader.GetMethodDefinition(mh)
+            let name = runtimeReader.GetString(md.Name)
+            if name.StartsWith("GapCheck.IOverloadedIndexer", StringComparison.Ordinal) {
+                AssertExplicitAccessorAttributes(md.Attributes)
+            }
+        }
+        let runtimeGetterSigs = GetMethodSignaturesNamed(
+            runtimeReader,
+            runtimeType,
+            "GapCheck.IOverloadedIndexer[string].get_Item"
+        )
+        let refGetterSigs = GetMethodSignaturesNamed(refReader, refType, "GapCheck.IOverloadedIndexer[string].get_Item")
+        Assert.Equal(2, runtimeGetterSigs.Length)
+        Assert.Equal(runtimeGetterSigs, refGetterSigs)
+    }
+
+    @Fact
+    func Issue6125_OverloadedExplicitInterfaceIndexers_RuntimeDispatchReflectionAndCSharpConsumer() {
+        let tempDir = Directory.CreateTempSubdirectory("gs_issue6125_").FullName
+        try {
+            let libPath = Path.Combine(tempDir, "OverloadedLib.dll")
+            let compilation = GsCompilation(
+                GsSyntaxTree.Parse(SourceText.From(OverloadedExplicitIndexerLibrarySource))
+            ){IsLibrary = true}
+            {
+                using let pe = File.Create(libPath)
+                let emitRes = compilation.Emit(pe, pdbStream: nil, refStream: nil, assemblyName: "OverloadedLib")
+                Assert.True(emitRes.Success, string.Join(Environment.NewLine, emitRes.Diagnostics))
+            }
+            IlVerifier.Verify(libPath)
+
+            let gsConsumerSource = `package Consumer
+import GapCheck
+
+public class GsProbe {
     shared {
+        public func Run() string {
+            let obj = C()
+            let asIface IOverloadedIndexer[string] = obj
+            let initial = asIface[1] + "|" + asIface["k"] + "|" + obj[2, "x"]
+            asIface[1] = "new-int"
+            asIface["k"] = "new-str"
+            let updated = asIface[1] + "|" + asIface["k"]
+            let gen IGenericOverloaded[string] = GenericImpl[string]()
+            let genRead = gen["alpha"] + "|" + gen[7]
+            let multi IMultiPair = PairImpl()
+            let multiRead = multi[10] + "|" + multi[10, "hi"]
+            let inOnly IInIndexer = InImpl()
+            var inArg = 42
+            let inRead = inOnly[42] + "|" + inOnly[in inArg]
+            return initial + ";" + updated + ";" + genRead + ";" + multiRead + ";" + inRead
+        }
+    }
+}`
+
+            let gsConsumerPath = Path.Combine(tempDir, "GsConsumer.dll")
+            CompileWithReference(gsConsumerSource, libPath, gsConsumerPath, isExe: false)
+            IlVerifier.Verify(gsConsumerPath, additionalReferences: []string{libPath})
+
+            let csConsumerSource = `using GapCheck;
+public static class CsProbe {
+    public static string Run() {
+        var obj = new C();
+        IOverloadedIndexer<string> iface = obj;
+        var initial = iface[1] + "|" + iface["k"];
+        iface[1] = "cs-int";
+        iface["k"] = "cs-str";
+        IOverloadedIndexer<string> iface2 = new C();
+        var updated = iface[1] + "|" + iface["k"] + "|" + iface2[1];
+        IGenericOverloaded<string> gen = new GenericImpl<string>();
+        return initial + ";" + updated + ";" + gen["z"] + "|" + gen[3];
+    }
+}`
+            let csConsumerPath = Path.Combine(tempDir, "CsConsumer.dll")
+            CompileCSharpConsumer(csConsumerSource, libPath, csConsumerPath)
+            IlVerifier.Verify(csConsumerPath, additionalReferences: []string{libPath})
+
+            let loaded = EmittedFixture.LoadTogether(libPath, gsConsumerPath, csConsumerPath)
+            let libAsm = loaded[0]
+            let gsAsm = loaded[1]
+            let csAsm = loaded[2]
+
+            let cType = libAsm.GetType("GapCheck.C", throwOnError: true)!!
+            let ifaceType = libAsm.GetType("GapCheck.IOverloadedIndexer`1", throwOnError: true)!!.MakeGenericType(
+                []Type{typeof(string)}
+            )
+            let explicitProps = cType
+                .GetProperties(BindingFlags.NonPublic | BindingFlags.Instance)
+                .Where((p PropertyInfo) -> p.Name == "GapCheck.IOverloadedIndexer[string].Item")
+                .ToArray()
+            Assert.Equal(2, explicitProps.Length)
+            let ifaceMap = cType.GetInterfaceMap(ifaceType)
+            Assert.Equal(4, ifaceMap.InterfaceMethods.Length)
+            Assert.All(
+                ifaceMap.TargetMethods,
+                (m MethodInfo) -> Assert.StartsWith("GapCheck.IOverloadedIndexer[string].", m.Name)
+            )
+
+            let gsSummary = gsAsm.GetType("Consumer.GsProbe", throwOnError: true)!!.GetMethod("Run")!!.Invoke(
+                nil,
+                nil
+            ) as string
+            Assert.Equal("i:1|s:k|m:2:x;new-int|new-str;g:alpha|int:7;p:10|pm:10:hi;val:42|in:42", gsSummary)
+
+            let csResult = csAsm.GetType("CsProbe", throwOnError: true)!!.GetMethod("Run")!!.Invoke(nil, nil) as string
+            Assert.Equal("i:1|s:k;cs-int|cs-str|i:1;g:z|int:3", csResult)
+        } finally {
+            try {
+                Directory.Delete(tempDir, recursive: true)
+            } catch { }
+        }
+    }
+
+    @Fact
+    func Issue6125_ImportedCSharpOverloadedInterface_ExplicitGSharpImpl_IlVerifiesAndDispatches() {
+        let tempDir = Directory.CreateTempSubdirectory("gs_issue6125_cs_").FullName
+        try {
+            let csLibPath = Path.Combine(tempDir, "CsContracts.dll")
+            CompileCSharpLibrary(`namespace CsContracts;
+public interface ICsOverloaded<T> {
+    T this[int key] { get; set; }
+    T this[string key] { get; set; }
+}`, csLibPath)
+
+            let gsSource = `package GsImpl
+import CsContracts
+
+public class Host : ICsOverloaded[string] {
+    private var lastInt string = "init-i"
+    private var lastStr string = "init-s"
+
+    private prop (ICsOverloaded[string]) this[key int32] string {
+        get { return lastInt }
+        set { lastInt = value }
+    }
+
+    private prop (ICsOverloaded[string]) this[key string] string {
+        get { return lastStr }
+        set { lastStr = value }
+    }
+}
+
+public class GenericHost[U] : ICsOverloaded[U] {
+    private var lastInt U
+    private var lastStr U
+
+    init(a U, b U) {
+        lastInt = a
+        lastStr = b
+    }
+
+    private prop (ICsOverloaded[U]) this[key int32] U {
+        get { return lastInt }
+        set { lastInt = value }
+    }
+
+    private prop (ICsOverloaded[U]) this[key string] U {
+        get { return lastStr }
+        set { lastStr = value }
+    }
+}
+
+public class GsHostCaller {
+    shared {
+        public func Run() string {
+            let h ICsOverloaded[string] = Host()
+            let before = h[1] + "|" + h["a"]
+            h[1] = "set-i"
+            h["a"] = "set-s"
+            let g ICsOverloaded[string] = GenericHost[string]("g1", "g2")
+            g[0] = "g1b"
+            return before + "|" + h[1] + "|" + h["a"] + "|" + g[0] + "|" + g["k"]
+        }
+    }
+}`
+
+            let gsDllPath = Path.Combine(tempDir, "GsImpl.dll")
+            CompileWithReference(gsSource, csLibPath, gsDllPath, isExe: false)
+            IlVerifier.Verify(gsDllPath, additionalReferences: []string{csLibPath})
+
+            let csConsumerPath = Path.Combine(tempDir, "CsCaller.dll")
+            CompileCSharpConsumer(`using CsContracts;
+using GsImpl;
+public static class CsCaller {
+    public static string Call() {
+        ICsOverloaded<string> h = new Host();
+        h[1] = "c1";
+        h["x"] = "c2";
+        return h[1] + "|" + h["x"];
+    }
+}`, csLibPath, csConsumerPath, extraReferencePath: gsDllPath)
+
+            let loaded = EmittedFixture.LoadTogether(csLibPath, gsDllPath, csConsumerPath)
+            let gsRes = loaded[1].GetType("GsImpl.GsHostCaller", throwOnError: true)!!.GetMethod("Run")!!.Invoke(
+                nil,
+                nil
+            ) as string
+            Assert.Equal("init-i|init-s|set-i|set-s|g1b|g2", gsRes)
+
+            let csRes = loaded[2].GetType("CsCaller", throwOnError: true)!!.GetMethod("Call")!!.Invoke(
+                nil,
+                nil
+            ) as string
+            Assert.Equal("c1|c2", csRes)
+        } finally {
+            try {
+                Directory.Delete(tempDir, recursive: true)
+            } catch { }
+        }
+    }
+
+    shared {
+        private const OverloadedExplicitIndexerLibrarySource string = `package GapCheck
+
+public interface IOverloadedIndexer[T] {
+    prop this[key int32] T { get; set }
+    prop this[key string] T { get; set }
+}
+
+public class C : IOverloadedIndexer[string] {
+    private var intVal string = "i:1"
+    private var strVal string = "s:k"
+
+    private prop (IOverloadedIndexer[string]) this[key int32] string {
+        get { return if key == 1 { intVal } else { "i:" + key.ToString() } }
+        set { intVal = value }
+    }
+
+    private prop (IOverloadedIndexer[string]) this[key string] string {
+        get { return if key == "k" { strVal } else { "s:" + key } }
+        set { strVal = value }
+    }
+
+    public prop this[row int32, col string] string -> "m:" + row.ToString() + ":" + col
+}
+
+public interface IGenericOverloaded[T] {
+    prop this[key T] string { get; }
+    prop this[key int32] string { get; }
+}
+
+public class GenericImpl[U] : IGenericOverloaded[U] {
+    private prop (IGenericOverloaded[U]) this[key U] string -> "g:" + key!!.ToString()
+
+    private prop (IGenericOverloaded[U]) this[key int32] string -> "int:" + key.ToString()
+}
+
+public interface IMultiPair {
+    prop this[a int32] string { get; }
+    prop this[a int32, b string] string { get; }
+}
+
+public class PairImpl : IMultiPair {
+    private prop (IMultiPair) this[a int32] string -> "p:" + a.ToString()
+
+    private prop (IMultiPair) this[a int32, b string] string -> "pm:" + a.ToString() + ":" + b
+}
+
+public interface IInIndexer {
+    prop this[key int32] string { get; }
+    prop this[in key int32] string { get; }
+}
+
+public class InImpl : IInIndexer {
+    private prop (IInIndexer) this[key int32] string -> "val:" + key.ToString()
+
+    private prop (IInIndexer) this[in key int32] string -> "in:" + key.ToString()
+}`
+
+        private func CountPropertiesNamed(reader MetadataReader, type TypeDefinition, name string) int32 {
+            var count = 0
+            for ph in type.GetProperties() {
+                let pd = reader.GetPropertyDefinition(ph)
+                if reader.GetString(pd.Name) == name {
+                    count++
+                }
+            }
+            return count
+        }
+
+        private func GetMethodSignaturesNamed(reader MetadataReader, type TypeDefinition, name string)[][]uint8 {
+            let list = System.Collections.Generic.List[[]uint8]()
+            for mh in type.GetMethods() {
+                let md = reader.GetMethodDefinition(mh)
+                if reader.GetString(md.Name) == name {
+                    list.Add(reader.GetBlobBytes(md.Signature))
+                }
+            }
+            return list.ToArray()
+        }
+
+        private func CompileWithReference(source string, refPath string, outPath string, isExe bool) {
+            let srcPath = Path.ChangeExtension(outPath, ".gs")
+            File.WriteAllText(srcPath, source)
+            let targetArg = if isExe {
+                "/target:exe"
+            } else {
+                "/target:library"
+            }
+            using let stdoutWriter = StringWriter()
+            using let stderrWriter = StringWriter()
+            let prevOut = Console.Out
+            let prevErr = Console.Error
+            Console.SetOut(stdoutWriter)
+            Console.SetError(stderrWriter)
+            var exitCode int32
+            try {
+                exitCode = Program.Main(
+                    []string{"/out:" + outPath, targetArg, "/targetframework:net10.0", "/reference:" + refPath, srcPath}
+                )
+            } finally {
+                Console.SetOut(prevOut)
+                Console.SetError(prevErr)
+            }
+            Assert.True(exitCode == 0, (`gsc failed:
+stdout:
+` + "$stdoutWriter" + `
+stderr:
+` + "$stderrWriter"))
+        }
+
+        private func CompileCSharpLibrary(source string, outPath string) {
+            let references = (
+                (AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string)?.Split(Path.PathSeparator) ??
+                    Array.Empty[string]()
+            )
+                .Where(File.Exists)
+                .Select((path string) -> cast[MetadataReference](MetadataReference.CreateFromFile(path)))
+                .ToList()
+            let compilation = CSharpCompilation.Create(
+                Path.GetFileNameWithoutExtension(outPath),
+                []Microsoft
+                    .CodeAnalysis
+                    .SyntaxTree{CSharpSyntaxTree.ParseText(source, CSharpParseOptions(LanguageVersion.Latest))},
+                references,
+                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+            )
+            {
+                using let peStream = File.Create(outPath)
+                let emitResult = compilation.Emit(peStream)
+                Assert.True(emitResult.Success, string.Join(Environment.NewLine, emitResult.Diagnostics))
+            }
+            IlVerifier.Verify(outPath)
+        }
+
+        private func CompileCSharpConsumer(
+            source string,
+            refPath string,
+            outPath string,
+            extraReferencePath string? = nil
+        ) {
+            let references = (
+                (AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string)?.Split(Path.PathSeparator) ??
+                    Array.Empty[string]()
+            )
+                .Where(File.Exists)
+                .Select((path string) -> cast[MetadataReference](MetadataReference.CreateFromFile(path)))
+                .Append(MetadataReference.CreateFromFile(refPath))
+                .ToList()
+            if extraReferencePath != nil {
+                references.Add(MetadataReference.CreateFromFile(extraReferencePath))
+            }
+            let compilation = CSharpCompilation.Create(
+                Path.GetFileNameWithoutExtension(outPath),
+                []Microsoft
+                    .CodeAnalysis
+                    .SyntaxTree{CSharpSyntaxTree.ParseText(source, CSharpParseOptions(LanguageVersion.Latest))},
+                references,
+                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+            )
+            {
+                using let peStream = File.Create(outPath)
+                let emitResult = compilation.Emit(peStream)
+                Assert.True(emitResult.Success, string.Join(Environment.NewLine, emitResult.Diagnostics))
+            }
+        }
         private const EventReproSource string = `package GapCheck
 
 interface ICounter {

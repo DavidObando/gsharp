@@ -15,6 +15,7 @@ import GSharp.Core.CodeAnalysis.Syntax
 import SystemObject = System.Object
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Analyzers
+import GSharp.Core.CodeAnalysis.CodeFixes
 import GSharp.Core.CodeAnalysis.Text
 import System.Collections.Immutable
 import System.Security.Cryptography
@@ -42,6 +43,9 @@ open class ProjectState {
     private var cachedResolver ReferenceResolver?
     private var resolverReferences IReadOnlyList[string]?
     private var gsAnalyzerSourceMtimeUtc DateTime = DateTime.MinValue
+    // ADR-0227 D2: the built-in code-fix providers and the providers of the project's analyzer
+    // assemblies, loaded with the analyzers.
+    private var cachedCodeFixRegistry CodeFixRegistry?
     private var cachedGsAnalyzers ImmutableArray[GSharpDiagnosticAnalyzer] = ImmutableArray[
         GSharpDiagnosticAnalyzer
     ].Empty
@@ -338,6 +342,10 @@ open class ProjectState {
         lock compilationLock {
             let rspPath = referenceSourcePath
             if string.IsNullOrEmpty(rspPath) || !File.Exists(rspPath) {
+                // No analyzer configuration: forget the providers of the removed assemblies, and
+                // reload when the response file comes back.
+                cachedCodeFixRegistry = nil
+                gsAnalyzerSourceMtimeUtc = DateTime.MinValue
                 loadDiagnostics = ImmutableArray[GSharp.Core.CodeAnalysis.Diagnostic].Empty
                 return ImmutableArray[GSharpDiagnosticAnalyzer].Empty
             }
@@ -350,11 +358,34 @@ open class ProjectState {
             }
             if mtime != gsAnalyzerSourceMtimeUtc {
                 let paths = ProjectDiscovery.ParseGsAnalyzersFromResponseFile(rspPath)
-                cachedGsAnalyzers = GSharpAnalyzerHost.Load(paths, out gsAnalyzerLoadDiagnostics)
+                cachedGsAnalyzers = GSharpAnalyzerHost.Load(paths, out var analyzerDiagnostics)
+                // A rejected code-fix provider is reported with the load diagnostics; it does not
+                // stop the analyzers or the other providers.
+                cachedCodeFixRegistry = GSharpAnalyzerHost.LoadCodeFixRegistry(paths, out var fixDiagnostics)
+                gsAnalyzerLoadDiagnostics = analyzerDiagnostics.AddRange(
+                    fixDiagnostics.Where(
+                        (d GSharp.Core.CodeAnalysis.Diagnostic) -> !analyzerDiagnostics.Any(
+                            (a GSharp.Core.CodeAnalysis.Diagnostic) -> a.Message == d.Message
+                        )
+                    )
+                )
                 gsAnalyzerSourceMtimeUtc = mtime
             }
             loadDiagnostics = gsAnalyzerLoadDiagnostics
             return cachedGsAnalyzers
+        }
+    }
+
+    /// Gets the code-fix providers of the project: the built-in providers, then the providers of
+    /// its analyzer assemblies (ADR-0227 D2).
+    /// @returns The registry.
+    func GetCodeFixRegistry() CodeFixRegistry {
+        GetGsAnalyzers(out _)
+        lock compilationLock {
+            if cachedCodeFixRegistry == nil {
+                cachedCodeFixRegistry = CodeFixRegistry.CreateDefault()
+            }
+            return cachedCodeFixRegistry!!
         }
     }
 

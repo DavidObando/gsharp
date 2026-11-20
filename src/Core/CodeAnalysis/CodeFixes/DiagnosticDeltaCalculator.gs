@@ -79,7 +79,7 @@ internal shared class DiagnosticDeltaCalculator {
             options
         )
         let syntaxDelta = Match(syntaxBeforeChanged, syntaxAfterChanged, maps)
-        if options.StopOnNewSyntaxError && syntaxDelta.Added.Count > 0 {
+        if options.SyntaxOnly || (options.StopOnNewSyntaxError && syntaxDelta.Added.Count > 0) {
             return DiagnosticDelta(
                 syntaxDelta.Removed.ToImmutableArray(),
                 syntaxDelta.Added.ToImmutableArray(),
@@ -169,7 +169,9 @@ internal shared class DiagnosticDeltaCalculator {
     ] {
         let all = List[Diagnostic](compilation.GetDiagnostics(cancellationToken))
         if !options.Analyzers.IsEmpty {
-            all.AddRange(GSharpAnalyzerDriver.Run(compilation, options.Analyzers, nil, cancellationToken))
+            all.AddRange(
+                GSharpAnalyzerDriver.Run(compilation, options.Analyzers, options.AnalyzerOptions, cancellationToken)
+            )
         }
         return Filter(all, options)
     }

@@ -1706,7 +1706,13 @@ partial class CSharpToGSharpTranslator {
                     out var helperName
                 ) {
                     if member.Parent is ArgumentSyntax nameOfArgument && IsNameOfArgument(nameOfArgument) {
-                        return MemberAccessExpression(IdentifierExpression(helperOwner), helperName)
+                        return MemberAccessExpression(
+                            this.StaticQualifierReceiver(
+                                (memberExtMethod.ReducedFrom ?? memberExtMethod).ContainingType,
+                                member.GetLocation()
+                            ),
+                            helperName
+                        )
                     }
                     return this.TranslateStaticExtensionHelperMethodGroup(
                         member,

@@ -1319,7 +1319,7 @@ class Box {
 
         let edit = RenameComputer.ComputeRename(uri, content, boxValuePos, "Count")
         Assert.NotNull(edit)
-        let changes = edit!!.Changes[uri].ToList()
+        let changes = edit!!.Changes!![uri].ToList()
         Assert.Equal(2, changes.Count)
 
         let otherInitPos = LanguageServerTestHelpers.PositionOf(source, "Value", 2)

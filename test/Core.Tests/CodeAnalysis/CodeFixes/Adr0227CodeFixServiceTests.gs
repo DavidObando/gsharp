@@ -163,10 +163,33 @@ open class Adr0227CodeFixServiceTests {
         Assert.Equal(
             []string{
                 "GSharp.Core.Tests.CodeAnalysis.CodeFixes.Adr0227LoadableProviderA",
-                "GSharp.Core.Tests.CodeAnalysis.CodeFixes.Adr0227LoadableProviderB"
+                "GSharp.Core.Tests.CodeAnalysis.CodeFixes.Adr0227LoadableProviderB",
+                "GSharp.Core.Tests.CodeAnalysis.CodeFixes.Adr0227LoadableProviderRejected"
             },
             names
         )
+    }
+
+    @Fact
+    func AnalyzerHost_ProviderOnlyAssembly_IsNotAZeroDiscoveryFailure() {
+        Assert.True(
+            GSharpAnalyzerHost.ContainsCodeFixProviders(typeof(Adr0227CodeFixServiceTests).Assembly.GetExportedTypes())
+        )
+        Assert.False(GSharpAnalyzerHost.ContainsCodeFixProviders(typeof(CodeFixService).Assembly.GetExportedTypes()))
+    }
+
+    @Fact
+    func AnalyzerHost_Registry_LeavesOutARejectedProvider_AndKeepsTheOthers() {
+        let path = typeof(Adr0227CodeFixServiceTests).Assembly.Location
+        let registry = GSharpAnalyzerHost.LoadCodeFixRegistry([]string{path}, out var diagnostics)
+        let failure = Assert.Single(diagnostics)
+        Assert.Equal("GS9301", failure.Id)
+        Assert.Contains("Adr0227LoadableProviderRejected", failure.Message, StringComparison.Ordinal)
+        let names = registry.Providers.Select((p GSharpCodeFixProvider) -> p.GetType().Name).ToList()
+        Assert.Contains("Adr0227LoadableProviderA", names)
+        Assert.Contains("Adr0227LoadableProviderB", names)
+        Assert.DoesNotContain("Adr0227LoadableProviderRejected", names)
+        Assert.Equal(CodeFixRegistry.CreateDefault().Providers.Length + 2, registry.Providers.Length)
     }
 
     private func Registry(providers ...GSharpCodeFixProvider) CodeFixRegistry {
@@ -232,6 +255,14 @@ class Adr0227LoadableProviderA : GSharpCodeFixProvider {
 /// A provider without the attribute, which discovery skips.
 class Adr0227UnmarkedProvider : GSharpCodeFixProvider {
     override prop FixableDiagnosticIds ImmutableArray[string] -> ImmutableArray.Create("TEST0227")
+
+    override func RegisterCodeFixes(context CodeFixContext) { }
+}
+
+/// An attributed provider with no fixable ID, which the registry rejects (ADR-0227 D2).
+@GSharpCodeFixProvider
+class Adr0227LoadableProviderRejected : GSharpCodeFixProvider {
+    override prop FixableDiagnosticIds ImmutableArray[string] -> ImmutableArray[string].Empty
 
     override func RegisterCodeFixes(context CodeFixContext) { }
 }

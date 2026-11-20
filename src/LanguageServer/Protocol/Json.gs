@@ -238,7 +238,13 @@ class DiagnosticCodeConverter : JsonConverter[DiagnosticCode] {
         ref reader Utf8JsonReader,
         typeToConvert Type,
         options JsonSerializerOptions
-    ) DiagnosticCode -> DiagnosticCode(reader.GetString()!!)
+    ) DiagnosticCode -> if reader.TokenType == JsonTokenType
+        .Number {
+        // LSP allows an integer code.
+        DiagnosticCode(reader.GetInt64().ToString(System.Globalization.CultureInfo.InvariantCulture))
+    } else {
+        DiagnosticCode(reader.GetString() ?? string.Empty)
+    }
 
     override func Write(
         writer Utf8JsonWriter,

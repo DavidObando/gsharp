@@ -15,7 +15,7 @@ The GSharp Language Server provides rich IDE features for `.gs` files via the [L
 | Signature help | `textDocument/signatureHelp` | Parameter info at function call sites (triggered on `(` and `,`) |
 | Completion | `textDocument/completion` | Scope-aware identifier completion (keywords, globals, locals, types) |
 | Rename | `textDocument/rename` | Rename a user-defined symbol across the document |
-| Code actions | `textDocument/codeAction` | Refactoring actions (e.g., sort imports) |
+| Code actions | `textDocument/codeAction`, `codeAction/resolve` | Refactoring actions (e.g., sort imports) and the code fixes of `GSharp.Core` and of the project's analyzer assemblies (ADR-0227) |
 | Folding | `textDocument/foldingRange` | Code folding for function bodies |
 
 ## Attaching VS Code

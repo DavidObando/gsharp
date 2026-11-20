@@ -14,6 +14,10 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ## Unreleased (0.5 line)
 
+- **FixAll for code fixes** (Part of #6119; ADR-0227 D3). `CodeFixService.FixAll` applies every fix with an equivalence key (or the first fix of each diagnostic) at `FixAllScope.Document`, `Project` or `Solution` scope, like Roslyn's batch fixer: each round computes the fixes against one snapshot and keeps the fixes whose changes do not overlap or touch. `FixAllOptions` sets the minimum applicability (machine-applicable by default), the number of rounds and an optional delta gate. `FixAllResult` lists applied and dropped fixes with the reason, the changed documents and the new compilations. The language server offers `source.fixAll.gsharp` when the client asks for it.
+
+- **Language-server code actions use the code-fix service** (Part of #6119; ADR-0227 D7). `textDocument/codeAction` returns the Core and analyzer-assembly fixes for the diagnostics in range (syntax, declaration, body and, when a provider fixes them, analyzer diagnostics), with `diagnostics`, `isPreferred` and `context.only` filtering. Each fix passes the syntax stage of the delta gate. The server now declares `resolveProvider` and handles `codeAction/resolve`, records the client's document version, and emits versioned `documentChanges` when the client supports them. The ADR-0099 nullability fixes moved to Core with the same titles and edits.
+
 - **Built-in code fixes for common C#-isms** (Part of #6119; ADR-0227 D8). `CodeFixRegistry.CreateDefault()` now has providers for `null` → `nil` (GS0273), `new T(...)` → `T(...)` for a reference type (GS0125), `let` → `var` on a reassigned variable (GS0127), `or`/`and` → `||`/`&&` and `not` → `!` (GS0125, GS0130), and the ADR-0099 nullability fixes (GS0158, GS0154/0155/0156). Compiler diagnostics now keep their `Descriptor` and a new `Diagnostic.MessageArguments`, so fixes no longer parse message text; `GetDiagnostics()` results do not change.
 
 - **Diagnostic-delta gate for code fixes** (Part of #6119; ADR-0227 D4). `CodeFixService.ComputeDelta` parses each changed document, stops when the parse adds a syntax diagnostic, and otherwise binds a snapshot compilation (`Compilation.WithReplacedSyntaxTrees`) under the request's own work budget. It compares the diagnostics of the whole compilation before and after the complete edit set by document, ID, severity, message and mapped span, after the host's severity filter. `DeltaPolicy` names the gate rules: `NoNewDiagnostics` (the default), `RemovesTargetNoNewErrors`, `NetImprovement` and `PhaseAware` (for fixes of parse errors only). The host's compilation does not change.
@@ -29,6 +33,10 @@ The published **0.5** documentation snapshot and all current installation/downlo
 ### Bug Fixes
 
 - Convert capturing forward-recursive local functions to function values and compatible delegates. Preserve callback identity and shared capture cells across direct calls, escaped callbacks, and loop iterations. (Fixes #6105)
+
+- Allow overloaded explicit interface indexers with distinct parameter signatures on the same interface while still reporting `GS0495` for duplicate signatures, and align metadata-only explicit property accessor names with emitted runtime accessors. (Fixes #6125)
+
+- Preserve `ref` and `in` contracts across primitive/value-type extension receivers, non-identifier `in` operands (`in this`, `in x.Value`, `in xs[0]`), and source `ref readonly` parameter declarations and calls in `cs2gs` without copying storage operands. (Fixes #6063, #6052, #6047)
 
 - Replace recursive closure-chain traversal and full callable-state copies in `StatementBinder.AssignedRootsCollector` with an explicit heap work stack and immutable persistent state. Deep closure-call chains no longer overflow the compiler host stack or allocate quadratically, while preserving callable provenance, argument-dependent effects, cycles, and captured-write invalidation. (Fixes #6111)
 

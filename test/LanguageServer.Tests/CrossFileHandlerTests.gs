@@ -51,7 +51,7 @@ let b = helper()
         let edit WorkspaceEdit? = RenameComputer.ComputeRename(libUri, content, Position(0, 5), "newName")
         Assert.NotNull(edit)
         // Should produce edits spanning multiple files
-        Assert.True(edit!!.Changes.Count >= 2, "Expected edits in at least 2 files, got ${edit!!.Changes.Count}")
+        Assert.True(edit!!.Changes!!.Count >= 2, "Expected edits in at least 2 files, got ${edit!!.Changes!!.Count}")
     }
 
     @Fact

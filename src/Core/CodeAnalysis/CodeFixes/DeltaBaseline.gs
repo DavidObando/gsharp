@@ -63,7 +63,12 @@ class DeltaBaseline {
             return DeltaBaseline(
                 compilation,
                 effective,
-                DiagnosticDeltaCalculator.Collect(compilation, effective, cancellationToken)
+                if effective.SyntaxOnly {
+                    // A syntax-only check reads the parse diagnostics of the trees, not these.
+                    ImmutableArray[Diagnostic].Empty
+                } else {
+                    DiagnosticDeltaCalculator.Collect(compilation, effective, cancellationToken)
+                }
             )
         }
     }

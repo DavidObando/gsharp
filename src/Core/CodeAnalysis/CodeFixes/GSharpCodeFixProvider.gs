@@ -23,4 +23,8 @@ abstract class GSharpCodeFixProvider {
     /// and must not change the compilation.
     /// @param context The diagnostic, the tree, the compilation and the registration surface.
     open func RegisterCodeFixes(context CodeFixContext);
+    /// Gets a value that tells whether FixAll can apply the fixes of this provider (ADR-0227 D3).
+    /// The default is `true`: the batch fixer computes each fix against the original snapshot and
+    /// keeps the fixes that do not overlap. A provider whose fixes depend on each other returns `false`.
+    open prop SupportsFixAll bool -> true
 }

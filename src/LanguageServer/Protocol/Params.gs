@@ -60,6 +60,21 @@ class CodeActionParams {
 
     @JsonPropertyName("range")
     prop Range Range
+
+    @JsonPropertyName("context")
+    prop Context CodeActionContext?
+}
+
+/// The `context` of a `textDocument/codeAction` request (ADR-0227 D7).
+class CodeActionContext {
+    @JsonPropertyName("diagnostics")
+    prop Diagnostics IReadOnlyList[Diagnostic]?
+
+    @JsonPropertyName("only")
+    prop Only IReadOnlyList[CodeActionKind]?
+
+    @JsonPropertyName("triggerKind")
+    prop TriggerKind int32?
 }
 
 class FormattingOptions {

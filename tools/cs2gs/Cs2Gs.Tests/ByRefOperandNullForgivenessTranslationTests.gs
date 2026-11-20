@@ -101,7 +101,7 @@ namespace Demo
         Assert.Contains("Produce(out local)", printed, StringComparison.Ordinal)
         Assert.Contains("Produce(&holder.Text)", printed, StringComparison.Ordinal)
         Assert.Contains("Measure(in local)", printed, StringComparison.Ordinal)
-        Assert.Contains("Measure(&holder.Text)", printed, StringComparison.Ordinal)
+        Assert.Contains("Measure(in holder.Text)", printed, StringComparison.Ordinal)
     }
 
     @Fact

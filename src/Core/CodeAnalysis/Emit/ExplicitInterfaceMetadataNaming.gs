@@ -20,12 +20,12 @@ import System.Collections.Immutable
 /// reflection APIs that look a member up by name (and needlessly fragile).
 /// This helper synthesizes a qualified, C#-explicit-impl-style metadata name
 /// (`Interface.Member`, or `Package.Interface.Member` when the
-/// interface has a package/namespace) that is unique per (interface, member)
-/// slot — the same uniqueness key (cref:DiagnosticBag.ReportDuplicateExplicitInterfaceImplementation)
-/// (GS0495) already enforces at the source level, so within a single valid
-/// compilation this synthesized name can never collide with another such
-/// synthesized name, nor (since it always contains at least one `.`,
-/// which no plain G# identifier can contain) with any ordinary member's name.
+/// interface has a package/namespace). Non-overloaded slots are unique by
+/// `(interface, member)` (enforced by GS0495); overloaded explicit interface
+/// members such as overloaded indexers share this metadata name and are
+/// disambiguated by their CLR parameter signatures, matching C#. Since the
+/// synthesized name contains at least one `.`, it never collides with any
+/// ordinary member name.
 internal shared class ExplicitInterfaceMetadataNaming {
     /// Returns the collision-free CLR metadata name for a member explicitly
     /// implementing [`target`](paramref)'s [`memberName`](paramref)

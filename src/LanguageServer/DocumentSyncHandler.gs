@@ -259,7 +259,7 @@ shared class DocumentSyncHandler {
         }
     }
 
-    private func ToLspSeverity(severity GSharp.Core.CodeAnalysis.DiagnosticSeverity) GSharp
+    internal func ToLspSeverity(severity GSharp.Core.CodeAnalysis.DiagnosticSeverity) GSharp
         .LanguageServer
         .Protocol
         .DiagnosticSeverity {

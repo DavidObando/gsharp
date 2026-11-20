@@ -69,6 +69,9 @@ class LspServer {
     private var shutdownRequested bool
     private var clientSupportsPullDiagnostics bool
     private var clientSupportsDiagnosticRefresh bool
+
+    // ADR-0227 D7: what the client supports for code-action edits, from initialize.
+    private let codeActionClientOptions CodeActionClientOptions = CodeActionClientOptions()
     private var refreshTimer Timer?
     private var initializationOptions LanguageServerInitializationOptions = LanguageServerInitializationOptions()
     private var pendingWorkspaceRootPath string?
@@ -81,6 +84,11 @@ class LspServer {
         this.documentContentService = documentContentService
         this.workspaceState = workspaceState
         this.logger = logger ?? NullLogger.Instance
+        // ADR-0227 D7: an edit of another open document carries that document's client version.
+        this.codeActionClientOptions.DocumentOf = (uri DocumentUri) -> LspServer.FindOpenDocument(
+            documentContentService,
+            uri
+        )
     }
 
     /// Gets a task that completes when the client sends the `exit` notification.
@@ -247,7 +255,7 @@ class LspServer {
                 this.CancelPendingPushDiagnosticsBind(uri)
                 // Issue #1664: UpdateDocument already parses text and computes skipBinding:true
                 // diagnostics; reuse that result instead of re-parsing the same text a second time.
-                let result = this.UpdateDocument(uri, text)
+                let result = this.UpdateDocument(uri, text, request.TextDocument?.Version)
                 this.PublishDiagnosticsIfPushMode(uri, result)
                 this.SchedulePushDiagnosticsBind(uri, result)
                 this.RefreshRelatedDiagnostics(uri)
@@ -267,7 +275,7 @@ class LspServer {
         return this.GuardAsync(
             () -> {
                 this.CancelPendingPushDiagnosticsBind(uri)
-                let result = this.UpdateDocument(uri, text)
+                let result = this.UpdateDocument(uri, text, request.TextDocument?.Version)
                 if this.initializationOptions.DiagnosticsOnType {
                     this.PublishDiagnosticsIfPushMode(uri, result)
                     this.SchedulePushDiagnosticsBind(uri, result)
@@ -291,7 +299,7 @@ class LspServer {
         return this.GuardAsync(
             () -> {
                 this.CancelPendingPushDiagnosticsBind(uri)
-                let result = this.UpdateDocument(uri, text)
+                let result = this.UpdateDocument(uri, text, this.CurrentVersion(uri))
                 // Pull clients already receive live binding diagnostics via textDocument/diagnostic;
                 // only push clients need the full (binding + DocumentationValidator) pipeline here.
                 // Issue #1664: that full bind used to run inline, under this gate — freezing every
@@ -617,12 +625,38 @@ class LspServer {
             request.TextDocument.Uri,
             content,
             request.Range,
+            request.Context,
+            this.codeActionClientOptions,
             ct
         ),
         CommandOrCodeActionContainer(),
         cancellationToken,
         caller: "CodeActionAsync"
     )
+
+    // ADR-0227 D7: computes the edit of an action that the list request returned without one.
+    @JsonRpcMethod("codeAction/resolve", UseSingleObjectParameterDeserialization = true)
+    func CodeActionResolveAsync(
+        request CodeAction,
+        cancellationToken CancellationToken = default(CancellationToken)
+    ) Task[CodeAction] {
+        let uri DocumentUri? = DocumentUri.From(request.Data?.Uri)
+        if uri == nil {
+            return Task.FromResult(request)
+        }
+        return this.ReadDocumentAsync(
+            TextDocumentIdentifier{Uri: uri},
+            (content DocumentContent, ct CancellationToken) -> CodeActionComputer.ResolveCodeAction(
+                request,
+                content,
+                this.codeActionClientOptions,
+                ct
+            ),
+            request,
+            cancellationToken,
+            caller: "CodeActionResolveAsync"
+        )
+    }
 
     @JsonRpcMethod("textDocument/codeLens", UseSingleObjectParameterDeserialization = true)
     func CodeLensAsync(request CodeLensParams, cancellationToken CancellationToken = default(CancellationToken)) Task[
@@ -1127,7 +1161,16 @@ class LspServer {
         }
     }
 
-    private func UpdateDocument(uri DocumentUri, text string) DiagnosticComputationResult {
+    // The client's version of the stored text, or null (ADR-0227 D7). didSave carries no version, so
+    // it keeps the version of the text that the server already has.
+    private func CurrentVersion(uri DocumentUri) int32? {
+        if this.documentContentService.TryGet(uri.ToString(), out var content) {
+            return content.Version
+        }
+        return nil
+    }
+
+    private func UpdateDocument(uri DocumentUri, text string, version int32?) DiagnosticComputationResult {
         let filePath = uri.GetFileSystemPath()
         // Issue #1786 follow-up (B1): record the buffer before touching the project so a
         // concurrent background load that hasn't registered this file's project yet will see
@@ -1154,9 +1197,12 @@ class LspServer {
             filePath,
             this.workspaceState
         )
-        this.documentContentService.AddOrUpdate(uri.ToString(), result.Content)
-        this.TestOnParseResult?(uri, result)
-        return result
+        // ADR-0227 D7: the version is stored with the text in one step, so a code action can name
+        // the version that its edit was computed against.
+        let versioned = DiagnosticComputationResult(result.Content.WithVersion(version), result.Diagnostics)
+        this.documentContentService.AddOrUpdate(uri.ToString(), versioned.Content)
+        this.TestOnParseResult?(uri, versioned)
+        return versioned
     }
 
     /// Publishes the already-computed parse diagnostics immediately for push-mode clients.
@@ -1287,6 +1333,30 @@ class LspServer {
                     diagnostic.ValueKind == JsonValueKind.Object {
                     this.clientSupportsPullDiagnostics = true
                 }
+                // ADR-0227 D7: versioned edits and lazy code-action edits.
+                if capabilities.TryGetProperty("workspace", out var workspaceEdit) &&
+                    workspaceEdit.ValueKind == JsonValueKind.Object &&
+                    workspaceEdit.TryGetProperty("workspaceEdit", out var editCapabilities) &&
+                    editCapabilities.ValueKind == JsonValueKind.Object &&
+                    editCapabilities.TryGetProperty("documentChanges", out var documentChanges) &&
+                    documentChanges.ValueKind == JsonValueKind.True {
+                    this.codeActionClientOptions.SupportsDocumentChanges = true
+                }
+                if capabilities.TryGetProperty("textDocument", out var textDocumentActions) &&
+                    textDocumentActions.ValueKind == JsonValueKind.Object &&
+                    textDocumentActions.TryGetProperty("codeAction", out var codeAction) &&
+                    codeAction.ValueKind == JsonValueKind.Object &&
+                    codeAction.TryGetProperty("resolveSupport", out var resolveSupport) &&
+                    resolveSupport.ValueKind == JsonValueKind.Object &&
+                    resolveSupport.TryGetProperty("properties", out var properties) &&
+                    properties.ValueKind == JsonValueKind
+                    .Array {
+                    for property in properties.EnumerateArray() {
+                        if property.ValueKind == JsonValueKind.String && property.GetString() == "edit" {
+                            this.codeActionClientOptions.SupportsResolveEdit = true
+                        }
+                    }
+                }
                 if capabilities.TryGetProperty("workspace", out var workspace) &&
                     workspace.ValueKind == JsonValueKind.Object &&
                     workspace.TryGetProperty("diagnostics", out var wsDiagnostics) &&
@@ -1341,7 +1411,13 @@ class LspServer {
             } else {
                 document.Value.SyntaxTree
             }
-            let content = DocumentContent(syntaxTree, document.Value.Lines, project, this.workspaceState)
+            let content = DocumentContent(
+                syntaxTree,
+                document.Value.Lines,
+                project,
+                this.workspaceState,
+                document.Value.Version
+            )
             this.documentContentService.AddOrUpdate(document.Key, content)
             if !this.clientSupportsPullDiagnostics {
                 this.SchedulePushDiagnosticsBind(uri, DiagnosticComputationResult(content, Array.Empty[Diagnostic]()))
@@ -1759,6 +1835,26 @@ class LspServer {
     }
 
     shared {
+        // The stored content of an open document. The key is the client's URI text; an equivalent URI
+        // (another encoding of the same path) is matched by its file path, so an open buffer is never
+        // taken for a closed one (ADR-0227 D7).
+        internal func FindOpenDocument(service DocumentContentService, uri DocumentUri) DocumentContent? {
+            if service.TryGet(uri.ToString(), out var content) {
+                return content
+            }
+            let path = uri.GetFileSystemPath()
+            if string.IsNullOrEmpty(path) {
+                return nil
+            }
+            for pair in service.AllDocuments {
+                let other DocumentUri? = DocumentUri.From(pair.Key)
+                if other != nil && ServerPathIdentity.AreSame(other.GetFileSystemPath(), path) {
+                    return pair.Value
+                }
+            }
+            return nil
+        }
+
         // Builds the Test Explorer tree: a top-level grouping node per project, labelled
         // "<project-name> (<tfm>)" (matching the C# Dev Kit presentation), whose children are
         // the class/function items discovered in that project's sources. Loose files that
