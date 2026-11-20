@@ -60,7 +60,9 @@ internal class LetToVarCodeFixProvider : GSharpCodeFixProvider {
                 case local is VariableDeclarationSyntax when symbol is LocalVariableSymbol {
                     keyword = local.Keyword
                 }
-                case field is FieldDeclarationSyntax when symbol is FieldSymbol {
+                case field is FieldDeclarationSyntax when symbol is FieldSymbol &&
+                    !(field.FirstAncestorOrSelf[StructDeclarationSyntax]()?.IsInline ?? false) {
+                    // The fields of an inline struct stay read-only even when spelled `var`.
                     keyword = field.VarOrLetKeyword
                     applicability = Applicability.MaybeIncorrect
                 }
@@ -97,9 +99,9 @@ internal class LetToVarCodeFixProvider : GSharpCodeFixProvider {
                 return first
             }
             let name = if child is SyntaxToken token && token.Kind == SyntaxKind.IdentifierToken {
-                token.Text
+                token.ValueText
             } else if child is NameExpressionSyntax nameExpression {
-                nameExpression.IdentifierToken.Text
+                nameExpression.IdentifierToken.ValueText
             } else {
                 default(string?)
             }

@@ -323,7 +323,7 @@ open class Adr0227BuiltInFixTests {
             "GS0156",
             "Convert to 'int32'",
             Applicability.MaybeIncorrect,
-            "package P\n\nfunc F(n int64) int32 {\n    let m int32 = int32(n) // keep\n    return m\n}\n"
+            "package P\n\nfunc F(n int64) int32 {\n    let m int32 = checked(int32(n)) // keep\n    return m\n}\n"
         )
     }
 
@@ -337,6 +337,89 @@ open class Adr0227BuiltInFixTests {
             "Change 'let' to 'var'",
             Applicability.MaybeIncorrect,
             "package P\n\nclass C {\n    var N int32 = 1\n\n    func Set() {\n        N = 2\n    }\n}\n"
+        )
+    }
+
+    @Fact
+    func NumericConversion_OfAnOutOfRangeValue_Throws() {
+        // `var` keeps the value out of constant folding, so the check happens at run time.
+        const source = "var n int64 = 4294967296\nlet m int32 = n\nm\n"
+        let tree = SyntaxTree.Parse(source)
+        let compilation = Compilation(tree)
+        let target = compilation.GetDiagnostics().First((d Diagnostic) -> d.Id == "GS0156")
+        let service = CodeFixService(CodeFixRegistry.CreateDefault())
+        let fixedText = Assert
+            .Single(service.Apply(Assert.Single(service.GetFixes(compilation, target))))
+            .Text
+            .ToString()
+        let result = GSharp.Tests.EmittedOracle.Evaluate(fixedText)
+        // The oracle reports the run-time exception also as a synthesized diagnostic.
+        Assert.IsType[OverflowException](result.UnhandledException)
+        // The unchecked spelling silently gives 0.
+        let unchecked = GSharp.Tests.EmittedOracle.Evaluate(fixedText.Replace("checked(int32(n))", "int32(n)"))
+        Assert.Null(unchecked.UnhandledException)
+        Assert.Equal("0", unchecked.ValueText)
+    }
+
+    @Fact
+    func NumericConversion_IsDeclinedWhereItWouldChangeTheValueOrNotCompile() {
+        for source in[]string{
+            // A compound assignment converts the operation's result, not the right operand.
+            "package P\n\nfunc F(y int64) int32 {\n    var x int32 = 100\n    x /= y\n    return x\n}\n",
+            // The span covers a tuple while the arguments name one element's conversion.
+            "package P\n\nfunc F(n int32) {\n    let values = [](int32, uint8){(1, n)}\n}\n",
+            // An assignment operand is not a simple operand.
+            "package P\n\nfunc F(y int64) int32 {\n    var x int64 = 0\n    return x = y\n}\n"
+        } {
+            let tree = SyntaxTree.Parse(source)
+            let compilation = Compilation(tree)
+            let service = CodeFixService(CodeFixRegistry.CreateDefault())
+            for target in compilation.GetDiagnostics().Where((d Diagnostic) -> d.Id == "GS0156") {
+                Assert.Empty(
+                    service.GetFixes(compilation, target).Where(
+                        (f CodeFix) -> f.ProviderId == "GSharp.CodeFixes.NumericConversion"
+                    )
+                )
+            }
+        }
+    }
+
+    @Fact
+    func NumericConversion_CoversNativeIntegersAndChar() {
+        VerifyFix(
+            "package P\n\nfunc F(n nint) int32 {\n    let m int32 = n\n    return m\n}\n",
+            "GS0156",
+            "Convert to 'int32'",
+            Applicability.MaybeIncorrect,
+            "package P\n\nfunc F(n nint) int32 {\n    let m int32 = checked(int32(n))\n    return m\n}\n"
+        )
+    }
+
+    @Fact
+    func LetField_OfAnInlineStruct_HasNoFix() {
+        const source = "package P\n\ninline struct S {\n    let N int32 = 1\n\n    func Set() {\n        N = 2\n    }\n}\n"
+        let tree = SyntaxTree.Parse(source)
+        let compilation = Compilation(tree)
+        let service = CodeFixService(CodeFixRegistry.CreateDefault())
+        for target in compilation.GetDiagnostics().Where((d Diagnostic) -> d.Id == "GS0127") {
+            Assert.Empty(
+                service.GetFixes(compilation, target).Where((f CodeFix) -> f.ProviderId == "GSharp.CodeFixes.LetToVar")
+            )
+        }
+    }
+
+    @Fact
+    func LetField_WithAnEscapedName_BecomesVar() {
+        // `$yield` is written with a placeholder: `$` starts an interpolation in a G# string.
+        let dollar = "$"
+        VerifyFix(
+            "package P\n\nclass C {\n    let DOLLARyield int32 = 1\n\n    func Set() {\n        DOLLARyield = 2\n    }\n}\n"
+                .Replace("DOLLAR", dollar),
+            "GS0127",
+            "Change 'let' to 'var'",
+            Applicability.MaybeIncorrect,
+            "package P\n\nclass C {\n    var DOLLARyield int32 = 1\n\n    func Set() {\n        DOLLARyield = 2\n    }\n}\n"
+                .Replace("DOLLAR", dollar)
         )
     }
 
