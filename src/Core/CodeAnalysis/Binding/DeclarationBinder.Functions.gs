@@ -308,6 +308,10 @@ internal partial class DeclarationBinder {
                 Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, methodName)
                 return
             }
+            // Issue #6116: receiver-clause operators require a body; report GS0325 before the early-return branches.
+            if syntax.HasSemicolonBody {
+                Diagnostics.ReportSemicolonBodyRequiresDllImport(syntax.Identifier.Location, methodName)
+            }
             // Issue #2377: a receiver-clause binary/unary operator
             // (`func (a T) operator +(b T) T { … }`) is syntax sugar over
             // a CLR operator — it must be emitted as the canonical static,
@@ -940,6 +944,10 @@ internal partial class DeclarationBinder {
             "op_Explicit"
         } else {
             "op_Implicit"
+        }
+        // Issue #6116: conversion operators require a body; report GS0325 before the early-return checks.
+        if syntax.HasSemicolonBody {
+            Diagnostics.ReportSemicolonBodyRequiresDllImport(syntax.Identifier.Location, opName)
         }
         // A conversion operator has exactly one parameter — the source operand.
         if parameters.Length != 1 {
