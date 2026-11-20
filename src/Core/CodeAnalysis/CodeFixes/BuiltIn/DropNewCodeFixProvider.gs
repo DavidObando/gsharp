@@ -54,9 +54,9 @@ internal class DropNewCodeFixProvider : GSharpCodeFixProvider {
             return
         }
         // A call of a function value (`new make()` with a parameter `make () -> C`) has no symbol
-        // either. The callee's name must not name a variable or a function in scope.
-        let named = model.LookupSymbols(call.Span.Start, next.Text, context.CancellationToken)
-        if named.Any((s Symbol) -> !(s is TypeSymbol)) {
+        // either. The callee's name must name only types or type aliases in scope.
+        let named = model.LookupSymbols(call.Span.Start, next.ValueText, context.CancellationToken)
+        if named.Any((s Symbol) -> !(s is TypeSymbol || s is TypeAliasSymbol)) {
             return
         }
         context.RegisterFix(

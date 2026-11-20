@@ -245,6 +245,22 @@ open class Adr0227TransformationProgramTests {
         Assert.Empty(ProgramService(program).GetFixes(compilation, target))
     }
 
+    @Fact
+    func ConstructsReferenceType_AcceptsATypeAlias_AndRejectsAnUnboundType() {
+        let wrong = System.Collections.Generic.List[string]()
+        for (body, expected) in[](string, bool){
+            ("type D = C\n\nfunc F() C {\n    return new D()\n}\n", true),
+            ("func F() C {\n    return new Nope()\n}\n", false)
+        } {
+            let compilation = Compilation(SyntaxTree.Parse("package P\n\nclass C { }\n\n" + body))
+            let target = compilation.GetDiagnostics().First((d Diagnostic) -> d.Id == "GS0125")
+            if expected == ProgramService(DropNew).GetFixes(compilation, target).IsEmpty {
+                wrong.Add(body)
+            }
+        }
+        Assert.Empty(wrong)
+    }
+
     private func ProgramService(programs ...string) CodeFixService {
         let registry = CodeFixRegistry()
         registry.Add(

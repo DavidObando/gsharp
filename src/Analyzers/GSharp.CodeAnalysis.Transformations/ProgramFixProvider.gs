@@ -232,9 +232,11 @@ class ProgramFixProvider : GSharpCodeFixProvider {
                     return false
                 }
                 // A call of a function value (`make()` with a parameter `make () -> C`) has no
-                // symbol either. The callee's name must not name a variable or a function in scope.
+                // symbol either. The callee's name must name only types or type aliases in scope.
                 let callee = call.Identifier
-                return !model.LookupSymbols(call.Span.Start, callee.ValueText, ct).Any((s Symbol) -> !(s is TypeSymbol))
+                return !model.LookupSymbols(call.Span.Start, callee.ValueText, ct).Any(
+                    (s Symbol) -> !(s is TypeSymbol || s is TypeAliasSymbol)
+                )
             }
             case "typeIs" {
                 return TypeOf(model, node, ct)?.ToString() == rule.Value
