@@ -56,7 +56,9 @@
           "op": { "enum": ["replace", "delete", "insertBefore", "insertAfter"] },
           "capture": { "type": "string" },
           "template": { "type": "string", "description": "Text with ${capture} slots; $$ is a literal $." }
-        }
+        },
+        "if": { "properties": { "op": { "enum": ["replace", "insertBefore", "insertAfter"] } } },
+        "then": { "required": ["template"] }
       }
     },
     "applicability": { "enum": ["MachineApplicable", "MaybeIncorrect", "HasPlaceholders", "Unspecified"] },

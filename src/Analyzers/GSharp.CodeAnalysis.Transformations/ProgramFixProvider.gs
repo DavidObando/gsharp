@@ -145,7 +145,9 @@ class ProgramFixProvider : GSharpCodeFixProvider {
             while current != nil && kind != nil && current.Kind.ToString() != kind {
                 current = current.Parent
             }
-            if current == nil || !Match(ancestorPattern, current, tree, captures) {
+            if current == nil ||
+                !Follows(ancestorPattern, tree, node, current) ||
+                !Match(ancestorPattern, current, tree, captures) {
                 return false
             }
         }
@@ -221,17 +223,25 @@ class ProgramFixProvider : GSharpCodeFixProvider {
                         .OfType[CallExpressionSyntax]()
                         .FirstOrDefault((c CallExpressionSyntax) -> object.ReferenceEquals(c.Identifier, node))
                 }
-                if call == nil || model.GetSymbolInfo(call, ct).Symbol != nil {
+                // An indirect call (`(f)()`) invokes a value, never a constructor.
+                if call == nil || call.Callee != nil || model.GetSymbolInfo(call, ct).Symbol != nil {
                     return false
                 }
                 let type = model.GetTypeInfo(call, ct).Type
-                return type != nil && !type.IsValueType
+                if type == nil || type.IsValueType {
+                    return false
+                }
+                // A call of a function value (`make()` with a parameter `make () -> C`) has no
+                // symbol either. The callee's name must not name a variable or a function in scope.
+                let callee = call.Identifier
+                return !model.LookupSymbols(call.Span.Start, callee.Text, ct).Any((s Symbol) -> !(s is TypeSymbol))
             }
             case "typeIs" {
                 return TypeOf(model, node, ct)?.ToString() == rule.Value
             }
             case "isNullable" {
-                return TypeOf(model, node, ct)?.ToString()?.EndsWith("?", StringComparison.Ordinal) ?? false
+                // The type itself is nullable, not an element or argument of it.
+                return TypeOf(model, node, ct) is NullableTypeSymbol
             }
             default {
                 return false

@@ -121,7 +121,7 @@ class CodeFix {
         if Rank(applicability) <= Rank(Applicability) {
             return this
         }
-        return CodeFix(
+        let lowered = CodeFix(
             Title,
             EquivalenceKey,
             applicability,
@@ -129,6 +129,10 @@ class CodeFix {
             ProviderId,
             (ct CancellationToken) -> GetChanges(ct)
         )
+        // The copy keeps where the fix came from, so a host still gates a data-defined fix fully.
+        lowered.registeringProvider = registeringProvider
+        lowered.dataDefined = dataDefined
+        return lowered
     }
 
     /// Returns the title.

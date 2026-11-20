@@ -127,6 +127,55 @@ open class Adr0227TransformationProgramTests {
         Assert.Equal([]string{"GS0125"}, provider.FixableDiagnosticIds.ToArray())
     }
 
+    @Fact
+    func AncestorWithSameLine_MatchesOnlyAnAncestorThatStartsOnTheLine() {
+        const program = `{"id":"zero","title":"Use 0","trigger":{"diagnosticIds":["GS0125"]},"pattern":{"capture":"name","ancestor":{"capture":"function","kind":"FunctionDeclaration","sameLine":true}},"edits":[{"op":"replace","capture":"name","template":"0"}],"applicability":"MaybeIncorrect","provenance":{"origin":"HandWritten"}}`
+        let service = ProgramService(program)
+        for (source, expected) in[](string, bool){
+            ("package P\n\nfunc F() int32 -> missing\n", true),
+            ("package P\n\nfunc F() int32 {\n    return missing\n}\n", false)
+        } {
+            let compilation = Compilation(SyntaxTree.Parse(source))
+            let target = compilation.GetDiagnostics().First((d Diagnostic) -> d.Id == "GS0125")
+            Assert.Equal(expected, !service.GetFixes(compilation, target).IsEmpty)
+        }
+    }
+
+    @Fact
+    func ConstructsReferenceType_IsFalseForACallOfAFunctionValue() {
+        const source = "package P\n\nclass C { }\n\nfunc F(make () -> C) C {\n    return new make()\n}\n"
+        let compilation = Compilation(SyntaxTree.Parse(source))
+        let target = compilation.GetDiagnostics().First((d Diagnostic) -> d.Id == "GS0125")
+        Assert.Empty(ProgramService(DropNew).GetFixes(compilation, target))
+    }
+
+    @Fact
+    func IsNullable_AsksWhetherTheTypeItselfIsNullable() {
+        const program = `{"id":"safe-dot","title":"Use '?.'","trigger":{"diagnosticIds":["IDS"]},"pattern":{"capture":"member","previous":{"capture":"dot","text":".","previous":{"capture":"receiver"}}},"guards":[{"predicate":"isNullable","capture":"receiver"}],"edits":[{"op":"replace","capture":"dot","template":"?."}],"applicability":"MaybeIncorrect","provenance":{"origin":"HandWritten"}}`
+        for (parameter, expected) in[](string, bool){("[]?C", true), ("[]C?", false)} {
+            let compilation = Compilation(
+                SyntaxTree.Parse(
+                    "package P\n\nclass C { }\n\nfunc F(c " + parameter + ") int32 {\n    return c.Nope\n}\n"
+                )
+            )
+            let target = compilation.GetDiagnostics().First((d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+            let service = ProgramService(program.Replace("IDS", target.Id))
+            Assert.Equal(expected, !service.GetFixes(compilation, target).IsEmpty)
+        }
+    }
+
+    @Fact
+    func LoweringTheApplicability_KeepsTheDataDefinedMark() {
+        const source = "package P\n\nclass C { }\n\nfunc F() C {\n    return new C()\n}\n"
+        let compilation = Compilation(SyntaxTree.Parse(source))
+        let target = compilation.GetDiagnostics().First((d Diagnostic) -> d.Id == "GS0125")
+        let fix = Assert.Single(ProgramService(DropNew).GetFixes(compilation, target))
+        Assert.True(fix.IsDataDefined)
+        let lowered = fix.WithLowerApplicability(Applicability.MaybeIncorrect)
+        Assert.NotSame(fix, lowered)
+        Assert.True(lowered.IsDataDefined)
+    }
+
     private func ProgramService(programs ...string) CodeFixService {
         let registry = CodeFixRegistry()
         registry.Add(
