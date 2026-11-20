@@ -7,6 +7,7 @@ package GSharp.Core.CodeAnalysis.Symbols
 import System
 import System.Collections.Generic
 import System.Collections.Immutable
+import System.Linq
 
 /// Issue #1477: shared helper that makes a synthesized closure / capture-box
 /// class generic over the enclosing generic type / method type parameters its
@@ -43,28 +44,18 @@ internal shared class SynthesizedClosureReifier {
             return ImmutableArray[TypeParameterSymbol].Empty
         }
         // Canonical order: class type parameters (Var) before method type
-        // parameters (MVar), each by their original ordinal. This keeps the
-        // synthesized class's parameter list deterministic regardless of the
-        // member-scan order.
-        referenced.Sort(
-            (a TypeParameterSymbol, b TypeParameterSymbol) -> {
-                let ak = if a.IsMethodTypeParameter {
-                    1
-                } else {
-                    0
-                }
-                let bk = if b.IsMethodTypeParameter {
-                    1
-                } else {
-                    0
-                }
-                if ak != bk {
-                    return ak - bk
-                }
-                return a.Ordinal - b.Ordinal
+        // parameters (MVar), each by their original ordinal, preserving
+        // encounter order on ties (e.g. nested generic local functions).
+        return referenced
+            .OrderBy(
+            (tp TypeParameterSymbol) -> if tp.IsMethodTypeParameter {
+                1
+            } else {
+                0
             }
         )
-        return referenced.ToImmutableArray()
+            .ThenBy((tp TypeParameterSymbol) -> tp.Ordinal)
+            .ToImmutableArray()
     }
 
     func ExpandWithConstraintDependencies(referenced List[TypeParameterSymbol]) {

@@ -1786,7 +1786,12 @@ internal partial class ExpressionBinder {
             shape[i] = (memberNames[i], memberValues[i].Type)
         }
         let packageName = this.function?.Package?.Name ?? string.Empty
-        let anonymousType = $scope.GetAnonymousTypeCache().GetOrCreate(shape, packageName, useFields: syntax.IsData)
+        let anonymousType = $scope.GetAnonymousTypeCache().GetOrCreate(
+            shape,
+            packageName,
+            useFields: syntax.IsData,
+            mapClrType: $scope.References?.MapClrTypeToReferences
+        )
         if syntax.IsData {
             // ADR-0146 / issue #2243: a `data object { ... }` synthesizes a
             // fields-based value type (data-class style). Emit it as a
