@@ -467,7 +467,9 @@ The implementation follows the decision, with these differences and results:
 
 By key: `GS0156.NumericConversion` 64 (64 accepted), `GS0125.DropNew` 17 (15), `GS0127.LetToVar` 13 (13), `LogicalWord.or` 12 (12), `LogicalWord.and` 5 (1), `GS0273.UseNil` 4 (4), `LogicalWord.not` 3 (3). The delta costs about one warm check, which meets the Oats budget of D4.
 
-**Phase 4 decision.** None of the 118 measured fixes lost a comment. Those fixes come from the built-in providers and suggestions, which edit tokens or compose `OriginalText`. Option B stays. Transformation programs were not measured: a program's `replace` or `delete` of a captured node drops any comment inside that node. Revisit option A when programs that replace or delete such nodes are in use, or when a provider makes structural rewrites of nodes that hold comments.
+**Phase 4 decision.** None of the 118 measured fixes lost a comment. Those fixes come from the built-in providers and suggestions, which edit tokens or compose `OriginalText`. Transformation programs were not measured. A `delete` of a captured node drops the comments inside it. A `replace` keeps the comments of every capture that its template writes with `${capture}`, because the slot copies the capture's source text, and drops the comments in the parts of the node that the template leaves out.
+
+Hand-written `OriginalText` composition is small. Three built-in fixes compose it: the two nullability fixes that wrap an operand (`?? default` and the parenthesized form), and the numeric conversion. Each is one interpolated expression around one operand, with no trivia handling of its own. The program interpreter composes it in one place, the `${capture}` slot, for every program. Neither the measured loss nor this code is significant, so option B stays. Revisit option A when programs that delete or partly replace nodes holding comments are in use, or when a provider makes structural rewrites of such nodes.
 
 ## Consequences
 
