@@ -40,6 +40,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 - Settle nested conditional capturing local-function values as ordinary function values that shadow same-signature outer and forward-declared siblings, while preserving distinct outer callable overloads and keeping capture-free local functions delegate-free. (Fixes #6112)
 
+- Bind the body of a `for … in` or `await for` loop whose collection cannot be iterated (an unresolved collection, or a type that is not enumerable), with error-typed loop variables. The body's own errors are now reported, and the semantic model answers its declarations and type clauses. (Fixes #6140)
+
 - Parse nested indexers followed by member access (`samples[jobs[slot]].Key`) as indexers instead of generic type names unless an inner type argument is unambiguously type-shaped, and reshape index-shaped nested generic static receivers (`Box[List[int32]].Create()`) in the binder. (Fixes #6071)
 
 - Normalize `nint` and `nuint` optional parameter default values to `int32` and `uint32` CLR Constant metadata, rejecting out-of-range defaults with GS0265 and converting omitted call-site arguments to native-width integers. (Fixes #6073)
