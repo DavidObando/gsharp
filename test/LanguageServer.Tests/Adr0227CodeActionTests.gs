@@ -447,7 +447,8 @@ open class Adr0227CodeActionTests {
 
     @Fact
     func SourceFixAll_ThatAddsASyntaxError_IsNotOffered() {
-        let content = LanguageServerTestHelpers.Content(Source)
+        // GS0125 has no compiler suggestion, so the breaking provider is the only fix.
+        let content = LanguageServerTestHelpers.Content("package P\n\nfunc F() int32 {\n    return missing\n}\n")
         let uri = DocumentUri.From("file:///a.gs")!!
         let origin = Position(0, 0)
         let registry = GSharp.Core.CodeAnalysis.CodeFixes.CodeFixRegistry()
@@ -474,7 +475,7 @@ open class Adr0227CodeActionTests {
             .Collections
             .Immutable
             .ImmutableArray
-            .Create("GS0273")
+            .Create("GS0125")
 
         override func RegisterCodeFixes(context GSharp.Core.CodeAnalysis.CodeFixes.CodeFixContext) {
             let token = context.Tree.Root.FindToken(context.Diagnostic.Location.Span.Start)!!
