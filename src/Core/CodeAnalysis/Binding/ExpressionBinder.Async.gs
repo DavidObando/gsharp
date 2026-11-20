@@ -622,7 +622,8 @@ internal partial class ExpressionBinder {
             boundReceiver = BindExpression(accessor.LeftPart)
             if boundReceiver.Type == TypeSymbol.Error {
                 let _ = ReportUnresolvedTargetlessValues(boundReceiver)
-                return BoundErrorExpression(nil)
+                // A receiver that is itself a failed member access keeps its receiver (#6127).
+                return BoundErrorExpression.WithFailedOperands(boundReceiver)
             }
             // ADR-0186 §4/§5, issue #4325: this method binds BOTH event
             // subscription (`x.E += h`) and compound member assignment

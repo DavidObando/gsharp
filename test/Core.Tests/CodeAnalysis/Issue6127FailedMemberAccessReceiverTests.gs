@@ -85,6 +85,26 @@ open class Issue6127FailedMemberAccessReceiverTests {
     }
 
     @Fact
+    func NullableRootOfAChainedCompoundWrite_AnswersItsSymbolAndType() {
+        let tree = SyntaxTree.Parse(
+            SourceText.From(
+                "package P\n\nclass D {\n    var N int32\n}\n\nclass C {\n    var Tag D = D()\n}\n\nfunc F(c C?) {\n    c.Tag.N += 1\n}\n",
+                "compound.gs"
+            )
+        )
+        let compilation = Compilation(tree)
+        let model = compilation.GetSemanticModel(tree)
+        let receiver = tree
+            .Root
+            .DescendantNodes()
+            .OfType[NameExpressionSyntax]()
+            .Single((n NameExpressionSyntax) -> n.IdentifierToken.Text == "c")
+        let parameter = Assert.IsType[ParameterSymbol](model.GetSymbolInfo(receiver).Symbol)
+        Assert.Equal("c", parameter.Name)
+        Assert.IsType[NullableTypeSymbol](model.GetTypeInfo(receiver).Type)
+    }
+
+    @Fact
     func Diagnostics_AreOnePerFailedAccess() {
         let tree = SyntaxTree.Parse(SourceText.From(Source, "issue6127.gs"))
         let compilation = Compilation(tree)
