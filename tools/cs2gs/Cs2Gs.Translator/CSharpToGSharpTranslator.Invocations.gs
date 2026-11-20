@@ -2076,11 +2076,18 @@ partial class CSharpToGSharpTranslator {
                 if translatedExisting is IdentifierExpression identifier {
                     return OutArgumentExpression("out", identifier.Name)
                 }
+                if translatedExisting is ThisExpression {
+                    return OutArgumentExpression("out", "this")
+                }
                 // Non-identifier lvalues keep the universal address form.
                 return AddressOf(translatedExisting)
             }
             if refKind == Microsoft.CodeAnalysis.CSharp.SyntaxKind.RefKeyword {
-                return AddressOf(this.TranslateExpression(argument.Expression))
+                let translatedRef GExpression? = WithoutNonNullAssertion(this.TranslateExpression(argument.Expression))
+                if translatedRef is ThisExpression {
+                    return OutArgumentExpression("ref", "this")
+                }
+                return AddressOf(translatedRef)
             }
             // ADR-0060: an explicit C# `in x` argument keeps its keyword, and
             // an implicit one naming a variable that targets a source-declared
@@ -11869,16 +11876,21 @@ partial class CSharpToGSharpTranslator {
 
             private func PassStaticExtensionHelperReceiver(receiver GExpression?, method IMethodSymbol?) GExpression? {
                 let original IMethodSymbol? = method!!.ReducedFrom ?? method
-                return if original!!
-                    .Parameters[0]
-                    .RefKind == RefKind.Ref ||
-                    original!!
-                    .Parameters[0]
-                    .RefKind == RefKind.Out {
-                    AddressOf(receiver)
-                } else {
-                    receiver
+                let refKind = original!!.Parameters[0].RefKind
+                if refKind == RefKind.Ref || refKind == RefKind.Out {
+                    if WithoutNonNullAssertion(receiver) is ThisExpression {
+                        return OutArgumentExpression(
+                            if refKind == RefKind.Out {
+                                "out"
+                            } else {
+                                "ref"
+                            },
+                            "this"
+                        )
+                    }
+                    return AddressOf(receiver)
                 }
+                return receiver
             }
 
             /// Translates an argument list at a call site that may need lowering

@@ -292,7 +292,8 @@ internal partial class ExpressionBinder {
         }
         // GS9005: cannot take address of a constant binding. General block
         // expressions preserve the trailing lvalue's mutability contract.
-        if TryGetReadOnlyAddressTarget(operand, out var readOnlyVariable) {
+        let ownReceiver = getCurrentFunction()?.ThisParameter
+        if TryGetReadOnlyAddressTarget(operand, out var readOnlyVariable, ownReceiver) {
             // ADR-0060: address-of an `in` parameter would let callers write
             // through the pointer, defeating the read-only contract. Report
             // GS0237 instead of the generic "cannot take address of constant".
@@ -304,7 +305,10 @@ internal partial class ExpressionBinder {
             return BoundErrorExpression(nil)
         }
         // Lvalue check.
-        if RefCapabilities.IsReadOnlyStorage(operand) {
+        if RefCapabilities.IsReadOnlyStorage(operand) || RefCapabilities.IsCapturedValueTypeReceiverStorage(
+            operand,
+            ownReceiver
+        ) {
             Diagnostics.ReportCannotTakeAddressOfConstant(syntax.OperatorToken.Location, syntax.Operand.ToString())
             return BoundErrorExpression(nil)
         }

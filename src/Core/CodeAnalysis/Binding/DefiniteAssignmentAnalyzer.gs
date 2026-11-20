@@ -358,11 +358,15 @@ internal shared class DefiniteAssignmentAnalyzer {
             return
         }
         // Seed: every non-out parameter (including ref/in) is assigned on entry.
+        // Non-constructor instance members also enter with `this` assigned.
         let initialAssigned = HashSet[VariableSymbol]()
         for p in function.Parameters {
             if p.RefKind != RefKind.Out {
                 initialAssigned.Add(p)
             }
+        }
+        if function.ThisParameter != nil && function.Name != ".ctor" {
+            initialAssigned.Add(function.ThisParameter)
         }
         if capturedAssigned != nil {
             initialAssigned.UnionWith(capturedAssigned)
