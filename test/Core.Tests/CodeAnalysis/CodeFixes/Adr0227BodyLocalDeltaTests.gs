@@ -295,6 +295,30 @@ open class Adr0227BodyLocalDeltaTests {
     }
 
     @Fact
+    func SnapshotOfACompilationWithoutReferences_UsesItsResolver_AndAnEditThatChangesNothingHasAnEmptyDelta() {
+        // A default resolver depends on what the process has loaded when it is made. The snapshot of the
+        // gate binds against the resolver of the compilation before the edit, so it compares like with like.
+        const source = "package P\n\nimport System.Text\n\nlet n int32 = missing\n\nfunc F() string {\n    return StringBuilder().ToString()\n}\n"
+        let tree = SyntaxTree.Parse(SourceText.From(source, "a.gs"))
+        let compilation = Compilation(tree)
+        Assert.Null(compilation.References)
+        Assert.NotEmpty(compilation.GetDiagnostics())
+        let snapshot = compilation.WithReplacedSyntaxTree(tree, SyntaxTree.Parse(SourceText.From(source, "a.gs")))
+        Assert.Same(compilation.GlobalScope.References, snapshot.References)
+        // The same text outside any body: the full check.
+        for options in[]DeltaOptions{DeltaOptions{BodyLocalBind: false}, DeltaOptions()} {
+            let delta = CodeFixService(CodeFixRegistry()).ComputeDelta(
+                DeltaBaseline.Create(compilation, options),
+                Changes(tree, "missing", "missing"),
+                ImmutableArray[Diagnostic].Empty
+            )
+            Assert.False(delta.ParseOnly)
+            Assert.Empty(delta.Removed)
+            Assert.Empty(delta.Added)
+        }
+    }
+
+    @Fact
     func Analyzers_FallBack() {
         const source = "package P\n\nfunc F() int32 {\n    return 1\n}\n"
         let tree = SyntaxTree.Parse(SourceText.From(source, "a.gs"))

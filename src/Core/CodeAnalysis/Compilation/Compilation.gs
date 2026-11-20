@@ -810,6 +810,8 @@ open class Compilation {
     /// Returns a one-shot compilation in which [`newTree`](paramref) replaces [`oldTree`](paramref),
     /// for a buffer that is not saved (ADR-0212 §7a). It binds from scratch, never re-points this
     /// compilation's symbols, and has no body cache, so it cannot evict this chain's cache entries.
+    /// When this compilation has no explicit (cref:References) and has bound its declarations, the
+    /// snapshot uses the resolver that that bind chose (ADR-0227 D4).
     /// @param oldTree A tree of this compilation.
     /// @param newTree The tree that replaces it.
     /// @returns The snapshot compilation.
@@ -826,7 +828,8 @@ open class Compilation {
     /// Returns a one-shot compilation in which each tree of [`oldTrees`](paramref) is replaced by the
     /// tree at the same index of [`newTrees`](paramref) (ADR-0227 D4). Like
     /// (cref:WithReplacedSyntaxTree), it binds from scratch, never re-points this compilation's
-    /// symbols, and has no body cache. The tree order of this compilation does not change.
+    /// symbols, has no body cache, and uses this compilation's resolver when it has no explicit
+    /// references. The tree order of this compilation does not change.
     /// @param oldTrees Distinct trees of this compilation.
     /// @param newTrees The replacements, one for each old tree.
     /// @returns The snapshot compilation.
@@ -1001,7 +1004,16 @@ open class Compilation {
 
     // Builds a compilation over [`trees`](paramref) with this compilation's options (ADR-0212 §8).
     private func CreateSuccessor(trees ImmutableArray[SyntaxTree], shareBodyCache bool) Compilation {
-        let successor = Compilation(References, trees.ToArray())
+        // ADR-0227 D4: a one-shot snapshot of a compilation without explicit references binds against
+        // the resolver that this compilation's bind chose. A default resolver depends on the assemblies
+        // that the process has loaded when it is made, so a snapshot that made its own could report
+        // differently from this compilation for text that did not change, and a diagnostic delta would
+        // then compare unlike things.
+        var references = References
+        if references == nil && !shareBodyCache {
+            references = Volatile.Read[BoundGlobalScope?](&this.globalScope)?.References
+        }
+        let successor = Compilation(references, trees.ToArray())
         successor.ImplicitSystemImport = ImplicitSystemImport
         successor.Nullability = Nullability
         successor.PlatformNilChecks = PlatformNilChecks
