@@ -38,6 +38,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Preserve symbolic element types and declaration-site nullability across imported generic constructor parameter conversions and `params` array expansion, accepting `nil` at nullable generic constructor slots and matching symbolic `params` elements while preserving invariant slice and generic-argument rejection. (Fixes #6059, #6061)
+
 - Settle nested conditional capturing local-function values as ordinary function values that shadow same-signature outer and forward-declared siblings, while preserving distinct outer callable overloads and keeping capture-free local functions delegate-free. (Fixes #6112)
 
 - Parse nested indexers followed by member access (`samples[jobs[slot]].Key`) as indexers instead of generic type names unless an inner type argument is unambiguously type-shaped, and reshape index-shaped nested generic static receivers (`Box[List[int32]].Create()`) in the binder. (Fixes #6071)

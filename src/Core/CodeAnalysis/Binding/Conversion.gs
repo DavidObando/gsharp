@@ -1901,6 +1901,8 @@ class Conversion {
             // guard below, which offers it as an explicit `cast[[N]T](s)`.
             if from is SliceTypeSymbol sliceSrc &&
                 !(to is ArrayTypeSymbol) &&
+                !RequiresSymbolicTypeArgumentIdentity(sliceSrc.ElementType) &&
+                !RequiresSymbolicTypeArgumentIdentity(to) &&
                 !(TypeSymbol.ContainsFunctionPointer(from) || TypeSymbol.ContainsFunctionPointer(to)) {
                 let targetArray = to?.ClrType
                 let sourceElement Type? = sliceSrc.ElementType?.ClrType
@@ -6501,6 +6503,15 @@ class Conversion {
                     elementType
                 ) ||
                     RequiresSymbolicTypeArgumentIdentity(elementType)
+            }
+            let arrayElement TypeSymbol? = switch type {
+                case slice is SliceTypeSymbol: slice.ElementType
+                case fixedArray is ArrayTypeSymbol: fixedArray.ElementType
+                case rectArray is RectangularArrayTypeSymbol: rectArray.ElementType
+                default: nil
+            }
+            if arrayElement != nil {
+                return RequiresSymbolicTypeArgumentIdentity(arrayElement)
             }
             if type is not ImportedTypeSymbol imported ||
                 (imported.OpenDefinition == nil && imported.TypeArguments.IsDefaultOrEmpty) {

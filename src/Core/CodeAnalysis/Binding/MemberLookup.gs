@@ -6519,21 +6519,8 @@ internal class MemberLookup {
         }
 
         /// ADR-0193 Phase 2: an OPEN parameter projected as an argument's
-        /// conversion target (formerly the projection in
-        /// `ConversionClassifier.TrySubstituteParameterType*` plus
-        /// `ConversionClassifier.PreserveParameterTopLevelNullability`, moved
-        /// inside the funnel). The by-ref pointee is projected through the
-        /// symbolic arguments, and only a delegate-typed parameter's top-level
-        /// `?` is merged from the declaration, so an argument may convert to
-        /// a stated-nullable callback slot.
-        ///
-        /// This is deliberately <b>not</b> the full merge
-        /// (cref:GetClrOpenParameterPointeeTypeSymbol) does. The full merge
-        /// would also stamp a concrete oblivious position's `!` onto a
-        /// projection with symbolic method type arguments, which the projection's
-        /// consumers do not peel yet — the same blocker as
-        /// (cref:ResolveCallReturnTypeFromSymbolicTypeArgs), lifted by
-        /// ADR-0193 Phase 3 and closed in Phase 4.
+        /// conversion target, sharing (cref:GetClrOpenParameterPointeeTypeSymbol)'s
+        /// receiver-aware projection and declaration-nullability merge.
         /// @param openParameter The parameter on the open method or constructor.
         /// @param openDefinition The open declaring type the type-level parameters bind against.
         /// @param typeArguments The declaring type's symbolic arguments.
@@ -6547,41 +6534,13 @@ internal class MemberLookup {
             typeArguments ImmutableArray[TypeSymbol],
             openMethod MethodInfo? = nil,
             methodTypeArguments ImmutableArray[TypeSymbol?] = default(ImmutableArray[TypeSymbol?])
-        ) TypeSymbol {
-            let openType = ClrNullability.GetSignatureType(openParameter)
-            let layout = if openType.IsByRef {
-                Invariant.Required(
-                    openType.GetElementType(),
-                    "a by-ref parameter type has an element type",
-                    expression: "openType.GetElementType()"
-                )
-            } else {
-                openType
-            }
-            let mapped = MapOpenClrTypeToSymbolic(
-                layout,
-                openDefinition,
-                typeArguments,
-                openMethod,
-                methodTypeArguments
-            )
-            if mapped == TypeSymbol.Error || mapped is NullableTypeSymbol || !ClrTypeUtilities.IsDelegateType(
-                openType
-            ) {
-                return mapped
-            }
-            // ADR-0193 Phase 1: classify, never compare bytes by hand. An empty
-            // array classifies as Oblivious.
-            let state = ClrNullability.ClassifyPosition(
-                ClrNullability.ReadNullableFlags(openParameter, openParameter.Member),
-                0
-            )
-            return if state == ClrNullabilityState.Annotated {
-                NullabilityImportRule.ApplyConcrete(mapped, state)
-            } else {
-                mapped
-            }
-        }
+        ) TypeSymbol -> GetClrOpenParameterPointeeTypeSymbol(
+            openParameter,
+            openDefinition,
+            typeArguments,
+            openMethod,
+            methodTypeArguments
+        )
 
         internal func GetImportedMethodForEmission(
             method MethodInfo

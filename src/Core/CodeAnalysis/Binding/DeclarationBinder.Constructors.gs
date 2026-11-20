@@ -459,12 +459,19 @@ internal partial class DeclarationBinder {
             // `object[]` the constructed type reports. Building the erased one
             // boxed each element and handed an `object[]` to a MemberRef whose
             // signature says `T0[]`, which ILVerify rejects.
-            let symbolicParamsSlice SliceTypeSymbol? = TryProjectSymbolicBaseParameterType(
+            var projectedParams = TryProjectSymbolicBaseParameterType(
                 openBaseCtorParams,
                 openBaseDefinition,
                 baseTypeArguments,
                 paramsIndex
-            ) as SliceTypeSymbol
+            )
+            while projectedParams is NullableTypeSymbol nullableParams {
+                projectedParams = nullableParams.UnderlyingType
+            }
+            while projectedParams is PlatformTypeSymbol platformParams {
+                projectedParams = platformParams.UnderlyingType
+            }
+            let symbolicParamsSlice SliceTypeSymbol? = projectedParams as SliceTypeSymbol
             // The packed array's element, read through the funnel and taken
             // bare: the emitter pushes an array of the erased element shape.
             let elementTypeSymbol = symbolicParamsSlice?.ElementType ??

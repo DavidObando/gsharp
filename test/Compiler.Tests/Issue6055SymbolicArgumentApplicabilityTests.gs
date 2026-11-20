@@ -231,6 +231,254 @@ class P {
         Assert.Equal(expected, fixture.RunBytes(dll))
     }
 
+    @Fact
+    func ImportedGenericParamsConstructors_AcceptSymbolicAndSameClosedArguments() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(ContractSource + ExtraContractSource, "ParamsContract6061")
+        let dll = fixture.Compile(`import System
+import System.Collections.Generic
+import Contracts6055
+enum Failure { Suspension, NestedClosure }
+struct BoxVal {
+    var Value int32
+    init(value int32) { Value = value }
+    override func ToString() string -> Value.ToString()
+}
+class BoxRef {
+    var Name string
+    init(name string) { Name = name }
+    override func ToString() string -> Name
+}
+class State {
+    init() {
+        Values = Dictionary[string, Failure](StringComparer.Ordinal)
+        Values.Add("k", Failure.Suspension)
+    }
+    prop Values Dictionary[string, Failure] { get; }
+}
+let s = State()
+let two = Exact[Failure](s.Values, s.Values)
+let normal = Exact[Failure]([]Dictionary[string, Failure]{ s.Values, s.Values })
+let zero = Exact[Failure]()
+let single = Exact[Failure](s.Values)
+let nilSingle = Exact[Failure](cast[Dictionary[string, Failure]?](nil))
+let enumParams = ParamsBox[Failure](Failure.Suspension, Failure.NestedClosure)
+let structParams = ParamsBox[BoxVal](BoxVal(11), BoxVal(22))
+let refParams = ParamsBox[BoxRef](BoxRef("a"), BoxRef("b"))
+let nullableRefParams = NullableParamsBox[BoxRef](nil, BoxRef("ok"))
+let taggedParams = TaggedParamsBox[Failure](7, s.Values, s.Values)
+let methodCount = Exact[Failure].CountAll(s.Values, s.Values)
+Console.WriteLine(two.Count)
+Console.WriteLine(normal.Count)
+Console.WriteLine(zero.Count)
+Console.WriteLine(single.Count)
+Console.WriteLine(nilSingle.Count)
+Console.WriteLine("${enumParams.Count}:${enumParams.Describe()}")
+Console.WriteLine("${structParams.Count}:${structParams.Describe()}")
+Console.WriteLine("${refParams.Count}:${refParams.Describe()}")
+Console.WriteLine("${nullableRefParams.Count}:${nullableRefParams.Describe()}")
+Console.WriteLine("${taggedParams.Tag}:${taggedParams.Count}")
+Console.WriteLine(methodCount)
+`, "Params6061", executable: true, "/r:" + contract)
+        IlVerifier.Verify(dll, []string{contract})
+        let native = fixture.CompileCSharpExecutable(`using System;
+using System.Collections.Generic;
+` + ContractSource.Replace("using System.Collections.Generic;\nnamespace Contracts6055;", "") + ExtraContractSource + `
+enum Failure { Suspension, NestedClosure }
+struct BoxVal {
+    public int Value;
+    public BoxVal(int value) { Value = value; }
+    public override string ToString() => Value.ToString();
+}
+class BoxRef {
+    public string Name;
+    public BoxRef(string name) { Name = name; }
+    public override string ToString() => Name;
+}
+class State {
+    public Dictionary<string, Failure> Values { get; } = new(StringComparer.Ordinal) { ["k"] = Failure.Suspension };
+}
+class P {
+    static void Main() {
+        var s = new State();
+        var two = new Exact<Failure>(s.Values, s.Values);
+        var normal = new Exact<Failure>(new Dictionary<string, Failure>[] { s.Values, s.Values });
+        var zero = new Exact<Failure>();
+        var single = new Exact<Failure>(s.Values);
+        var nilSingle = new Exact<Failure>((Dictionary<string, Failure>?)null);
+        var enumParams = new ParamsBox<Failure>(Failure.Suspension, Failure.NestedClosure);
+        var structParams = new ParamsBox<BoxVal>(new BoxVal(11), new BoxVal(22));
+        var refParams = new ParamsBox<BoxRef>(new BoxRef("a"), new BoxRef("b"));
+        var nullableRefParams = new NullableParamsBox<BoxRef>(null, new BoxRef("ok"));
+        var taggedParams = new TaggedParamsBox<Failure>(7, s.Values, s.Values);
+        var methodCount = Exact<Failure>.CountAll(s.Values, s.Values);
+        Console.WriteLine(two.Count);
+        Console.WriteLine(normal.Count);
+        Console.WriteLine(zero.Count);
+        Console.WriteLine(single.Count);
+        Console.WriteLine(nilSingle.Count);
+        Console.WriteLine($"{enumParams.Count}:{enumParams.Describe()}");
+        Console.WriteLine($"{structParams.Count}:{structParams.Describe()}");
+        Console.WriteLine($"{refParams.Count}:{refParams.Describe()}");
+        Console.WriteLine($"{nullableRefParams.Count}:{nullableRefParams.Describe()}");
+        Console.WriteLine($"{taggedParams.Tag}:{taggedParams.Count}");
+        Console.WriteLine(methodCount);
+    }
+}`, "NativeParams6061")
+        IlVerifier.Verify(native)
+        File.Copy(Path.ChangeExtension(dll, ".runtimeconfig.json"), Path.ChangeExtension(native, ".runtimeconfig.json"))
+        let expected = Encoding.UTF8.GetBytes(
+            "2\n2\n0\n1\n99\n2:Suspension,NestedClosure\n2:11,22\n2:a,b\n2:null,ok\n7:2\n2\n".Replace(
+                "\n",
+                Environment.NewLine
+            )
+        )
+        Assert.Equal(expected, fixture.RunBytes(native))
+        Assert.Equal(expected, fixture.RunBytes(dll))
+    }
+
+    @Theory
+    @InlineData("Exact[Other](State().Values, State().Values)")
+    @InlineData("Exact[Other]([]Dictionary[string, Failure]{ State().Values })")
+    @InlineData("Exact[int32]([]Dictionary[string, Failure]{ State().Values })")
+    @InlineData("Exact[Failure]([]Dictionary[string, int32]{ Dictionary[string, int32]() })")
+    func ImportedGenericParamsConstructors_RejectInvariantSymbolicMismatches(callExpr string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(ContractSource, "RejectParamsContract6061")
+        let (code, diagnostics) = fixture.TryCompile(`import Contracts6055
+import System.Collections.Generic
+enum Failure { Suspension }
+enum Other { Suspension }
+class State {
+    init() { Values = Dictionary[string, Failure]() }
+    prop Values Dictionary[string, Failure] { get; }
+}
+let copy = CALL_EXPR
+`.Replace("CALL_EXPR", callExpr), "RejectParams6061", executable: true, "/r:" + contract)
+        Assert.True(code != 0, diagnostics)
+        Assert.True(
+            diagnostics.Contains("error GS0267", StringComparison.Ordinal) || diagnostics.Contains(
+                "error GS0155",
+                StringComparison.Ordinal
+            ),
+            diagnostics
+        )
+    }
+
+    @Fact
+    func ImportedNullableGenericConstructors_AcceptNilAndEnforceNullabilityContracts() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(ContractSource + ExtraContractSource, "NullableCtorContract6059")
+        let obliviousContract = fixture.CompileCSharp(ObliviousContractSource, "ObliviousCtorContract6059")
+        let dll = fixture.Compile(`import System
+import System.Collections.Generic
+import Contracts6055
+enum Failure { Suspension }
+class BoxRef {
+    var Name string
+    init(name string) { Name = name }
+}
+func MakeClass[U class]() string -> OpenSlotBox[U](nil).Tag
+let nilBox = NullableBox[Failure](nil)
+let defaultBox = NullableBox[Failure](default(List[Failure]?))
+let items = List[Failure]()
+items.Add(Failure.Suspension)
+let nonNullBox = NullableBox[Failure](items)
+let objBox = NullableBox[Failure]("hello")
+let nestedNil = Outer[Failure].Inner[BoxRef](nil, nil)
+let nestedNonNull = Outer[Failure].Inner[BoxRef](items, List[BoxRef]())
+let valNil = ValueNullableBox[Failure](nil)
+let valSet = ValueNullableBox[Failure](Failure.Suspension)
+let openRefStr = OpenSlotBox[string](nil)
+let openRefUser = OpenSlotBox[BoxRef](nil)
+let openRefGeneric = MakeClass[BoxRef]()
+let obliviousNil = ObliviousBox[Failure](nil)
+Console.WriteLine(nilBox.Tag)
+Console.WriteLine(defaultBox.Tag)
+Console.WriteLine(nonNullBox.Tag)
+Console.WriteLine(objBox.Tag)
+Console.WriteLine(nestedNil.Tag)
+Console.WriteLine(nestedNonNull.Tag)
+Console.WriteLine("${valNil.HasValue}:${valSet.HasValue}:${valSet.Value}")
+Console.WriteLine("${openRefStr.Tag}:${openRefUser.Tag}:${openRefGeneric}")
+Console.WriteLine(obliviousNil.Tag)
+`, "NullableCtor6059", executable: true, "/r:" + contract, "/r:" + obliviousContract)
+        IlVerifier.Verify(dll, []string{contract, obliviousContract})
+        let native = fixture.CompileCSharpExecutable(`using System;
+using System.Collections.Generic;
+` + ContractSource.Replace("using System.Collections.Generic;\nnamespace Contracts6055;", "") +
+                ExtraContractSource +
+                "\n" +
+                ObliviousContractSource
+                .Replace("#nullable disable", "")
+                .Replace("using System.Collections.Generic;", "")
+                .Replace("namespace Contracts6055;", "") +
+                `
+enum Failure { Suspension }
+class BoxRef {
+    public string Name;
+    public BoxRef(string name) { Name = name; }
+}
+class P {
+    static string MakeClass<U>() where U : class => new OpenSlotBox<U>(null).Tag;
+    static void Main() {
+        var nilBox = new NullableBox<Failure>(null);
+        var defaultBox = new NullableBox<Failure>(default(List<Failure>?));
+        var items = new List<Failure> { Failure.Suspension };
+        var nonNullBox = new NullableBox<Failure>(items);
+        var objBox = new NullableBox<Failure>("hello");
+        var nestedNil = new Outer<Failure>.Inner<BoxRef>(null, null);
+        var nestedNonNull = new Outer<Failure>.Inner<BoxRef>(items, new List<BoxRef>());
+        var valNil = new ValueNullableBox<Failure>(null);
+        var valSet = new ValueNullableBox<Failure>(Failure.Suspension);
+        var openRefStr = new OpenSlotBox<string>(null);
+        var openRefUser = new OpenSlotBox<BoxRef>(null);
+        var openRefGeneric = MakeClass<BoxRef>();
+        var obliviousNil = new ObliviousBox<Failure>(null);
+        Console.WriteLine(nilBox.Tag);
+        Console.WriteLine(defaultBox.Tag);
+        Console.WriteLine(nonNullBox.Tag);
+        Console.WriteLine(objBox.Tag);
+        Console.WriteLine(nestedNil.Tag);
+        Console.WriteLine(nestedNonNull.Tag);
+        Console.WriteLine($"{valNil.HasValue}:{valSet.HasValue}:{valSet.Value}");
+        Console.WriteLine($"{openRefStr.Tag}:{openRefUser.Tag}:{openRefGeneric}");
+        Console.WriteLine(obliviousNil.Tag);
+    }
+}`, "NativeNullableCtor6059")
+        IlVerifier.Verify(native)
+        File.Copy(Path.ChangeExtension(dll, ".runtimeconfig.json"), Path.ChangeExtension(native, ".runtimeconfig.json"))
+        let expected = Encoding.UTF8.GetBytes(
+            "list:null\nlist:null\nlist:1\nobject\nnull,null\n1,0\nFalse:True:Suspension\nnull:null:null\nob-null\n"
+                .Replace("\n", Environment.NewLine)
+        )
+        Assert.Equal(expected, fixture.RunBytes(native))
+        Assert.Equal(expected, fixture.RunBytes(dll))
+    }
+
+    @Theory
+    @InlineData("let b = StrictBox[Failure](nil)")
+    @InlineData("let b = OpenSlotBox[Failure](nil)")
+    @InlineData("let b = OpenSlotBox[int32](nil)")
+    @InlineData("func bad[U]() -> OpenSlotBox[U](nil)")
+    @InlineData("class R {}\nlet b = ParamsBox[R](nil)")
+    func ImportedNonNullableGenericConstructors_RejectNil(body string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(ContractSource + ExtraContractSource, "RejectNullableCtor6059")
+        let (code, diagnostics) = fixture.TryCompile(`import Contracts6055
+import System.Collections.Generic
+enum Failure { Suspension }
+` + body, "RejectNullableCtorCase6059", executable: false, "/r:" + contract)
+        Assert.True(code != 0, diagnostics)
+        Assert.True(
+            diagnostics.Contains("error GS0155", StringComparison.Ordinal) || diagnostics.Contains(
+                "error GS0267",
+                StringComparison.Ordinal
+            ),
+            diagnostics
+        )
+    }
+
     shared {
         private func AssertNativeRejects(target string, arguments string, contract string) {
             let source = `using System;
@@ -275,6 +523,7 @@ public sealed class Exact<T> {
     public Exact(Dictionary<string, T>? values) { Count = values?.Count ?? 99; }
     public Exact(params Dictionary<string, T>[] values) { Count = values.Length; }
     public int Count { get; }
+    public static int CountAll(params Dictionary<string, T>[] values) => values.Length;
 }
 public sealed class Point {
     public Point(int x, int y) { X = x; Y = y; }
@@ -288,6 +537,59 @@ public static class Projection {
         foreach (var value in values) total += Read(value);
         return total;
     }
+}`
+
+        private const ExtraContractSource string = `
+public sealed class ParamsBox<T> {
+    private readonly T[] _values;
+    public ParamsBox(params T[] values) { _values = values; }
+    public int Count => _values.Length;
+    public string Describe() => string.Join(",", System.Array.ConvertAll(_values, v => v?.ToString() ?? "null"));
+}
+public sealed class NullableParamsBox<T> {
+    private readonly T?[] _values;
+    public NullableParamsBox(params T?[] values) { _values = values; }
+    public int Count => _values.Length;
+    public string Describe() => string.Join(",", System.Array.ConvertAll(_values, v => v?.ToString() ?? "null"));
+}
+public sealed class TaggedParamsBox<T> {
+    public TaggedParamsBox(int tag, params Dictionary<string, T>[] values) { Tag = tag; Count = values.Length; }
+    public int Tag { get; }
+    public int Count { get; }
+}
+public sealed class NullableBox<T> {
+    public NullableBox(List<T>? values) { Tag = values == null ? "list:null" : "list:" + values.Count; }
+    public NullableBox(object? values) { Tag = "object"; }
+    public string Tag { get; }
+}
+public sealed class StrictBox<T> {
+    public StrictBox(List<T> values) { Count = values.Count; }
+    public int Count { get; }
+}
+public sealed class OpenSlotBox<T> {
+    public OpenSlotBox(T? value) { Tag = value == null ? "null" : "nonnull"; }
+    public string Tag { get; }
+}
+public sealed class ValueNullableBox<T> where T : struct {
+    public ValueNullableBox(T? value) { HasValue = value.HasValue; Value = value.GetValueOrDefault(); }
+    public bool HasValue { get; }
+    public T Value { get; }
+}
+public static class Outer<T> {
+    public sealed class Inner<U> {
+        public Inner(List<T>? left, List<U>? right) {
+            Tag = (left?.Count.ToString() ?? "null") + "," + (right?.Count.ToString() ?? "null");
+        }
+        public string Tag { get; }
+    }
+}`
+
+        private const ObliviousContractSource string = `#nullable disable
+using System.Collections.Generic;
+namespace Contracts6055;
+public sealed class ObliviousBox<T> {
+    public ObliviousBox(List<T> values) { Tag = values == null ? "ob-null" : "ob:" + values.Count; }
+    public string Tag { get; }
 }`
     }
 }
