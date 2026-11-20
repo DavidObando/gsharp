@@ -214,6 +214,9 @@ class CodeFixService {
                 provider.RegisterCodeFixes(context)
                 for fix in context.Fixes {
                     fix.MarkProvider(provider)
+                    if provider.IsDataDefined {
+                        fix.MarkDataDefined()
+                    }
                     fixes.Add(fix)
                 }
             } catch (OperationCanceledException) when cancellationToken.IsCancellationRequested {

@@ -6,6 +6,7 @@
   </Configurations>
   <Folder Name="/Analyzers/">
     <Project Path="src/Analyzers/GSharp.CodeAnalysis.Analyzers.Testing/GSharp.CodeAnalysis.Analyzers.Testing.gsproj" Type="C#" />
+    <Project Path="src/Analyzers/GSharp.CodeAnalysis.Transformations/GSharp.CodeAnalysis.Transformations.gsproj" Type="C#" />
   </Folder>
   <Folder Name="/Build/">
     <Project Path="build/ilverify/IlVerifyDiagnostics.gsproj" Type="C#" />

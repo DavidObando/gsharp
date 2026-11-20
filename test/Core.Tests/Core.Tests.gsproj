@@ -34,6 +34,7 @@
   <ItemGroup>
     <ProjectReference Include="@(GsharpCore-&gt;'%(RootDir)%(Directory)%(Filename).gsproj')" />
     <ProjectReference Include="../../src/Analyzers/GSharp.CodeAnalysis.Analyzers.Testing/GSharp.CodeAnalysis.Analyzers.Testing.gsproj" />
+    <ProjectReference Include="../../src/Analyzers/GSharp.CodeAnalysis.Transformations/GSharp.CodeAnalysis.Transformations.gsproj" />
     <!-- ADR-0174: EmittedOracle-driven channel tests need the runtime beside the host. -->
     <ProjectReference Include="../../src/Sdk/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.gsproj" />
     <!-- Emitted native-slice tests need the runtime beside the host. -->

@@ -27,4 +27,9 @@ abstract class GSharpCodeFixProvider {
     /// The default is `true`: the batch fixer computes each fix against the original snapshot and
     /// keeps the fixes that do not overlap. A provider whose fixes depend on each other returns `false`.
     open prop SupportsFixAll bool -> true
+
+    /// Gets a value that tells whether the fixes of this provider come from data, such as mined
+    /// transformation programs, rather than hand-written code (ADR-0227 D6). A host runs the full
+    /// delta gate on these fixes (decision Q4).
+    open prop IsDataDefined bool -> false
 }
