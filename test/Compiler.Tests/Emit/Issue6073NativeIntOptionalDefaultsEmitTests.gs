@@ -306,6 +306,13 @@ func ObjectNIntDefault(x object = nint(0)) {}`
             .ToArray()
         Assert.Equal(10, errors.Length)
         Assert.All(errors, (diagnostic GSharp.Core.CodeAnalysis.Diagnostic) -> Assert.Equal("GS0265", diagnostic.Id))
+        Assert.Equal(
+            []int32{2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
+            errors
+                .Select((diagnostic GSharp.Core.CodeAnalysis.Diagnostic) -> diagnostic.Location.StartLine)
+                .OrderBy((line int32) -> line)
+                .ToArray()
+        )
     }
 
     shared {
