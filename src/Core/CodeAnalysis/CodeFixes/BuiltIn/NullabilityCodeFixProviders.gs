@@ -65,8 +65,10 @@ internal class NullConditionalAccessCodeFixProvider : GSharpCodeFixProvider {
         )
     }
 
-    // Whether the access, or the chain or parentheses it ends, is the target of a compound or a
-    // null-coalescing assignment.
+    // Whether the access, or the chain, parentheses or indexing it ends, is written: the target of a
+    // compound or null-coalescing assignment, the receiver of a member write (`c.Child.N = 1`), or
+    // the indexed target of an index write (`c.Items[0] = 1`). A right-hand value and an index
+    // argument are reads.
     private func IsAssignmentTarget(accessor AccessorExpressionSyntax) bool {
         var current SyntaxNode = accessor
         while true {
@@ -75,6 +77,8 @@ internal class NullConditionalAccessCodeFixProvider : GSharpCodeFixProvider {
                 current = outer
             } else if parent is ParenthesizedExpressionSyntax {
                 current = parent
+            } else if parent is IndexExpressionSyntax indexed && object.ReferenceEquals(indexed.Target, current) {
+                current = indexed
             } else {
                 break
             }
@@ -83,6 +87,12 @@ internal class NullConditionalAccessCodeFixProvider : GSharpCodeFixProvider {
             case compound is EventSubscriptionExpressionSyntax: object.ReferenceEquals(compound.LeftHandSide, current)
             case coalescing is NullCoalescingAssignmentExpressionSyntax: object.ReferenceEquals(
                 coalescing.Target,
+                current
+            )
+            case member is MemberFieldAssignmentExpressionSyntax: object.ReferenceEquals(member.Receiver, current)
+            case index is MemberIndexAssignmentExpressionSyntax: object.ReferenceEquals(index.Target, current)
+            case compoundIndex is CompoundIndexAssignmentExpressionSyntax: object.ReferenceEquals(
+                compoundIndex.Target,
                 current
             )
             default: false

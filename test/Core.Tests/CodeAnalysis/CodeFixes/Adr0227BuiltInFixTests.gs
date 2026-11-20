@@ -204,18 +204,44 @@ open class Adr0227BuiltInFixTests {
     @Theory
     @InlineData("c.N += 1")
     @InlineData("c.M ??= 1")
-    @InlineData("c.Child.N += 1")
+    @InlineData("d.Child.N += 1")
+    @InlineData("c.Child.N = 1")
+    @InlineData("c.Items[0] = 1")
+    @InlineData("c.Items[0] += 1")
     func NullConditionalAccess_OnACompoundAssignmentTarget_HasNoFix(statement string) {
-        let source = "package P\n\nclass C {\n    var N int32\n    var M int32?\n    var Child C?\n}\n\nfunc F(c C?, d C) {\n    " +
-            statement.Replace("c.Child", "d.Child") + "\n}\n"
+        let source = "package P\n\nclass C {\n    var N int32\n    var M int32?\n    var Child C?\n    var Items []int32 = []int32{0}\n}\n\nclass D {\n    var N int32\n    var Child C?\n}\n\nfunc F(c C?, d D) {\n    " +
+            statement +
+            "\n}\n"
+        let tree = SyntaxTree.Parse(SourceText.From(source, "a.gs"))
+        let compilation = Compilation(tree)
+        let targets = compilation.GetDiagnostics().Where((d Diagnostic) -> d.Id == "GS0158").ToList()
+        Assert.NotEmpty(targets)
+        for target in targets {
+            Assert.Empty(
+                CodeFixService(CodeFixRegistry.CreateDefault()).GetFixes(compilation, target).Where(
+                    (f CodeFix) -> f.ProviderId == "GSharp.CodeFixes.NullConditionalAccess"
+                )
+            )
+        }
+    }
+
+    @Theory
+    @InlineData("d.N = c.N")
+    @InlineData("d.Items[c.N] = 1")
+    func NullConditionalAccess_InTheValueOrIndexOfAWrite_IsFixed(statement string) {
+        let source = "package P\n\nclass C {\n    var N int32\n}\n\nclass D {\n    var N int32?\n    var Items map[int32?]int32 = map[int32?]int32{}\n}\n\nfunc F(c C?, d D) {\n    " +
+            statement +
+            "\n}\n"
         let tree = SyntaxTree.Parse(SourceText.From(source, "a.gs"))
         let compilation = Compilation(tree)
         let target = compilation.GetDiagnostics().Single((d Diagnostic) -> d.Id == "GS0158")
-        Assert.Empty(
-            CodeFixService(CodeFixRegistry.CreateDefault()).GetFixes(compilation, target).Where(
+        let service = CodeFixService(CodeFixRegistry.CreateDefault())
+        let fix = Assert.Single(
+            service.GetFixes(compilation, target).Where(
                 (f CodeFix) -> f.ProviderId == "GSharp.CodeFixes.NullConditionalAccess"
             )
         )
+        Assert.Contains("c?.N", Assert.Single(service.Apply(fix)).Text.ToString())
     }
 
     @Fact
