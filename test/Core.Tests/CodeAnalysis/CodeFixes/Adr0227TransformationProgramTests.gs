@@ -226,6 +226,25 @@ open class Adr0227TransformationProgramTests {
         }
     }
 
+    @Fact
+    func AMemberName_DoesNotResolveToALocalOfTheSameName() {
+        const program = `{"id":"m","title":"T","trigger":{"diagnosticIds":["IDS"]},"pattern":{"capture":"member","previous":{"text":"."}},"guards":[{"predicate":"symbolKind","capture":"member","value":"local"}],"edits":[{"op":"delete","capture":"member"}],"applicability":"MaybeIncorrect","provenance":{"origin":"HandWritten"}}`
+        const source = "package P\n\nclass C { }\n\nfunc F(c C) int32 {\n    let N = 1\n    return c.N\n}\n"
+        let compilation = Compilation(SyntaxTree.Parse(source))
+        let target = compilation.GetDiagnostics().First((d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+        Assert.Equal(source.LastIndexOf("N", StringComparison.Ordinal), target.Location.Span.Start)
+        Assert.Empty(ProgramService(program.Replace("IDS", target.Id)).GetFixes(compilation, target))
+    }
+
+    @Fact
+    func TheTypeOfACapturedCallee_IsNotTheTypeOfTheCall() {
+        let program = DropNew.Replace("constructsReferenceType", "isNullable")
+        const source = "package P\n\nclass C { }\n\nfunc F(make () -> C?) C? {\n    return new make()\n}\n"
+        let compilation = Compilation(SyntaxTree.Parse(source))
+        let target = compilation.GetDiagnostics().First((d Diagnostic) -> d.Id == "GS0125")
+        Assert.Empty(ProgramService(program).GetFixes(compilation, target))
+    }
+
     private func ProgramService(programs ...string) CodeFixService {
         let registry = CodeFixRegistry()
         registry.Add(

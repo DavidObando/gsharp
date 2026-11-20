@@ -268,6 +268,10 @@ class ProgramFixProvider : GSharpCodeFixProvider {
         if bound != nil {
             return bound
         }
+        // A member name after a dot names a member of its receiver, never a variable in scope.
+        if IsMemberName(node) {
+            return nil
+        }
         // The semantic name: `$c` names `c`.
         let name string? = switch node {
             case token is SyntaxToken when token.Kind == SyntaxKind.IdentifierToken: token.ValueText
@@ -285,17 +289,43 @@ class ProgramFixProvider : GSharpCodeFixProvider {
         }
     }
 
-    // The type of a capture: GetTypeInfo of its node, else the type of its variable.
-    private func TypeOf(model SemanticModel, node SyntaxNode, ct CancellationToken) TypeSymbol? {
-        let target SyntaxNode? = if node is SyntaxToken {
+    // Whether a capture is the name of a member access (`N` in `c.N`, `M` in `c.M()`).
+    private func IsMemberName(node SyntaxNode) bool {
+        let expression SyntaxNode? = if node is SyntaxToken {
             node.Parent
         } else {
             node
         }
-        if target == nil {
-            return nil
+        return expression?.Parent is AccessorExpressionSyntax access && !object.ReferenceEquals(
+            access.LeftPart,
+            expression
+        )
+    }
+
+    // The type of a capture: GetTypeInfo of its node, else the type of its variable. An identifier
+    // token asks about itself first; the callee of a call is not the call, whose type is the result.
+    private func TypeOf(model SemanticModel, node SyntaxNode, ct CancellationToken) TypeSymbol? {
+        if node is SyntaxToken{Kind: SyntaxKind.IdentifierToken} {
+            let own TypeSymbol? = model.GetTypeInfo(node, ct).Type
+            if own != nil {
+                return own
+            }
         }
-        let bound TypeSymbol? = model.GetTypeInfo(target, ct).Type
+        let target SyntaxNode? = if node.Parent is CallExpressionSyntax call && object.ReferenceEquals(
+            call.Identifier,
+            node
+        ) {
+            nil
+        } else if node is SyntaxToken {
+            node.Parent
+        } else {
+            node
+        }
+        let bound TypeSymbol? = if target == nil {
+            nil
+        } else {
+            model.GetTypeInfo(target, ct).Type
+        }
         if bound != nil {
             return bound
         }
