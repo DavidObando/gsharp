@@ -415,6 +415,79 @@ open class Adr0227CodeActionTests {
         }
     }
 
+    @Fact
+    func SourceFixAll_AppliesEveryMachineApplicableFix_OnlyWhenAsked() {
+        const source = "package P\n\nfunc F(a bool, b bool) string? {\n    if a or b {\n        return null\n    }\n    return null\n}\n"
+        let content = LanguageServerTestHelpers.Content(source)
+        let uri = DocumentUri.From("file:///a.gs")!!
+        let origin = Position(0, 0)
+        Assert.DoesNotContain(
+            CodeActionComputer.ComputeCodeActions(uri, content, Range(origin, origin)),
+            (a CommandOrCodeAction) -> a.CodeAction.Kind == CodeActionKind.SourceFixAllGSharp
+        )
+        let context = CodeActionContext{Only: []CodeActionKind{CodeActionKind("source.fixAll")}}
+        let action = Assert.Single(
+            CodeActionComputer.ComputeCodeActions(
+                uri,
+                content,
+                Range(origin, origin),
+                context,
+                CodeActionClientOptions()
+            )
+        )
+            .CodeAction
+        Assert.Equal(CodeActionKind.SourceFixAllGSharp, action.Kind)
+        let edit = Assert.Single(action.Edit!!.Changes!![uri])
+        let start = LanguageServerTestHelpers.PositionOf(source, "or")
+        Assert.Equal(start.Line, edit.Range.Start.Line)
+        Assert.Contains("||", edit.NewText, StringComparison.Ordinal)
+        Assert.Contains("nil", edit.NewText, StringComparison.Ordinal)
+        Assert.DoesNotContain("null", edit.NewText, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func SourceFixAll_ThatAddsASyntaxError_IsNotOffered() {
+        // GS0125 has no compiler suggestion, so the breaking provider is the only fix.
+        let content = LanguageServerTestHelpers.Content("package P\n\nfunc F() int32 {\n    return missing\n}\n")
+        let uri = DocumentUri.From("file:///a.gs")!!
+        let origin = Position(0, 0)
+        let registry = GSharp.Core.CodeAnalysis.CodeFixes.CodeFixRegistry()
+        registry.Add(BreakingProvider())
+        let context = CodeActionContext{Only: []CodeActionKind{CodeActionKind("source.fixAll")}}
+        let actions = CodeActionComputer.ComputeCodeActions(
+            uri,
+            content,
+            Range(origin, origin),
+            context,
+            CodeActionClientOptions(),
+            registry,
+            default(System.Threading.CancellationToken)
+        )
+        Assert.Empty(actions)
+    }
+
+    // A machine-applicable fix that leaves an open parenthesis.
+    private class BreakingProvider : GSharp.Core.CodeAnalysis.CodeFixes.GSharpCodeFixProvider {
+        override prop FixableDiagnosticIds System
+            .Collections
+            .Immutable
+            .ImmutableArray[string] -> System
+            .Collections
+            .Immutable
+            .ImmutableArray
+            .Create("GS0125")
+
+        override func RegisterCodeFixes(context GSharp.Core.CodeAnalysis.CodeFixes.CodeFixContext) {
+            let token = context.Tree.Root.FindToken(context.Diagnostic.Location.Span.Start)!!
+            context.RegisterFix(
+                "Break",
+                "test.break",
+                GSharp.Core.CodeAnalysis.CodeFixes.Applicability.MachineApplicable,
+                (editor SyntaxEditor) -> editor.ReplaceToken(token, "(nil")
+            )
+        }
+    }
+
     private func AssertOffered(source string, at string, title string, newText string) {
         let content = LanguageServerTestHelpers.Content(source)
         let uri = DocumentUri.From("file:///a.gs")!!

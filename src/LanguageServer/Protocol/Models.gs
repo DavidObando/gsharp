@@ -469,6 +469,8 @@ struct CodeActionKind : IEquatable[CodeActionKind] {
         prop Refactor CodeActionKind -> CodeActionKind("refactor")
         prop RefactorRewrite CodeActionKind -> CodeActionKind("refactor.rewrite")
         prop Source CodeActionKind -> CodeActionKind("source")
+        /// The document FixAll of the machine-applicable G# fixes (ADR-0227 D7).
+        prop SourceFixAllGSharp CodeActionKind -> CodeActionKind("source.fixAll.gsharp")
     }
 }
 

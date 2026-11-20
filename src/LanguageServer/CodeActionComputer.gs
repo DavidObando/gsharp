@@ -102,6 +102,13 @@ shared class CodeActionComputer {
                 actions.Add(CommandOrCodeAction(sortImports))
             }
         }
+        // ADR-0227 D7: a FixAll runs only when the client asks for source actions by name.
+        if only != nil && only.Count > 0 && KindRequested(CodeActionKind.SourceFixAllGSharp, only) {
+            let fixAll CodeAction? = TryCreateFixAll(uri, content, client, registryOverride, ct)
+            if fixAll != nil {
+                actions.Add(CommandOrCodeAction(fixAll))
+            }
+        }
         if KindRequested(CodeActionKind.QuickFix, only) {
             for action in ComputeQuickFixes(uri, content, RangeToSpan(content, $range), client, registryOverride, ct) {
                 actions.Add(CommandOrCodeAction(action))
@@ -448,6 +455,65 @@ shared class CodeActionComputer {
             Range: SemanticLookup.ToRange(source, d.Location.Span),
             Severity: DocumentSyncHandler.ToLspSeverity(d.Severity),
             Source: Constants.LanguageIdentifier
+        }
+    }
+
+    // The document FixAll of the machine-applicable fixes, as one edit (ADR-0227 D3, D7).
+    private func TryCreateFixAll(
+        uri DocumentUri,
+        content DocumentContent,
+        client CodeActionClientOptions,
+        registryOverride CodeFixRegistry?,
+        ct CancellationToken
+    ) CodeAction? {
+        let compilation = CompilationFor(content, content.Project?.GetCompilation())
+        let registry = registryOverride ?? content.Project?.GetCodeFixRegistry() ?? DefaultRegistry
+        let service = CodeFixService(registry)
+        // The analyzers' diagnostics take part when a provider fixes them, under the same budget.
+        let options = FixAllOptions()
+        let deltaOptions = DeltaOptions()
+        deltaOptions.AnalyzerOptions = AnalyzerOptions{TimeBudgetMilliseconds: AnalyzerTimeBudgetMilliseconds}
+        let project ProjectState? = content.Project
+        if project != nil {
+            let analyzers = project.GetGsAnalyzers(out _)
+            if AnyFixable(analyzers, registry, ct) {
+                deltaOptions.Analyzers = analyzers
+            }
+        }
+        options.DeltaOptions = deltaOptions
+        let result = service.FixAll(FixAllScope.Document(compilation, content.SyntaxTree), nil, options, ct)
+        if result.Documents.IsEmpty {
+            return nil
+        }
+        // Every changed tree, each with its own changes from its original text.
+        let changes = FixChanges(
+            result
+                .Documents
+                .Select(
+                (d FixAllDocument) -> DocumentChanges(d.Original, d.GetChanges(), ImmutableArray[TextSpan].Empty)
+            )
+                .ToImmutableArray()
+        )
+        // ADR-0227 Q4: the batch passes the syntax stage of the gate as a whole.
+        let gateOptions = DeltaOptions()
+        gateOptions.SyntaxOnly = true
+        let delta = service.ComputeDelta(
+            DeltaBaseline.Create(compilation, gateOptions, ct),
+            changes,
+            ImmutableArray[CoreDiagnostic].Empty,
+            ct
+        )
+        if !delta.AddedSyntax.IsEmpty {
+            return nil
+        }
+        let edit WorkspaceEdit? = BuildEdit(uri, content, changes, client)
+        if edit == nil {
+            return nil
+        }
+        return CodeAction{
+            Title: "Fix all auto-fixable G# problems",
+            Kind: CodeActionKind.SourceFixAllGSharp,
+            Edit: edit
         }
     }
 

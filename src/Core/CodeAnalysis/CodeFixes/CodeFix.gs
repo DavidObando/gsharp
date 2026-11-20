@@ -73,6 +73,17 @@ class CodeFix {
         get;
     }
 
+    // The provider that registered the fix, set by the service; null for a fix built elsewhere.
+    internal prop Provider GSharpCodeFixProvider? {
+        get -> registeringProvider
+    }
+
+    private var registeringProvider GSharpCodeFixProvider?
+
+    internal func MarkProvider(provider GSharpCodeFixProvider) {
+        registeringProvider = provider
+    }
+
     /// Gets the changes of the fix. The first call computes them. Later calls return the same object.
     /// @param cancellationToken Cancels the computation.
     /// @returns The changes.

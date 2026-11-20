@@ -24,6 +24,13 @@ class DeltaOptions {
         copy.StopOnNewSyntaxError = StopOnNewSyntaxError
         copy.DiagnosticFilter = DiagnosticFilter
         copy.SyntaxOnly = SyntaxOnly
+        // AnalyzerOptions is mutable, so the snapshot gets its own copy.
+        let analyzerOptions AnalyzerOptions? = AnalyzerOptions
+        copy.AnalyzerOptions = if analyzerOptions == nil {
+            default(AnalyzerOptions?)
+        } else {
+            AnalyzerOptions{TimeBudgetMilliseconds: analyzerOptions.TimeBudgetMilliseconds}
+        }
         return copy
     }
 
@@ -43,6 +50,10 @@ class DeltaOptions {
         get -> stopOnNewSyntaxError
         set -> stopOnNewSyntaxError = value
     }
+
+    /// Gets or sets the options of the analyzer driver, such as a time budget for each analyzer.
+    /// `null` uses the driver's defaults.
+    prop AnalyzerOptions AnalyzerOptions?
 
     /// Gets or sets a value that tells whether the check stops after the parse in every case: it
     /// compares only the syntax diagnostics of the changed documents and never binds. An
