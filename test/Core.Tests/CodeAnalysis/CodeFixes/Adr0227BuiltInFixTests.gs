@@ -414,6 +414,18 @@ open class Adr0227BuiltInFixTests {
     }
 
     @Fact
+    func NullableValue_InsideAnInterpolationHole_GetsItsFixes() {
+        let source = "package P\n\nfunc Use(s string) int32 -> s.Length\n\nfunc F(t string?) string -> \"x " +
+            "$" +
+            "{Use(t)}\"\n"
+        let tree = SyntaxTree.Parse(SourceText.From(source, "a.gs"))
+        let compilation = Compilation(tree)
+        let diagnostic = compilation.GetDiagnostics().First((d Diagnostic) -> d.Id == "GS0154" || d.Id == "GS0155")
+        let fixes = CodeFixService(CodeFixRegistry.CreateDefault()).GetFixes(compilation, diagnostic)
+        Assert.Contains(fixes, (f CodeFix) -> f.Title == "Assert non-nil with '!!'")
+    }
+
+    @Fact
     func NumericConversion_LooksThroughParentheses() {
         VerifyFix(
             "package P\n\nfunc F(n int64) int32 {\n    let m int32 = (n)\n    return m\n}\n",

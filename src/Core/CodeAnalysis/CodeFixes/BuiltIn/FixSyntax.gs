@@ -66,7 +66,11 @@ internal shared class FixSyntax {
             current = nil
             for child in node.GetChildren() {
                 let childSpan = child.Span
-                if childSpan.Length > 0 && childSpan.Start <= span.Start && span.End <= childSpan.End {
+                // Tokens are skipped: a string token of an interpolation spans its holes.
+                if !(child is SyntaxToken) &&
+                    childSpan.Length > 0 &&
+                    childSpan.Start <= span.Start &&
+                    span.End <= childSpan.End {
                     current = child
                     break
                 }
