@@ -910,6 +910,29 @@ open class Compilation {
         cut int32,
         options PrefixBindOptions,
         cancellationToken CancellationToken = default(CancellationToken)
+    ) PrefixBindResult -> BindPrefix(tree, cut, options, nil, cancellationToken)
+
+    /// Binds [`tree`](paramref) as if its text ended at [`cut`](paramref), as
+    /// (cref:BindPrefix(SyntaxTree, int32, PrefixBindOptions, CancellationToken)) does, and reuses the
+    /// declarations that [`previous`](paramref) bound when only the body of the open member differs
+    /// (ADR-0225 D6.6). The result is the same as without [`previous`](paramref).
+    /// @remarks Reuse needs a previous result of a compilation with the same options, the same
+    /// reference resolver and the same other trees, and a prefix tree whose declarations are the same as
+    /// the previous prefix tree's: successive cuts in one member body, or a text that grew after the cut.
+    /// Reuse **retires** [`previous`](paramref)'s compilation: its symbols then belong to the new result
+    /// (ADR-0212 §7a). Otherwise the bind starts from scratch and does not change [`previous`](paramref).
+    /// @param tree A tree of this compilation. Its text can end at the cut or continue after it.
+    /// @param cut A character offset into the text of [`tree`](paramref).
+    /// @param options What follows the cut, and whether the result contains the scope at the cut.
+    /// @param previous The result of the previous cut, or `null`.
+    /// @param cancellationToken Cancels this caller's wait for the binds.
+    /// @returns The classified diagnostics, the open constructs and the scope at the cut.
+    func BindPrefix(
+        tree SyntaxTree,
+        cut int32,
+        options PrefixBindOptions,
+        previous PrefixBindResult?,
+        cancellationToken CancellationToken = default(CancellationToken)
     ) PrefixBindResult {
         ArgumentNullException.ThrowIfNull(tree, paramName: "tree")
         ArgumentNullException.ThrowIfNull(options, paramName: "options")
@@ -926,7 +949,26 @@ open class Compilation {
             "a prefix parse records its cut",
             expression: "prefixTree.Prefix"
         )
-        let successor = CreateSuccessor(SyntaxTrees.SetItem(index, prefixTree), shareBodyCache: false)
+        var successor Compilation
+        if previous != nil && CanReusePrefixBind(previous, index, options) {
+            // The successor reuses the previous declarations when the prefix trees differ only in
+            // member bodies, and binds from scratch otherwise.
+            successor = previous.Compilation.ReplaceSyntaxTree(previous.SyntaxTree, prefixTree)
+            // Both prefix trees have the host's text, so a member body that did not change has the same
+            // spans and the same diagnostics: the body cache can serve it. The open body changed, so its
+            // hash misses and it binds again.
+            if successor.ReusedGlobalScope != nil && object.ReferenceEquals(
+                previous.SyntaxTree.Text,
+                prefixTree.Text
+            ) &&
+                successor.DirtyBodyTrees is {} dirty {
+                successor.DirtyBodyTrees = dirty.Remove(prefixTree)
+            }
+        } else {
+            successor = CreateSuccessor(SyntaxTrees.SetItem(index, prefixTree), shareBodyCache: false)
+            // ADR-0225 D6.6: a later cut can reuse the bodies of this bind.
+            successor.IncrementalBodyReuse = true
+        }
         let diagnostics = successor.GetDiagnostics(cancellationToken)
         let classified = ImmutableArray.CreateBuilder[ClassifiedDiagnostic](diagnostics.Length)
         let model = successor.GetSemanticModel(prefixTree)
@@ -956,8 +998,50 @@ open class Compilation {
             openConstructs.ToImmutable(),
             symbolsInScope,
             successor,
-            prefixTree
+            prefixTree,
+            this,
+            index,
+            options.Remainder
         )
+    }
+
+    // ADR-0225 D6.6: the previous prefix compilation binds like a successor of this compilation when
+    // it holds the same other trees, the same resolver and the same options. Only the prefix tree differs.
+    private func CanReusePrefixBind(previous PrefixBindResult, index int32, options PrefixBindOptions) bool {
+        let host = previous.Host
+        if host == nil || previous.Remainder != options.Remainder || previous.HostIndex != index {
+            return false
+        }
+        let previousTrees = previous.Compilation.SyntaxTrees
+        if previousTrees.Length != SyntaxTrees.Length || !object.ReferenceEquals(
+            previousTrees[index],
+            previous.SyntaxTree
+        ) {
+            return false
+        }
+        for var i = 0; i < SyntaxTrees.Length; i++ {
+            if i != index && !object.ReferenceEquals(previousTrees[i], SyntaxTrees[i]) {
+                return false
+            }
+        }
+        return object.ReferenceEquals(host.References, References) &&
+            host.ImplicitSystemImport == ImplicitSystemImport &&
+            host.Nullability == Nullability &&
+            host.PlatformNilChecks == PlatformNilChecks &&
+            host.IsLibrary == IsLibrary &&
+            host.Optimize == Optimize &&
+            host.Submission == nil &&
+            Submission == nil &&
+            host.RecordMemberGroups == RecordMemberGroups &&
+            string.Equals(host.assemblyName, assemblyName, StringComparison.Ordinal) &&
+            SamePreprocessorSymbols(host.PreprocessorSymbols, PreprocessorSymbols)
+    }
+
+    private func SamePreprocessorSymbols(left ImmutableHashSet[string]?, right ImmutableHashSet[string]?) bool {
+        if left == nil || right == nil {
+            return left == nil && right == nil
+        }
+        return left.SetEquals(right)
     }
 
     // ADR-0225: the cut of the prefix tree that this compilation binds, or null.
