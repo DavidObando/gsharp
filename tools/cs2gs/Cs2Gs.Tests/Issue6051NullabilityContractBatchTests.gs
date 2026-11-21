@@ -43,6 +43,48 @@ public static class P
             nullableContextOptions: NullableContextOptions.Enable,
             expectedOutput: "True|True"
         )
+
+        let mixedMethodGroup = `
+#nullable enable
+using System;
+public class Resolver
+{
+    public Type? MapClrTypeToReferences(Type? hostType) => hostType;
+}
+#nullable disable
+public static class P
+{
+    static string Maybe() => null;
+    public static void Main()
+    {
+        var resolver = new Resolver();
+        var mapClrType = resolver.MapClrTypeToReferences;
+        var unusedMap = resolver.MapClrTypeToReferences;
+        var local = Maybe;
+        Console.Write((mapClrType(null) == null) + "|" + (local() == null));
+    }
+}`
+        LiteralConstructionRuntimeParity.AssertMatches(
+            mixedMethodGroup,
+            verifyTranslation: (printed string) -> {
+                Assert.Contains(
+                    "let mapClrType (Type?) -> Type? = resolver.MapClrTypeToReferences",
+                    printed,
+                    StringComparison.Ordinal
+                )
+                Assert.Contains(
+                    "let unusedMap (Type?) -> Type? = resolver.MapClrTypeToReferences",
+                    printed,
+                    StringComparison.Ordinal
+                )
+                Assert.Contains("let local () -> string? = Maybe", printed, StringComparison.Ordinal)
+                Assert.DoesNotContain("((Type?) -> Type?)?", printed, StringComparison.Ordinal)
+                Assert.DoesNotContain("(() -> string?)?", printed, StringComparison.Ordinal)
+            },
+            verifyIL: true,
+            nullableContextOptions: NullableContextOptions.Disable,
+            expectedOutput: "True|True"
+        )
     }
 
     @Fact

@@ -390,8 +390,15 @@ partial class CSharpToGSharpTranslator {
                     )
                 } else if initializer != nil &&
                     (
-                    declarator.Initializer!!.Value is BaseObjectCreationExpressionSyntax and
-                        {ArgumentList: {Arguments: {Count: 1}}}
+                    (
+                        declarator.Initializer!!.Value is BaseObjectCreationExpressionSyntax and
+                            {ArgumentList: {Arguments: {Count: 1}}}
+                    ) ||
+                        this
+                        .context
+                        .SemanticModel
+                        .GetMemberGroup(Unparenthesize(declarator.Initializer!!.Value)!!)
+                        .Length > 0
                 ) &&
                     this
                     .context
@@ -453,11 +460,67 @@ partial class CSharpToGSharpTranslator {
                     // idiomatic unannotated arrow form (issue #1901's own
                     // coverage pins this; a broader condition here
                     // regressed it).
+                    //
+                    // Method-group initializers (`var f = obj.M;`) likewise
+                    // need a target delegate type in G# (GS0582).
                     type = this.typeMapper.MapExplicitType(
                         namedDelegateLocalType,
                         this.context,
                         declaration!!.Type.GetLocation()
                     )
+                    if type is ArrowTypeReference inferredArrow &&
+                        Unparenthesize(declarator.Initializer!!.Value) is {} unwrappedMethodGroup &&
+                        this
+                        .context
+                        .SemanticModel
+                        .GetMemberGroup(unwrappedMethodGroup)
+                        .Length > 0 &&
+                        this
+                        .context
+                        .GetSymbolInfo(unwrappedMethodGroup)
+                        .Symbol is IMethodSymbol methodGroupTarget {
+                        let parameterList = inferredArrow.ParameterTypes.ToList()
+                        var parameterTypes IReadOnlyList[GTypeReference] = parameterList
+                        var parametersChanged = false
+                        if parameterList.Count == methodGroupTarget.Parameters.Length {
+                            let updatedParameters = List[GTypeReference](parameterList.Count)
+                            for var i = 0; i < parameterList.Count; i++ {
+                                let parameterType = parameterList[i]
+                                if !parameterType.IsNullable && this.ShouldPromoteToNullableReference(
+                                    methodGroupTarget.Parameters[i]
+                                ) {
+                                    updatedParameters.Add(MakeNullable(parameterType)!!)
+                                    parametersChanged = true
+                                } else {
+                                    updatedParameters.Add(parameterType)
+                                }
+                            }
+                            if parametersChanged {
+                                parameterTypes = updatedParameters
+                            }
+                        }
+                        let returnList = inferredArrow.ReturnTypes.ToList()
+                        var returnTypes IReadOnlyList[GTypeReference] = returnList
+                        var returnsChanged = false
+                        if !methodGroupTarget.ReturnsVoid &&
+                            returnList.Count == 1 &&
+                            !returnList[0].IsNullable &&
+                            (
+                            this.ShouldPromoteToNullableReference(methodGroupTarget) ||
+                                ObliviousNullabilityAnalyzer.ReturnContractIsNullable(
+                                this.context.Compilation,
+                                methodGroupTarget
+                            )
+                        ) {
+                            returnTypes = List[GTypeReference]{MakeNullable(returnList[0])!!}
+                            returnsChanged = true
+                        }
+                        if parametersChanged || returnsChanged {
+                            type = ArrowTypeReference(parameterTypes, returnTypes, inferredArrow.IsAsync){
+                                IsNullable = inferredArrow.IsNullable
+                            }
+                        }
+                    }
                 }
                 // Keep nullable tuple storage even when the initializer is non-null.
                 if (binding == BindingKind.Var || hasExplicitType) && this.context.GetDeclaredSymbol(
