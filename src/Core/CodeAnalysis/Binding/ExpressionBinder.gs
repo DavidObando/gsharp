@@ -6886,7 +6886,7 @@ internal partial class ExpressionBinder {
                 return nil
             }
             if current?.ThisParameter != nil {
-                return current!!.ThisParameter!!
+                return current.ThisParameter
             }
             return binderCtx.RootScope.TryLookupSymbol("this") as ParameterSymbol
         }

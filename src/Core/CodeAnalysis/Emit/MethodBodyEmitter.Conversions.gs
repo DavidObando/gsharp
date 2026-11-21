@@ -235,7 +235,7 @@ internal partial class MethodBodyEmitter {
             delegateTargetType?.ClrType != nil &&
             ClrTypeUtilities
             .IsDelegateType(delegateTargetType.ClrType) {
-            this.EmitFunctionToDelegateConversion(conv.Expression, sourceFn, delegateTargetType.ClrType!!)
+            this.EmitFunctionToDelegateConversion(conv.Expression, sourceFn, delegateTargetType.ClrType)
             return
         }
         // Issues #1356/#2542/#2618: reference nullability and reference variance

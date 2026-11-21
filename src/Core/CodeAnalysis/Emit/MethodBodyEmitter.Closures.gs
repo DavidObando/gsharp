@@ -304,8 +304,8 @@ internal partial class MethodBodyEmitter {
         // delegate instance using `dup; ldvirtftn; newobj`. Issue #2066:
         // null-guarded via EmitNullGuardedDelegateToDelegateAdaptation so an
         // unsubscribed (null) source flows through as null.
-        if sourceFn?.ClrType != nil && ClrTypeUtilities.IsDelegateType(sourceFn!!.ClrType) {
-            let sourceDelegateType = this.outer.signatures.ResolveDelegateClrType(sourceFn!!)
+        if sourceFn?.ClrType != nil && ClrTypeUtilities.IsDelegateType(sourceFn.ClrType) {
+            let sourceDelegateType = this.outer.signatures.ResolveDelegateClrType(sourceFn)
             let sourceInvoke = sourceDelegateType.GetMethod("Invoke") ??
                 throw InvalidOperationException("Delegate type '${sourceDelegateType.FullName}' has no Invoke method.")
             this.EmitNullGuardedDelegateToDelegateAdaptation(

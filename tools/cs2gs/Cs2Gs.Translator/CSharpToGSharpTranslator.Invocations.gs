@@ -984,12 +984,12 @@ partial class CSharpToGSharpTranslator {
                 methodName = nil
                 return false
             }
-            ownerName = if original!!.ContainingType is {} containingType {
+            ownerName = if original.ContainingType is {} containingType {
                 this.EmittedName(containingType, containingType.Name)
             } else {
                 default(string?)
             }
-            methodName = this.EmittedName(original, original!!.Name)
+            methodName = this.EmittedName(original, original.Name)
             return ownerName != nil
         }
 
@@ -6059,7 +6059,7 @@ partial class CSharpToGSharpTranslator {
             }
             let receiverNamed INamedTypeSymbol? = if receiver != nil {
                 this.GetReceiverOwnerType(receiver)
-            } else if assignment.Left is IdentifierNameSyntax && !targetMember!!.IsStatic {
+            } else if assignment.Left is IdentifierNameSyntax && !targetMember.IsStatic {
                 this.context.SemanticModel.GetEnclosingSymbol(assignment.SpanStart)?.ContainingType
             } else {
                 default(INamedTypeSymbol?)
@@ -10420,8 +10420,8 @@ partial class CSharpToGSharpTranslator {
             if current?.BaseType == nil {
                 return nil
             }
-            if SymbolEqualityComparer.Default.Equals(current, current!!.OriginalDefinition) {
-                return this.ProjectNamedTypeWithReplacements(current!!.BaseType, replacements)
+            if SymbolEqualityComparer.Default.Equals(current, current.OriginalDefinition) {
+                return this.ProjectNamedTypeWithReplacements(current.BaseType, replacements)
             }
             let typeParameterMap = Dictionary[ITypeParameterSymbol, ITypeSymbol](SymbolEqualityComparer.Default)
             for owner in NamedTypeAndContainingTypes(current) {
@@ -10441,7 +10441,7 @@ partial class CSharpToGSharpTranslator {
             for entry in replacements {
                 closedReplacements[entry.Key] = this.SubstituteTypeParameters(entry.Value, typeParameterMap)
             }
-            return this.ProjectNamedTypeWithReplacements(current!!.BaseType, closedReplacements)
+            return this.ProjectNamedTypeWithReplacements(current.BaseType, closedReplacements)
         }
 
         private func ProjectNamedTypeWithReplacements(

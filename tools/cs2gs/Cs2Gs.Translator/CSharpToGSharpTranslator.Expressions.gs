@@ -2622,7 +2622,7 @@ partial class CSharpToGSharpTranslator {
                 if invokedMethod?.ReturnType is IArrayTypeSymbol{
                     ElementType: {IsReferenceType: true} returnElement
                 } returnArray &&
-                    invokedMethod!!
+                    invokedMethod
                     .DeclaringSyntaxReferences
                     .FirstOrDefault()
                     ?.GetSyntax() is MethodDeclarationSyntax declaration {
@@ -3225,31 +3225,30 @@ partial class CSharpToGSharpTranslator {
             .ExpressionSyntax? {
             var current Microsoft.CodeAnalysis.SyntaxNode? = node
             while current?.Parent != nil {
-                if current!!.Parent is ConditionalAccessExpressionSyntax conditional &&
+                if current.Parent is ConditionalAccessExpressionSyntax conditional &&
                     conditional.WhenNotNull == current {
                     return conditional.Expression
                 }
                 if (
-                    current!!.Parent is ConditionalAccessExpressionSyntax nestedConditional &&
+                    current.Parent is ConditionalAccessExpressionSyntax nestedConditional &&
                         nestedConditional.Expression == current
                 ) ||
-                    (current!!.Parent is InvocationExpressionSyntax invocation && invocation.Expression == current) ||
+                    (current.Parent is InvocationExpressionSyntax invocation && invocation.Expression == current) ||
                     (
-                    current!!.Parent is MemberAccessExpressionSyntax memberAccess && memberAccess.Expression == current
+                    current.Parent is MemberAccessExpressionSyntax memberAccess && memberAccess.Expression == current
                 ) ||
                     (
-                    current!!.Parent is ElementAccessExpressionSyntax elementAccess &&
-                        elementAccess.Expression == current
+                    current.Parent is ElementAccessExpressionSyntax elementAccess && elementAccess.Expression == current
                 ) ||
-                    (current!!.Parent is PostfixUnaryExpressionSyntax postfix && postfix.Operand == current) ||
-                    current!!.Parent is Microsoft
+                    (current.Parent is PostfixUnaryExpressionSyntax postfix && postfix.Operand == current) ||
+                    current.Parent is Microsoft
                     .CodeAnalysis
                     .CSharp
                     .Syntax
                     .ParenthesizedExpressionSyntax ||
-                    current!!.Parent is MemberBindingExpressionSyntax ||
-                    current!!.Parent is ElementBindingExpressionSyntax {
-                    current = current!!.Parent
+                    current.Parent is MemberBindingExpressionSyntax ||
+                    current.Parent is ElementBindingExpressionSyntax {
+                    current = current.Parent
                     continue
                 }
                 break
@@ -26686,7 +26685,7 @@ partial class CSharpToGSharpTranslator {
                     .ParenthesizedExpressionSyntax or
                     CastExpressionSyntax
             ) {
-                current = current!!.Parent
+                current = current.Parent
             }
             let materializer InvocationExpressionSyntax? = switch current?.Parent {
                 case member is MemberAccessExpressionSyntax when member.Expression == current &&
@@ -26767,7 +26766,7 @@ partial class CSharpToGSharpTranslator {
             return parameter?.ContainingSymbol is IMethodSymbol method &&
                 ReturnsGenericSelectorResult(
                 method.OriginalDefinition,
-                parameter!!.Ordinal,
+                parameter.Ordinal,
                 lambda.AsyncKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AsyncKeyword)
             )
         }

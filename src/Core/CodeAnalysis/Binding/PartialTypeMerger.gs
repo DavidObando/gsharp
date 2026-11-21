@@ -888,7 +888,7 @@ internal shared class PartialTypeMerger {
         if node?.SyntaxTree?.Text == nil {
             return string.Empty
         }
-        let text = node!!.SyntaxTree.Text.ToString(node!!.Span)
+        let text = node.SyntaxTree.Text.ToString(node.Span)
         let normalized = StringBuilder(text.Length)
         for character in text {
             if !char.IsWhiteSpace(character) {

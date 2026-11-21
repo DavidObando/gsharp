@@ -1087,15 +1087,15 @@ class MigrationPipeline {
                         if prior?.Fingerprint == nil {
                             continue
                         }
-                        if !map_.TryGetValue(prior!!.Fingerprint, out var entries) {
+                        if !map_.TryGetValue(prior.Fingerprint, out var entries) {
                             entries = List[TriageRetryEntry]()
-                            map_[prior!!.Fingerprint] = entries
+                            map_[prior.Fingerprint] = entries
                         }
                         if entries.All(
-                            (e TriageRetryEntry) -> !string.Equals(e.RunId, prior!!.RunId, StringComparison.Ordinal)
+                            (e TriageRetryEntry) -> !string.Equals(e.RunId, prior.RunId, StringComparison.Ordinal)
                         ) {
                             entries.Add(
-                                TriageRetryEntry{RunId: prior!!.RunId, GscVersion: prior!!.GscVersion, Result: "fail"}
+                                TriageRetryEntry{RunId: prior.RunId, GscVersion: prior.GscVersion, Result: "fail"}
                             )
                         }
                     }

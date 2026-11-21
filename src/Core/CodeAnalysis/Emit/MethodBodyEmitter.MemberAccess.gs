@@ -438,7 +438,7 @@ internal partial class MethodBodyEmitter {
             fa.Field
         )
         if this.enclosingClosure?.CaptureFields.ContainsValue(fa.Field) == true {
-            fieldContainer = this.enclosingClosure!!.ConstructedClassSym
+            fieldContainer = this.enclosingClosure.ConstructedClassSym
         }
         var fieldHandle EntityHandle
         if fa.InterfaceType is {} interfaceType {
@@ -534,7 +534,7 @@ internal partial class MethodBodyEmitter {
             fas.Field
         )
         if this.enclosingClosure?.CaptureFields.ContainsValue(fas.Field) == true {
-            fieldContainer = this.enclosingClosure!!.ConstructedClassSym
+            fieldContainer = this.enclosingClosure.ConstructedClassSym
         }
         var fieldHandle EntityHandle
         if fas.InterfaceType is {} interfaceType {

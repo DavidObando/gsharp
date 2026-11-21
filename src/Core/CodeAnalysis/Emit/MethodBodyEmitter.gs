@@ -961,7 +961,7 @@ internal partial class MethodBodyEmitter {
             }
             // ADR-0045: any reference type widens to `object` at the IL
             // level as a no-op; the slot already holds the reference.
-            if b?.ClrType.IsSameAs(typeof(object)) == true && a?.ClrType != nil && !a!!.ClrType!!.IsValueType {
+            if b?.ClrType.IsSameAs(typeof(object)) == true && a?.ClrType != nil && !a.ClrType.IsValueType {
                 return true
             }
             // Issue #990: a user-declared reference type (a `class`, modelled as
@@ -1131,10 +1131,10 @@ internal partial class MethodBodyEmitter {
             // such as Func[string]) widens to System.Delegate /
             // System.MulticastDelegate as a no-op reference upcast.
             if b?.ClrType != nil &&
-                IsSystemDelegateHostType(b!!.ClrType) &&
+                IsSystemDelegateHostType(b.ClrType) &&
                 (
                 (a is FunctionTypeSymbol or DelegateTypeSymbol) ||
-                    (a?.ClrType != nil && ClrTypeUtilities.IsDelegateType(a!!.ClrType))
+                    (a?.ClrType != nil && ClrTypeUtilities.IsDelegateType(a.ClrType))
             ) {
                 return true
             }
@@ -1201,9 +1201,13 @@ internal partial class MethodBodyEmitter {
             // already satisfies the wider static type).
             if a?.ClrType != nil &&
                 b?.ClrType != nil &&
-                !a!!.ClrType!!.IsValueType &&
-                !b!!.ClrType!!.IsValueType &&
-                ClrTypeUtilities.IsAssignableByName(b!!.ClrType, a!!.ClrType) {
+                !a
+                .ClrType
+                .IsValueType &&
+                !b
+                .ClrType
+                .IsValueType &&
+                ClrTypeUtilities.IsAssignableByName(b.ClrType, a.ClrType) {
                 return true
             }
             // Issue #570: cross-context interface implementation check for
@@ -1211,8 +1215,10 @@ internal partial class MethodBodyEmitter {
             // covariance cannot bypass G#'s element restrictions.
             if a?.ClrType != nil &&
                 b?.ClrType != nil &&
-                b!!.ClrType!!.IsInterface &&
-                ClrTypeUtilities.ImplementsInterfaceByName(a!!.ClrType, b!!.ClrType) {
+                b
+                .ClrType
+                .IsInterface &&
+                ClrTypeUtilities.ImplementsInterfaceByName(a.ClrType, b.ClrType) {
                 return true
             }
             // Issue #2140 / #3354: a G# slice, fixed array, or rectangular array
@@ -1402,7 +1408,7 @@ internal partial class MethodBodyEmitter {
         }
 
         internal func ChannelElementNeedsSymbolicType(elementType TypeSymbol) bool -> elementType?.ClrType == nil ||
-            !IsRuntimeProvidedType(elementType.ClrType!!) ||
+            !IsRuntimeProvidedType(elementType.ClrType) ||
             TypeSymbol.RequiresSymbolicProjection(elementType)
 
         // Whether `type` is provided by the live runtime's own loader (a

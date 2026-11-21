@@ -171,7 +171,7 @@ internal shared class ClrOperatorResolution {
             return false
         }
         let candidates = List[MethodInfo]()
-        CollectOperators(operandType!!.ClrType, name, candidates)
+        CollectOperators(operandType.ClrType, name, candidates)
         if candidates.Count == 0 {
             return false
         }
@@ -180,7 +180,7 @@ internal shared class ClrOperatorResolution {
         // to classify as an interpolated string.
         // Constant-narrowing is also unavailable for the same reason: the
         // literal value is not present in this type-only helper.
-        let argTypes = []Type{operandType!!.ClrType!!}
+        let argTypes = []Type{operandType.ClrType!!}
         let outcome = ClrOverloadResolution.Resolve(candidates, argTypes)
         if outcome.Outcome == ClrOverloadResolution.ResolutionOutcome.Resolved && outcome.Best is {} best {
             method = best

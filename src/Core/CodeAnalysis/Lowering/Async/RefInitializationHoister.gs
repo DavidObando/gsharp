@@ -458,7 +458,7 @@ shared class RefInitializationHoister {
             let addressOf BoundAddressOfExpression? = decl.Initializer as BoundAddressOfExpression
             if local?.Type is ByRefTypeSymbol && addressOf != nil {
                 // Retain the original address permissions with the operand template.
-                refLocals[local!!] = addressOf
+                refLocals[local] = addressOf
                 found = true
             }
         } else if statement is BoundIfStatement ifStmt {

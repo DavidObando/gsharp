@@ -189,7 +189,7 @@ ALLOWED: tuple[Allowed, ...] = (
     Allowed("samples/HotReload/global.json", frozenset({"0.3.356"}),
             "placeholder: e2etests/hot-reload-e2e.sh rewrites it to the locally built "
             "SDK and restores it on exit"),
-    Allowed("global.json", frozenset({"0.5.698"}),
+    Allowed("global.json", frozenset({"0.5.767"}),
             "the bootstrap pin: the repository's G# source is compiled by a published SDK "
             "(CONTRIBUTING.md, N-1 rule), independently of the website's release"),
     Allowed("test/InternalAnalyzers.Tests/InternalAnalyzers.Tests.gsproj", frozenset({"0.5.460-g21e3f30fa3"}),
