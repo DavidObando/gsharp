@@ -174,7 +174,13 @@ internal partial class StatementBinder {
             MemberLookup.ResolveGetEnumerator(collectionClrType, out var ambiguousGetEnumerator)
             if ambiguousGetEnumerator {
                 Diagnostics.ReportAmbiguousImportedMember(syntax.Collection.Location, collection.Type, "GetEnumerator")
-                return BoundExpressionStatement(syntax, BoundErrorExpression(nil))
+                return BindForRangeBodyWithoutIteration(
+                    syntax,
+                    labelName,
+                    originatingSyntax,
+                    bindLoopPrelude,
+                    collection
+                )
             }
         }
         // Decide iteration strategy and element/key types based on the
@@ -283,7 +289,13 @@ internal partial class StatementBinder {
                     )
                 } else {
                     Diagnostics.ReportTypeNotIndexable(syntax.Collection.Location, collection.Type ?? TypeSymbol.Error)
-                    return BoundExpressionStatement(syntax, BoundErrorExpression(nil))
+                    return BindForRangeBodyWithoutIteration(
+                        syntax,
+                        labelName,
+                        originatingSyntax,
+                        bindLoopPrelude,
+                        collection
+                    )
                 }
             }
             case openImp is ImportedTypeSymbol when openImp.OpenDefinition != nil &&
@@ -332,7 +344,13 @@ internal partial class StatementBinder {
                     )
                 } else {
                     Diagnostics.ReportTypeNotIndexable(syntax.Collection.Location, collection.Type ?? TypeSymbol.Error)
-                    return BoundExpressionStatement(syntax, BoundErrorExpression(nil))
+                    return BindForRangeBodyWithoutIteration(
+                        syntax,
+                        labelName,
+                        originatingSyntax,
+                        bindLoopPrelude,
+                        collection
+                    )
                 }
             }
             case imp is ImportedTypeSymbol when imp.ClrType != nil {
@@ -371,7 +389,13 @@ internal partial class StatementBinder {
                     )
                 } else {
                     Diagnostics.ReportTypeNotIndexable(syntax.Collection.Location, collection.Type ?? TypeSymbol.Error)
-                    return BoundExpressionStatement(syntax, BoundErrorExpression(nil))
+                    return BindForRangeBodyWithoutIteration(
+                        syntax,
+                        labelName,
+                        originatingSyntax,
+                        bindLoopPrelude,
+                        collection
+                    )
                 }
             }
             case userType is StructSymbol when MemberLookup.TryGetUserPatternEnumerableElementType(
@@ -410,7 +434,13 @@ internal partial class StatementBinder {
                 if collection.Type != TypeSymbol.Error {
                     Diagnostics.ReportTypeNotIndexable(syntax.Collection.Location, collection.Type ?? TypeSymbol.Error)
                 }
-                return BoundExpressionStatement(syntax, BoundErrorExpression(nil))
+                return BindForRangeBodyWithoutIteration(
+                    syntax,
+                    labelName,
+                    originatingSyntax,
+                    bindLoopPrelude,
+                    collection
+                )
             }
         }
         $scope = BoundScope($scope)
@@ -492,6 +522,75 @@ internal partial class StatementBinder {
             breakLabel,
             continueLabel
         )
+    }
+
+    /// Issue #6140: a `for … in` whose collection cannot be iterated (the collection is already an error,
+    /// or its diagnostic was just reported) still binds its body, with error-typed loop variables, so the
+    /// body's declarations exist for the semantic model and the body's own errors are reported. The
+    /// result is not a loop: the program has an error, so it is never lowered or emitted.
+    /// @param syntax The for-range syntax.
+    /// @param labelName The ADR-0070 label, or `null`.
+    /// @param originatingSyntax Syntax node used for the resulting bound node.
+    /// @param bindLoopPrelude The deconstruction prelude of `for (a, b) in coll`, or `null`.
+    /// @param collection The bound collection. It stays in the result, so an error keeps its
+    /// failed-call records and failed receiver, and a collection of the wrong type keeps its anchors.
+    /// @returns The collection statement, the header declarations and the bound body.
+    private func BindForRangeBodyWithoutIteration(
+        syntax ForRangeStatementSyntax,
+        labelName string?,
+        originatingSyntax SyntaxNode,
+        bindLoopPrelude((VariableSymbol) -> ImmutableArray[BoundStatement])?,
+        collection BoundExpression
+    ) BoundStatement {
+        $scope = BoundScope($scope)
+        var valueVariable VariableSymbol
+        if syntax.SecondIdentifier != nil {
+            bindLocalVariable(syntax.FirstIdentifier, false, TypeSymbol.Error)
+            valueVariable = bindLocalVariable(syntax.SecondIdentifier!!, false, TypeSymbol.Error)
+        } else if syntax.TypeClause != nil {
+            valueVariable = bindLocalVariable(
+                syntax.FirstIdentifier,
+                false,
+                bindTypeClause(syntax.TypeClause) ?? TypeSymbol.Error
+            )
+        } else {
+            valueVariable = bindLocalVariable(syntax.FirstIdentifier, false, TypeSymbol.Error)
+        }
+        let prelude = bindLoopPrelude?(valueVariable) ?? ImmutableArray[BoundStatement].Empty
+        let headerDeclarations = DeclareRecoveredHeaderVariables(prelude)
+        let body = BindLoopBody(syntax.Body, labelName, out var breakLabel, out var continueLabel)
+        $scope = $scope.Pop()
+        let statements = ImmutableArray.CreateBuilder[BoundStatement]()
+        statements.Add(BoundExpressionStatement(syntax, collection))
+        statements.AddRange(headerDeclarations)
+        statements.AddRange(prelude)
+        statements.Add(body)
+        statements.Add(BoundLabelStatement(originatingSyntax, continueLabel))
+        statements.Add(BoundLabelStatement(originatingSyntax, breakLabel))
+        return BoundBlockStatement(originatingSyntax, statements.ToImmutable())
+    }
+
+    /// Issue #6140: declares the header variables of a loop that is not iterated (the loop variables
+    /// and any error-typed deconstruction locals), so the semantic model has them even when the body
+    /// never reads them. Variables that [`prelude`](paramref) already declares are skipped.
+    /// @param prelude The statements of the deconstruction prelude.
+    /// @returns A declaration with an error initializer for each other variable of the header scope.
+    private func DeclareRecoveredHeaderVariables(prelude ImmutableArray[BoundStatement]) ImmutableArray[
+        BoundStatement
+    ] {
+        let declared = HashSet[VariableSymbol]()
+        for statement in prelude {
+            if statement is BoundVariableDeclaration declaration {
+                declared.Add(declaration.Variable)
+            }
+        }
+        let declarations = ImmutableArray.CreateBuilder[BoundStatement]()
+        for variable in $scope.GetDeclaredVariables() {
+            if declared.Add(variable) {
+                declarations.Add(BoundVariableDeclaration(nil, variable, BoundErrorExpression(nil)))
+            }
+        }
+        return declarations.ToImmutable()
     }
 
     private func BindForConditionStatement(syntax ForConditionStatementSyntax) BoundStatement {

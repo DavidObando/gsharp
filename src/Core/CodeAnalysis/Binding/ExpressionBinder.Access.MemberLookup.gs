@@ -1619,7 +1619,7 @@ internal partial class ExpressionBinder {
             }
         }
         ReportUnableToFindMemberOrNilableReceiver(receiver, name, receiverSyntax, receiverStart)
-        return BoundErrorExpression(nil)
+        return BoundErrorExpression.ForFailedMemberAccess(receiver, receiverSyntax)
     }
 
     private enum NilableMemberAccessKind {

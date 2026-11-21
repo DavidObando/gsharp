@@ -2997,7 +2997,7 @@ internal partial class StatementBinder {
         // achieving parity with the synchronous `for … in` loop.
         var stream = bindExpression(syntax.Stream, false)
         if stream is BoundErrorExpression {
-            return BoundExpressionStatement(syntax, stream)
+            return BindAwaitForRangeBodyWithoutIteration(syntax, labelName, originatingSyntax, stream)
         }
         // ADR-0186 §4: the asynchronous twin of the `for … in` source check
         // (StatementBinder.Loops). A nil oblivious stream otherwise fails
@@ -3005,7 +3005,7 @@ internal partial class StatementBinder {
         stream = binderCtx.InsertPlatformCheck(stream, syntax.Stream.Location, "an 'await for' source")
         if !MemberLookup.TryGetAsyncEnumerableElementType(stream.Type, out var elementType) {
             Diagnostics.ReportTypeIsNotAsyncEnumerable(syntax.Stream.Location, stream.Type ?? TypeSymbol.Error)
-            return BoundExpressionStatement(syntax, BoundErrorExpression(nil))
+            return BindAwaitForRangeBodyWithoutIteration(syntax, labelName, originatingSyntax, stream)
         }
         $scope = BoundScope($scope)
         let sourceType = Invariant.Required(
@@ -3046,6 +3046,42 @@ internal partial class StatementBinder {
         }
         $scope = $scope.Pop()
         return BoundAwaitForRangeStatement(originatingSyntax, variable, stream, body, breakLabel, continueLabel)
+    }
+
+    /// Issue #6140: the `await for` twin of `BindForRangeBodyWithoutIteration`. A stream that cannot be
+    /// iterated still has its body bound, with an error-typed loop variable, so the body's declarations
+    /// exist for the semantic model and the body's own errors are reported.
+    /// @param syntax The `await for` syntax.
+    /// @param labelName The ADR-0070 label, or `null`.
+    /// @param originatingSyntax Syntax node used for the resulting bound node.
+    /// @param error The error expression of the stream.
+    /// @returns The error statement followed by the bound body.
+    private func BindAwaitForRangeBodyWithoutIteration(
+        syntax AwaitForRangeStatementSyntax,
+        labelName string?,
+        originatingSyntax SyntaxNode,
+        error BoundExpression
+    ) BoundStatement {
+        $scope = BoundScope($scope)
+        let declaredType = if syntax.TypeClause == nil {
+            TypeSymbol.Error
+        } else {
+            bindTypeClause(syntax.TypeClause) ?? TypeSymbol.Error
+        }
+        let variable = bindLocalVariable(syntax.Identifier, false, declaredType)
+        let body = BindLoopBody(syntax.Body, labelName, out var breakLabel, out var continueLabel)
+        $scope = $scope.Pop()
+        return BoundBlockStatement(
+            originatingSyntax,
+            ImmutableArray.Create[BoundStatement](
+                BoundExpressionStatement(syntax, error),
+                // The loop variable is declared even when the body never reads it.
+                BoundVariableDeclaration(nil, variable, BoundErrorExpression(nil)),
+                body,
+                BoundLabelStatement(originatingSyntax, continueLabel),
+                BoundLabelStatement(originatingSyntax, breakLabel)
+            )
+        )
     }
 
     private func BindYieldStatement(syntax YieldStatementSyntax) BoundStatement {

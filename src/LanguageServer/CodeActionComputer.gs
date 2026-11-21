@@ -178,8 +178,15 @@ shared class CodeActionComputer {
         ) {
             return action
         }
+        let documentOf = client.DocumentOf
         for pair in entry.OtherVersions {
-            if CurrentVersion(client, pair.Key) != pair.Value {
+            let other DocumentUri? = DocumentUri.From(pair.Key)
+            let current int32? = if other == nil || documentOf == nil {
+                default(int32?)
+            } else {
+                documentOf(other)?.Version
+            }
+            if current != pair.Value {
                 return action
             }
         }
@@ -381,19 +388,6 @@ shared class CodeActionComputer {
             byUri[d.TextDocument.Uri] = d.Edits
         }
         return WorkspaceEdit{Changes: byUri}
-    }
-
-    // The current client version of an open document, or null.
-    private func CurrentVersion(client CodeActionClientOptions, key string) int32? {
-        let other DocumentUri? = DocumentUri.From(key)
-        if other == nil {
-            return nil
-        }
-        let openDocument DocumentContent? = client.DocumentOf?(other)
-        if openDocument == nil {
-            return nil
-        }
-        return openDocument.Version
     }
 
     // The compilation that holds the document's tree: the project's, else a one-tree compilation.

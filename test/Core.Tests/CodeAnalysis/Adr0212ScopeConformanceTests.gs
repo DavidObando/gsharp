@@ -463,6 +463,113 @@ open class Adr0212ScopeConformanceTests {
         Assert.Equal([]string{"first", "second", "Third", "fourth"}, names)
     }
 
+    // #6140: a `for … in` whose collection cannot be iterated still binds its body, so the body's
+    // declarations and type clauses answer (the language server's sources compile here without
+    // their references, so such loops occur in the conformance corpus).
+    @Theory
+    @InlineData("for pair in Missing.Items {", "pair.Key")
+    @InlineData("for pair in 42 {", "pair")
+    @InlineData("for k, v in Missing.Items {", "k")
+    @InlineData("for (a, b) in Missing.Items {", "a")
+    @InlineData("for item string in Missing.Items {", "item")
+    @InlineData("await for item in Missing.Stream {", "item")
+    @InlineData("await for item in 42 {", "item")
+    func UniterableLoop_BodyDeclarationsAnswer(header string, use string) {
+        let text = `package Conformance
+
+import System
+
+class C {
+    async func Check(flag bool) int32 {
+        ` + header + `
+            let current int32? = if flag {
+                default(int32?)
+            } else {
+                Use(` + use + `)
+            }
+            if current == nil {
+                break
+            }
+        }
+        return 0
+    }
+
+    func Use(value object?) int32? -> nil
+}
+`
+        let tree = SyntaxTree.Parse(SourceText.From(text, "uniterable.gs"))
+        let compilation = Compilation(tree)
+        // The collection's own error only: a use of an error-typed loop variable does not cascade.
+        Assert.Single(compilation.BoundProgram.Diagnostics)
+        let declaration = tree
+            .Root
+            .DescendantNodes()
+            .OfType[VariableDeclarationSyntax]()
+            .Single((d VariableDeclarationSyntax) -> d.Identifier.Text == "current")
+        let model = compilation.GetSemanticModel(tree)
+        Assert.Same(TypeSymbol.Int32, model.GetSymbolInfo(declaration.TypeClause!!.Identifier!!).Symbol)
+        Assert.IsType[LocalVariableSymbol](model.GetDeclaredSymbol(declaration.Identifier))
+        let mismatches = List[string]()
+        CompareCompilation(compilation, mismatches)
+        AssertNoMismatches(mismatches)
+    }
+
+    // #6140: the body of a loop over an error is bound, so its own errors are reported too.
+    @Fact
+    func UniterableLoop_BodyErrorsAreReported() {
+        let text = "func F() {\n    for x in Missing.Items {\n        let y int32 = NotDeclared\n    }\n}\n"
+        let tree = SyntaxTree.Parse(SourceText.From(text, "body.gs"))
+        let messages = Compilation(tree).BoundProgram.Diagnostics.Select((d Diagnostic) -> d.Message).ToList()
+        Assert.Contains(messages, (m string) -> m.Contains("NotDeclared", StringComparison.Ordinal))
+    }
+
+    // #6140: a header variable the body never reads still has its declaration.
+    @Theory
+    @InlineData("for item in 42 {", "item")
+    @InlineData("for k, v in Missing.Items {", "k")
+    @InlineData("for k, v in Missing.Items {", "v")
+    @InlineData("for (a, b) in Missing.Items {", "a")
+    @InlineData("for (a, b) in Missing.Items {", "b")
+    @InlineData("await for item in 42 {", "item")
+    func UniterableLoop_UnreadHeaderVariableIsDeclared(header string, name string) {
+        let text = "package P\n\nclass C {\n    async func Check() {\n        " +
+            header +
+            "\n            let value = 1\n        }\n    }\n}\n"
+        let tree = SyntaxTree.Parse(SourceText.From(text, "unread.gs"))
+        let compilation = Compilation(tree)
+        Assert.Single(compilation.BoundProgram.Diagnostics)
+        let model = compilation.GetSemanticModel(tree)
+        let headerStart = text.IndexOf(header, StringComparison.Ordinal)
+        let token = tree.Root.FindToken(headerStart + header.IndexOf(name, StringComparison.Ordinal))
+        Assert.NotNull(token)
+        Assert.Equal(name, token!!.Text)
+        let local = Assert.IsType[LocalVariableSymbol](model.GetDeclaredSymbol(token!!))
+        Assert.Equal(name, local.Name)
+    }
+
+    // #6140: a collection that is a failed member access keeps its receiver's answers.
+    @Theory
+    @InlineData("for item in c.N {")
+    @InlineData("await for item in c.N {")
+    func UniterableLoop_FailedCollectionReceiverAnswers(header string) {
+        let text = "package P\n\nclass C {\n    var N []int32 = []int32{}\n}\n\nclass D {\n    async func Check(c C?) {\n        " +
+            header +
+            "\n            let value = 1\n        }\n    }\n}\n"
+        let tree = SyntaxTree.Parse(SourceText.From(text, "receiver.gs"))
+        let compilation = Compilation(tree)
+        let model = compilation.GetSemanticModel(tree)
+        let receiver = tree
+            .Root
+            .DescendantNodes()
+            .OfType[AccessorExpressionSyntax]()
+            .Select((a AccessorExpressionSyntax) -> a.LeftPart)
+            .OfType[NameExpressionSyntax]()
+            .Single((n NameExpressionSyntax) -> n.IdentifierToken.Text == "c")
+        let parameter = Assert.IsType[ParameterSymbol](model.GetSymbolInfo(receiver).Symbol)
+        Assert.Equal("c", parameter.Name)
+        Assert.IsType[NullableTypeSymbol](model.GetTypeInfo(receiver).Type)
+    }
+
     @Fact
     func LookupSymbols_AgreesWithTheBinder_OnThePurposeWrittenProgram() {
         let mismatches = List[string]()

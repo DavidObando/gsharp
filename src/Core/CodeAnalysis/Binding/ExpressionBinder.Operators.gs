@@ -56,7 +56,8 @@ internal partial class ExpressionBinder {
         var boundOperand = BindExpression(syntax.Operand)
         if boundOperand.Type == TypeSymbol.Error {
             ReportUnresolvedTargetlessValues(boundOperand)
-            return BoundErrorExpression(nil)
+            // An operand that is a failed member access keeps its receiver (#6127), as a binary one does.
+            return BoundErrorExpression.WithFailedOperands(boundOperand)
         }
         // Issue #2616 / ECMA-334 §14.2.6.1: char participates in unary numeric
         // promotion as int32. Promote before operator lookup so the bound

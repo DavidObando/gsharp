@@ -54,18 +54,65 @@ class BoundErrorExpression : BoundExpression {
         set;
     }
 
+    /// Gets or sets the bound receiver of a member access whose member did not bind (GS0158), so
+    /// the semantic model still answers the receiver's symbol and type (#6127). The receiver is
+    /// not a child of this node: walkers and rewriters do not visit it.
+    internal prop FailedReceiver BoundExpression? {
+        get;
+        set;
+    }
+
+    /// Gets or sets the syntax of (cref:FailedReceiver) when the binder built the receiver from a
+    /// token or an expression it did not anchor (the `c` of a failed write `c.N = 1`).
+    internal prop FailedReceiverSyntax SyntaxNode? {
+        get;
+        set;
+    }
+
     shared {
+        /// Creates the error of a member access whose member did not bind, keeping its receiver.
+        /// @param receiver The bound receiver, or null.
+        /// @param receiverSyntax The receiver's syntax, when the receiver does not carry it.
+        /// @returns The error expression.
+        internal func ForFailedMemberAccess(
+            receiver BoundExpression?,
+            receiverSyntax SyntaxNode? = nil
+        ) BoundErrorExpression {
+            let error = BoundErrorExpression(nil)
+            if receiver != nil && !(receiver is BoundErrorExpression) {
+                error.FailedReceiver = receiver
+                error.FailedReceiverSyntax = receiverSyntax
+            }
+            return error
+        }
+
         /// Creates an error expression that retains any failed-call records from [`left`](paramref) and [`right`](paramref).
         internal func WithFailedOperands(left BoundExpression, right BoundExpression? = nil) BoundErrorExpression {
             let error = BoundErrorExpression(nil)
             var builder ImmutableArray[BoundErrorExpression].Builder? = nil
             if left is BoundErrorExpression leftError &&
-                (!leftError.MemberGroup.IsDefaultOrEmpty || !leftError.FailedChildren.IsDefaultOrEmpty) {
+                (
+                !leftError
+                    .MemberGroup
+                    .IsDefaultOrEmpty ||
+                    !leftError
+                    .FailedChildren
+                    .IsDefaultOrEmpty ||
+                    leftError.FailedReceiver != nil
+            ) {
                 builder ??= ImmutableArray.CreateBuilder[BoundErrorExpression]()
                 builder.Add(leftError)
             }
             if right is BoundErrorExpression rightError &&
-                (!rightError.MemberGroup.IsDefaultOrEmpty || !rightError.FailedChildren.IsDefaultOrEmpty) {
+                (
+                !rightError
+                    .MemberGroup
+                    .IsDefaultOrEmpty ||
+                    !rightError
+                    .FailedChildren
+                    .IsDefaultOrEmpty ||
+                    rightError.FailedReceiver != nil
+            ) {
                 builder ??= ImmutableArray.CreateBuilder[BoundErrorExpression]()
                 if !builder.Contains(rightError) {
                     builder.Add(rightError)

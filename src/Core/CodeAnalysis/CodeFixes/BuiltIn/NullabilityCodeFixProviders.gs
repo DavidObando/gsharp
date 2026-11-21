@@ -6,6 +6,7 @@ package GSharp.Core.CodeAnalysis.CodeFixes.BuiltIn
 
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.CodeFixes
+import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 import System
@@ -14,8 +15,10 @@ import System.Collections.Immutable
 import System.Linq
 
 /// GS0158 on a member of a nullable receiver: `.` → `?.` (ADR-0099, moved to Core by ADR-0227 D7).
-/// @remarks The receiver must look nullable from the syntax: a `?.` chain, a `nil` literal, or a
-/// name whose declared type clause ends with `?`. The fix changes the result type, so it is
+/// @remarks The semantic model must give the receiver a nullable type. Where it has no answer (a
+/// function literal body, #6149; an argument of a failed call, #6150), the receiver must look nullable from the
+/// syntax: a `?.` chain, a `nil` literal, or a name whose declared type clause ends with `?`. The
+/// fix changes the result type, so it is
 /// (cref:Applicability.MaybeIncorrect).
 internal class NullConditionalAccessCodeFixProvider : GSharpCodeFixProvider {
     /// The title of the fix.
@@ -33,7 +36,34 @@ internal class NullConditionalAccessCodeFixProvider : GSharpCodeFixProvider {
         if accessor == nil || accessor.IsNullConditional || !FixSyntax.IsReal(accessor.DotToken) {
             return
         }
-        if !NullabilitySyntax.ReceiverLooksNullable(context.Tree, accessor.LeftPart) {
+        // GS0158 also reports a member that does not exist; `?.` fixes only a member of a receiver
+        // that may be nil.
+        let message = if context.Diagnostic.MessageArguments.IsEmpty {
+            context.Diagnostic.Message
+        } else {
+            context.Diagnostic.MessageArguments[0]
+        }
+        if !message.Contains("may be nil", StringComparison.Ordinal) {
+            return
+        }
+        // `?.` reads a member. An assignment target (`c.N += 1`, `c.Child.N += 1`, `c.N ??= 1`) is
+        // a write, where `?.` is not valid.
+        if IsAssignmentTarget(accessor) {
+            return
+        }
+        // The receiver's type decides (#6127). The model has no answer inside a function literal
+        // (#6149) or in an argument of a call that fails too (#6150); there the syntax decides.
+        let model = context.SemanticModel
+        let receiverType = model.GetReceiverTypeInfo(accessor.LeftPart, context.CancellationToken)
+            .Type ??
+            model
+            .GetTypeInfo(accessor.LeftPart, context.CancellationToken).Type
+        let nullable = if receiverType != nil {
+            receiverType is NullableTypeSymbol
+        } else {
+            NullabilitySyntax.ReceiverLooksNullable(context.Tree, accessor.LeftPart)
+        }
+        if !nullable {
             return
         }
         let dot = accessor.DotToken
@@ -43,6 +73,56 @@ internal class NullConditionalAccessCodeFixProvider : GSharpCodeFixProvider {
             Applicability.MaybeIncorrect,
             (editor SyntaxEditor) -> editor.ReplaceToken(dot, "?.")
         )
+    }
+
+    // Whether the access, or a chain, parentheses or indexing around it, is written: the target of a
+    // compound or null-coalescing assignment, the receiver of a member write (`c.Child.N = 1`), or
+    // the indexed target of an index write (`c.Items[0] = 1`), or a target of a multi-assignment
+    // (`c.N, x = 1, 2`), and the storage of an indirect write (`*c.P = 1`). A right-hand value and an index
+    // argument are reads.
+    private func IsAssignmentTarget(accessor AccessorExpressionSyntax) bool {
+        var current SyntaxNode = accessor
+        while true {
+            let parent = current.Parent
+            // A chain that contains the access, on either side, writes through it when the chain is
+            // written (`c.Tag.N += 1` however the chain nests).
+            if parent is AccessorExpressionSyntax outer {
+                current = outer
+            } else if parent is ParenthesizedExpressionSyntax {
+                current = parent
+            } else if parent is IndexExpressionSyntax indexed && object.ReferenceEquals(indexed.Target, current) {
+                current = indexed
+            } else if parent is UnaryExpressionSyntax dereference &&
+                dereference
+                .OperatorToken
+                .Kind == SyntaxKind.StarToken {
+                current = dereference
+            } else {
+                break
+            }
+        }
+        return switch current.Parent {
+            case compound is EventSubscriptionExpressionSyntax: object.ReferenceEquals(compound.LeftHandSide, current)
+            case coalescing is NullCoalescingAssignmentExpressionSyntax: object.ReferenceEquals(
+                coalescing.Target,
+                current
+            )
+            case member is MemberFieldAssignmentExpressionSyntax: object.ReferenceEquals(member.Receiver, current)
+            case index is MemberIndexAssignmentExpressionSyntax: object.ReferenceEquals(index.Target, current)
+            case compoundIndex is CompoundIndexAssignmentExpressionSyntax: object.ReferenceEquals(
+                compoundIndex.Target,
+                current
+            )
+            case indirect is IndirectAssignmentExpressionSyntax: object.ReferenceEquals(indirect.Target, current)
+            case indirectCompound is IndirectCompoundAssignmentExpressionSyntax: object.ReferenceEquals(
+                indirectCompound.Target,
+                current
+            )
+            case multi is MultiAssignmentStatementSyntax: multi.Targets.Any(
+                (target ExpressionSyntax) -> object.ReferenceEquals(target, current)
+            )
+            default: false
+        }
     }
 
     // The smallest accessor whose right part covers the span. GS0158 is reported at the member name.

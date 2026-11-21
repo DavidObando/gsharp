@@ -883,6 +883,35 @@ partial class SemanticModel {
         }
     }
 
+    /// Gets the variable, field or property that an assignment writes. The receiver of a field or
+    /// property write (an implicit `this`, or the variable before the dot) is not the target (#6126).
+    private func AssignedSymbol(node BoundExpression) Symbol? -> switch node {
+        case BoundAssignmentExpression{Variable: ImplicitFieldVariableSymbol implicitField}: implicitField.Field
+        case BoundAssignmentExpression{Variable: ImplicitStaticFieldVariableSymbol staticField}: staticField.Field
+        case BoundAssignmentExpression{
+            Variable: ImplicitPropertyVariableSymbol implicitProperty
+        }: implicitProperty.Property
+        case BoundAssignmentExpression{
+            Variable: ImplicitStaticPropertyVariableSymbol staticProperty
+        }: staticProperty.Property
+        case field is BoundFieldAssignmentExpression: TypeMemberModel.PropertyForBackingField(
+            field.StructType,
+            field.Field
+        ) ??
+            cast[Symbol](field.Field)
+        case BoundPropertyAssignmentExpression{
+            SubstitutedType: {} substitutedType
+        } property when !object.ReferenceEquals(substitutedType, property.Property.Type): property
+            .Property
+            .WithSignature(substitutedType, property.Property.Parameters)
+        case property is BoundPropertyAssignmentExpression: property.Property
+        case clr is BoundClrPropertyAssignmentExpression: ImportedMemberSymbol(
+            clr.ConstrainedInterfaceType ?? clr.Receiver?.Type ?? clr.StaticContainerType,
+            clr.Member
+        )
+        default: default(Symbol?)
+    }
+
     private func ReferencedCallSymbol(receiverType TypeSymbol?, function FunctionSymbol?, type TypeSymbol) Symbol? {
         if function == nil {
             return nil
@@ -956,6 +985,18 @@ partial class SemanticModel {
         if index.Value.TypeClauseTokens.TryGetValue(token, out var clauseType) {
             return clauseType
         }
+        // The target or the receiver of an assignment answers what the assignment writes, or the
+        // variable it writes through (#6126).
+        // An imported member written by bare name keeps the lookup below, which names it at its
+        // declaring type.
+        if AssignmentTokenSymbol(token) is {} assigned &&
+            !(token.Parent is AssignmentExpressionSyntax && IsImportedMemberSymbol(assigned)) {
+            return if SpellsName(assigned, token.ValueText) {
+                assigned
+            } else {
+                default(Symbol?)
+            }
+        }
         let node = Unwrap(FindReferencedNode(token))
         let symbol = if node == nil {
             default(Symbol?)
@@ -972,6 +1013,80 @@ partial class SemanticModel {
         } else {
             default(Symbol?)
         }
+    }
+
+    /// Gets the symbol of an assignment's target token (`N` in `N = 1` or `c.N = 1`), or of the
+    /// receiver token of a member write (`c` in `c.N = 1`), from the bound assignment.
+    private func AssignmentTokenSymbol(token SyntaxToken) Symbol? {
+        return switch token.Parent {
+            case assignment is AssignmentExpressionSyntax when object.ReferenceEquals(
+                assignment.IdentifierToken,
+                token
+            ): GetSymbolInfo(assignment).Symbol
+            case field is FieldAssignmentExpressionSyntax when object.ReferenceEquals(
+                field.FieldIdentifier,
+                token
+            ): GetSymbolInfo(field).Symbol
+            case field is FieldAssignmentExpressionSyntax when object.ReferenceEquals(
+                field.Receiver,
+                token
+            ): AssignmentReceiverSymbol(GetBoundNode(field))
+            case member is MemberFieldAssignmentExpressionSyntax when object.ReferenceEquals(
+                member.FieldIdentifier,
+                token
+            ): GetSymbolInfo(member).Symbol
+            default: default(Symbol?)
+        }
+    }
+
+    private func IsImportedMemberSymbol(symbol Symbol) bool -> switch symbol {
+        case ImportedFunctionSymbol _: true
+        case property is PropertySymbol: property.ImportedMember != nil
+        case field is FieldSymbol: field.ImportedMember != nil
+        default: false
+    }
+
+    /// Gets the variable a field or property write goes through: the bound assignment's receiver.
+    private func AssignmentReceiverSymbol(bound BoundNode?) Symbol? {
+        var current = bound
+        for var depth = 0; depth < 16 && current != nil; depth++ {
+            switch current {
+                case field is BoundFieldAssignmentExpression {
+                    return if field.Receiver != nil {
+                        cast[Symbol](field.Receiver)
+                    } else if field.ReceiverExpression is {} receiverExpression &&
+                        Unwrap(receiverExpression) is {} read {
+                        ReferencedSourceSymbol(read)
+                    } else {
+                        default(Symbol?)
+                    }
+                }
+                case property is BoundPropertyAssignmentExpression {
+                    return if property.Receiver is {} receiver && Unwrap(receiver) is {} read {
+                        ReferencedSourceSymbol(read)
+                    } else {
+                        default(Symbol?)
+                    }
+                }
+                case clr is BoundClrPropertyAssignmentExpression {
+                    return if clr.Receiver is {} receiver && Unwrap(receiver) is {} read {
+                        ReferencedSourceSymbol(read)
+                    } else {
+                        default(Symbol?)
+                    }
+                }
+                case expression is BoundExpression when expression.LogicalCompletionOperand is {} operand {
+                    current = operand
+                }
+                case conversion is BoundConversionExpression {
+                    current = conversion.Expression
+                }
+                default {
+                    return nil
+                }
+            }
+        }
+        return nil
     }
 
     private func ReferencedFieldSymbol(field BoundFieldAccessExpression) Symbol {

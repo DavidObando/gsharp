@@ -564,11 +564,13 @@ class Lowerer : BoundTreeRewriter {
         // ADR-0051: an auto-property write lowers to a backing-field store only
         // when UsesBackingField permits it. Otherwise it stays an accessor call.
         if UsesBackingField(node.Property, isWrite: true) {
+            // The store keeps the assignment's anchor, as the read above does, so the semantic
+            // model answers the property for `P = 1` (#6126).
             let value = RewriteExpression(node.Value)
             // Issue #263: static auto-property assignment — lower to static field assignment.
             if node.Receiver == nil {
                 return BoundFieldAssignmentExpression(
-                    nil,
+                    node.Syntax,
                     receiver: nil,
                     Invariant.Required(
                         node.StructType,
@@ -576,12 +578,13 @@ class Lowerer : BoundTreeRewriter {
                         expression: "node.StructType"
                     ),
                     node.Property.BackingField!!,
-                    value
+                    value,
+                    node.Type
                 )
             }
             if node.Receiver is BoundVariableExpression varExpr {
                 return BoundFieldAssignmentExpression(
-                    nil,
+                    node.Syntax,
                     varExpr.Variable,
                     Invariant.Required(
                         node.StructType,
@@ -589,7 +592,8 @@ class Lowerer : BoundTreeRewriter {
                         expression: "node.StructType"
                     ),
                     node.Property.BackingField!!,
-                    value
+                    value,
+                    node.Type
                 )
             }
         }

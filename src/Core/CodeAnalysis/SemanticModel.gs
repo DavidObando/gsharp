@@ -187,7 +187,8 @@ partial class SemanticModel {
     /// symbol it holds: the field or enum member behind a constant-folded
     /// literal, the property behind an auto-property backing-field read (at the
     /// constructed receiver's signature), and the type behind a static
-    /// qualifier whose read the binder folded. An identifier token answers the
+    /// qualifier whose read the binder folded. An assignment answers the variable, field
+    /// or property it writes, not the receiver of the write. An identifier token answers the
     /// symbol the binder recorded for it (a local, a parameter, a pattern
     /// variable) or the symbol it names; a name that differs from the token text, and
     /// a field-like event's backing field, answer nothing.
@@ -215,6 +216,14 @@ partial class SemanticModel {
             if current is BoundExpression{LogicalCompletionOperand: {} operand} {
                 bound = operand
                 continue
+            }
+            // An assignment answers the variable, field or property it writes, never the receiver
+            // of the write (#6126). A write to a field-like event's backing field answers nothing.
+            if current is BoundFieldAssignmentExpression{Field: {IsEventBackingField: true}} {
+                return SymbolInfo.None
+            }
+            if current is BoundExpression written && AssignedSymbol(written) is {} assigned {
+                return SymbolInfo(assigned)
             }
             if current is BoundExpression expression &&
                 (
@@ -522,6 +531,17 @@ partial class SemanticModel {
         }
 
         private func RecordFailedCall(error BoundErrorExpression) {
+            // The receiver of a member access that did not bind keeps its own anchors (#6127).
+            if error.FailedReceiver is {} receiver {
+                VisitExpression(receiver)
+                if literalDepth == 0 && error.FailedReceiverSyntax is {} receiverSyntax && object.ReferenceEquals(
+                    receiverSyntax.SyntaxTree,
+                    tree
+                ) &&
+                    !boundBySyntax.ContainsKey(receiverSyntax) {
+                    boundBySyntax.Add(receiverSyntax, receiver)
+                }
+            }
             if error.CallSyntax is {} callSyntax && !error.MemberGroup.IsDefaultOrEmpty && object.ReferenceEquals(
                 callSyntax.SyntaxTree,
                 tree
