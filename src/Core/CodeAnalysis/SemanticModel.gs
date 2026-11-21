@@ -414,6 +414,11 @@ partial class SemanticModel {
         private let logicalCompletions Dictionary[BoundExpression, BoundExpression?]
         private let staticQualifierTypes Dictionary[SyntaxNode, TypeSymbol?]
         private let failedCalls Dictionary[SyntaxNode, BoundErrorExpression]
+        // A failed call can be reached as an inner failed call and as a failed argument of the call
+        // around it; each is walked once, so nested failures stay linear.
+        private let walkedFailures HashSet[BoundErrorExpression] = HashSet[BoundErrorExpression](
+            ReferenceEqualityComparer.Instance
+        )
 
         init(
             tree SyntaxTree,
@@ -543,6 +548,9 @@ partial class SemanticModel {
         }
 
         private func RecordFailedCall(error BoundErrorExpression) {
+            if !walkedFailures.Add(error) {
+                return
+            }
             // The receiver of a member access or a call that did not bind keeps its own anchors
             // (#6127, #6151), and so do the arguments of a call that did not bind (#6150).
             if !error.FailedArguments.IsDefaultOrEmpty {

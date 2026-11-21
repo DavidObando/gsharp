@@ -157,6 +157,44 @@ open class Issue6150FailedCallArgumentTests {
     }
 
     @Fact
+    func FunctionLiteralArgumentOfAFailedImportedCall_BodyAnswers() {
+        // The literal is bound against the candidates' delegate type, not through the expression
+        // dispatch, before the arity check rejects the call.
+        let (model, tree, compilation) = CreateModel(
+            "package P\n\nimport System.Collections.Generic\n\nfunc F(values List[int32]) {\n    let x = 1\n    let k = values.FindAll((v int32) -> v > x, 2)\n}\n"
+        )
+        Assert.Contains(compilation.GetDiagnostics(), (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+        let x = Assert.Single(Names(tree, "x"))
+        Assert.Equal("x", Assert.IsAssignableFrom[VariableSymbol](model.GetSymbolInfo(x).Symbol).Name)
+        Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(x).Type)
+        let v = Assert.Single(Names(tree, "v"))
+        Assert.Equal("v", Assert.IsType[ParameterSymbol](model.GetSymbolInfo(v).Symbol).Name)
+        let values = Assert.Single(Names(tree, "values"))
+        Assert.Equal("values", Assert.IsType[ParameterSymbol](model.GetSymbolInfo(values).Symbol).Name)
+    }
+
+    @Fact
+    func DeeplyNestedFailedCalls_WithMemberGroups_IndexEachFailureOnce() {
+        // With member groups recorded, an inner failed call is both an inner failed call and a
+        // failed argument of the call around it. Walking both at every level doubles the work per
+        // level; 40 levels would not finish.
+        var call = "Use(x, 2)"
+        for var i = 0; i < 40; i++ {
+            call = "Use(" + call + ", 2)"
+        }
+        let source = "package P\n\nfunc Use(v int32) int32 -> v\n\nfunc F() {\n    let x = 1\n    let k = " +
+            call +
+            "\n}\n"
+        let tree = SyntaxTree.Parse(SourceText.From(source, "nested.gs"))
+        let compilation = Compilation(tree)
+        compilation.RecordMemberGroups = true
+        let model = compilation.GetSemanticModel(tree)
+        let x = Assert.Single(Names(tree, "x"))
+        Assert.Equal("x", Assert.IsAssignableFrom[VariableSymbol](model.GetSymbolInfo(x).Symbol).Name)
+        Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(x).Type)
+    }
+
+    @Fact
     func Diagnostics_AreUnchangedByTheIndex() {
         let source = "package P\n\nfunc Use(v int32) int32 -> v\n\nfunc F() {\n    let x = 1\n    let k = Use(x, 2)\n}\n"
         let tree = SyntaxTree.Parse(SourceText.From(source, "issue6150.gs"))

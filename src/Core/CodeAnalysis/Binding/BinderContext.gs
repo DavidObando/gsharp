@@ -91,26 +91,29 @@ internal class BinderContext {
     /// not shared between threads.
     private var callArguments Dictionary[SyntaxNode, BoundExpression]?
 
-    /// Remembers [`bound`](paramref) when [`syntax`](paramref) is the value of a call argument, so a
-    /// call that fails keeps it for the semantic model (#6150). A `ref`/`out` argument is recorded
-    /// both at its operand and at the argument itself, whose bind builds the address-of, the
-    /// conditional reference or the inline declaration.
+    /// Remembers [`bound`](paramref) when [`syntax`](paramref) is a call argument, so a call that
+    /// fails keeps it for the semantic model (#6150). The record is keyed by the argument as the
+    /// argument list holds it (inside a named argument), reached from its operand through
+    /// parentheses and `ref`/`out`; the last bind of the argument wins, so the argument's own bind
+    /// (the address-of, the conditional reference, the inline declaration, the target-typed
+    /// function literal) replaces its operand's.
     /// @param syntax The expression the binder bound.
     /// @param bound Its bound node.
-    internal func RecordCallArgument(syntax ExpressionSyntax, bound BoundExpression) {
+    internal func RecordCallArgument(syntax SyntaxNode, bound BoundExpression) {
         var argument SyntaxNode = syntax
-        if argument.Parent is RefArgumentExpressionSyntax refArgument {
-            argument = refArgument
+        while argument.Parent is {} enclosing and (ParenthesizedExpressionSyntax or RefArgumentExpressionSyntax) {
+            argument = enclosing
         }
+        var listed SyntaxNode = argument
         if argument.Parent is {} wrapper and (NamedArgumentExpressionSyntax or NamedTupleElementSyntax) {
-            argument = wrapper
+            listed = wrapper
         }
-        if argument.Parent is not(CallExpressionSyntax or BaseInterfaceCallExpressionSyntax) {
+        if listed.Parent is not(CallExpressionSyntax or BaseInterfaceCallExpressionSyntax) {
             return
         }
         let table = callArguments ?? Dictionary[SyntaxNode, BoundExpression](ReferenceEqualityComparer.Instance)
         callArguments = table
-        table[syntax] = bound
+        table[argument] = bound
     }
 
     /// Finishes the bind of the call that [`syntax`](paramref) spells, if any: a call, a
@@ -152,18 +155,7 @@ internal class BinderContext {
         let error = bound as BoundErrorExpression
         if callArguments is {Count: > 0} table {
             for argument in arguments {
-                let value = ArgumentValue(argument)
-                var argumentBound BoundExpression? = nil
-                // A `ref`/`out` argument answers at the argument, else at its operand.
-                if value is RefArgumentExpressionSyntax refArgument {
-                    if refArgument.Expression is {} operand && table.Remove(operand, out var operandBound) {
-                        argumentBound = operandBound
-                    }
-                }
-                if table.Remove(value, out var valueBound) {
-                    argumentBound = valueBound
-                }
-                if argumentBound == nil {
+                if !table.Remove(ArgumentValue(argument), out var argumentBound) {
                     continue
                 }
                 if error != nil && !object.ReferenceEquals(argumentBound, error) {
