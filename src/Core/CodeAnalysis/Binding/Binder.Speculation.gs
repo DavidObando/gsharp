@@ -207,11 +207,17 @@ partial class Binder {
                 if directCycle || overridesCycle {
                     return SpeculativePass("the call-effect summary of the member has a cycle")
                 }
+                // A summary that depends on the root of its traversal (whether the root takes a sequence)
+                // is not the member's own: a caller that takes a sequence sees other effects, and the full
+                // pass caches the callees' summaries as its earlier roots saw them.
+                let services = parentScope.GetBindingServices()
+                if services.EnumerationEffectsDependOnRoot {
+                    return SpeculativePass("a call-effect summary of the member depends on the caller")
+                }
                 // The traversal from this member caches the summaries of its callees as seen from it (a
                 // callee's enumeration of a sequence can run a deferred callback only when the root takes a
                 // sequence). The bind asks for each callee's summary as its own root, so it starts without
                 // them.
-                let services = parentScope.GetBindingServices()
                 services.CachedCallEffectSummaries = nil
                 services.CachedCallEffectSummariesWithOverrides = nil
                 let allPathsReturnLocation = if function.Type != TypeSymbol.Void {
@@ -228,6 +234,9 @@ partial class Binder {
                     allPathsReturnLocation,
                     convenienceConstructor: nil
                 )
+                if services.EnumerationEffectsDependOnRoot {
+                    return SpeculativePass("a call-effect summary that the bind reads depends on the caller")
+                }
                 if (globalScope.RefDelegateCache is {} && parentScope.GetSynthesizedRefDelegateCache().WasQueried) ||
                     parentScope
                     .GetAnonymousTypeCache()

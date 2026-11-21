@@ -8014,6 +8014,8 @@ internal partial class StatementBinder {
     }
 
     private func VisitingChainAcceptsEnumerable(visiting HashSet[FunctionSymbol]) bool {
+        // The answer depends on the root of the traversal, not on the function being summarized.
+        binderCtx.Services.EnumerationEffectsDependOnRoot = true
         if activeRootVisitingFunction is {} rootFn {
             for p in rootFn.Parameters {
                 if IsLazyEnumerableType(p.Type) {

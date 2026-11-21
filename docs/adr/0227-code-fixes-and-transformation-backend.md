@@ -483,7 +483,8 @@ The check binds the declared body and the edited body, each in a body pass of it
 
 An edit inside a body can still change what other code reports. The check falls back when:
 
-- the call-effect summary of the member changes, or has a cycle. The narrowing of every caller reads it, through the callee's body syntax. The summary is computed with the edited body in place of the declared one. The traversal caches its callees' summaries as seen from the member, which can differ from a callee's own summary (an enumeration in a callee can run a deferred callback only when the root takes a sequence), so the bind of each body starts without those cached summaries. The full pass shares that cache across members in bind order; the check that the declared body reports what the compilation recorded catches an order effect on the declared body.
+- the call-effect summary of the member changes, or has a cycle. The narrowing of every caller reads it, through the callee's body syntax. The summary is computed with the edited body in place of the declared one.
+- a call-effect traversal of either pass, in the summary probe or in the bind, asks whether its root takes a sequence. The analysis merges the effects of deferred-enumeration callbacks only when it does, so the summary depends on the caller. The full pass also caches callee summaries as its earlier roots saw them, in bind order. The bind of each body starts without the summaries that the probe cached.
 - for a struct or class member, the edit changes whether the body takes a reference to a member name. The narrowing scans every body of the type for that.
 - the edit changes whether the member provably returns a non-nil value. The narrowing of a caller reads the callee's body for that proof.
 - the edit changes whether the body writes the name of a callable field of a declared type. The call-effect analysis reads the field's initializer only while no tree writes that name.
@@ -500,11 +501,11 @@ An edit inside a body can still change what other code reports. The check falls 
 
 | Corpus | Candidates | Body-local | Full delta p50 / p95 | Default delta p50 / p95 | Body-local only p50 / p95 |
 | --- | --- | --- | --- | --- | --- |
-| Oats S0 dev repair log, 304 distinct broken programs (built-in fixes) | 50 | 26 | 4.8 ms / 9.9 ms | 4.3 ms / 11.9 ms | 3.0 ms / 9.7 ms (the full delta of the same 26: 4.2 ms / 7.2 ms) |
-| `src/LanguageServer` (37 files), one statement inserted at the start of a function body, 30 edits | 30 | 19 | 652 ms / 1617 ms | 33 ms / 687 ms | 16 ms / 97 ms |
-| `src/Core` (814 files), the same edit, 6 edits | 6 | 1 | 31.0 s / 33.6 s | 28.3 s / 36.8 s | 0.23 s |
+| Oats S0 dev repair log, 304 distinct broken programs (built-in fixes) | 50 | 26 | 6.8 ms / 13.7 ms | 6.0 ms / 16.9 ms | 4.3 ms / 10.1 ms (the full delta of the same 26: 6.4 ms / 10.1 ms) |
+| `src/LanguageServer` (37 files), one statement inserted at the start of a function body, 30 edits | 30 | 17 | 797 ms / 1676 ms | 44 ms / 981 ms | 22 ms / 97 ms |
+| `src/Core` (814 files), the same edit, 6 edits | 6 | 1 | 34.1 s / 41.1 s | 32.5 s / 39.7 s | 0.26 s |
 
-A warm check costs 5.3 ms / 19.0 ms for the Oats programs, 1.8 s for `src/LanguageServer` and 22.4 s for `src/Core`. For a single-file program the body-local check costs about what the full check costs, because it binds two bodies in two passes and the program is small; its p95 is a little higher. For a project it is one to two orders of magnitude cheaper when it applies. The Oats fallbacks: 18 deferred LINQ calls, 3 parse-only exits, 2 call-effect changes, 1 async member. The project fallbacks: deferred LINQ calls (8), cross-body syntax (5), cycles in the call-effect summary (3). No candidate gave a different delta.
+A warm check costs 7.9 ms / 24.1 ms for the Oats programs, 1.8 s for `src/LanguageServer` and 22.3 s for `src/Core`. For a single-file program the body-local check costs about what the full check costs, because it binds two bodies in two passes and the program is small; the p95 of the two is about the same. For a project it is one to two orders of magnitude cheaper when it applies. The Oats fallbacks: 18 deferred LINQ calls, 3 parse-only exits, 2 call-effect changes, 1 async member. The project fallbacks: deferred LINQ calls (8), cross-body syntax (5), cycles in the call-effect summary (3), summaries that depend on the caller (2). No candidate gave a different delta.
 
 The 50 candidates are fewer than the 118 of the phase-1–3 measurement. That measurement ran before the numeric conversion was narrowed to simple operands, and over the 327 records rather than the 304 distinct programs; how the difference splits between the two was not measured.
 

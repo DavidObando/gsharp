@@ -354,27 +354,14 @@ open class Adr0227BodyLocalDeltaTests {
     }
 
     @Fact
-    func SummaryProbeOfAMemberThatTakesASequence_DoesNotSeedTheCalleeSummariesOfTheBind() {
+    func EditInAMemberThatTakesASequence_WhereEnumerationHasAnEffect_FallsBack() {
         // Under the root `F`, which takes a sequence, `G`'s enumeration of a local sequence may run the
         // deferred callback of `H`, which writes a `C?`. The bind asks for `G`'s own summary, which does
-        // not, so the full check keeps the narrowing of `a` across `G()`.
+        // not, so the full check keeps the narrowing of `a` across `G()`. The summary probe of the body-local
+        // check cached `G`'s summary as seen from `F` and gave a GS0158 that the full check does not report.
         const source = "package P\n\nimport System.Collections.Generic\nimport System.Linq\n\nclass C {\n    var Value int32 = 1\n}\n\nclass Box {\n    var Item C? = nil\n}\n\nfunc H(items IEnumerable[int32], box Box) IEnumerable[int32] -> items.Select((x int32) -> {\n    box.Item = nil\n    return x\n})\n\nfunc G() int32 {\n    let xs IEnumerable[int32] = List[int32]()\n    return xs.Count()\n}\n\nfunc F(items IEnumerable[int32], ref a C?) int32 {\n    let n = G()\n    if a == nil {\n        return n\n    }\n    return a.Value\n}\n"
-        // A default resolver depends on what the process has loaded, and so does this program's bind: an
-        // explicit resolver over the assemblies it uses.
         let tree = SyntaxTree.Parse(SourceText.From(source, "f0.gs"))
-        let compilation = Compilation(
-            ReferenceResolver.WithReferences(
-                []string{
-                    typeof(object).Assembly.Location,
-                    typeof(List[int32]).Assembly.Location,
-                    typeof(Enumerable).Assembly.Location,
-                    Path.Combine(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "System.Runtime.dll"),
-                    Path.Combine(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "System.Collections.dll")
-                }
-                    .Distinct().ToArray()
-            ),
-            tree
-        )
+        let compilation = Compilation(SequenceResolver(), tree)
         let (full, local) = BothOn(
             compilation,
             tree,
@@ -382,8 +369,53 @@ open class Adr0227BodyLocalDeltaTests {
             "    if a == nil {\n        return 0\n    }\n    let n = G()\n    return a.Value + n\n"
         )
         Assert.Empty(full.Added)
-        Assert.True(local.BodyLocal, local.BodyLocalFallbackReason)
+        Assert.False(local.BodyLocal)
         AssertSameDelta(full, local, "root-dependent callee summary")
+    }
+
+    @Fact
+    func EditThatEnumeratesUnderAWrapperThatTakesASequence_FallsBack() {
+        // `G`'s own summaries stay empty, but under the root `K`, which takes a sequence, its new
+        // enumeration may run `H`'s callback, which writes a `C?`; `Caller` loses the narrowing of `a`.
+        const source = "package P\n\nimport System.Collections.Generic\nimport System.Linq\n\nclass C {\n    var Value int32 = 1\n}\n\nclass Box {\n    var Item C? = nil\n}\n\nfunc H(items IEnumerable[int32], box Box) IEnumerable[int32] -> items.Select((x int32) -> {\n    box.Item = nil\n    return x\n})\n\nfunc Caller(items IEnumerable[int32], ref a C?) int32 {\n    if a == nil {\n        return 0\n    }\n    let n = K(items)\n    return a.Value + n\n}\n\nfunc K(items IEnumerable[int32]) int32 {\n    return G()\n}\n\nfunc G() int32 {\n    let xs IEnumerable[int32] = List[int32]()\n    return 1\n}\n"
+        let tree = SyntaxTree.Parse(SourceText.From(source, "f0.gs"))
+        let (full, local) = BothOn(Compilation(SequenceResolver(), tree), tree, "return 1", "return xs.Count()")
+        Assert.Contains(full.Added, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.False(local.BodyLocal)
+        AssertSameDelta(full, local, "caller-dependent enumeration")
+    }
+
+    @Fact
+    func EditOfAnEarlierWrapperThatStopsCachingACalleeSummary_FallsBack() {
+        // Binding `Pre` asks for `K`'s summary, which caches `G`'s summary as seen from `K`; `Caller` then
+        // reads it. The edited `K` writes as much but no longer calls `G`.
+        const source = "package P\n\nimport System.Collections.Generic\nimport System.Linq\n\nclass C {\n    var Value int32 = 1\n}\n\nclass Box {\n    var Item C? = nil\n}\n\nfunc H(items IEnumerable[int32], box Box) IEnumerable[int32] -> items.Select((x int32) -> {\n    box.Item = nil\n    return x\n})\n\nfunc Pre(items IEnumerable[int32], ref a C?) int32 {\n    if a == nil {\n        return 0\n    }\n    let n = K(items)\n    return a.Value + n\n}\n\nfunc K(items IEnumerable[int32]) int32 {\n    return G()\n}\n\nfunc Caller(ref b C?) int32 {\n    if b == nil {\n        return 0\n    }\n    let n = G()\n    return b.Value + n\n}\n\nfunc G() int32 {\n    let xs IEnumerable[int32] = List[int32]()\n    return xs.Count()\n}\n"
+        let tree = SyntaxTree.Parse(SourceText.From(source, "f0.gs"))
+        let (full, local) = BothOn(
+            Compilation(SequenceResolver(), tree),
+            tree,
+            "    return G()\n",
+            "    return items.Count()\n"
+        )
+        Assert.Contains(full.Removed, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.False(local.BodyLocal)
+        AssertSameDelta(full, local, "cached callee summary")
+    }
+
+    // A default resolver depends on what the process has loaded, and so does the bind of a program whose
+    // narrowing reads deferred-enumeration effects: an explicit resolver over the assemblies it uses.
+    private func SequenceResolver() ReferenceResolver {
+        let runtime = Path.GetDirectoryName(typeof(object).Assembly.Location)!!
+        return ReferenceResolver.WithReferences(
+            []string{
+                typeof(object).Assembly.Location,
+                typeof(List[int32]).Assembly.Location,
+                typeof(Enumerable).Assembly.Location,
+                Path.Combine(runtime, "System.Runtime.dll"),
+                Path.Combine(runtime, "System.Collections.dll")
+            }
+                .Distinct().ToArray()
+        )
     }
 
     @Fact

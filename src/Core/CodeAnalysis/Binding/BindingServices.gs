@@ -89,6 +89,10 @@ internal class BindingServices {
         return declaration?.Body
     }
 
+    /// Gets or sets a value that tells whether a call-effect traversal of this pass asked whether its root
+    /// takes a sequence: the summary it computed or cached depends on the root (ADR-0227 D4).
+    var EnumerationEffectsDependOnRoot bool
+
     /// Issue #5326: cached direct call-effect summaries by original function symbol.
     var CachedCallEffectSummaries Dictionary[FunctionSymbol, CallEffectSummary]?
 
