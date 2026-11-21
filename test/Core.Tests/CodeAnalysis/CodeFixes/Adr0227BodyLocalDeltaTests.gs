@@ -354,11 +354,12 @@ open class Adr0227BodyLocalDeltaTests {
     }
 
     @Fact
-    func EditInAMemberThatTakesASequence_WhereEnumerationHasAnEffect_FallsBack() {
+    func EditInAMemberThatTakesASequence_WhereEnumerationHasAnEffect_IsBodyLocal() {
         // Under the root `F`, which takes a sequence, `G`'s enumeration of a local sequence may run the
-        // deferred callback of `H`, which writes a `C?`. The bind asks for `G`'s own summary, which does
-        // not, so the full check keeps the narrowing of `a` across `G()`. The summary probe of the body-local
-        // check cached `G`'s summary as seen from `F` and gave a GS0158 that the full check does not report.
+        // deferred callback of `H`, which writes a `C?`. The bind asks for `G`'s summary under the root `G`,
+        // which takes none, so the full check keeps the narrowing of `a` across `G()`. The summary probe
+        // computes `G`'s summary under the root `F` too; the caches keep the two apart (issue #6162), so the
+        // body-local check reports no GS0158 either.
         const source = "package P\n\nimport System.Collections.Generic\nimport System.Linq\n\nclass C {\n    var Value int32 = 1\n}\n\nclass Box {\n    var Item C? = nil\n}\n\nfunc H(items IEnumerable[int32], box Box) IEnumerable[int32] -> items.Select((x int32) -> {\n    box.Item = nil\n    return x\n})\n\nfunc G() int32 {\n    let xs IEnumerable[int32] = List[int32]()\n    return xs.Count()\n}\n\nfunc F(items IEnumerable[int32], ref a C?) int32 {\n    let n = G()\n    if a == nil {\n        return n\n    }\n    return a.Value\n}\n"
         let tree = SyntaxTree.Parse(SourceText.From(source, "f0.gs"))
         let compilation = Compilation(SequenceResolver(), tree)
@@ -369,7 +370,7 @@ open class Adr0227BodyLocalDeltaTests {
             "    if a == nil {\n        return 0\n    }\n    let n = G()\n    return a.Value + n\n"
         )
         Assert.Empty(full.Added)
-        Assert.False(local.BodyLocal)
+        Assert.True(local.BodyLocal, local.BodyLocalFallbackReason)
         AssertSameDelta(full, local, "root-dependent callee summary")
     }
 
@@ -382,13 +383,17 @@ open class Adr0227BodyLocalDeltaTests {
         let (full, local) = BothOn(Compilation(SequenceResolver(), tree), tree, "return 1", "return xs.Count()")
         Assert.Contains(full.Added, (d Diagnostic) -> d.Id == "GS0158")
         Assert.False(local.BodyLocal)
+        // `G`'s summary under a root that takes a sequence changes.
+        Assert.Equal("the edit changes the call-effect summary of the member", local.BodyLocalFallbackReason)
         AssertSameDelta(full, local, "caller-dependent enumeration")
     }
 
     @Fact
-    func EditOfAnEarlierWrapperThatStopsCachingACalleeSummary_FallsBack() {
-        // Binding `Pre` asks for `K`'s summary, which caches `G`'s summary as seen from `K`; `Caller` then
-        // reads it. The edited `K` writes as much but no longer calls `G`.
+    func EditOfAnEarlierWrapperThatStopsCallingACallee_IsBodyLocal() {
+        // Binding `Pre` asks for `K`'s summary, which computes `G`'s summary under the root `K`, which takes
+        // a sequence. The edited `K` writes as much but no longer calls `G`. Before issue #6162 `Caller` read
+        // that summary from the cache and reported a GS0158 that the edit removed; it reads `G`'s summary
+        // under its own root now, which takes no sequence, so the narrowing of `b` holds before and after.
         const source = "package P\n\nimport System.Collections.Generic\nimport System.Linq\n\nclass C {\n    var Value int32 = 1\n}\n\nclass Box {\n    var Item C? = nil\n}\n\nfunc H(items IEnumerable[int32], box Box) IEnumerable[int32] -> items.Select((x int32) -> {\n    box.Item = nil\n    return x\n})\n\nfunc Pre(items IEnumerable[int32], ref a C?) int32 {\n    if a == nil {\n        return 0\n    }\n    let n = K(items)\n    return a.Value + n\n}\n\nfunc K(items IEnumerable[int32]) int32 {\n    return G()\n}\n\nfunc Caller(ref b C?) int32 {\n    if b == nil {\n        return 0\n    }\n    let n = G()\n    return b.Value + n\n}\n\nfunc G() int32 {\n    let xs IEnumerable[int32] = List[int32]()\n    return xs.Count()\n}\n"
         let tree = SyntaxTree.Parse(SourceText.From(source, "f0.gs"))
         let (full, local) = BothOn(
@@ -397,8 +402,8 @@ open class Adr0227BodyLocalDeltaTests {
             "    return G()\n",
             "    return items.Count()\n"
         )
-        Assert.Contains(full.Removed, (d Diagnostic) -> d.Id == "GS0158")
-        Assert.False(local.BodyLocal)
+        Assert.DoesNotContain(full.Removed, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.True(local.BodyLocal, local.BodyLocalFallbackReason)
         AssertSameDelta(full, local, "cached callee summary")
     }
 

@@ -7388,17 +7388,23 @@ internal partial class StatementBinder {
     }
 
     /// Computes the call-effect summary of [`function`](paramref) as the root of a traversal, for
-    /// the body-local check of the diagnostic-delta gate (ADR-0227 D4, issue #6128).
+    /// the body-local check of the diagnostic-delta gate (ADR-0227 D4, issue #6128). The traversal
+    /// answers [`rootTakesSequence`](paramref) wherever it asks whether its root takes a sequence, so
+    /// the summary is the one that a caller with that answer reads (issue #6162).
     internal func GetFunctionEffectSummaryForSpeculation(
         function FunctionSymbol,
         includeOverrides bool,
+        rootTakesSequence bool,
         out hitCycle bool
-    ) CallEffectSummary -> GetFunctionEffectSummaryCore(
-        function,
-        includeOverrides,
-        HashSet[FunctionSymbol](),
-        out hitCycle
-    )
+    ) CallEffectSummary {
+        let previous = rootTakesSequenceOverride
+        rootTakesSequenceOverride = rootTakesSequence
+        try {
+            return GetFunctionEffectSummaryCore(function, includeOverrides, HashSet[FunctionSymbol](), out hitCycle)
+        } finally {
+            rootTakesSequenceOverride = previous
+        }
+    }
 
     /// Returns a value that tells whether the call-effect analysis treats a call named
     /// [`name`](paramref) as a deferred LINQ operator (ADR-0227 D4, issue #6128).
@@ -7434,7 +7440,10 @@ internal partial class StatementBinder {
 
     private var activeTraversalDirectMemo Dictionary[FunctionSymbol, CallEffectSummary]? = nil
     private var activeTraversalOverridesMemo Dictionary[FunctionSymbol, CallEffectSummary]? = nil
-    private var activeRootVisitingFunction FunctionSymbol? = nil
+    // Issue #6162: whether the root of the active traversal takes a sequence. A summary can depend on
+    // it (VisitingChainAcceptsEnumerable), so the caches keep one summary for each answer.
+    private var activeRootTakesSequence bool = false
+    private var rootTakesSequenceOverride bool? = nil
 
     private func GetFunctionEffectSummaryCore(
         function FunctionSymbol,
@@ -7444,9 +7453,18 @@ internal partial class StatementBinder {
     ) CallEffectSummary {
         let orig = function
         let services = binderCtx.Services
+        let isTopLevelRoot = visiting.Count == 0
+        // Issue #6162: the root's answer selects the cache slot, so every traversal reads what a
+        // traversal from its own root computes.
+        let takesSequence = if isTopLevelRoot {
+            rootTakesSequenceOverride ?? FunctionTakesSequence(orig)
+        } else {
+            activeRootTakesSequence
+        }
+        let directCache = services.CallEffectSummaryCache(includeOverrides: false, takesSequence)
+        let overridesCache = services.CallEffectSummaryCache(includeOverrides: true, takesSequence)
         if includeOverrides {
-            if services.CachedCallEffectSummariesWithOverrides != nil &&
-                services.CachedCallEffectSummariesWithOverrides!!.TryGetValue(orig, out var cachedWithOverrides) {
+            if overridesCache.TryGetValue(orig, out var cachedWithOverrides) {
                 hitCycle = false
                 return cachedWithOverrides
             }
@@ -7458,10 +7476,7 @@ internal partial class StatementBinder {
                 return memoWithOverrides
             }
         } else {
-            if services.CachedCallEffectSummaries != nil && services.CachedCallEffectSummaries!!.TryGetValue(
-                orig,
-                out var cachedDirect
-            ) {
+            if directCache.TryGetValue(orig, out var cachedDirect) {
                 hitCycle = false
                 return cachedDirect
             }
@@ -7470,7 +7485,6 @@ internal partial class StatementBinder {
                 return memoDirect
             }
         }
-        let isTopLevelRoot = visiting.Count == 0
         if isTopLevelRoot {
             activeTraversalDirectMemo = Dictionary[FunctionSymbol, CallEffectSummary](
                 ReferenceEqualityComparer.Instance
@@ -7478,7 +7492,7 @@ internal partial class StatementBinder {
             activeTraversalOverridesMemo = Dictionary[FunctionSymbol, CallEffectSummary](
                 ReferenceEqualityComparer.Instance
             )
-            activeRootVisitingFunction = orig
+            activeRootTakesSequence = takesSequence
         }
         if !visiting.Add(orig) {
             hitCycle = true
@@ -7488,10 +7502,7 @@ internal partial class StatementBinder {
         }
         var localCycle = false
         var directSummary CallEffectSummary
-        if services.CachedCallEffectSummaries != nil && services.CachedCallEffectSummaries!!.TryGetValue(
-            orig,
-            out var existingDirect
-        ) {
+        if directCache.TryGetValue(orig, out var existingDirect) {
             directSummary = existingDirect
         } else if activeTraversalDirectMemo != nil && activeTraversalDirectMemo!!.TryGetValue(
             orig,
@@ -7505,12 +7516,7 @@ internal partial class StatementBinder {
                 activeTraversalDirectMemo!![orig] = directSummary
             }
             if !localCycle || visiting.Count == 1 {
-                if services.CachedCallEffectSummaries == nil {
-                    services.CachedCallEffectSummaries = Dictionary[FunctionSymbol, CallEffectSummary](
-                        ReferenceEqualityComparer.Instance
-                    )
-                }
-                services.CachedCallEffectSummaries!![orig] = directSummary
+                directCache[orig] = directSummary
             }
         }
         if !includeOverrides {
@@ -7518,7 +7524,7 @@ internal partial class StatementBinder {
             if isTopLevelRoot {
                 activeTraversalDirectMemo = nil
                 activeTraversalOverridesMemo = nil
-                activeRootVisitingFunction = nil
+                activeRootTakesSequence = false
             }
             hitCycle = localCycle
             return directSummary
@@ -7558,17 +7564,12 @@ internal partial class StatementBinder {
             activeTraversalOverridesMemo!![orig] = combined
         }
         if !localCycle || visiting.Count == 0 {
-            if services.CachedCallEffectSummariesWithOverrides == nil {
-                services.CachedCallEffectSummariesWithOverrides = Dictionary[FunctionSymbol, CallEffectSummary](
-                    ReferenceEqualityComparer.Instance
-                )
-            }
-            services.CachedCallEffectSummariesWithOverrides!![orig] = combined
+            overridesCache[orig] = combined
         }
         if isTopLevelRoot {
             activeTraversalDirectMemo = nil
             activeTraversalOverridesMemo = nil
-            activeRootVisitingFunction = nil
+            activeRootTakesSequence = false
         }
         hitCycle = localCycle
         return combined
@@ -8013,14 +8014,14 @@ internal partial class StatementBinder {
         return false
     }
 
-    private func VisitingChainAcceptsEnumerable(visiting HashSet[FunctionSymbol]) bool {
-        // The answer depends on the root of the traversal, not on the function being summarized.
-        binderCtx.Services.EnumerationEffectsDependOnRoot = true
-        if activeRootVisitingFunction is {} rootFn {
-            for p in rootFn.Parameters {
-                if IsLazyEnumerableType(p.Type) {
-                    return true
-                }
+    // The answer depends on the root of the traversal, not on the function being summarized, so the
+    // summary caches keep one slot for each answer (issue #6162).
+    private func VisitingChainAcceptsEnumerable(visiting HashSet[FunctionSymbol]) bool -> activeRootTakesSequence
+
+    private func FunctionTakesSequence(function FunctionSymbol) bool {
+        for p in function.Parameters {
+            if IsLazyEnumerableType(p.Type) {
+                return true
             }
         }
         return false
