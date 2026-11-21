@@ -372,7 +372,10 @@ shared class BaseCallForwarderRewriter {
                 .Binding
                 .OverloadResolution
                 .OverloadResolver
-                .SeedFixedOwnerTypeParameters(targetInterface, substitution)
+                .SeedFixedOwnerTypeParameters(
+                (method.ContainingType as InterfaceSymbol) ?? targetInterface,
+                substitution
+            )
             let typeParameters = CloneMethodTypeParameters(method.TypeParameters, substitution)
             let Substitute = func (type TypeSymbol) TypeSymbol {
                 return if substitution.Count == 0 {

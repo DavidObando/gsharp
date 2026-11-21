@@ -163,12 +163,17 @@ class C : IDefault[int32] {
         let csSource = `using System;
 namespace ProbeClr
 {
+    public static class Store
+    {
+        public static int Value = 40;
+    }
     public interface IClrDefault<T>
     {
         T Read() => default!;
         T Echo(T value) => value;
         U Map<U>(T value, Func<T, U> f) => f(value);
         T Prop => default!;
+        ref int RefVal => ref Store.Value;
     }
 }`
         using let fixture = CSharpFixture(csSource, assemblyName: "ProbeClrDim")
@@ -187,7 +192,8 @@ class ClassInt : IClrDefault[int32] {
         let a = base[IClrDefault[int32]].Echo(41) + 1
         let b = base[IClrDefault[int32]].Map[string](9, (x int32) -> "c:${x}")
         let c = base[IClrDefault[int32]].Prop
-        return "${a}|${b}|${c}"
+        let d = base[IClrDefault[int32]].RefVal + 2
+        return "${a}|${b}|${c}|${d}"
     }
 }
 
@@ -207,8 +213,48 @@ Console.WriteLine(ClassInt().Run())
 Console.WriteLine(ClassItem().Run(Item("user")))
 Console.WriteLine(StructInt{}.Run())`
         let output = CompileAndRunWithReference(gsSource, fixture.AssemblyPath)
-        let expected = string.Join(Environment.NewLine, "42|c:9|0", "user", "23") + Environment.NewLine
+        let expected = string.Join(Environment.NewLine, "42|c:9|0|42", "user", "23") + Environment.NewLine
         Assert.Equal(expected, output)
+    }
+
+    @Fact
+    func InheritedGenericBaseInterface_DependentConstraint_AsyncAndLambda_VerifyAndRun() {
+        let source = `package Probe
+import System
+import System.Threading.Tasks
+
+open class Animal {
+    open func Tag() string -> "animal"
+}
+
+class Dog : Animal {
+    override func Tag() string -> "dog"
+}
+
+interface IBase[T] {
+    func Accept[U T](u U) U { return u }
+}
+
+interface IDerived[T] : IBase[T] {
+}
+
+class Handler : IDerived[Animal] {
+    func Accept[U Animal](u U) U -> u
+    async func RunAsync(d Dog) string {
+        await Task.Yield()
+        return base[IDerived[Animal]].Accept[Dog](d).Tag()
+    }
+    func RunLambda(d Dog) string {
+        let fn = () -> base[IDerived[Animal]].Accept[Dog](d).Tag()
+        return fn()
+    }
+}
+
+let h = Handler()
+Console.WriteLine(h.RunAsync(Dog()).GetAwaiter().GetResult())
+Console.WriteLine(h.RunLambda(Dog()))`
+        let expected = string.Join(Environment.NewLine, "dog", "dog") + Environment.NewLine
+        Assert.Equal(expected, CompileAndRun(source))
     }
 
     shared {

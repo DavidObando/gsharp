@@ -287,6 +287,93 @@ class C : IClrDefault[int32] {
         Assert.Contains(Compile(abstractMember, refs), (d Diagnostic) -> d.Id == "GS0340")
     }
 
+    @Fact
+    func InheritedGenericBaseInterface_DependentMethodConstraint_EnforcesBound() {
+        let accepted = `
+open class Animal {
+}
+class Dog : Animal {
+}
+interface IBase[T] {
+    func Accept[U T](u U) U { return u }
+    func Accept[U T](u U, tag string) U { return u }
+}
+interface IDerived[T] : IBase[T] {
+}
+class Handler : IDerived[Animal] {
+    func Run(d Dog) Dog {
+        let fn = () -> base[IDerived[Animal]].Accept[Dog](d)
+        return fn()
+    }
+}
+`
+        Assert.Empty(Compile(accepted))
+
+        let rejected = `
+open class Animal {
+}
+interface IBase[T] {
+    func Accept[U T](u U) U { return u }
+    func Accept[U T](u U, tag string) U { return u }
+}
+interface IDerived[T] : IBase[T] {
+}
+class Handler : IDerived[Animal] {
+    func Bad() string -> base[IDerived[Animal]].Accept[string]("bad")
+}
+`
+        let diagnostics = Compile(rejected)
+        Assert.NotEmpty(diagnostics)
+        Assert.Contains(diagnostics, (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+    }
+
+    @Fact
+    func ImportedClrInterface_IndexerInitOnlyAndRefProperty_EnforceContracts() {
+        let csharp = `using System;
+namespace ProbeClr {
+    public static class Store {
+        public static int Value = 41;
+    }
+    public interface IClrProps<T> {
+        T this[int index] => default!;
+        T InitProp { get => default!; init { } }
+        ref int RefVal => ref Store.Value;
+    }
+}`
+        using let fixture = CSharpFixture(csharp)
+        let refs = fixture.RuntimeReferences()
+
+        let indexerAsProp = `package App
+import ProbeClr
+
+class C : IClrProps[int32] {
+    func ReadItem() int32 -> base[IClrProps[int32]].Item
+    func WriteItem() { base[IClrProps[int32]].Item = 1 }
+}
+`
+        let indexerDiags = Compile(indexerAsProp, refs)
+        Assert.Equal(2, indexerDiags.Where((d Diagnostic) -> d.Id == "GS0339").Count())
+
+        let initOnlyOutsideCtor = `package App
+import ProbeClr
+
+class C : IClrProps[int32] {
+    func WriteInit() { base[IClrProps[int32]].InitProp = 7 }
+}
+`
+        let initDiags = Compile(initOnlyOutsideCtor, refs)
+        Assert.Contains(initDiags, (d Diagnostic) -> d.Id == "GS0372")
+
+        let refPropRead = `package App
+import ProbeClr
+
+class C : IClrProps[int32] {
+    func ReadRefPlusOne() int32 -> base[IClrProps[int32]].RefVal + 1
+}
+`
+        Assert.Empty(Compile(refPropRead, refs))
+    }
+
     shared {
         private func Compile(source string, references ReferenceResolver? = nil) System
             .Collections

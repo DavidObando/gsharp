@@ -3058,13 +3058,14 @@ internal partial class ExpressionBinder {
             return BoundErrorExpression(nil)
         }
         let receiver = BoundVariableExpression(nil, thisParameter)
+        let selectedOwner = (selected.ContainingType as InterfaceSymbol) ?? ifaceSym
         let bound = overloads.BindUserInstanceCall(
             receiver,
             selected,
             arguments,
             synthesizedCall,
             argumentNames,
-            explicitOwnerType: ifaceSym
+            explicitOwnerType: selectedOwner
         )
         let completedSuspendingCall BoundUserInstanceCallExpression? = if selected.IsSuspending {
             TryGetCompletedSuspendingInstanceCall(bound)
@@ -3101,7 +3102,7 @@ internal partial class ExpressionBinder {
             propName,
             BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
         )
-        if clrProp == nil {
+        if clrProp == nil || clrProp.GetIndexParameters().Length > 0 {
             if syntax.IsPropertyWrite && syntax.Value is {} valueSyntax {
                 let _ = BindExpression(valueSyntax)
             }
@@ -3136,6 +3137,7 @@ internal partial class ExpressionBinder {
                 )
                 return BoundErrorExpression(nil)
             }
+            EnforceImportedInitOnlyAssignment(clrProp, receiver, equalsToken.Location)
             let converted = conversions.BindConversion(valueSyntax.Location, boundValue, propType)
             return BoundImportedInstanceCallExpression(
                 syntax,
@@ -3163,14 +3165,16 @@ internal partial class ExpressionBinder {
             )
             return BoundErrorExpression(nil)
         }
-        return BoundImportedInstanceCallExpression(
-            syntax,
-            receiver,
-            getter,
-            propType,
-            ImmutableArray[BoundExpression].Empty,
-            isNonVirtualBaseCall: true
-        ){NonVirtualBaseTargetType = ifaceType}
+        return ConversionClassifier.AutoDereferenceRefReturn(
+            BoundImportedInstanceCallExpression(
+                syntax,
+                receiver,
+                getter,
+                propType,
+                ImmutableArray[BoundExpression].Empty,
+                isNonVirtualBaseCall: true
+            ){NonVirtualBaseTargetType = ifaceType}
+        )
     }
 
     private func BindBaseClrInterfaceMethodCall(
