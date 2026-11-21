@@ -2613,7 +2613,10 @@ partial class CSharpToGSharpTranslator {
                         } else {
                             projectedElementReturn
                         }
-                        if !SymbolEqualityComparer.IncludeNullability.Equals(invocationReturn, effectiveReturn) {
+                        if SymbolEqualityComparer.Default.Equals(invocationReturn, effectiveReturn) &&
+                            !SymbolEqualityComparer
+                            .IncludeNullability
+                            .Equals(invocationReturn, effectiveReturn) {
                             return effectiveReturn
                         }
                     }

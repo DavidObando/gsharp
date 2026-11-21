@@ -542,6 +542,27 @@ public static class Demo {` + identityBody + `
     }
 
     @Fact
+    func Issue6159_ExplicitWiderGenericLinqElementType_DoesNotNarrowToContainerElement() {
+        let printed = Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+public static class Demo {
+    public static string Run() {
+        var source = new { Items = new List<string> { "x" } };
+        var empty = new { Items = new List<string>() };
+        var first = new { Value = Enumerable.First<object>(source.Items) };
+        var fallback = new { Value = Enumerable.FirstOrDefault<object>(empty.Items, 42) };
+        return first.Value.ToString() + ":" + fallback.Value?.ToString();
+    }
+}`, strictIl: true, expectedOutput: "x:42")
+        Assert.Contains("Value object)", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("Value string)", printed, StringComparison.Ordinal)
+    }
+
+    @Fact
     func EmptyGenericCollectionInitializer_KeepsParenthesesAndBinds() {
         let collection = CollectionInitializerExpression(
             InvocationExpression(
