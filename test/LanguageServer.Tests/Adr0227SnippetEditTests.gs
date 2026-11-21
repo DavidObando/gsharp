@@ -6,12 +6,14 @@ package GSharp.LanguageServer.Tests
 
 import GSharp.Core.CodeAnalysis.CodeFixes
 import GSharp.Core.CodeAnalysis.Syntax
+import GSharp.Core.CodeAnalysis.Text
 import GSharp.LanguageServer
 import GSharp.LanguageServer.Protocol
 import GSharp.LanguageServer.Server
 import Range = GSharp.LanguageServer.Protocol.Range
 import System
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.Linq
 import System.Text.Json
 import System.Threading
@@ -117,6 +119,62 @@ open class Adr0227SnippetEditTests {
         let resolved = CodeActionComputer.ResolveCodeAction(listed, content, client)
         let edit = Assert.IsType[SnippetTextEdit](Assert.Single(Assert.Single(resolved.Edit!!.DocumentChanges!!).Edits))
         Assert.Equal("$${1:value} /* $${2:\\$$\\}} \\\\ */", edit.Snippet.Value)
+    }
+
+    @Fact
+    func SnippetEdits_NumberTabStopsAcrossChanges_AtTheirOffsetsInTheChangedText() {
+        // The first change is shorter than the text it replaces, so the placeholder of the second change
+        // sits two characters before its original position in the changed text.
+        let tree = SyntaxTree.Parse(SourceText.From(Source, "a.gs"))
+        let first = Source.IndexOf("string?", StringComparison.Ordinal)
+        let second = Source.IndexOf("null", StringComparison.Ordinal)
+        let changes = ImmutableArray.Create(
+            TextChange(TextSpan(first, 7), "int32"),
+            TextChange(TextSpan(second, 4), "0 + n")
+        )
+        let placeholders = ImmutableArray.Create(TextSpan(first, 5), TextSpan(second - 2 + 4, 1))
+        let edits = CodeActionComputer.SnippetEdits(DocumentChanges(tree, changes, placeholders))
+        Assert.Equal(2, edits.Count)
+        Assert.Equal("$${1:int32}", Assert.IsType[SnippetTextEdit](edits[0]).Snippet.Value)
+        Assert.Equal("0 + $${2:n}", Assert.IsType[SnippetTextEdit](edits[1]).Snippet.Value)
+        let at = LanguageServerTestHelpers.PositionOf(Source, "null")
+        Assert.Equal(at.Line, edits[1].Range.Start.Line)
+        Assert.Equal(at.Character, edits[1].Range.Start.Character)
+    }
+
+    @Fact
+    func SnippetEdits_KeepAChangeWithoutAPlaceholderPlain() {
+        let tree = SyntaxTree.Parse(SourceText.From(Source, "a.gs"))
+        let first = Source.IndexOf("string?", StringComparison.Ordinal)
+        let second = Source.IndexOf("null", StringComparison.Ordinal)
+        let changes = ImmutableArray.Create(
+            TextChange(TextSpan(first, 7), "int32"),
+            TextChange(TextSpan(second, 4), "0")
+        )
+        let placeholders = ImmutableArray.Create(TextSpan(second - 2, 1))
+        let edits = CodeActionComputer.SnippetEdits(DocumentChanges(tree, changes, placeholders))
+        Assert.IsNotType[SnippetTextEdit](edits[0])
+        Assert.Equal("int32", edits[0].NewText)
+        Assert.Equal("$${1:0}", Assert.IsType[SnippetTextEdit](edits[1]).Snippet.Value)
+    }
+
+    @Fact
+    func SnippetEdits_PlaceholderOutsideTheNewTextOfOneChange_GivesPlainEdits() {
+        // The first placeholder runs from the new text of the first change into unchanged text.
+        let tree = SyntaxTree.Parse(SourceText.From(Source, "a.gs"))
+        let first = Source.IndexOf("string?", StringComparison.Ordinal)
+        let second = Source.IndexOf("null", StringComparison.Ordinal)
+        let changes = ImmutableArray.Create(
+            TextChange(TextSpan(first, 7), "int32"),
+            TextChange(TextSpan(second, 4), "0")
+        )
+        let placeholders = ImmutableArray.Create(TextSpan(first + 3, 4), TextSpan(second - 2, 1))
+        let edits = CodeActionComputer.SnippetEdits(DocumentChanges(tree, changes, placeholders))
+        Assert.Equal(2, edits.Count)
+        Assert.IsNotType[SnippetTextEdit](edits[0])
+        Assert.IsNotType[SnippetTextEdit](edits[1])
+        Assert.Equal("int32", edits[0].NewText)
+        Assert.Equal("0", edits[1].NewText)
     }
 
     @Fact
