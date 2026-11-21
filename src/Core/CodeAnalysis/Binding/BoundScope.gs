@@ -98,7 +98,9 @@ partial class BoundScope {
         independentBodyRoot = true,
         bindingServices = BindingServices(){
             BodyBindingOptions = GetBindingServices().BodyBindingOptions,
-            SourceNullableAnnotationErrors = GetBindingServices().SourceNullableAnnotationErrors
+            SourceNullableAnnotationErrors = GetBindingServices().SourceNullableAnnotationErrors,
+            RecordedBodyDiagnostics = GetBindingServices().RecordedBodyDiagnostics,
+            SpeculativeBodies = GetBindingServices().SpeculativeBodies
         }
     }
 
@@ -2059,8 +2061,33 @@ partial class BoundScope {
             return Parent.SetCurrentReferencingSyntaxTree(tree)
         }
         let previous = currentReferencingSyntaxTree.Value
-        this.currentReferencingSyntaxTree.Value = tree
+        // ADR-0227 D4 (issue #6128): a speculative body pass binds an edited body of a file whose
+        // declarations, imports included, belong to the file's tree before the edit.
+        this
+            .currentReferencingSyntaxTree
+            .Value = if tree != nil &&
+            speculativeEditedTree != nil &&
+            object.ReferenceEquals(tree, speculativeEditedTree) {
+            speculativeDeclaringTree
+        } else {
+            tree
+        }
         return previous
+    }
+
+    private var speculativeEditedTree SyntaxTree?
+    private var speculativeDeclaringTree SyntaxTree?
+
+    /// Makes [`editedTree`](paramref) count as [`declaringTree`](paramref) wherever this pass selects
+    /// the imports and declarations of a file (ADR-0227 D4, issue #6128). Only a speculative body pass,
+    /// whose symbols belong to the tree before the edit, sets it.
+    internal func SetSpeculativeTreeAlias(editedTree SyntaxTree, declaringTree SyntaxTree) {
+        if Parent != nil {
+            Parent.SetSpeculativeTreeAlias(editedTree, declaringTree)
+            return
+        }
+        speculativeEditedTree = editedTree
+        speculativeDeclaringTree = declaringTree
     }
 
     internal func GetCurrentReferencingSyntaxTreeForCache() SyntaxTree? -> GetCurrentReferencingSyntaxTree()

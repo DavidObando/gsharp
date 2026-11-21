@@ -27,7 +27,7 @@ SCRIPT = REPO / "build" / "release-publish.py"
 
 RIDS = ("linux-x64", "linux-arm64", "win-x64", "win-arm64", "osx-x64", "osx-arm64")
 OTHERS = ("Gsharp.NET.Sdk", "Gsharp.Compiler", "Gsharp.Templates", "Gsharp.Repl", "Gsharp.Gsfmt", "Gsharp.Cs2Gs",
-          "GSharp.CodeAnalysis.Analyzers.Testing")
+          "GSharp.CodeAnalysis.Analyzers.Testing", "GSharp.CodeAnalysis.Transformations")
 NO_SYMBOLS = ("Gsharp.Templates", "Gsharp.Compiler")
 # ADR-0223 D2: the runtime files of the SDK (one copy each) and of Gsharp.Compiler (the same bytes).
 RUNTIMES = {"Gsharp.Extensions.dll": "extensions", "Gsharp.Runtime.Channels.dll": "channels",
@@ -182,7 +182,7 @@ class VerifyNugetTests(unittest.TestCase):
         make_packages(self.nupkgs)
         result = self.verify()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("verified 13 packages and 5 symbol packages at 0.5.212", result.stdout)
+        self.assertIn("verified 14 packages and 6 symbol packages at 0.5.212", result.stdout)
 
     def test_prerelease_version_passes(self) -> None:
         make_packages(self.nupkgs, version="0.5.300-g1a2b3c4")
@@ -340,7 +340,7 @@ class VerifyNugetTests(unittest.TestCase):
     def test_each_missing_metadata_field_fails_in_every_package(self) -> None:
         # Issue #5621: the RID packages had no readme or icon, and Gsharp.Templates had no license or project URL.
         names = [f"Gsharp.NET.Sdk.Compiler.{rid}" for rid in RIDS] + list(OTHERS)
-        self.assertEqual(len(names), 13)
+        self.assertEqual(len(names), 14)
         for field in METADATA:
             for name in names:
                 with self.subTest(field=field, package=name):
@@ -560,7 +560,8 @@ class NugetPushTests(unittest.TestCase):
             "Gsharp.Repl.0.5.212.nupkg", "Gsharp.Repl.0.5.212.snupkg",
             "Gsharp.Gsfmt.0.5.212.nupkg", "Gsharp.Gsfmt.0.5.212.snupkg",
             "Gsharp.Cs2Gs.0.5.212.nupkg", "Gsharp.Cs2Gs.0.5.212.snupkg",
-            "GSharp.CodeAnalysis.Analyzers.Testing.0.5.212.nupkg", "GSharp.CodeAnalysis.Analyzers.Testing.0.5.212.snupkg"])
+            "GSharp.CodeAnalysis.Analyzers.Testing.0.5.212.nupkg", "GSharp.CodeAnalysis.Analyzers.Testing.0.5.212.snupkg",
+            "GSharp.CodeAnalysis.Transformations.0.5.212.nupkg", "GSharp.CodeAnalysis.Transformations.0.5.212.snupkg"])
 
     def test_every_push_skips_duplicates_with_the_source_and_key(self) -> None:
         self.assertEqual(self.push("sdk").returncode, 0)
@@ -574,7 +575,7 @@ class NugetPushTests(unittest.TestCase):
         self.assertEqual(self.push("sdk").returncode, 0)
         lines = self.log.read_text().splitlines()
         # Seven packages and five symbol packages; an empty log must not pass.
-        self.assertEqual(sorted(Path(line.split()[0]).suffix for line in lines), [".nupkg"] * 7 + [".snupkg"] * 5)
+        self.assertEqual(sorted(Path(line.split()[0]).suffix for line in lines), [".nupkg"] * 8 + [".snupkg"] * 6)
         for line in lines:
             with self.subTest(line=line.split()[0]):
                 self.assertEqual("--no-symbols" in line.split(), line.split()[0].endswith(".nupkg"))
@@ -863,7 +864,7 @@ class FinalizeTests(unittest.TestCase):
         Feed.version = self.VERSION
         result = self.finalize(prerelease="true", vs="skipped", version=version)
         self.assertEqual(result.returncode, 1)
-        self.assertIn("nuget.org (13 packages) | MISSING", result.stdout)
+        self.assertIn("nuget.org (14 packages) | MISSING", result.stdout)
         self.assertEqual(self.edits(), [])
         Feed.version = version
         self.assertEqual(self.finalize(prerelease="true", vs="skipped", version=version).returncode, 0)

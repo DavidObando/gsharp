@@ -2108,10 +2108,22 @@ internal partial class StatementBinder {
     }
 
     private func FunctionReturnsDefinitelyNonNull(function FunctionSymbol) bool {
-        if function?.Declaration?.Body == nil || function.Type is NullableTypeSymbol {
+        if function?.Declaration?.Body == nil {
             return false
         }
-        let descendants = DescendantsAndSelf(function.Declaration!!.Body!!).ToArray()
+        return BodyReturnsDefinitelyNonNull(function, function.Declaration!!.Body!!)
+    }
+
+    /// Returns a value that tells whether the narrowing of a caller proves that [`function`](paramref)
+    /// returns a non-nil value when [`body`](paramref) is its body (ADR-0227 D4).
+    internal func ReturnsDefinitelyNonNullForSpeculation(function FunctionSymbol, body SyntaxNode) bool ->
+    BodyReturnsDefinitelyNonNull(function, body)
+
+    private func BodyReturnsDefinitelyNonNull(function FunctionSymbol, body SyntaxNode) bool {
+        if function.Type is NullableTypeSymbol {
+            return false
+        }
+        let descendants = DescendantsAndSelf(body).ToArray()
         for node in descendants {
             if node is VariableDeclarationSyntax variable && string.Equals(
                 variable.Identifier.ValueText,

@@ -134,12 +134,30 @@ class Location {
     prop Range Range
 }
 
-class TextEdit {
+open class TextEdit {
     @JsonPropertyName("range")
     prop Range Range
 
     @JsonPropertyName("newText")
     prop NewText string
+}
+
+/// An LSP 3.18 snippet edit (ADR-0227 D5): the client inserts (cref:Snippet) as a snippet, so
+/// each placeholder is a tab stop. (cref:TextEdit.NewText) holds the same text without snippet
+/// syntax; it is not serialized. A client sees it only in `documentChanges`, and only when it declares
+/// `workspace.workspaceEdit.snippetEditSupport`.
+class SnippetTextEdit : TextEdit {
+    @JsonPropertyName("snippet")
+    prop Snippet StringValue
+}
+
+/// An LSP 3.18 string value of kind `snippet`.
+class StringValue {
+    @JsonPropertyName("kind")
+    prop Kind string -> "snippet"
+
+    @JsonPropertyName("value")
+    prop Value string
 }
 
 struct MarkupKind : IEquatable[MarkupKind] {

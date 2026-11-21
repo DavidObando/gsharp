@@ -98,7 +98,7 @@ ADRs, and `docs/vs-gsharp-compatibility.md` (a dated compatibility record).
 
 | Where | Value | Source |
 |---|---|---|
-| NuGet packages `Gsharp.NET.Sdk`, `Gsharp.Templates`, `Gsharp.Repl`, `Gsharp.Gsfmt`, `Gsharp.Cs2Gs`, `GSharp.CodeAnalysis.Analyzers.Testing` | `NuGetPackageVersion` | Nerdbank.GitVersioning. Packed into `out/bin/Release/nupkgs` by `build/gsharp.build.props` `PackageOutputPath`. |
+| NuGet packages `Gsharp.NET.Sdk`, `Gsharp.Templates`, `Gsharp.Repl`, `Gsharp.Gsfmt`, `Gsharp.Cs2Gs`, `GSharp.CodeAnalysis.Analyzers.Testing`, `GSharp.CodeAnalysis.Transformations` | `NuGetPackageVersion` | Nerdbank.GitVersioning. Packed into `out/bin/Release/nupkgs` by `build/gsharp.build.props` `PackageOutputPath`. |
 | Assembly versions | `AssemblyVersion` = `<major>.<minor>.0.0` | Nerdbank.GitVersioning. A minor bump changes it, so `GS9303` (analyzer built against another `GSharp.Core` AssemblyVersion) warns once for analyzers built against the old line. |
 | VS Code extension (`src/vscode-gsharp/package.json` stays `0.1.0` in source) | `SimpleVersion` | `build.yml` `vsix` job, "Stamp version" step; the change is never committed. |
 | Visual Studio VSIX | `FileVersion` | `GetVsixVersion` in `VsGsharp.csproj`. |

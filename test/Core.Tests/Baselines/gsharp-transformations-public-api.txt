@@ -1,0 +1,96 @@
+type enum GSharp.CodeAnalysis.Transformations.EditOperationKind : Int32
+  field public const GSharp.CodeAnalysis.Transformations.EditOperationKind Delete = 1
+  field public const GSharp.CodeAnalysis.Transformations.EditOperationKind InsertAfter = 3
+  field public const GSharp.CodeAnalysis.Transformations.EditOperationKind InsertBefore = 2
+  field public const GSharp.CodeAnalysis.Transformations.EditOperationKind Replace = 0
+type enum GSharp.CodeAnalysis.Transformations.ProgramOrigin : Int32
+  field public const GSharp.CodeAnalysis.Transformations.ProgramOrigin HandWritten = 0
+  field public const GSharp.CodeAnalysis.Transformations.ProgramOrigin Mined = 1
+  field public const GSharp.CodeAnalysis.Transformations.ProgramOrigin Synthesized = 2
+type sealed class GSharp.CodeAnalysis.Transformations.EditOperation : System.Object
+  method public GSharp.CodeAnalysis.Transformations.EditOperationKind get_Kind()
+  method public String get_Capture()
+  method public String get_Template()
+  method public Void .ctor(GSharp.CodeAnalysis.Transformations.EditOperationKind kind, String capture, String template)
+  property public GSharp.CodeAnalysis.Transformations.EditOperationKind Kind { get; }
+  property public String Capture { get; }
+  property public String Template { get; }
+type sealed class GSharp.CodeAnalysis.Transformations.GuardPredicate : System.Object
+  field public static readonly System.Collections.Immutable.ImmutableHashSet`1<String> ComparisonPredicates
+  field public static readonly System.Collections.Immutable.ImmutableHashSet`1<String> KnownPredicates
+  method public String get_Capture()
+  method public String get_Other()
+  method public String get_Predicate()
+  method public String get_Value()
+  method public Void .ctor(String predicate, String capture, String other, String value)
+  property public String Capture { get; }
+  property public String Other { get; }
+  property public String Predicate { get; }
+  property public String Value { get; }
+type sealed class GSharp.CodeAnalysis.Transformations.ProgramFixProvider : GSharp.Core.CodeAnalysis.CodeFixes.GSharpCodeFixProvider
+  field public const String ProviderIdPrefix = "program:"
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.CodeAnalysis.Transformations.TransformationProgram> get_Programs()
+  method public Void .ctor(System.Collections.Immutable.ImmutableArray`1<GSharp.CodeAnalysis.Transformations.TransformationProgram> programs)
+  method public virtual override Boolean get_IsDataDefined()
+  method public virtual override String get_Id()
+  method public virtual override System.Collections.Immutable.ImmutableArray`1<String> get_FixableDiagnosticIds()
+  method public virtual override Void RegisterCodeFixes(GSharp.Core.CodeAnalysis.CodeFixes.CodeFixContext context)
+  property public Boolean IsDataDefined { get; }
+  property public String Id { get; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.CodeAnalysis.Transformations.TransformationProgram> Programs { get; }
+  property public System.Collections.Immutable.ImmutableArray`1<String> FixableDiagnosticIds { get; }
+type sealed class GSharp.CodeAnalysis.Transformations.ProgramProvenance : System.Object
+  method public GSharp.CodeAnalysis.Transformations.ProgramOrigin get_Origin()
+  method public String get_Source()
+  method public System.Nullable`1<Int32> get_Support()
+  method public Void .ctor(GSharp.CodeAnalysis.Transformations.ProgramOrigin origin, String source, System.Nullable`1<Int32> support)
+  property public GSharp.CodeAnalysis.Transformations.ProgramOrigin Origin { get; }
+  property public String Source { get; }
+  property public System.Nullable`1<Int32> Support { get; }
+type sealed class GSharp.CodeAnalysis.Transformations.ProgramTrigger : System.Object
+  method public String get_ArgumentEquals()
+  method public System.Collections.Immutable.ImmutableArray`1<String> get_DiagnosticIds()
+  method public System.Nullable`1<Int32> get_ArgumentIndex()
+  method public Void .ctor(System.Collections.Immutable.ImmutableArray`1<String> diagnosticIds, System.Nullable`1<Int32> argumentIndex, String argumentEquals)
+  property public String ArgumentEquals { get; }
+  property public System.Collections.Immutable.ImmutableArray`1<String> DiagnosticIds { get; }
+  property public System.Nullable`1<Int32> ArgumentIndex { get; }
+type sealed class GSharp.CodeAnalysis.Transformations.SyntaxPattern : System.Object
+  method public Boolean get_SameLine()
+  method public GSharp.CodeAnalysis.Transformations.SyntaxPattern get_Ancestor()
+  method public GSharp.CodeAnalysis.Transformations.SyntaxPattern get_Next()
+  method public GSharp.CodeAnalysis.Transformations.SyntaxPattern get_Previous()
+  method public String get_Capture()
+  method public String get_Kind()
+  method public String get_Text()
+  method public Void .ctor(String capture, String kind, String text, Boolean sameLine, GSharp.CodeAnalysis.Transformations.SyntaxPattern next, GSharp.CodeAnalysis.Transformations.SyntaxPattern previous, GSharp.CodeAnalysis.Transformations.SyntaxPattern ancestor)
+  property public Boolean SameLine { get; }
+  property public GSharp.CodeAnalysis.Transformations.SyntaxPattern Ancestor { get; }
+  property public GSharp.CodeAnalysis.Transformations.SyntaxPattern Next { get; }
+  property public GSharp.CodeAnalysis.Transformations.SyntaxPattern Previous { get; }
+  property public String Capture { get; }
+  property public String Kind { get; }
+  property public String Text { get; }
+type sealed class GSharp.CodeAnalysis.Transformations.TransformationProgram : System.Object
+  method public GSharp.CodeAnalysis.Transformations.ProgramProvenance get_Provenance()
+  method public GSharp.CodeAnalysis.Transformations.ProgramTrigger get_Trigger()
+  method public GSharp.CodeAnalysis.Transformations.SyntaxPattern get_Pattern()
+  method public GSharp.Core.CodeAnalysis.CodeFixes.Applicability get_Applicability()
+  method public String ToJson()
+  method public String get_Id()
+  method public String get_Title()
+  method public String get_Version()
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.CodeAnalysis.Transformations.EditOperation> get_Edits()
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.CodeAnalysis.Transformations.GuardPredicate> get_Guards()
+  method public Void .ctor(String id, String title, GSharp.CodeAnalysis.Transformations.ProgramTrigger trigger, GSharp.CodeAnalysis.Transformations.SyntaxPattern pattern, System.Collections.Immutable.ImmutableArray`1<GSharp.CodeAnalysis.Transformations.GuardPredicate> guards, System.Collections.Immutable.ImmutableArray`1<GSharp.CodeAnalysis.Transformations.EditOperation> edits, GSharp.Core.CodeAnalysis.CodeFixes.Applicability applicability, GSharp.CodeAnalysis.Transformations.ProgramProvenance provenance)
+  method public static GSharp.CodeAnalysis.Transformations.TransformationProgram FromJson(String json)
+  method public static System.Collections.Immutable.ImmutableArray`1<GSharp.CodeAnalysis.Transformations.TransformationProgram> ListFromJson(String json)
+  property public GSharp.CodeAnalysis.Transformations.ProgramProvenance Provenance { get; }
+  property public GSharp.CodeAnalysis.Transformations.ProgramTrigger Trigger { get; }
+  property public GSharp.CodeAnalysis.Transformations.SyntaxPattern Pattern { get; }
+  property public GSharp.Core.CodeAnalysis.CodeFixes.Applicability Applicability { get; }
+  property public String Id { get; }
+  property public String Title { get; }
+  property public String Version { get; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.CodeAnalysis.Transformations.EditOperation> Edits { get; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.CodeAnalysis.Transformations.GuardPredicate> Guards { get; }

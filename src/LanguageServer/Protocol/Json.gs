@@ -47,6 +47,7 @@ shared class LspJson {
         options.Converters.Add(CommandOrCodeActionContainerConverter())
         options.Converters.Add(StringOrInlayHintLabelPartsConverter())
         options.Converters.Add(DiagnosticCodeConverter())
+        options.Converters.Add(TextEditConverter())
         return options
     }
 }
@@ -179,6 +180,34 @@ class SymbolInformationOrDocumentSymbolConverter : JsonConverter[SymbolInformati
         value SymbolInformationOrDocumentSymbol,
         options JsonSerializerOptions
     ) -> JsonSerializer.Serialize(writer, value.DocumentSymbol, options)
+}
+
+/// Writes a (cref:TextEdit) as `{range, newText}` and a (cref:SnippetTextEdit) as `{range, snippet}`
+/// (LSP 3.18), and reads either shape back.
+class TextEditConverter : JsonConverter[TextEdit] {
+    override func Read(ref reader Utf8JsonReader, typeToConvert Type, options JsonSerializerOptions) TextEdit {
+        using let document = JsonDocument.ParseValue(&reader)
+        let root = document.RootElement
+        let $range = JsonSerializer.Deserialize[Range](root.GetProperty("range"), options)
+        if root.TryGetProperty("snippet", out var snippet) {
+            let value = JsonSerializer.Deserialize[StringValue](snippet, options)
+            return SnippetTextEdit{Range: $range, Snippet: value, NewText: value.Value}
+        }
+        return TextEdit{Range: $range, NewText: root.GetProperty("newText").GetString() ?? string.Empty}
+    }
+
+    override func Write(writer Utf8JsonWriter, value TextEdit, options JsonSerializerOptions) {
+        writer.WriteStartObject()
+        writer.WritePropertyName("range")
+        JsonSerializer.Serialize(writer, value.Range, options)
+        if value is SnippetTextEdit snippetEdit {
+            writer.WritePropertyName("snippet")
+            JsonSerializer.Serialize(writer, snippetEdit.Snippet, options)
+        } else {
+            writer.WriteString("newText", value.NewText)
+        }
+        writer.WriteEndObject()
+    }
 }
 
 class CommandOrCodeActionConverter : JsonConverter[CommandOrCodeAction] {

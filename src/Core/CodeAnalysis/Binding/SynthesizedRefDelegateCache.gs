@@ -31,6 +31,25 @@ internal class SynthesizedRefDelegateCache {
     /// Gets every distinct synthesized delegate created so far in this cache, in creation order.
     prop Symbols IReadOnlyList[DelegateTypeSymbol] -> symbols
 
+    /// Gets a value that tells whether a caller asked this cache for a delegate. Only a speculative
+    /// copy reads it (ADR-0227 D4, issue #6128).
+    prop WasQueried bool {
+        get;
+        private set;
+    }
+
+    /// Returns a copy for a speculative body bind (ADR-0227 D4, issue #6128), so the bind cannot
+    /// add a delegate to the cache of the compilation it binds against.
+    func CreateSpeculativeCopy() SynthesizedRefDelegateCache {
+        let copy = SynthesizedRefDelegateCache()
+        for pair in byShape {
+            copy.byShape.Add(pair.Key, pair.Value)
+        }
+        copy.symbols.AddRange(symbols)
+        copy.counter = counter
+        return copy
+    }
+
     /// Returns the cached synthesized delegate for the given signature,
     /// creating and caching a new one on first use. At least one parameter
     /// is expected to carry a non-(cref:RefKind.None) ref kind —
@@ -44,6 +63,7 @@ internal class SynthesizedRefDelegateCache {
         returnType TypeSymbol,
         packageName string?
     ) DelegateTypeSymbol {
+        WasQueried = true
         let key = BuildKey(parameters, returnType)
         if byShape.TryGetValue(key, out var existing) {
             return existing

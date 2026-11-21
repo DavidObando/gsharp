@@ -91,10 +91,33 @@ internal shared class DiagnosticDeltaCalculator {
                 stopwatch.Elapsed
             )
         }
-        // Stage 2: the bind of the whole compilation, on this thread, under the request token.
-        let budget = compilation.WorkBudget
-        snapshot.WorkBudget = CompilationWorkBudget(budget.MaxWorkers, budget.MemoryBudgetMiB, cancellationToken)
-        let after = Collect(snapshot, options, cancellationToken)
+        // Stage 2: the bind of the edited body alone when the edit is confined to it and nothing
+        // outside it can change (issue #6128), else of the whole compilation, on this thread, under
+        // the request token.
+        var bodyLocal = false
+        var fallbackReason string? = nil
+        var after = default(ImmutableArray[Diagnostic])
+        if options.BodyLocalBind && options.Analyzers.IsEmpty && changes.Documents.Length == 1 {
+            let local = BodyLocalDelta.TryCollect(
+                compilation,
+                snapshot,
+                oldTrees[0],
+                newTrees[0],
+                changes.Documents[0].Changes,
+                cancellationToken
+            )
+            if local.Succeeded {
+                after = Filter(local.Diagnostics, options)
+                bodyLocal = true
+            } else {
+                fallbackReason = local.Reason
+            }
+        }
+        if !bodyLocal {
+            let budget = compilation.WorkBudget
+            snapshot.WorkBudget = CompilationWorkBudget(budget.MaxWorkers, budget.MemoryBudgetMiB, cancellationToken)
+            after = Collect(snapshot, options, cancellationToken)
+        }
         let delta = Match(baseline.Diagnostics, after, maps)
         let syntaxAfter = HashSet[Diagnostic](ReferenceEqualityComparer.Instance)
         for tree in newTrees {
@@ -112,7 +135,7 @@ internal shared class DiagnosticDeltaCalculator {
             targetsAreSyntax,
             false,
             stopwatch.Elapsed
-        )
+        ){BodyLocal = bodyLocal, BodyLocalFallbackReason = fallbackReason}
     }
 
     // Every target is removed: a removed diagnostic has its document, ID, message, span and
