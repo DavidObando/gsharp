@@ -2616,12 +2616,12 @@ internal partial class StatementBinder {
             }
         }
         var (thenNarrow, elseNarrow) = TryClassifyNilGuard(condition, forShortCircuitOperand)
-        let (conditionalThen, conditionalElse) = TryClassifyNullConditionalBoolNarrowing(
+        let (conditionalThen, conditionalElse) = TryClassifyNullConditionalNarrowing(
             condition,
             forShortCircuitOperand,
             beforeAliases,
             (node BoundNode, state Dictionary[AccessPath, TypeSymbol], aliases IReadOnlyCollection[VariableSymbol]?) ->
-            ClearAssignedRoots(node, state, aliases)
+            ClearAssignedRootsForConditionOperand(node, state, aliases)
         )
         thenNarrow = MergeNarrowingFrames(thenNarrow, conditionalThen)
         elseNarrow = MergeNarrowingFrames(elseNarrow, conditionalElse)

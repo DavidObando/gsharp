@@ -2608,7 +2608,7 @@ internal partial class ExpressionBinder {
             clearAssignedRoots,
             evolveAliases
         )
-        let (conditionalThen, conditionalElse) = StatementBinder.TryClassifyNullConditionalBoolNarrowing(
+        let (conditionalThen, conditionalElse) = StatementBinder.TryClassifyNullConditionalNarrowing(
             condition,
             restrictBareVariableToLocalsAndParams,
             beforeAliases,
