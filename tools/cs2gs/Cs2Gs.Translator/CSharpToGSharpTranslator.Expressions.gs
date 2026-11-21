@@ -3716,48 +3716,62 @@ partial class CSharpToGSharpTranslator {
             if owner == nil || this.state.AnalyzedFieldOverrideTypes.Contains(owner) {
                 return false
             }
-            // Forward-referenced types not yet visited by VisitAggregate may still discard inline initializers
-            // via static constructors or non-positional record-struct constructor lifts.
-            let isNonPositionalRecordStruct = owner.IsRecord &&
-                owner.IsValueType &&
-                GetPrimaryConstructorParameterList(owner) == nil
-            if !field.IsStatic && !isNonPositionalRecordStruct {
-                return false
+            this.EnsureForwardAggregateFieldInitializerOverridesAnalyzed(owner)
+            return this
+                .state
+                .StaticFieldInitializers
+                .ContainsKey(field) ||
+                this
+                .state
+                .LiftedFieldInitializers
+                .Contains(field)
+        }
+
+        private func EnsureForwardAggregateFieldInitializerOverridesAnalyzed(owner INamedTypeSymbol) {
+            this.state.AnalyzedFieldOverrideTypes.Add(owner)
+            let ownerParts = if !this.preservePartialParts && this.partialTypeParts.TryGetValue(owner, out var parts) {
+                parts
+            } else {
+                default(List[TypeDeclarationSyntax]?)
             }
-            for constructor in owner.Constructors {
-                let matchesConstructor = if field.IsStatic {
-                    constructor.IsStatic
-                } else {
-                    !constructor.IsStatic && !constructor.IsImplicitlyDeclared
+            let primaryDecl = ownerParts?.FirstOrDefault() ??
+                (owner.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() as TypeDeclarationSyntax)
+            if primaryDecl == nil {
+                return
+            }
+            let mergedMembers = primaryDecl.Members.ToList()
+            if ownerParts != nil {
+                for part in ownerParts.Skip(1) {
+                    mergedMembers.AddRange(part.Members)
                 }
-                if !matchesConstructor {
-                    continue
-                }
-                for reference in constructor.DeclaringSyntaxReferences {
-                    if reference.GetSyntax() is Microsoft
-                        .CodeAnalysis
-                        .CSharp
-                        .Syntax
-                        .ConstructorDeclarationSyntax ctorSyntax &&
-                        ctorSyntax.Body != nil {
-                        using let modelScope = this.context.UseSemanticModelForSymbol(reference.SyntaxTree, owner)
-                        if modelScope != nil &&
-                            ctorSyntax.Body!!
-                            .DescendantNodes()
-                            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax]()
-                            .Any(
-                            (assignment Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax) ->
-                            assignment.OperatorToken.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.EqualsToken) &&
-                                SymbolEqualityComparer
-                                .Default
-                                .Equals(this.context.GetSymbolInfo(assignment.Left).Symbol, field)
-                        ) {
-                            return true
+            }
+            for (staticField, _) in this.EnumerateFoldableStaticConstructorAssignments(mergedMembers, owner) {
+                this.state.LiftedFieldInitializers.Add(staticField)
+            }
+            if owner.IsRecord && owner.IsValueType && GetPrimaryConstructorParameterList(owner) == nil {
+                let outerAggregate = this.state.CurrentEmittedAggregate
+                this.state.CurrentEmittedAggregate = owner
+                try {
+                    let lift = this.GetOrAnalyzeConstructorLift(
+                        primaryDecl,
+                        mergedMembers,
+                        owner,
+                        TypeDeclarationKind.DataStruct
+                    )
+                    if lift.FieldInitializers.Count > 0 || lift.FieldsAsPrimaryParameters.Count > 0 {
+                        for memberSymbol in owner.GetMembers().OfType[IFieldSymbol]() {
+                            if lift.FieldInitializers.ContainsKey(memberSymbol.Name) ||
+                                lift
+                                .FieldsAsPrimaryParameters
+                                .Contains(memberSymbol.Name) {
+                                this.state.LiftedFieldInitializers.Add(memberSymbol)
+                            }
                         }
                     }
+                } finally {
+                    this.state.CurrentEmittedAggregate = outerAggregate
                 }
             }
-            return false
         }
 
         /// Issue #4356: whether [`symbol`](paramref) is a Roslyn property or

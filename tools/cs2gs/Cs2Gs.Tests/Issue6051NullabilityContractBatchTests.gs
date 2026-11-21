@@ -198,6 +198,56 @@ public static class P
             nullableContextOptions: NullableContextOptions.Enable,
             expectedOutput: "False"
         )
+
+        let forwardResidualAndFoldedFields = `
+#nullable enable
+using System;
+#pragma warning disable CS8601
+public static class P
+{
+    public sealed class Box { public Func<object?> Fallback = () => "fallback"; }
+    static readonly Box? LiveBox = new Box();
+    static int trace;
+    static void Touch() { trace++; }
+    public static void Main()
+    {
+        var s = new ForwardLiftedStruct();
+        Console.Write((s.Saved() == null) + "|" + (ForwardFoldedStatic.Saved() == null) + "|" + (ForwardResidualStatic.Saved() == null) + "|" + trace);
+    }
+    public record struct ForwardLiftedStruct
+    {
+        public Func<object?> Saved = LiveBox?.Fallback;
+        public ForwardLiftedStruct() { Saved = () => "lifted"; }
+    }
+    public static class ForwardFoldedStatic
+    {
+        public static Func<object?> Saved = LiveBox?.Fallback;
+        static ForwardFoldedStatic() { Saved = () => "folded"; }
+    }
+    public static class ForwardResidualStatic
+    {
+        public static Func<object?> Saved = LiveBox?.Fallback;
+        static ForwardResidualStatic()
+        {
+            Touch();
+            Saved = () => "residual";
+        }
+    }
+}`
+        LiteralConstructionRuntimeParity.AssertMatches(
+            forwardResidualAndFoldedFields,
+            verifyTranslation: (printed string) -> {
+                Assert.Contains("var Saved () -> object? = () -> \"lifted\"", printed, StringComparison.Ordinal)
+                Assert.Contains("var Saved () -> object? = () -> \"folded\"", printed, StringComparison.Ordinal)
+                Assert.Contains("var Saved (() -> object?)? =", printed, StringComparison.Ordinal)
+                Assert.DoesNotContain("s.Saved!!()", printed, StringComparison.Ordinal)
+                Assert.DoesNotContain("ForwardFoldedStatic.Saved!!()", printed, StringComparison.Ordinal)
+                Assert.Contains("ForwardResidualStatic.Saved!!()", printed, StringComparison.Ordinal)
+            },
+            verifyIL: true,
+            nullableContextOptions: NullableContextOptions.Enable,
+            expectedOutput: "False|False|False|1"
+        )
     }
 
     @Fact

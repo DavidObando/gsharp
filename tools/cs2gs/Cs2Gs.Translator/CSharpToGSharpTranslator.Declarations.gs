@@ -1164,7 +1164,7 @@ partial class CSharpToGSharpTranslator {
             let lift = if autoPropertyLift != ConstructorLift.None {
                 autoPropertyLift
             } else {
-                this.AnalyzeConstructorLift(node, mergedMembers, symbol, kind!!)
+                this.GetOrAnalyzeConstructorLift(node, mergedMembers, symbol, kind!!)
             }
             // Issues #1990/#2435: G# data structs have no explicit `init`
             // member, but a C# record-struct constructor whose complete effect is a
@@ -2197,6 +2197,22 @@ partial class CSharpToGSharpTranslator {
                 BodyFieldInitializers: bodyFieldInitializers,
                 ResidualInitStatements: List[GStatement]()
             }
+        }
+
+        private func GetOrAnalyzeConstructorLift(
+            node TypeDeclarationSyntax,
+            members IReadOnlyList[MemberDeclarationSyntax],
+            symbol INamedTypeSymbol?,
+            kind TypeDeclarationKind
+        ) ConstructorLift {
+            if symbol != nil && this.state.CachedConstructorLifts.TryGetValue(symbol, out var cached) {
+                return cast[ConstructorLift](cached)
+            }
+            let lift = this.AnalyzeConstructorLift(node, members, symbol, kind)
+            if symbol != nil {
+                this.state.CachedConstructorLifts[symbol] = lift
+            }
+            return lift
         }
 
         private func AnalyzeConstructorLift(
