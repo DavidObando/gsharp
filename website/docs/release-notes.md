@@ -38,6 +38,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Keep constructor call parentheses on zero-argument generic collection initializers in `cs2gs` when the initializer is empty or begins with an identifier key (`Dictionary[K, V](){ key: value }`), preventing `gsc` from misparsing the brace as a struct literal (`GS0158` or silent property writes). (Fixes #6011)
+
 - Narrow nullable receivers and stable intermediate `?.` chain members when a conditional-access result is compared with `nil` (`!= nil`, `nil !=`, `== nil` else/early-exit branches, conditional expressions, `&&`/`||`, `is not nil`/non-nil patterns, method calls, and `?[]` indexers), while preserving side-effect invalidation when a getter, call, or index mutates the receiver. (Fixes #6042)
 
 - Substitute constructed interface type arguments through `base[Interface[Args]].Member` calls, parameters, generic interface method type arguments, default interface properties, value-type (`struct`) receiver boxing, async/lambda forwarders, and imported C# default interface methods, while rejecting mismatched interface type arguments with `GS0338`. (Fixes #6045)
