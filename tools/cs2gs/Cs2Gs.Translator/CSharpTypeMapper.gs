@@ -4533,7 +4533,19 @@ class CSharpTypeMapper {
         }
 
         private func MergeAnonymousNullability(mapped GTypeReference, symbol ITypeSymbol?) GTypeReference {
+            var symbol = symbol
+            let nullableValueWrapper = symbol is INamedTypeSymbol{
+                OriginalDefinition: {SpecialType: SpecialType.System_Nullable_T},
+                TypeArguments: {Length: 1}
+            }
+            if symbol is INamedTypeSymbol{
+                OriginalDefinition: {SpecialType: SpecialType.System_Nullable_T},
+                TypeArguments: {Length: 1}
+            } nullableValue {
+                symbol = nullableValue.TypeArguments[0]
+            }
             let nullable = mapped.IsNullable ||
+                nullableValueWrapper ||
                 (
                 symbol!!.NullableAnnotation == Microsoft
                     .CodeAnalysis

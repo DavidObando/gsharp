@@ -4365,6 +4365,20 @@ partial class CSharpToGSharpTranslator {
 
         private func ApplyMappedArrayElementShape(source ITypeSymbol?, mapped GTypeReference?) ITypeSymbol? {
             var mapped = mapped
+            if source is INamedTypeSymbol{
+                OriginalDefinition: {SpecialType: SpecialType.System_Nullable_T},
+                TypeArguments: {Length: 1}
+            } nullableValue {
+                let projectedPayload = this.ApplyMappedArrayElementShape(nullableValue.TypeArguments[0], mapped)
+                return if projectedPayload == nil || SymbolEqualityComparer.IncludeNullability.Equals(
+                    projectedPayload,
+                    nullableValue.TypeArguments[0]
+                ) {
+                    source
+                } else {
+                    nullableValue.OriginalDefinition.Construct(projectedPayload)
+                }
+            }
             if source is INamedTypeSymbol native {
                 let element GTypeReference? = switch mapped {
                     case managed is ManagedReferenceTypeReference when CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(

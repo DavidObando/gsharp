@@ -562,6 +562,82 @@ public static class Demo {
         Assert.DoesNotContain("Value string)", printed, StringComparison.Ordinal)
     }
 
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Issue6159_NullableTupleAnonymousProjectedStorage_ReconcilesAndBridgesAcrossOrders(disabledFirst bool) {
+        let obliviousTree = Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(`
+#nullable disable
+public static class ObliviousNullableTuple {
+    public static object Make() {
+        (string, int)? pair = ("tup", 7);
+        return new { Pair = pair };
+    }
+}`, path: "ObliviousNullableTuple.cs")
+        let obliviousProject = CSharpProjectLoader.LoadInMemory(
+            [](string, string){("ObliviousNullableTuple.cs", obliviousTree.ToString())}
+        )
+        Assert.True(
+            obliviousProject.BoundWithoutErrors,
+            string.Join(Environment.NewLine, obliviousProject.ErrorDiagnostics)
+        )
+        let obliviousDoc = Assert.Single(obliviousProject.Documents)
+        let obliviousCtx = TranslationContext(
+            obliviousProject.Compilation,
+            obliviousDoc.SemanticModel,
+            obliviousDoc.FilePath
+        )
+        let obliviousPrinted = GSharpPrinter.Print(
+            CSharpToGSharpTranslator().TranslateDocument(obliviousDoc, obliviousCtx)
+        )
+        Assert.Contains("Pair (string?, int32)?", obliviousPrinted, StringComparison.Ordinal)
+        TranslationTestValidation.AssertBinds(obliviousPrinted)
+
+        let body = if disabledFirst {
+            `
+#nullable disable
+    public static object MakeDisabled() {
+        (string, int)? pair = ("same", 7);
+        return new { Pair = pair };
+    }
+#nullable enable
+    public static string Run() {
+        (string, int)? pair = ("same", 7);
+        var box = new { Pair = pair };
+        var dis = MakeDisabled();
+        return box.Equals(dis).ToString() + ":" +
+            (box.GetType() == dis.GetType()).ToString() + ":" +
+            box.Pair.Value.Item1.ToString() + ":" +
+            box.Pair.Value.Item2;
+    }`
+        } else {
+            `
+#nullable enable
+    public static string Run() {
+        (string, int)? pair = ("same", 7);
+        var box = new { Pair = pair };
+        var dis = MakeDisabled();
+        return box.Equals(dis).ToString() + ":" +
+            (box.GetType() == dis.GetType()).ToString() + ":" +
+            box.Pair.Value.Item1.ToString() + ":" +
+            box.Pair.Value.Item2;
+    }
+#nullable disable
+    public static object MakeDisabled() {
+        (string, int)? pair = ("same", 7);
+        return new { Pair = pair };
+    }`
+        }
+        let printed = Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+using System;
+public static class Demo {` + body + `
+}`, strictIl: true, expectedOutput: "True:True:same:7")
+        Assert.Contains("Pair (string?, int32)?", printed, StringComparison.Ordinal)
+        Assert.Single(
+            System.Text.RegularExpressions.Regex.Matches(printed, `data class AnonymousType\d+_[0-9A-F]{16}\(`)
+        )
+    }
+
     @Fact
     func EmptyGenericCollectionInitializer_KeepsParenthesesAndBinds() {
         let collection = CollectionInitializerExpression(
