@@ -339,6 +339,7 @@ abstract class BoundExpression : BoundNode {
         ) &&
             object.ReferenceEquals(call.ConstrainedInterfaceType, replacement.ConstrainedInterfaceType) &&
             object.ReferenceEquals(call.NonVirtualBaseTargetType, replacement.NonVirtualBaseTargetType) &&
+            object.ReferenceEquals(call.AssociatedProperty, replacement.AssociatedProperty) &&
             call.IsNonVirtualBaseCall == replacement.IsNonVirtualBaseCall &&
             call
             .TypeArgumentSymbols

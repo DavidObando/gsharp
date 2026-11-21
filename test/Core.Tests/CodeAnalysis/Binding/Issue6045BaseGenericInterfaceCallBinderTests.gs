@@ -444,6 +444,110 @@ class C : IAsyncDefault[int32] {
         Assert.Empty(Compile(source))
     }
 
+    @Fact
+    func RefStruct_BaseInterfaceCallAndProperty_ReportGS0219() {
+        let sourceUser = `
+interface IDefault[T] {
+    func Echo(v T) T { return v }
+    prop Value T {
+        get { return default(T) }
+        set { }
+    }
+}
+
+ref struct R : IDefault[int32] {
+    func Echo(v int32) int32 -> v
+    func BadMethod() int32 -> base[IDefault[int32]].Echo(1)
+    func BadPropRead() int32 -> base[IDefault[int32]].Value
+    func BadPropWrite() { base[IDefault[int32]].Value = 2 }
+}
+`
+        let userDiags = Compile(sourceUser)
+        Assert.Equal(3, userDiags.Where((d Diagnostic) -> d.Id == "GS0219").Count())
+
+        let csharp = `using System;
+namespace ProbeClr {
+    public interface IClrDefault<T> {
+        T Echo(T value) => value;
+        T Prop { get => default!; set { } }
+    }
+}`
+        using let fixture = CSharpFixture(csharp)
+        let sourceClr = `package App
+import ProbeClr
+
+ref struct R : IClrDefault[int32] {
+    func BadClrMethod() int32 -> base[IClrDefault[int32]].Echo(1)
+    func BadClrPropRead() int32 -> base[IClrDefault[int32]].Prop
+    func BadClrPropWrite() { base[IClrDefault[int32]].Prop = 2 }
+}
+`
+        let clrDiags = Compile(sourceClr, fixture.RuntimeReferences())
+        Assert.Equal(3, clrDiags.Where((d Diagnostic) -> d.Id == "GS0219").Count())
+    }
+
+    @Fact
+    func BaseInterfaceProperty_SemanticModel_PreservesPropertySymbolAndMemberGroup() {
+        let csharp = `namespace ProbeClr {
+    public interface IClrProps<T> {
+        T ClrProp { get => default!; set { } }
+    }
+}`
+        using let fixture = CSharpFixture(csharp)
+        let source = `package App
+import ProbeClr
+
+interface IDefaultProp[T] {
+    prop GsProp T {
+        get { return default(T) }
+        set { }
+    }
+}
+
+class C : IDefaultProp[int32], IClrProps[int32] {
+    func Test() int32 {
+        base[IDefaultProp[int32]].GsProp = 10
+        let a = base[IDefaultProp[int32]].GsProp
+        base[IClrProps[int32]].ClrProp = 20
+        let b = base[IClrProps[int32]].ClrProp
+        return a + b
+    }
+}
+`
+        let tree = SyntaxTree.Parse(SourceText.From(source))
+        let compilation = Compilation(fixture.RuntimeReferences(), tree)
+        compilation.RecordMemberGroups = true
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let model = compilation.GetSemanticModel(tree)
+        let calls = tree.Root.DescendantNodes().OfType[BaseInterfaceCallExpressionSyntax]().ToArray()
+        Assert.Equal(4, calls.Length)
+
+        let gsWriteProp = Assert.IsType[PropertySymbol](model.GetSymbolInfo(calls[0]).Symbol)
+        Assert.Equal("GsProp", gsWriteProp.Name)
+        Assert.Equal("int32", gsWriteProp.Type.Name)
+        let gsWriteGroup = model.GetMemberGroup(calls[0])
+        Assert.Equal("GsProp", Assert.Single(gsWriteGroup).Name)
+
+        let gsReadProp = Assert.IsType[PropertySymbol](model.GetSymbolInfo(calls[1]).Symbol)
+        Assert.Equal("GsProp", gsReadProp.Name)
+        Assert.Equal("int32", gsReadProp.Type.Name)
+        let gsReadGroup = model.GetMemberGroup(calls[1])
+        Assert.Equal("GsProp", Assert.Single(gsReadGroup).Name)
+
+        let clrWriteProp = Assert.IsType[PropertySymbol](model.GetSymbolInfo(calls[2]).Symbol)
+        Assert.Equal("ClrProp", clrWriteProp.Name)
+        Assert.Equal("int32", clrWriteProp.Type.Name)
+        let clrWriteGroup = model.GetMemberGroup(calls[2])
+        Assert.Equal("ClrProp", Assert.Single(clrWriteGroup).Name)
+
+        let clrReadProp = Assert.IsType[PropertySymbol](model.GetSymbolInfo(calls[3]).Symbol)
+        Assert.Equal("ClrProp", clrReadProp.Name)
+        Assert.Equal("int32", clrReadProp.Type.Name)
+        let clrReadGroup = model.GetMemberGroup(calls[3])
+        Assert.Equal("ClrProp", Assert.Single(clrReadGroup).Name)
+    }
+
     shared {
         private func Compile(source string, references ReferenceResolver? = nil) System
             .Collections

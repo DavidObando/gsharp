@@ -190,4 +190,10 @@ class BoundImportedInstanceCallExpression : BoundCallOperationExpression {
         get;
         init;
     }
+
+    /// Gets the backing CLR property when this call lowers an explicit `base[IClrIface].Prop` access.
+    internal prop AssociatedProperty PropertyInfo? {
+        get;
+        init;
+    }
 }

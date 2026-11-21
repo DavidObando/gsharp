@@ -698,7 +698,7 @@ shared class BaseCallForwarderRewriter {
                 node.ArgumentRefKinds,
                 typeArgumentSymbols,
                 isNonVirtualBaseCall: true
-            ){NonVirtualBaseTargetType = node.NonVirtualBaseTargetType}
+            ){NonVirtualBaseTargetType = node.NonVirtualBaseTargetType, AssociatedProperty = node.AssociatedProperty}
             this.forwarderBodies[forwarder] = CreateForwarderBody(forwarder, innerCall, returnType)
             return forwarder
         }

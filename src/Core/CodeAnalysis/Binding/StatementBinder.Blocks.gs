@@ -1357,7 +1357,10 @@ internal partial class StatementBinder {
                         call.ConstrainedReceiverTypeParameter,
                         call.ConstrainedInterfaceType,
                         call.IsNonVirtualBaseCall
-                    ){NonVirtualBaseTargetType = call.NonVirtualBaseTargetType}
+                    ){
+                        NonVirtualBaseTargetType = call.NonVirtualBaseTargetType,
+                        AssociatedProperty = call.AssociatedProperty
+                    }
                 )
             }
             case call is BoundBaseInterfaceCallExpression {

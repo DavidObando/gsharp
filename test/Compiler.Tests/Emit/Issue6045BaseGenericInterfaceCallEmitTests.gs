@@ -11,6 +11,8 @@ import System
 import System.Collections.Generic
 import System.Diagnostics
 import System.IO
+import System.Linq
+import System.Reflection.Emit
 import System.Reflection.Metadata
 import System.Reflection.PortableExecutable
 import Xunit
@@ -142,15 +144,9 @@ class C : IDefault[int32] {
             let body = peReader.GetMethodBody(method.RelativeVirtualAddress)
             let ilBytes[]?uint8 = body.GetILBytes()
             Assert.NotNull(ilBytes)
-            var sawCall = false
-            var sawCallvirt = false
-            for b in ilBytes!! {
-                if b == uint8(0x28) {
-                    sawCall = true
-                } else if b == uint8(0x6F) {
-                    sawCallvirt = true
-                }
-            }
+            let instructions = IlInstructionReader.Read(ilBytes)
+            let sawCall = instructions.Any((instruction IlInstruction) -> instruction.OpCode == OpCodes.Call)
+            let sawCallvirt = instructions.Any((instruction IlInstruction) -> instruction.OpCode == OpCodes.Callvirt)
             Assert.True(sawCall, "C::Echo must use `call` for base[IDefault[int32]].Echo")
             Assert.False(sawCallvirt, "C::Echo must NOT use `callvirt`")
         } finally {

@@ -808,6 +808,24 @@ partial class SemanticModel {
             return ImmutableArray[Symbol].Empty
         }
         let referenced = Unwrap(FindReferencedNode(token))
+        if referenced is BoundBaseInterfaceCallExpression{Property: {} baseProperty} basePropCall {
+            if !SpellsName(baseProperty, token.ValueText) {
+                return ImmutableArray[Symbol].Empty
+            }
+            return ImmutableArray.Create(SubstituteSourceMember(basePropCall.Interface, baseProperty))
+        }
+        if referenced is BoundImportedInstanceCallExpression{AssociatedProperty: {} importedProperty} importedPropCall {
+            let owner = importedPropCall.ConstrainedInterfaceType ??
+                importedPropCall.NonVirtualBaseTargetType ??
+                importedPropCall
+                .Receiver
+                .Type
+            let symbol = ImportedMemberSymbol(owner, importedProperty)
+            if !SpellsName(symbol, token.ValueText) {
+                return ImmutableArray[Symbol].Empty
+            }
+            return ImmutableArray.Create(symbol)
+        }
         if referenced is BoundCallOperationExpression call {
             if !SpellsName(call.CalledFunction, token.ValueText) {
                 return ImmutableArray[Symbol].Empty

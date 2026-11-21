@@ -2898,6 +2898,15 @@ internal partial class ExpressionBinder {
                 )
                 return BoundErrorExpression(nil)
             }
+            if TypeSymbol.IsByRefLike(enclosingType) {
+                BindDiscardedOperands()
+                Diagnostics.ReportByRefLikeEscape(
+                    syntax.BaseKeyword.Location,
+                    enclosingType,
+                    "invoke interface member '${syntax.MethodIdentifier.ValueText}' because dispatch requires boxing the receiver"
+                )
+                return BoundErrorExpression(nil)
+            }
             if syntax.IsPropertyAccess {
                 return BindBaseUserInterfacePropertyAccess(syntax, thisParameter, userInterface)
             }
@@ -2909,6 +2918,15 @@ internal partial class ExpressionBinder {
                 syntax.InterfaceTypeClause.Location,
                 enclosingType.Name,
                 ifaceType.Name
+            )
+            return BoundErrorExpression(nil)
+        }
+        if TypeSymbol.IsByRefLike(enclosingType) {
+            BindDiscardedOperands()
+            Diagnostics.ReportByRefLikeEscape(
+                syntax.BaseKeyword.Location,
+                enclosingType,
+                "invoke interface member '${syntax.MethodIdentifier.ValueText}' because dispatch requires boxing the receiver"
             )
             return BoundErrorExpression(nil)
         }
@@ -3147,7 +3165,7 @@ internal partial class ExpressionBinder {
                 TypeSymbol.Void,
                 ImmutableArray.Create(converted),
                 isNonVirtualBaseCall: true
-            ){NonVirtualBaseTargetType = ifaceType}
+            ){NonVirtualBaseTargetType = ifaceType, AssociatedProperty = clrProp}
         }
         let getter MethodInfo? = GetVisibleGetter(clrProp, fromDerivedType: true)
         if getter == nil {
@@ -3174,7 +3192,7 @@ internal partial class ExpressionBinder {
                 propType,
                 ImmutableArray[BoundExpression].Empty,
                 isNonVirtualBaseCall: true
-            ){NonVirtualBaseTargetType = ifaceType}
+            ){NonVirtualBaseTargetType = ifaceType, AssociatedProperty = clrProp}
         )
     }
 
