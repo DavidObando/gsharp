@@ -44,12 +44,11 @@ class GSharpAnalyzerDriver {
         (Owner GSharpDiagnosticAnalyzer, Id string)
     ]()
     private var suppressions DiagnosticSuppressionMap?
-    // Issue #6165: the function or field whose body the driver is dispatching, and the diagnostics that
-    // each such dispatch reported.
+    // Issue #6165: the function or field whose body the driver is dispatching, and for each report that
+    // entered the bag, in order, the dispatch that made it. An analyzer can report one Diagnostic object
+    // more than once, so the origin belongs to the occurrence, not to the object.
     private var origin Symbol? = nil
-    private let origins Dictionary[Diagnostic, Symbol] = Dictionary[Diagnostic, Symbol](
-        ReferenceEqualityComparer.Instance
-    )
+    private let origins List[Symbol?] = List[Symbol?]()
 
     private init(compilation Compilation, options AnalyzerOptions, cancellationToken CancellationToken) {
         this.compilation = compilation
@@ -243,7 +242,7 @@ class GSharpAnalyzerDriver {
         }
         if !supportedIds[owner].Contains(diagnostic.Id) {
             if reportedUnsupported.Add((owner, diagnostic.Id)) {
-                diagnostics.Report(
+                Record(
                     Diagnostic.Create(
                         DiagnosticDescriptors.AnalyzerUnsupportedDiagnosticId,
                         default(TextLocation),
@@ -275,19 +274,27 @@ class GSharpAnalyzerDriver {
         if suppressions!!.IsSuppressed(diagnostic) {
             return
         }
+        Record(diagnostic)
+    }
+
+    private func Record(diagnostic Diagnostic) {
+        let before = diagnostics.Count
         diagnostics.Report(diagnostic)
-        if origin is {} source {
-            origins[diagnostic] = source
+        if diagnostics.Count > before {
+            origins.Add(origin)
         }
     }
 
     private func Result() AnalyzerRun {
         let produced = diagnostics.ToImmutableArray()
         let sources = ImmutableArray.CreateBuilder[Symbol?](produced.Length)
-        for d in produced {
+        // The bag keeps every report of the driver, in order. Were it to leave one out, no origin is
+        // known, and the body-local check falls back.
+        let aligned = produced.Length == origins.Count
+        for var i = 0; i < produced.Length; i++ {
             sources.Add(
-                if origins.TryGetValue(d, out var source) {
-                    source
+                if aligned {
+                    origins[i]
                 } else {
                     default(Symbol?)
                 }
@@ -316,7 +323,7 @@ class GSharpAnalyzerDriver {
             rethrow
         } catch (ex Exception) when !(ex is OutOfMemoryException) && !(ex is StackOverflowException) {
             disabled.Add(owner)
-            diagnostics.Report(
+            Record(
                 Diagnostic.Create(
                     DiagnosticDescriptors.AnalyzerThrewException,
                     default(TextLocation),
@@ -331,7 +338,7 @@ class GSharpAnalyzerDriver {
             if options.TimeBudgetMilliseconds is {} budget && watch.ElapsedMilliseconds > int64(budget) && disabled.Add(
                 owner
             ) {
-                diagnostics.Report(
+                Record(
                     Diagnostic.Create(
                         DiagnosticDescriptors.AnalyzerExceededTimeBudget,
                         default(TextLocation),

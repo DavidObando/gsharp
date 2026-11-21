@@ -500,6 +500,39 @@ open class Adr0227BodyLocalDeltaTests {
     }
 
     @Fact
+    func EditOfASuppressedMember_KeepsTheAnalyzerDiagnosticAtItsNameSuppressed_BodyLocally() {
+        // The body reporter reports at the member's name, which the new-body run sees in the old text.
+        const source = "package P\n\nfunc F() int32 {\n    return 1\n}\n\n@SuppressDiagnostic(\"TA0002\")\nfunc H() int32 {\n    return 3\n}\n"
+        let (full, local) = BothWith(
+            ImmutableArray.Create(source),
+            0,
+            "    return 3\n",
+            "    let c = 3\n    return c\n",
+            BodyLocalAnalyzers()
+        )
+        Assert.True(local.BodyLocal, local.BodyLocalFallbackReason)
+        Assert.DoesNotContain(local.Added, (d Diagnostic) -> d.Id == "TA0002")
+        AssertSameDelta(full, local, "suppressed member")
+    }
+
+    @Fact
+    func AnalyzerThatReportsOneDiagnosticObjectFromEveryBody_IsBodyLocal() {
+        // Each report of the same object has the origin of its own dispatch.
+        const source = "package P\n\nfunc F() int32 {\n    return 1\n}\n\nfunc G() int32 {\n    return 2\n}\n"
+        for edited in[]string{"    return 1\n", "    return 2\n"} {
+            let (full, local) = BothWith(
+                ImmutableArray.Create(source),
+                0,
+                edited,
+                "    let d = 4\n    return d\n",
+                []GSharpDiagnosticAnalyzer{SharedReporter()}
+            )
+            Assert.True(local.BodyLocal, local.BodyLocalFallbackReason)
+            AssertSameDelta(full, local, "shared diagnostic object")
+        }
+    }
+
+    @Fact
     func BodyLocalAnalyzerThatThrowsOnTheNewBody_FallsBack() {
         const source = "package P\n\nfunc F() int32 {\n    return 1\n}\n"
         let (full, local) = BothWith(
@@ -616,6 +649,25 @@ open class Adr0227BodyLocalDeltaTests {
                     }
                 }
             )
+        }
+    }
+
+    // Reports one Diagnostic object, without a location, from every body.
+    private class SharedReporter : GSharpDiagnosticAnalyzer {
+        private let cached Diagnostic = Diagnostic.Create(
+            Adr0227BodyLocalDeltaTests.BodyRule,
+            default(TextLocation),
+            "all",
+            0
+        )
+
+        override prop SupportedDiagnostics ImmutableArray[DiagnosticDescriptor] -> ImmutableArray.Create(
+            Adr0227BodyLocalDeltaTests.BodyRule
+        )
+
+        override func Initialize(context AnalysisContext) {
+            context.ConfigureScope(AnalyzerScope.MemberBody)
+            context.RegisterBoundBodyAction((ctx BoundBodyAnalysisContext) -> ctx.ReportDiagnostic(cached))
         }
     }
 

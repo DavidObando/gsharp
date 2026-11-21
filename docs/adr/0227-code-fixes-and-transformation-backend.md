@@ -516,12 +516,24 @@ The 50 candidates are fewer than the 118 of the phase-1–3 measurement. That me
 
 When every analyzer of `DeltaOptions.Analyzers` is body-local, the body-local check runs them:
 
-- the baseline's analyzer run records, for each diagnostic, the function or field whose body's dispatch reported it;
+- the baseline's analyzer run records, for each report (an analyzer can report one `Diagnostic` object from several bodies), the function or field whose body's dispatch made it;
 - the check runs the analyzers on the declared body, bound speculatively, and requires the diagnostics that the baseline recorded for the member; otherwise it falls back;
-- it runs them on the edited body, with the snapshot's source suppressions, and keeps the baseline's other analyzer diagnostics with their spans moved by the edit;
+- it runs them on the edited body and keeps the baseline's other analyzer diagnostics with their spans moved by the edit, and applies the snapshot's source suppressions after the move (a diagnostic of the new body can sit at the member's name in the old text);
 - it falls back when an analyzer of the baseline or of either run threw, ran out of time or reported an unsupported ID (GS9300, GS9302, GS9304), when an analyzer diagnostic of another dispatch is inside the declared body, and when a kept diagnostic touches the edit.
 
-The speculative bodies are anchored as the program's bind anchors its bodies (ADR-0169), at the declaration before and after the edit. A compilation-wide analyzer, alone or with body-local ones, keeps the full-bind fallback. The contexts of a run on one body give the compilation before the edit; an analyzer of `MemberBody` scope must not read other bodies through it. `Adr0227BodyLocalDeltaTests` compares the two paths with two body-local analyzers (one reports every bound node by kind and span, one reports each body's statement count at the member's name, outside the body) over the fix corpus, the synthetic body edits and the samples, and has tests for a compilation-wide analyzer, a mixed set, a mislabeled analyzer, an analyzer that throws on the new body and a suppressed member.
+The speculative bodies are anchored as the program's bind anchors its bodies (ADR-0169), at the declaration before and after the edit. A compilation-wide analyzer, alone or with body-local ones, keeps the full-bind fallback. The contexts of a run on one body give the compilation before the edit; an analyzer of `MemberBody` scope must not read other bodies through it. `Adr0227BodyLocalDeltaTests` compares the two paths with two body-local analyzers (one reports every bound node by kind and span, one reports each body's statement count at the member's name, outside the body) over the fix corpus, the synthetic body edits and the samples, and has tests for a compilation-wide analyzer, a mixed set, a mislabeled analyzer, an analyzer that throws on the new body, an edit beside a suppressed member and of the suppressed member itself, and an analyzer that reports one diagnostic object from every body.
+
+**Measured after #6162 and #6165**, with the harness of the #6128 measurement (Release, warm, low priority while another benchmark ran, both deltas of each candidate on one baseline, 0 mismatches in every row), on the same inputs before (main) and after. The project rows bind a copy of each project's sources.
+
+| Corpus | Analyzers | Body-local before / after | Full delta p50 / p95 after | Default delta p50 / p95 before / after | Body-local only p50 / p95 before / after |
+| --- | --- | --- | --- | --- | --- |
+| Oats S0 dev repair log (built-in fixes) | none | 26 / 26 of 50 | 10.2 ms / 20.4 ms | 8.3 ms / 22.5 ms / 9.4 ms / 24.7 ms | 4.8 ms / 17.4 ms / 5.8 ms / 17.4 ms |
+| `src/LanguageServer`, 30 body edits | none | 17 / 19 of 30 | 933 ms / 2550 ms | 60 ms / 1229 ms / 31 ms / 939 ms | 29 ms / 155 ms / 23 ms / 150 ms |
+| `src/Core`, 6 body edits | none | 1 / 1 of 6 | 46.7 s / 59.4 s | 33.7 s / 39.4 s / 45.9 s / 61.9 s | 0.31 s / 0.36 s |
+| `src/LanguageServer`, 30 body edits | one body-local analyzer (reports every call) | 0 / 19 of 30 | 1171 ms / 3434 ms | full delta / 54 ms / 1712 ms | - / 36 ms / 187 ms |
+| `src/Core`, 6 body edits | the same | 0 / 1 of 6 | 49.7 s / 55.8 s | full delta / 46.5 s / 55.0 s | - / 0.39 s |
+
+The two `src/LanguageServer` hits that the caller-dependent fallback of #6156 cost are back; the other fallbacks are unchanged (deferred LINQ calls, cross-body syntax, cycles in the call-effect summary). Before #6165 any analyzer made the check bind the whole compilation. The `src/Core` rows vary with the load of the machine (its warm check was 26 s in both runs, and the full-bind diagnostics, in file order and reversed, are the same before and after); compare within a row.
 
 **Snippet edits (#6129).** When the client declares `workspace.workspaceEdit.snippetEditSupport` (LSP 3.18) and applies `documentChanges`, a change that holds a placeholder of a `HasPlaceholders` fix becomes a `SnippetTextEdit`: `{range, snippet: {kind: "snippet", value}}`, with each placeholder a tab stop `${n:text}`, numbered in document order. A backslash escapes `$`, `}` and `\` in the fixed text and in the placeholder text. A change without a placeholder stays a `TextEdit`. Without that capability, or without `documentChanges` (where a snippet edit is not allowed), the server sends plain text. A placeholder that is not inside the new text of one change gives the document plain edits.
 

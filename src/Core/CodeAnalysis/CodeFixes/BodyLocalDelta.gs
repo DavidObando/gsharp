@@ -355,13 +355,15 @@ internal shared class BodyLocalDelta {
         if !SameOccurrences(before.Diagnostics, recorded.ToImmutable()) {
             return "the analyzers report on the speculative bind of the declared body other than on the compilation's"
         }
+        // A diagnostic of the new body can sit at the member's declaration in the old text, so the
+        // snapshot's source suppressions apply after the move to the new text.
         let after = GSharpAnalyzerDriver.TryRunOnBody(
             compilation,
             options.Analyzers,
             options.AnalyzerOptions,
             function,
             newBody,
-            snapshot.DiagnosticSuppressions,
+            DiagnosticSuppressionMap.Build(ImmutableArray[SyntaxTree].Empty),
             cancellationToken
         )
         if after == nil || after.Diagnostics.Any(IsAnalyzerHostDiagnostic) {
@@ -371,7 +373,9 @@ internal shared class BodyLocalDelta {
             if !TryRelocate(d, oldText, newText, spanMap, out var moved) {
                 return "an analyzer diagnostic of the new body touches the edit outside the new body"
             }
-            result.Add(moved!!)
+            if !snapshot.DiagnosticSuppressions.IsSuppressed(moved!!) {
+                result.Add(moved!!)
+            }
         }
         return nil
     }
