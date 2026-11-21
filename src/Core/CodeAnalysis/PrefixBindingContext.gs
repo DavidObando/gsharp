@@ -293,7 +293,8 @@ internal shared class PrefixBindingContext {
 
     /// Returns a value that tells whether a later declaration can add a conversion between
     /// [`fromType`](paramref) and [`toType`](paramref) (ADR-0120): nothing follows the cut, and one of
-    /// the types is a type of this compilation.
+    /// the types is a type of this compilation, or an imported type that a later source type of the same
+    /// name can hide (D6.3). A built-in type is neither.
     /// @param fromType The source type of the conversion.
     /// @param toType The target type of the conversion.
     /// @returns `true` when a later `func operator implicit` can remove a missing-conversion report.
@@ -310,7 +311,8 @@ internal shared class PrefixBindingContext {
         } else {
             type
         }
-        return underlying is StructSymbol structSymbol && structSymbol.Declaration != nil
+        return (underlying is StructSymbol structSymbol && structSymbol.Declaration != nil) ||
+            underlying is ImportedTypeSymbol
     }
 
     /// Returns the premise of a failed overload resolution or argument check at [`location`](paramref)

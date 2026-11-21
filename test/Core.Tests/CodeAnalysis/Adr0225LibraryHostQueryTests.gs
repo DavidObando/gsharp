@@ -86,6 +86,7 @@ func F() {
         Assert.Null(SyntaxTree.ParseStatement("func F() {}"))
         Assert.Null(SyntaxTree.ParseStatement("let a = 1\nlet b = 2"))
         Assert.Null(SyntaxTree.ParseStatement(""))
+        Assert.Null(SyntaxTree.ParseStatement("@assembly:CLSCompliant(true)\nlet x = 1"))
         Assert.Null(SyntaxTree.ParseExpression("let x = 1"))
         Assert.Null(SyntaxTree.ParseExpression(""))
         Assert.Null(SyntaxTree.ParseExpression("a b"))
@@ -226,6 +227,34 @@ func F() {
         Assert.Null(model.GetExpectedType(source.IndexOf("1, 2)", StringComparison.Ordinal)))
         Assert.Null(model.GetExpectedType(source.IndexOf("\"x\"", StringComparison.Ordinal)))
         Assert.Null(model.GetExpectedType(source.IndexOf("3)", StringComparison.Ordinal)))
+    }
+
+    @Fact
+    func GetExpectedType_StopsAtTheNearestDeclarationAndAtAnUntypedInitializer() {
+        const source = `package P
+
+func F() int64 {
+    let result int32 = {
+        let text = "s"
+        1
+    }
+    let g = func () int64 {
+        let o = object {
+            func Run() bool {
+                return true
+            }
+        }
+        return 2
+    }
+    return 3
+}
+`
+        let (_, model) = Model(source)
+        // The block gives its target type to its last expression only.
+        Assert.Null(model.GetExpectedType(source.IndexOf("\"s\"", StringComparison.Ordinal)))
+        // A rich object's method inside a literal owns its `return`.
+        Assert.Equal(TypeSymbol.Bool, model.GetExpectedType(source.IndexOf("true", StringComparison.Ordinal)))
+        Assert.Equal(TypeSymbol.Int64, model.GetExpectedType(source.IndexOf("2\n", StringComparison.Ordinal)))
     }
 
     shared {

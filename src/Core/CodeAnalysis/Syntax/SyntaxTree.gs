@@ -162,7 +162,12 @@ open class SyntaxTree {
             ArgumentNullException.ThrowIfNull(text, paramName: "text")
             let tree = Parse(SourceText.From(text))
             let members = tree.Root.Members
-            return if members.Length == 1 && members[0] is GlobalStatementSyntax global {
+            return if members.Length == 1 &&
+                tree
+                .Root
+                .FileAttributes
+                .IsDefaultOrEmpty &&
+                members[0] is GlobalStatementSyntax global {
                 global.Statement
             } else {
                 default(StatementSyntax?)

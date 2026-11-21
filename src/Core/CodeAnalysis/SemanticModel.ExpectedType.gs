@@ -52,6 +52,13 @@ partial class SemanticModel {
             if current is ReturnStatementSyntax returnStatement && position >= returnStatement.ReturnKeyword.Span.End {
                 return Usable(ReturnType(path, i, position, cancellationToken))
             }
+            // An initializer without a declared type expects nothing; the outer context does not reach it.
+            if current is VariableDeclarationSyntax{TypeClause: nil, EqualsToken: {} untypedEquals} &&
+                position >= untypedEquals
+                .Span
+                .End {
+                return nil
+            }
             if current is VariableDeclarationSyntax{TypeClause: not nil, EqualsToken: {} equals} declaration &&
                 position >= equals
                 .Span
@@ -102,6 +109,15 @@ partial class SemanticModel {
         cancellationToken CancellationToken
     ) TypeSymbol? {
         for var i = index - 1; i >= 0; i-- {
+            // The nearest declared function or method, a rich object's method included, owns the return.
+            if path[i] is FunctionDeclarationSyntax declaration {
+                return if GetDeclaredSymbol(declaration, cancellationToken) is FunctionSymbol declared &&
+                    !declared.IsAsyncOrSuspending {
+                    declared.Type
+                } else {
+                    default(TypeSymbol?)
+                }
+            }
             if path[i] is LambdaExpressionSyntax {
                 return nil
             }

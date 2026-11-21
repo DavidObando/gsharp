@@ -774,7 +774,8 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         location TextLocation,
         descriptor DiagnosticDescriptor,
         fromType TypeSymbol,
-        toType TypeSymbol
+        toType TypeSymbol,
+        messageArguments ...object
     ) {
         let stack List[PrefixPremise]? = premises
         let pushed = (stack == nil || stack.Count == 0) &&
@@ -782,7 +783,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
             PrefixBindingContext.LaterConversionCanFollow(fromType, toType),
             PrefixPremise.LaterDeclaration
         )
-        Report(location, descriptor, descriptor.Severity, []object{fromType, toType})
+        Report(location, descriptor, descriptor.Severity, messageArguments)
         PopPremiseIf(pushed)
     }
 

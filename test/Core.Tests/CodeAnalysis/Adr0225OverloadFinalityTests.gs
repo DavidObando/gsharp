@@ -527,6 +527,56 @@ func Main() {
         AssertFutureDependent(result, "GS0176", "rest-of-statement")
     }
 
+    @Fact
+    func ArmTypeMismatchOfAClosedSwitchExpression_CanBeALaterConversion() {
+        const prefix = `package P
+
+struct V {
+    var Value int32
+}
+
+func Pick(n int32) int32 {
+    let r = switch n {
+        case 0: 1
+        default: V{Value: 2}
+    }
+    return r
+}
+`
+        const witness = `
+func operator implicit (v V) int32 {
+    return v.Value
+}
+`
+        let result = BindNothing(prefix, []string{"", witness})
+        AssertWitness(prefix + witness, "GS0179")
+        AssertFutureDependent(result, "GS0179", "later-declaration")
+    }
+
+    @Fact
+    func MissingConversionToAnImportedType_CanBeALaterHidingType() {
+        const prefix = `package P
+
+import System
+
+func Main() {
+    let v Version = "s"
+`
+        // A later source type hides the imported one, and a later conversion converts to it.
+        const witness = `}
+
+class Version {
+}
+
+func operator implicit (s string) Version {
+    return Version()
+}
+`
+        let result = BindNothing(prefix, []string{"}\n", witness})
+        AssertWitness(prefix + witness, "GS0155")
+        AssertFutureDependent(result, "GS0155", "later-declaration")
+    }
+
     shared {
         // Binds [`prefix`](paramref) as text that ends at the cut, with nothing after it, and checks that
         // each final diagnostic stays reported in every completion.

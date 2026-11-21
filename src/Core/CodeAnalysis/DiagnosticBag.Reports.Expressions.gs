@@ -553,6 +553,8 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         location,
         DiagnosticDescriptors.CannotConvert,
         fromType,
+        toType,
+        fromType,
         toType
     )
 
@@ -576,7 +578,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         location TextLocation,
         fromType TypeSymbol,
         toType TypeSymbol
-    ) -> ReportConversion(location, DiagnosticDescriptors.CannotConvertImplicitly, fromType, toType)
+    ) -> ReportConversion(location, DiagnosticDescriptors.CannotConvertImplicitly, fromType, toType, fromType, toType)
 
     /// Issue #337: reports that a CLR member method group cannot be converted to
     /// the expected target type (it is not a compatible delegate type, or no
