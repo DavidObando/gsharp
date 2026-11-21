@@ -174,7 +174,16 @@ open class SyntaxTree {
         /// @param text The text of the expression.
         /// @returns The expression, or `null` when the text is not exactly one expression.
         func ParseExpression(text string) ExpressionSyntax? {
-            return if ParseStatement(text) is ExpressionStatementSyntax statement {
+            ArgumentNullException.ThrowIfNull(text, paramName: "text")
+            let syntaxTree = SyntaxTree(SourceText.From(text))
+            let parser = Parser(syntaxTree)
+            let root = parser.ParseExpressionFragment(out var isSingleExpression)
+            syntaxTree.SetParseResult(root, parser.Diagnostics.ToImmutableArray(), parser.DocumentationTokens)
+            return if isSingleExpression &&
+                root
+                .Members
+                .Length == 1 &&
+                root.Members[0] is GlobalStatementSyntax{Statement: ExpressionStatementSyntax statement} {
                 statement.Expression
             } else {
                 default(ExpressionSyntax?)

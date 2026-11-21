@@ -7,6 +7,7 @@ package GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
+import GSharp.Core.CodeAnalysis.Text
 import System
 import System.Collections.Generic
 import System.Collections.Immutable
@@ -79,16 +80,21 @@ partial class SemanticModel {
                 (call.CloseParenthesisToken.IsMissing || position <= call.CloseParenthesisToken.Span.Start) {
                 return Usable(ArgumentType(call, position, cancellationToken))
             }
-            // A function literal or lambda starts another context.
-            if current is FunctionLiteralExpressionSyntax || current is LambdaExpressionSyntax {
+            // The body of a function literal or lambda starts another context; its header does not.
+            if current is FunctionLiteralExpressionSyntax literal && Contains(literal.Body.Span, position) {
+                return nil
+            }
+            if current is LambdaExpressionSyntax lambda && Contains(lambda.Body.Span, position) {
                 return nil
             }
         }
         return nil
     }
 
-    // The return type of the function that a `return` at path[index] leaves. A function literal gives its
-    // own; a lambda gives none.
+    // The return type of the function that a `return` at path[index] leaves: the declared return type of
+    // a function literal, or of the enclosing function. A lambda, a literal without a declared return
+    // type, and an `async` or suspending function give none, because the type that a `return` expects
+    // differs from the declared one or is inferred.
     private func ReturnType(
         path List[SyntaxNode],
         index int32,
@@ -100,30 +106,26 @@ partial class SemanticModel {
                 return nil
             }
             if path[i] is FunctionLiteralExpressionSyntax literal {
-                // The model does not index a function literal. A literal that initializes a local gets
-                // its function from the bound declaration, as (cref:Compilation.Compilation.BindPrefix) does.
-                var bound = GetBoundNode(literal, cancellationToken)
-                if bound == nil &&
-                    i >= 1 &&
-                    path[i - 1] is VariableDeclarationSyntax declaration &&
-                    GetBoundNode(declaration, cancellationToken) is BoundVariableDeclaration boundDeclaration {
-                    bound = boundDeclaration.Initializer
+                if literal.ReturnTypeClause == nil || literal.IsAsync {
+                    return nil
                 }
-                return if bound is BoundFunctionLiteralExpression boundLiteral {
-                    boundLiteral.Function.Type
-                } else if bound is BoundExpression{Type: FunctionTypeSymbol functionType} {
-                    functionType.ReturnType
+                return if GetDeclaredSymbol(literal, cancellationToken) is FunctionSymbol literalFunction &&
+                    !literalFunction.IsAsyncOrSuspending {
+                    literalFunction.Type
                 } else {
                     default(TypeSymbol?)
                 }
             }
         }
-        return if GetEnclosingSymbol(position, cancellationToken) is FunctionSymbol function {
+        return if GetEnclosingSymbol(position, cancellationToken) is FunctionSymbol function &&
+            !function.IsAsyncOrSuspending {
             function.Type
         } else {
             default(TypeSymbol?)
         }
     }
+
+    private func Contains(span TextSpan, position int32) bool -> span.Start <= position && position <= span.End
 
     // The parameter type that every candidate of [`call`](paramref) has at the slot of [`position`](paramref).
     private func ArgumentType(

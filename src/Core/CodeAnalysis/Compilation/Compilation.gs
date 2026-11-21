@@ -1024,17 +1024,21 @@ open class Compilation {
                 return false
             }
         }
+        // The previous prefix compilation holds the options that its bind used; the host can have changed
+        // its own since then.
+        let bound = previous.Compilation
         return object.ReferenceEquals(host.References, References) &&
-            host.ImplicitSystemImport == ImplicitSystemImport &&
-            host.Nullability == Nullability &&
-            host.PlatformNilChecks == PlatformNilChecks &&
-            host.IsLibrary == IsLibrary &&
-            host.Optimize == Optimize &&
-            host.Submission == nil &&
+            bound.ImplicitSystemImport == ImplicitSystemImport &&
+            bound.Nullability == Nullability &&
+            bound.PlatformNilChecks == PlatformNilChecks &&
+            bound.IsLibrary == IsLibrary &&
+            bound.Optimize == Optimize &&
+            bound.WarnOnMissingDocumentation == WarnOnMissingDocumentation &&
+            bound.Submission == nil &&
             Submission == nil &&
-            host.RecordMemberGroups == RecordMemberGroups &&
-            string.Equals(host.assemblyName, assemblyName, StringComparison.Ordinal) &&
-            SamePreprocessorSymbols(host.PreprocessorSymbols, PreprocessorSymbols)
+            bound.RecordMemberGroups == RecordMemberGroups &&
+            string.Equals(bound.assemblyName, assemblyName, StringComparison.Ordinal) &&
+            SamePreprocessorSymbols(bound.PreprocessorSymbols, PreprocessorSymbols)
     }
 
     private func SamePreprocessorSymbols(left ImmutableHashSet[string]?, right ImmutableHashSet[string]?) bool {

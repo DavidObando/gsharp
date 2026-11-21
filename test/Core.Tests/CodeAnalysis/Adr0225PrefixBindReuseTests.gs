@@ -270,6 +270,34 @@ func Value(x int32) int32 {
         }
     }
 
+    /// A previous result whose compilation was bound with other options is not reused: the bind reads the
+    /// options of the previous prefix compilation, not of its host.
+    @Fact
+    func PreviousBoundWithOtherOptions_IsNotReused() {
+        const source = `package P
+
+func Value(x int32) int32 {
+    let y = x + 1
+    let z = y + 1
+    return z
+}
+`
+        let first = source.IndexOf("let z", StringComparison.Ordinal)
+        let second = source.IndexOf("return", StringComparison.Ordinal)
+        let options = PrefixBindOptions(PrefixRemainder.Nothing)
+        let tree = SyntaxTree.Parse(SourceText.From(source, "prefix.gs"))
+        let plain = Compilation(tree)
+        let previous = plain.BindPrefix(tree, first, options)
+        let documented = Compilation(tree){.WarnOnMissingDocumentation: true}
+        using let measurements = CompilationMeasurements.Start("test")
+        let other = documented.BindPrefix(tree, second, options, previous)
+        Assert.Equal(0L, measurements.GetCounter("declarations.reuses"))
+        Assert.Equal(Describe(documented.BindPrefix(tree, second, options)), Describe(other))
+        // The same options reuse it.
+        plain.BindPrefix(tree, second, options, previous)
+        Assert.Equal(1L, measurements.GetCounter("declarations.reuses"))
+    }
+
     shared {
         private func Describe(result PrefixBindResult) string {
             let diagnostics = string.Join(

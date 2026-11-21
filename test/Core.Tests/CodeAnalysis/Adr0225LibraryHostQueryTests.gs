@@ -87,6 +87,11 @@ func F() {
         Assert.Null(SyntaxTree.ParseStatement("let a = 1\nlet b = 2"))
         Assert.Null(SyntaxTree.ParseStatement(""))
         Assert.Null(SyntaxTree.ParseExpression("let x = 1"))
+        Assert.Null(SyntaxTree.ParseExpression(""))
+        Assert.Null(SyntaxTree.ParseExpression("a b"))
+        // Forms that only the expression grammar reads at the start of a fragment.
+        Assert.IsType[FunctionLiteralExpressionSyntax](SyntaxTree.ParseExpression("func () int32 { return 1 }"))
+        Assert.NotNull(SyntaxTree.ParseExpression("{ 1 }"))
         // A parsed expression binds speculatively at a position of another tree.
         const source = "package P\n\nfunc F(p int32) {\n    let q = p\n}\n"
         let (_, model) = Model(source)
@@ -104,7 +109,17 @@ func F() {
 func Take(a int32, b string, c int64) {
 }
 
+func Apply(f (int32) -> int32) {
+}
+
+func Pred(p () -> bool) {
+}
+
 func F() int64 {
+    Apply((n int32) -> n)
+    Pred(func () bool {
+        return false
+    })
     var s string = "x"
     let typed float64 = 1.0
     s = "y"
@@ -124,8 +139,17 @@ func F() int64 {
         Assert.Equal(TypeSymbol.Int64, model.GetExpectedType(source.IndexOf("3)", StringComparison.Ordinal)))
         Assert.Equal(TypeSymbol.Bool, model.GetExpectedType(source.IndexOf("true", StringComparison.Ordinal)))
         Assert.Equal(TypeSymbol.Int64, model.GetExpectedType(source.IndexOf("4\n", StringComparison.Ordinal)))
+        // The header of a literal or lambda argument gets the parameter type; a literal that is an
+        // argument gives its declared return type to its `return`.
+        Assert.IsType[FunctionTypeSymbol](
+            model.GetExpectedType(source.IndexOf("(n int32) ->", StringComparison.Ordinal))
+        )
+        Assert.IsType[FunctionTypeSymbol](
+            model.GetExpectedType(source.IndexOf("func () bool {\n        return false", StringComparison.Ordinal))
+        )
+        Assert.Equal(TypeSymbol.Bool, model.GetExpectedType(source.IndexOf("false", StringComparison.Ordinal)))
         // A declaration without a type, and a lambda body, expect nothing.
-        Assert.Null(model.GetExpectedType(source.IndexOf("func () bool", StringComparison.Ordinal)))
+        Assert.Null(model.GetExpectedType(source.IndexOf("let f = func", StringComparison.Ordinal) + 8))
         Assert.Null(model.GetExpectedType(source.IndexOf("-> n", StringComparison.Ordinal) + 3))
     }
 

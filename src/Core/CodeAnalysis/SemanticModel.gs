@@ -132,7 +132,7 @@ partial class SemanticModel {
     /// counterpart of Roslyn's `GetDeclaredSymbol`. Covers functions,
     /// structs, interfaces, enums, delegates, properties, globals, parameters,
     /// and locals whose declaration lives in this tree. A parameter or a local answers for its
-    /// declaration node and for its identifier token.
+    /// declaration node and for its identifier token, and a function literal answers its function.
     /// @param node The declaration syntax node.
     /// @param cancellationToken Cancels index construction on first use.
     /// @returns The declared symbol, or null when the node declares nothing.
@@ -469,6 +469,19 @@ partial class SemanticModel {
             // declarations it holds (a literal's parameters and locals), not for anchoring: syntax
             // inside a literal keeps answering no bound node.
             if node is BoundFunctionLiteralExpression literal {
+                // A function literal declares its function (#6079). The bound literal has no syntax of its
+                // own; its body block does.
+                let literalSyntax SyntaxNode? = if literal.Syntax is FunctionLiteralExpressionSyntax own {
+                    own
+                } else if literal.Body.Syntax is BlockStatementSyntax{Parent: FunctionLiteralExpressionSyntax parent} {
+                    parent
+                } else {
+                    default(SyntaxNode?)
+                }
+                if literalSyntax != nil && object.ReferenceEquals(literalSyntax.SyntaxTree, tree) &&
+                    !declaredBySyntax.ContainsKey(literalSyntax) {
+                    declaredBySyntax.Add(literalSyntax, literal.Function)
+                }
                 // A parameter the body never reads is not reached through the body.
                 for parameter in literal.Function.Parameters {
                     SemanticModel.RecordDeclarations(parameter, tree, declaredBySyntax)
