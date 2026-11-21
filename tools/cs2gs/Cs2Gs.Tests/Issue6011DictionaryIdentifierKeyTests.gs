@@ -12,6 +12,8 @@ import System
 import System.Collections.Generic
 import System.Diagnostics
 import System.IO
+import System.Linq
+import System.Text.RegularExpressions
 import Xunit
 
 /// Issue #6011: a generic collection initializer whose first element is a
@@ -289,9 +291,21 @@ public static class Second { public static string Run() => ""; }
             using let process = Process.Start(startInfo) ?? throw InvalidOperationException("failed to start dotnet")
             let stdout = process.StandardOutput.ReadToEndAsync()
             let stderr = process.StandardError.ReadToEndAsync()
-            Assert.True(process.WaitForExit(TimeSpan.FromMinutes(5)))
+            if !process.WaitForExit(TimeSpan.FromMinutes(5)) {
+                process.Kill(entireProcessTree: true)
+                process.WaitForExit()
+                Assert.Fail("gsc did not exit within 5 minutes.")
+            }
             let output = stdout.GetAwaiter().GetResult() + stderr.GetAwaiter().GetResult()
             Assert.DoesNotContain("GS0158", output, StringComparison.Ordinal)
+            if process.ExitCode != 0 {
+                let errorIds = Regex
+                    .Matches(output, `(?m):\s*error\s+(GS\d+):`)
+                    .Select((match Match) -> match.Groups[1].Value)
+                    .ToArray()
+                Assert.True(errorIds.Length > 0, "Expected gsc diagnostics on non-zero exit:\n" + output)
+                Assert.All(errorIds, (id string) -> Assert.Equal("GS0159", id))
+            }
         } finally {
             try {
                 Directory.Delete(workDir, recursive: true)
