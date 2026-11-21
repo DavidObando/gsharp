@@ -68,7 +68,10 @@ internal partial class OverloadResolver {
                 let explicitVector = BuildTypeArgumentVector(
                     candidate.TypeParameters,
                     boundTypeArguments,
-                    receiverType ?? candidate.StaticOwnerType ?? candidate.ReceiverType
+                    (candidate.ContainingType as InterfaceSymbol) ??
+                        receiverType ??
+                        candidate.StaticOwnerType ??
+                        candidate.ReceiverType
                 )
                 var constraintsSatisfied = true
                 for var i = 0; i < candidate.TypeParameters.Length; i++ {
@@ -1747,7 +1750,10 @@ internal partial class OverloadResolver {
         if !candidate.IsGeneric {
             return true
         }
-        SeedFixedOwnerTypeParameters(candidate.StaticOwnerType ?? candidate.ReceiverType, substitution)
+        SeedFixedOwnerTypeParameters(
+            (candidate.ContainingType as InterfaceSymbol) ?? candidate.StaticOwnerType ?? candidate.ReceiverType,
+            substitution
+        )
         let parameterOffset = if candidate.ExplicitReceiverParameter == nil {
             0
         } else {

@@ -269,10 +269,11 @@ internal partial class MethodBodyEmitter {
                         )
                     }
                     this.EmitImportedCallArguments(instCall.Arguments, instCall.ArgumentRefKinds)
+                    let containerType = instCall.NonVirtualBaseTargetType ?? receiverType
                     let instCallHandle = this
                         .outer
                         .memberRefs
-                        .GetMethodEntityHandle(instCall.Method, instCall.TypeArgumentSymbols, receiverType)
+                        .GetMethodEntityHandle(instCall.Method, instCall.TypeArgumentSymbols, containerType)
                     // Issue #1260: a `base.Member(...)` access into an imported/BCL
                     // base class emits a non-virtual `call` (never `callvirt`),
                     // exactly like C# `base.M(...)`. `callvirt` would re-dispatch
@@ -300,7 +301,7 @@ internal partial class MethodBodyEmitter {
                     if this
                         .outer
                         .userTokens
-                        .TryGetSymbolicSubstitutedInstanceMethodReturn(receiverType, instCall.Method, out _) {
+                        .TryGetSymbolicSubstitutedInstanceMethodReturn(containerType, instCall.Method, out _) {
                         break
                     }
                     // The receiver may be an ordinary imported type while the

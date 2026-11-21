@@ -1243,7 +1243,10 @@ internal class ChannelRuntimeBinder {
                     call.ConstrainedReceiverTypeParameter,
                     call.ConstrainedInterfaceType,
                     call.IsNonVirtualBaseCall
-                )
+                ){
+                    NonVirtualBaseTargetType = call.NonVirtualBaseTargetType,
+                    AssociatedProperty = call.AssociatedProperty
+                }
             )
         }
 

@@ -1810,7 +1810,8 @@ internal partial class OverloadResolver {
         arguments ImmutableArray[BoundExpression],
         ce CallExpressionSyntax,
         argumentNames ImmutableArray[string] = default(ImmutableArray[string]),
-        constrainedReceiverTypeParameter TypeParameterSymbol? = nil
+        constrainedReceiverTypeParameter TypeParameterSymbol? = nil,
+        explicitOwnerType TypeSymbol? = nil
     ) BoundExpression {
         // Issue #950 / #2044 / #2058: enforce `protected`/`private` method
         // access — a `protected` method is only callable from the declaring
@@ -1957,6 +1958,9 @@ internal partial class OverloadResolver {
         if method.IsGeneric {
             if substitution == nil {
                 substitution = Dictionary[TypeParameterSymbol, TypeSymbol]()
+            }
+            if explicitOwnerType != nil {
+                SeedFixedOwnerTypeParameters(explicitOwnerType, substitution)
             }
             SeedFixedOwnerTypeParameters(receiver.Type ?? method.ReceiverType, substitution)
             if ce.TypeArgumentList is {} typeArgumentList {

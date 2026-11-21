@@ -741,10 +741,21 @@ internal partial class ExpressionBinder {
             HashSet[VariableSymbol](GetCurrentExpressionCallableAliases())
         }
         setCallableAliases(initialAliases)
-        let pushed = if frame != nil && frame.Count > 0 {
-            binderCtx.PushNarrowingFrame(Dictionary[AccessPath, TypeSymbol](frame))
-        } else {
-            default(NarrowingFrame?)
+        var pushed NarrowingFrame? = nil
+        if frame != nil && frame.Count > 0 {
+            let refined = Dictionary[AccessPath, TypeSymbol]()
+            for fact in frame {
+                let held = binderCtx.NarrowedVariables.Query(fact.Key)
+                // Preserve surviving stronger refinements, matching PushConditionNarrowingFrame.
+                refined[fact.Key] = if !StatementBinder.IsNullableWidening(fact.Key, fact.Value) &&
+                    held != nil &&
+                    NarrowingState.IsNoStrongerThan(fact.Value, held) {
+                    held
+                } else {
+                    fact.Value
+                }
+            }
+            pushed = binderCtx.PushNarrowingFrame(refined)
         }
         nextExpressionFrameId += 1
         let id = nextExpressionFrameId
@@ -2608,7 +2619,7 @@ internal partial class ExpressionBinder {
             clearAssignedRoots,
             evolveAliases
         )
-        let (conditionalThen, conditionalElse) = StatementBinder.TryClassifyNullConditionalBoolNarrowing(
+        let (conditionalThen, conditionalElse) = StatementBinder.TryClassifyNullConditionalNarrowing(
             condition,
             restrictBareVariableToLocalsAndParams,
             beforeAliases,
@@ -5917,17 +5928,22 @@ internal partial class ExpressionBinder {
 
         internal func TryGetReadOnlyAddressTarget(
             expression BoundExpression,
-            @NotNullWhen(true) out variable VariableSymbol?
+            @NotNullWhen(true) out variable VariableSymbol?,
+            ownReceiver ParameterSymbol? = nil
         ) bool {
             switch expression {
                 case block is BoundBlockExpression {
-                    return TryGetReadOnlyAddressTarget(block.Expression, out variable)
+                    return TryGetReadOnlyAddressTarget(block.Expression, out variable, ownReceiver)
                 }
                 case conditional is BoundConditionalExpression {
-                    return TryGetReadOnlyAddressTarget(conditional.WhenTrue, out variable) ||
-                        TryGetReadOnlyAddressTarget(conditional.WhenFalse, out variable)
+                    return TryGetReadOnlyAddressTarget(conditional.WhenTrue, out variable, ownReceiver) ||
+                        TryGetReadOnlyAddressTarget(conditional.WhenFalse, out variable, ownReceiver)
                 }
-                case BoundVariableExpression{Variable: {IsReadOnly: true}} readOnly {
+                case BoundVariableExpression{Variable: {IsReadOnly: true}} readOnly
+                when RefCapabilities.IsReadOnlyStorage(readOnly) || RefCapabilities.IsCapturedValueTypeReceiverStorage(
+                    readOnly,
+                    ownReceiver
+                ) {
                     variable = readOnly.Variable
                     return true
                 }

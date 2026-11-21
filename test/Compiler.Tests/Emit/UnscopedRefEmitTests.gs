@@ -123,6 +123,92 @@ func Forward(ref a Acc) ref int32 {
         Assert.DoesNotContain(il!!, (opcode uint8) -> StoreLocalOpcodes.Contains(opcode))
     }
 
+    @Fact
+    func StructMethod_RefAndOutThis_EmitLdarg0_PassIlVerify_AndPreserveAddressIdentity() {
+        let tempDir = Directory.CreateTempSubdirectory("gs_refthis_emit_").FullName
+        try {
+            let srcPath = Path.Combine(tempDir, "test.gs")
+            let outPath = Path.Combine(tempDir, "test.dll")
+            File.WriteAllText(srcPath, `package RefThisEmit
+import System.Runtime.CompilerServices
+
+public struct Counter {
+    public var N int32
+
+    shared {
+        private func Bump(ref c Counter) {
+            c.N = c.N + 1
+        }
+
+        private func Set(out c Counter, v int32) {
+            c = Counter{N: v}
+        }
+
+        private func SameWritable(ref a Counter, ref b Counter) bool -> Unsafe.AreSame(in a, in b)
+    }
+
+    public func BumpViaRef(ref expected Counter) bool {
+        Bump(ref this)
+        return SameWritable(ref this, ref expected)
+    }
+
+    public func ResetViaOut(v int32) {
+        Set(out this, v)
+    }
+}
+
+public class Harness {
+    shared {
+        public func Run() string {
+            var c = Counter{N: 1}
+            let same = c.BumpViaRef(ref c)
+            let afterBump = c.N
+            c.ResetViaOut(17)
+            return "${same}:${afterBump}:${c.N}"
+        }
+    }
+}
+`)
+            using let compileOut = StringWriter()
+            using let compileErr = StringWriter()
+            let prevOut = Console.Out
+            let prevErr = Console.Error
+            Console.SetOut(compileOut)
+            Console.SetError(compileErr)
+            var compileExit int32
+            try {
+                compileExit = Program.Main(
+                    []string{"/out:" + outPath, "/target:library", "/targetframework:net10.0", srcPath}
+                )
+            } finally {
+                Console.SetOut(prevOut)
+                Console.SetError(prevErr)
+            }
+            Assert.True(compileExit == 0, "gsc failed:\nstdout:\n$compileOut\nstderr:\n$compileErr")
+            IlVerifier.Verify(outPath)
+            let assembly = EmittedFixture.Load(outPath)
+            let counterType = assembly.GetTypes().Single((t Type) -> t.Name == "Counter")
+            let bumpMethod = counterType.GetMethod("BumpViaRef", BindingFlags.Public | BindingFlags.Instance)
+            Assert.NotNull(bumpMethod)
+            let il[]?uint8 = bumpMethod!!.GetMethodBody()?.GetILAsByteArray()
+            Assert.NotNull(il)
+            Assert.NotEmpty(il!!)
+            Assert.Equal(Ldarg0, il!![0])
+            Assert.DoesNotContain(LdargaS, il!!)
+            Assert.DoesNotContain(Ldobj, il!!)
+            Assert.DoesNotContain(il!!, (opcode uint8) -> StoreLocalOpcodes.Contains(opcode))
+
+            let harnessType = assembly.GetTypes().Single((t Type) -> t.Name == "Harness")
+            let runMethod = harnessType.GetMethod("Run", BindingFlags.Public | BindingFlags.Static)
+            Assert.NotNull(runMethod)
+            Assert.Equal("True:2:17", runMethod!!.Invoke(nil, nil))
+        } finally {
+            if Directory.Exists(tempDir) {
+                Directory.Delete(tempDir, recursive: true)
+            }
+        }
+    }
+
     shared {
         private const UnscopedRefAttributeFullName string = "System.Diagnostics.CodeAnalysis.UnscopedRefAttribute"
 

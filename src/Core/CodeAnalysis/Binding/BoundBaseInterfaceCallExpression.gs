@@ -17,6 +17,8 @@ import System.Collections.Immutable
 /// directly to the interface method body without re-entering the
 /// implementer's v-table.
 class BoundBaseInterfaceCallExpression : BoundCallOperationExpression {
+    private let returnTypeOverride TypeSymbol?
+
     /// Initializes a new instance of the (cref:BoundBaseInterfaceCallExpression) class.
     /// @param syntax The originating syntax.
     /// @param receiver The implicit `this` receiver of the enclosing instance member.
@@ -24,17 +26,33 @@ class BoundBaseInterfaceCallExpression : BoundCallOperationExpression {
     /// @param method The interface method whose default body is invoked. Must satisfy
     /// (cref:InterfaceSymbol.HasDefaultBody).
     /// @param arguments The bound argument expressions in declared order.
-    init(
+    convenience init(
         syntax SyntaxNode?,
         receiver BoundExpression,
         interfaceSymbol InterfaceSymbol,
         method FunctionSymbol,
         arguments ImmutableArray[BoundExpression]
+    ) {
+        init(syntax, receiver, interfaceSymbol, method, arguments, nil)
+    }
+
+    internal init(
+        syntax SyntaxNode?,
+        receiver BoundExpression,
+        interfaceSymbol InterfaceSymbol,
+        method FunctionSymbol,
+        arguments ImmutableArray[BoundExpression],
+        returnTypeOverride TypeSymbol?,
+        property PropertySymbol? = nil,
+        isSetterAccessor bool = false
     ) : base(syntax) {
         Receiver = receiver
         Interface = interfaceSymbol
         Method = method
         _arguments = arguments
+        this.returnTypeOverride = returnTypeOverride
+        Property = property
+        IsSetterAccessor = isSetterAccessor
     }
 
     /// ```xmldoc
@@ -50,7 +68,7 @@ class BoundBaseInterfaceCallExpression : BoundCallOperationExpression {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    override prop Type TypeSymbol -> Method.Type
+    override prop Type TypeSymbol -> returnTypeOverride ?? Method.Type
 
     /// Gets the implicit `this` receiver — a (cref:BoundVariableExpression) reading the enclosing method's
     /// first parameter.
@@ -66,6 +84,22 @@ class BoundBaseInterfaceCallExpression : BoundCallOperationExpression {
     /// Gets the interface method whose default body is invoked.
     prop Method FunctionSymbol {
         get;
+    }
+
+    /// Gets the interface property whose default accessor is invoked, or `null` for a method call.
+    internal prop Property PropertySymbol? {
+        get;
+    }
+
+    /// Gets a value indicating whether (cref:Property)'s setter accessor is invoked.
+    internal prop IsSetterAccessor bool {
+        get;
+    }
+
+    /// Gets the resolved method type arguments for a generic interface method call.
+    internal prop MethodTypeArguments ImmutableArray[TypeSymbol] {
+        get;
+        init;
     }
 
     /// Gets the bound argument expressions in declared order.

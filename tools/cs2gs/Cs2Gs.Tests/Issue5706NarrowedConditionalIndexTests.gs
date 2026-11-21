@@ -2627,6 +2627,68 @@ public static class Demo
         Assert.Contains("let ref readonly", printed, StringComparison.Ordinal)
     }
 
+    @Fact
+    func WritableRefThis_MethodAndExtensionAndOut_PreserveMutationAndAddressIdentity() {
+        let printed = Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System.Runtime.CompilerServices;
+using ExternalRefThis6064;
+public struct Counter : ICountable
+{
+    public int N;
+    public void Inc() { N += 10; }
+    static void Bump(ref Counter value) { value.N++; }
+    static void Set(out Counter value, int v) { value = new Counter { N = v }; }
+    static bool Same(in Counter left, in Counter right) =>
+        Unsafe.AreSame(ref Unsafe.AsRef(in left), ref Unsafe.AsRef(in right));
+    static bool SameWritable(ref Counter left, ref Counter right) =>
+        Unsafe.AreSame(ref left, ref right);
+    public string Check(ref Counter expected)
+    {
+        string? s = null;
+        s = "a";
+        Bump(ref this);
+        var direct = s.Length + ":" + s?[0] + ":" + N;
+        bool sameRef = SameWritable(ref this, ref expected);
+        bool sameIn = Same(in this, in expected);
+        this.Touch();
+        int afterTouch = N;
+        Ext.Touch(ref this);
+        int afterStatic = N;
+        this.ExternalTouch();
+        int afterExternal = N;
+        Set(out this, 42);
+        return direct + "|" + sameRef + ":" + sameIn + "|" + afterTouch + ":" + afterStatic + ":" + afterExternal + "|" + N;
+    }
+}
+public static class Ext
+{
+    public static void Touch(this ref Counter value) { value.N++; }
+}
+public static class Demo
+{
+    public static string Run()
+    {
+        var counter = new Counter();
+        var result = counter.Check(ref counter);
+        return result + "|" + counter.N;
+    }
+}`, `
+namespace ExternalRefThis6064
+{
+    public interface ICountable { void Inc(); }
+    public static class ExternalCounterExtensions
+    {
+        public static void ExternalTouch<T>(this ref T value) where T : struct, ICountable { value.Inc(); }
+    }
+}`, strictIl: true, rejectConditionalIndexWarnings: true, expectedOutput: "1:a:1|True:True|2:3:13|42|42")
+        Assert.Contains("Bump(ref this)", printed, StringComparison.Ordinal)
+        Assert.Contains("Ext.Touch(ref this)", printed, StringComparison.Ordinal)
+        Assert.Contains("Set(out this, 42)", printed, StringComparison.Ordinal)
+        Assert.Contains("Same(in this, in expected)", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("&this", printed, StringComparison.Ordinal)
+    }
+
     shared {
         private func AssertRunsWithoutConditionalIndexWarning(source string, expectedOutput string? = nil) string {
             let printed = Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(source, expectedOutput)

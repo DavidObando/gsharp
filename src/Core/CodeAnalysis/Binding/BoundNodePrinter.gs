@@ -1051,7 +1051,28 @@ shared class BoundNodePrinter {
         writer.WriteIdentifier(node.Interface.Name)
         writer.WritePunctuation(SyntaxKind.CloseSquareBracketToken)
         writer.WritePunctuation(SyntaxKind.DotToken)
+        if node.Property is {} prop {
+            writer.WriteIdentifier(prop.Name)
+            if node.IsSetterAccessor && node.Arguments.Length == 1 {
+                writer.WriteSpace()
+                writer.WritePunctuation(SyntaxKind.EqualsToken)
+                writer.WriteSpace()
+                BoundNodePrinter.WriteTo(node.Arguments[0], writer)
+            }
+            return
+        }
         writer.WriteIdentifier(node.Method.Name)
+        if !node.MethodTypeArguments.IsDefaultOrEmpty {
+            writer.WritePunctuation(SyntaxKind.OpenSquareBracketToken)
+            for var i = 0; i < node.MethodTypeArguments.Length; i++ {
+                if i > 0 {
+                    writer.WritePunctuation(SyntaxKind.CommaToken)
+                    writer.WriteSpace()
+                }
+                writer.WriteIdentifier(node.MethodTypeArguments[i].Name)
+            }
+            writer.WritePunctuation(SyntaxKind.CloseSquareBracketToken)
+        }
         writer.WritePunctuation(SyntaxKind.OpenParenthesisToken)
         for var i = 0; i < node.Arguments.Length; i++ {
             if i > 0 {

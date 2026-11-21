@@ -33,6 +33,8 @@ partial class CSharpToGSharpTranslator {
                 FieldInitializers = Dictionary[string, GExpression]()
                 BodyFieldInitializers = Dictionary[IPropertySymbol, GExpression](SymbolEqualityComparer.Default)
                 ResidualInitStatements = List[GStatement]()
+                InstanceSynthHelpers = List[MethodDeclaration]()
+                StaticSynthHelpers = List[MethodDeclaration]()
             }
 
             prop Constructor ConstructorDeclarationSyntax? {
@@ -96,6 +98,16 @@ partial class CSharpToGSharpTranslator {
             /// parameterless `init() { ... }` when the explicit constructor is
             /// otherwise dropped.
             prop ResidualInitStatements IReadOnlyList[GStatement] {
+                get;
+                init;
+            }
+
+            prop InstanceSynthHelpers IReadOnlyList[MethodDeclaration] {
+                get;
+                init;
+            }
+
+            prop StaticSynthHelpers IReadOnlyList[MethodDeclaration] {
                 get;
                 init;
             }

@@ -40,6 +40,14 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Keep constructor call parentheses on zero-argument generic collection initializers in `cs2gs` when the initializer is empty or begins with an identifier key (`Dictionary[K, V](){ key: value }`), preventing `gsc` from misparsing the brace as a struct literal (`GS0158` or silent property writes). (Fixes #6011)
+
+- Narrow nullable receivers and stable intermediate `?.` chain members when a conditional-access result is compared with `nil` (`!= nil`, `nil !=`, `== nil` else/early-exit branches, conditional expressions, `&&`/`||`, `is not nil`/non-nil patterns, method calls, and `?[]` indexers), while preserving side-effect invalidation when a getter, call, or index mutates the receiver. (Fixes #6042)
+
+- Substitute constructed interface type arguments through `base[Interface[Args]].Member` calls, parameters, generic interface method type arguments, default interface properties, value-type (`struct`) receiver boxing, async/lambda forwarders, and imported C# default interface methods, while rejecting mismatched interface type arguments with `GS0338`. (Fixes #6045)
+
+- Allow writable `ref this`, `out this`, and `&this` in non-constructor struct instance methods and property accessors (preserving `ldarg.0` receiver identity, rejecting constructors with unassigned `this` via `GS0239`, rejecting class `this` and captured lambda `this` via `GS9005`), and emit `ref this` / `out this` in `cs2gs` for writable struct receiver calls and `this ref` extensions. (Fixes #6064)
+
 - Preserve symbolic element types and declaration-site nullability across imported generic constructor parameter conversions and `params` array expansion, accepting `nil` at nullable generic constructor slots and matching symbolic `params` elements while preserving invariant slice and generic-argument rejection. (Fixes #6059, #6061)
 
 - Settle nested conditional capturing local-function values as ordinary function values that shadow same-signature outer and forward-declared siblings, while preserving distinct outer callable overloads and keeping capture-free local functions delegate-free. (Fixes #6112)
@@ -61,6 +69,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 - Allow overloaded explicit interface indexers with distinct parameter signatures on the same interface while still reporting `GS0495` for duplicate signatures, and align metadata-only explicit property accessor names with emitted runtime accessors. (Fixes #6125)
 
 - Preserve `ref` and `in` contracts across primitive/value-type extension receivers, non-identifier `in` operands (`in this`, `in x.Value`, `in xs[0]`), and source `ref readonly` parameter declarations and calls in `cs2gs` without copying storage operands. (Fixes #6063, #6052, #6047)
+
+- Preserve non-null delegate field contracts for nullable-result callables and bridge genuinely nullable delegate receivers on unconditional invocations, propagate oblivious nullable storage into implicit collection-initializer `Add` parameters, and propagate inferred nullable task payloads through synchronous `GetAwaiter().GetResult()` reads in `cs2gs`. (Fixes #6051, #6046, #6035)
 
 - Replace recursive closure-chain traversal and full callable-state copies in `StatementBinder.AssignedRootsCollector` with an explicit heap work stack and immutable persistent state. Deep closure-call chains no longer overflow the compiler host stack or allocate quadratically, while preserving callable provenance, argument-dependent effects, cycles, and captured-write invalidation. (Fixes #6111)
 

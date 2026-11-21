@@ -4148,7 +4148,15 @@ internal partial class ExpressionBinder {
             return BoundErrorExpression(nil)
         }
         // Constructor-owned readonly fields retain their initialization permissions.
-        if syntax.RefKindModifier.Text != "in" && RefCapabilities.IsReadOnlyStorage(operand) &&
+        if syntax
+            .RefKindModifier
+            .Text != "in" &&
+            (
+            RefCapabilities.IsReadOnlyStorage(operand) || RefCapabilities.IsCapturedValueTypeReceiverStorage(
+                operand,
+                this.function?.ThisParameter
+            )
+        ) &&
             !(operand is BoundFieldAccessExpression && IsWritableStructFieldReceiver(operand)) {
             Diagnostics.ReportCannotTakeAddressOfConstant(
                 syntax.RefKindModifier.Location,

@@ -448,6 +448,217 @@ unsafe func ok(out x int32, out s Pair, out vec Vector2, cond bool) int32 {
         Assert.Empty(result.Diagnostics)
     }
 
+    @Fact
+    func StructInstanceMethodAndAccessor_RefAndOutThis_AndAddressOfThis_AreAcceptedAndMutateCaller() {
+        let result = EmittedOracle.Evaluate(`import System.Runtime.CompilerServices
+
+func Bump(ref c Counter) {
+    c.N = c.N + 1
+}
+
+func Reset(out c Counter, value int32) {
+    c = Counter{N: value}
+}
+
+func SameWritable(ref a Counter, ref b Counter) bool -> Unsafe.AreSame(in a, in b)
+
+struct Counter {
+    var N int32
+
+    func Run(ref expected Counter) string {
+        Bump(ref this)
+        Bump(&this)
+        let same = SameWritable(ref this, ref expected)
+        let sameAddr = Unsafe.AreSame(&this, &expected)
+        let stepped = this.Step
+        let beforeOut = this.N
+        Reset(out this, 42)
+        return "${same}:${sameAddr}:${stepped}:${beforeOut}:${this.N}"
+    }
+
+    prop Step int32 {
+        get {
+            Bump(ref this)
+            return this.N
+        }
+    }
+}
+
+func Caller() string {
+    var c = Counter{N: 0}
+    let summary = c.Run(ref c)
+    return summary + ":" + c.N.ToString()
+}
+
+Caller()`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("True:True:3:3:42:42", result.Value)
+    }
+
+    @Fact
+    func StructConstructor_UnassignedRefThis_ReportsGS0239_WhileAfterOutThis_IsAccepted() {
+        let unassigned = Compile(`package CtorUnassignedRefThis
+
+func Bump(ref c Counter) {
+    c.N = c.N + 1
+}
+
+struct Counter {
+    var N int32
+
+    init() {
+        Bump(ref this)
+    }
+}
+`)
+        let diag = Assert.Single(unassigned.Diagnostics, (d Diagnostic) -> d.Id == "GS0239")
+        Assert.Contains("'this'", diag.Message)
+        Assert.NotEqual(default(TextLocation), diag.Location)
+        Assert.True(diag.Location.Span.Length > 0)
+
+        let assignedAfterOut = EmittedOracle.Evaluate(`func Set(out c Counter, seed int32) {
+    c = Counter{N: seed}
+}
+
+func Bump(ref c Counter) {
+    c.N = c.N + 1
+}
+
+struct Counter {
+    var N int32
+
+    init(seed int32) {
+        Set(out this, seed)
+        Bump(ref this)
+    }
+}
+
+let c = Counter(9)
+c.N`)
+        Assert.Empty(assignedAfterOut.Diagnostics)
+        Assert.Equal(10, assignedAfterOut.Value)
+    }
+
+    @Theory
+    @InlineData("Bump(ref this)")
+    @InlineData("Bump(&this)")
+    @InlineData("Set(out this)")
+    func ClassInstanceMethod_WritableByRefThis_ReportsGS9005(call string) {
+        let result = Compile(`package ClassByRefThis
+
+func Bump(ref b Box) { }
+func Set(out b Box) { b = Box{} }
+
+class Box {
+    var N int32
+
+    func Check() {
+        ` + call + `
+    }
+}
+`)
+        Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9005")
+    }
+
+    @Fact
+    func ClassInstanceMethod_ReturnRefThis_ReportsGS0253() {
+        let result = Compile(`package ClassReturnRefThis
+
+class Box {
+    var N int32
+
+    func Self() ref Box {
+        return ref this
+    }
+}
+`)
+        Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0253")
+    }
+
+    @Theory
+    @InlineData("Bump(ref this)", "GS9005")
+    @InlineData("Bump(&this)", "GS9005")
+    @InlineData("Set(out this)", "GS9005")
+    @InlineData("BumpInt(ref this.N)", "GS9005")
+    @InlineData("var ref alias = this", "GS9005")
+    @InlineData("var ref fieldAlias = this.N", "GS9005")
+    func StructLambda_WritableCapturedThis_ReportsGS9005(stmt string, expectedId string) {
+        let result = Compile(`package StructLambdaRefThis
+
+func Bump(ref c Counter) { c.N = c.N + 1 }
+func Set(out c Counter) { c = Counter{N: 1} }
+func BumpInt(ref n int32) { n = n + 1 }
+
+struct Counter {
+    var N int32
+
+    func Check() {
+        let f = () -> {
+            ` + stmt + `
+        }
+        f()
+    }
+}
+`)
+        Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.Id == expectedId)
+    }
+
+    @Fact
+    func StructGo_RefThis_ReportsGS0460() {
+        let result = Compile(`package StructGoRefThis
+
+func Bump(ref c Counter) { c.N = c.N + 1 }
+
+struct Counter {
+    var N int32
+
+    func Check() {
+        go Bump(ref this)
+    }
+}
+`)
+        Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0460")
+    }
+
+    @Fact
+    func StructAsyncAndIterator_RefThis_CompilesAndMutatesStateMachineCopyOnly() {
+        let result = EmittedOracle.Evaluate(`import System.Collections.Generic
+import System.Threading.Tasks
+
+func Bump(ref c Counter) {
+    c.N = c.N + 1
+}
+
+struct Counter {
+    var N int32
+
+    async func RunAsync() Task[int32] {
+        await Task.Yield()
+        Bump(ref this)
+        return this.N
+    }
+
+    func Items() IEnumerable[int32] {
+        Bump(ref this)
+        yield this.N
+    }
+}
+
+func Run() string {
+    var c = Counter{N: 5}
+    let asyncVal = c.RunAsync().GetAwaiter().GetResult()
+    var iterVal = 0
+    for item in c.Items() {
+        iterVal = item
+    }
+    return "${asyncVal}:${iterVal}:${c.N}"
+}
+
+Run()`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("6:6:5", result.Value)
+    }
+
     shared {
         private func Compile(source string) EmittedOracleResult {
             return EmittedOracle.Evaluate(source)

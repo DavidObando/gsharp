@@ -94,7 +94,7 @@ class BoundImportedInstanceCallExpression : BoundCallOperationExpression {
                 calledFunction = BoundCallOperationExpression.ImportedCallee(
                     Method,
                     signatureReturnType,
-                    ConstrainedInterfaceType ?? Receiver.Type,
+                    ConstrainedInterfaceType ?? NonVirtualBaseTargetType ?? Receiver.Type,
                     TypeArgumentSymbols
                 )
             )
@@ -183,5 +183,17 @@ class BoundImportedInstanceCallExpression : BoundCallOperationExpression {
     /// override.
     prop IsNonVirtualBaseCall bool {
         get;
+    }
+
+    /// Gets the target interface type for an explicit `base[IClrIface].Member(...)` call.
+    internal prop NonVirtualBaseTargetType TypeSymbol? {
+        get;
+        init;
+    }
+
+    /// Gets the backing CLR property when this call lowers an explicit `base[IClrIface].Prop` access.
+    internal prop AssociatedProperty PropertyInfo? {
+        get;
+        init;
     }
 }

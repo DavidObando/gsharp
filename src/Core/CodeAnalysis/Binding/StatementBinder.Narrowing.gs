@@ -2628,12 +2628,12 @@ internal partial class StatementBinder {
             }
         }
         var (thenNarrow, elseNarrow) = TryClassifyNilGuard(condition, forShortCircuitOperand)
-        let (conditionalThen, conditionalElse) = TryClassifyNullConditionalBoolNarrowing(
+        let (conditionalThen, conditionalElse) = TryClassifyNullConditionalNarrowing(
             condition,
             forShortCircuitOperand,
             beforeAliases,
             (node BoundNode, state Dictionary[AccessPath, TypeSymbol], aliases IReadOnlyCollection[VariableSymbol]?) ->
-            ClearAssignedRoots(node, state, aliases)
+            ClearAssignedRootsForConditionOperand(node, state, aliases)
         )
         thenNarrow = MergeNarrowingFrames(thenNarrow, conditionalThen)
         elseNarrow = MergeNarrowingFrames(elseNarrow, conditionalElse)
@@ -10809,7 +10809,13 @@ internal partial class StatementBinder {
         // Validate addressable storage and, for writable aliases, write permission.
         // The same restrictions that govern `&expr` apply here (issue #491 / ADR-0039 §3).
         var rhsValid = true
-        if !isReadOnly && RefCapabilities.IsReadOnlyStorage(initializer) {
+        if !isReadOnly &&
+            (
+            RefCapabilities.IsReadOnlyStorage(initializer) || RefCapabilities.IsCapturedValueTypeReceiverStorage(
+                initializer,
+                function?.ThisParameter
+            )
+        ) {
             // Aliasing a read-only binding would let the alias mutate it; mirror
             // the existing `&readonly` rejection (GS9005 / GS0237 for `in`).
             if initializer is BoundVariableExpression{Variable: ParameterSymbol inParam} &&
@@ -13426,7 +13432,7 @@ internal partial class StatementBinder {
             default: true
         }
 
-        private func IsNullOperand(operand BoundExpression) bool {
+        internal func IsNullOperand(operand BoundExpression) bool {
             var value = operand
             while value is BoundConversionExpression conversion {
                 if conversion.Type.StripToBareShape() is PointerTypeSymbol or FunctionPointerTypeSymbol {

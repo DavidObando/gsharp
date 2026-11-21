@@ -1466,10 +1466,13 @@ internal partial class ExpressionBinder {
         nonVirtualBaseCall bool = false,
         baseMemberLocation TextLocation? = nil,
         allowProtectedInherited bool = true,
-        callSyntax SyntaxNode? = nil
+        callSyntax SyntaxNode? = nil,
+        nonVirtualBaseTargetType TypeSymbol? = nil,
+        reportInterfaceAbstractAsGS0340 bool = false
     ) bool {
         result = nil
-        CallCandidateRecorder.RecordMethods(candidates, receiver.Type)
+        let symbolicReceiverType = nonVirtualBaseTargetType ?? receiver.Type
+        CallCandidateRecorder.RecordMethods(candidates, symbolicReceiverType)
         let argTypes = [arguments.Length]Type?
         let CheckUserClassInterface = func (source Type, target Type) bool {
             return IsUserClassAssignableToInterfaceFromArgs(arguments, argTypes, source, target)
@@ -1552,7 +1555,7 @@ internal partial class ExpressionBinder {
                 },
                 recoverInheritedMethodGroupSlots
             )
-            return MemberLookup.ValidateSymbolicMethodConstraintsWithReceiver(receiver.Type, closed, recovered)
+            return MemberLookup.ValidateSymbolicMethodConstraintsWithReceiver(symbolicReceiverType, closed, recovered)
         }
         let resolution = ClrOverloadResolution.Resolve(
             candidates,
@@ -1584,7 +1587,7 @@ internal partial class ExpressionBinder {
             symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(
                 arguments,
                 nativeConversions: conversions,
-                receiverType: receiver.Type,
+                receiverType: symbolicReceiverType,
                 explicitMethodTypeArguments: typeArgSymbols
             )
         )
@@ -1597,11 +1600,19 @@ internal partial class ExpressionBinder {
                 // base implementation to delegate to (e.g. Stream.Read). Match C#
                 // (CS0205) with a clean diagnostic instead of emitting invalid IL.
                 if nonVirtualBaseCall && best.IsAbstract {
-                    Diagnostics.ReportBaseClassCallAbstractMember(
-                        baseMemberLocation ?? ce.Location,
-                        importedBaseClr?.Name ?? "object",
-                        methodName
-                    )
+                    if reportInterfaceAbstractAsGS0340 {
+                        Diagnostics.ReportBaseInterfaceCallMemberIsAbstract(
+                            baseMemberLocation ?? ce.Location,
+                            nonVirtualBaseTargetType?.Name ?? importedBaseClr?.Name ?? "object",
+                            methodName
+                        )
+                    } else {
+                        Diagnostics.ReportBaseClassCallAbstractMember(
+                            baseMemberLocation ?? ce.Location,
+                            importedBaseClr?.Name ?? "object",
+                            methodName
+                        )
+                    }
                     result = BoundErrorExpression(nil)
                     return true
                 }
@@ -1693,9 +1704,9 @@ internal partial class ExpressionBinder {
                     MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs(
                     best,
                     inheritedSymbolicTypeArgs,
-                    receiver.Type
+                    symbolicReceiverType
                 ) ??
-                    MemberLookup.GetClrReceiverProjectedReturnTypeSymbol(receiver.Type, best) ??
+                    MemberLookup.GetClrReceiverProjectedReturnTypeSymbol(symbolicReceiverType, best) ??
                     MapClrMethodReturnType(best)
                 let inheritedParameters = best.GetParameters()
                 let inheritedMapping = resolution.ParameterMapping
@@ -1724,7 +1735,7 @@ internal partial class ExpressionBinder {
                     out var inheritedUpdatedReceiver,
                     method: best,
                     symbolicMethodTypeArgs: inheritedTypeArgSymbolsForCall,
-                    receiverType: receiver.Type,
+                    receiverType: symbolicReceiverType,
                     isExpanded: resolution.IsExpanded
                 )
                 let inheritedArguments = OverloadResolver.BuildOrderedCallArguments(
@@ -1732,7 +1743,7 @@ internal partial class ExpressionBinder {
                     inheritedDownstreamMapping,
                     inheritedParameters,
                     method: best,
-                    receiverType: receiver.Type,
+                    receiverType: symbolicReceiverType,
                     symbolicMethodTypeArgs: inheritedTypeArgSymbolsForCall
                 )
                 let refKinds = ComputeArgumentRefKinds(inheritedParameters)
@@ -1759,7 +1770,7 @@ internal partial class ExpressionBinder {
                         refKinds,
                         inheritedTypeArgSymbolsForCall,
                         isNonVirtualBaseCall: nonVirtualBaseCall
-                    )
+                    ){NonVirtualBaseTargetType = nonVirtualBaseTargetType}
                 )
                 // Issue #4392: a suspending method of an imported base, reached
                 // through `base.M()` or unqualified, is completed like any other
@@ -2755,7 +2766,17 @@ internal partial class ExpressionBinder {
     private func BindBaseInterfaceCallExpression(syntax BaseInterfaceCallExpressionSyntax) BoundExpression {
         let frame = CallCandidateRecorder.Begin(syntax)
         try {
-            let bound = BindBaseInterfaceCallExpressionCore(syntax)
+            var bound = BindBaseInterfaceCallExpressionCore(syntax)
+            if verifyCallArgumentsAfterConversions != nil &&
+                syntax.OpenParenthesisToken != nil &&
+                syntax.CloseParenthesisToken != nil {
+                bound = verifyCallArgumentsAfterConversions(
+                    syntax.Arguments,
+                    bound,
+                    () -> BindBaseInterfaceCallExpressionCore(syntax)
+                ) ??
+                    bound
+            }
             CallCandidateRecorder.Stamp(frame, bound)
             return bound
         } finally {
@@ -2779,10 +2800,7 @@ internal partial class ExpressionBinder {
         // base-class property read/write path with the explicit ancestor
         // selector so resolution + GS0383/GS0384/GS0385 diagnostics + non-virtual
         // `call instance ... <SelectorBase>::get_/set_Prop` emission all reuse
-        // the same code as plain `base.Prop`. A base-class selector is required;
-        // an interface selector in this position is not a supported form and is
-        // reported via the member-not-found path below by falling through to the
-        // call handling (which yields a clear diagnostic).
+        // the same code as plain `base.Prop`.
         if syntax.IsPropertyAccess && ifaceType is StructSymbol propSelector && propSelector.IsClass {
             if syntax.IsPropertyWrite {
                 if syntax.Value is not{} valueSyntax || syntax.EqualsToken is not{} equalsToken {
@@ -2829,17 +2847,27 @@ internal partial class ExpressionBinder {
                 syntaxOverride: syntax
             )
         }
-        // Bind the user arguments unconditionally — even on the failure paths
-        // below we want any nested binder diagnostics (unknown name in arg
-        // position, etc.) to surface in the same pass.
-        let boundArguments = ImmutableArray.CreateBuilder[BoundExpression](syntax.Arguments.Count)
-        for var i = 0; i < syntax.Arguments.Count; i++ {
-            let boundArg = BindExpression(syntax.Arguments[i])
-            ApplySubExpressionNarrowingEffects(syntax.Arguments[i], boundArg)
-            boundArguments.Add(boundArg)
+        let BindDiscardedOperands = func () {
+            if syntax.IsPropertyAccess {
+                if syntax.IsPropertyWrite && syntax.Value is {} valueSyntax {
+                    let _ = BindExpression(valueSyntax)
+                }
+                return
+            }
+            for var i = 0; i < syntax.Arguments.Count; i++ {
+                let argSyntax = OverloadResolver.UnwrapNamedArgumentValue(syntax.Arguments[i])
+                let boundArg = BindExpression(argSyntax)
+                ApplySubExpressionNarrowingEffects(argSyntax, boundArg)
+            }
         }
-        // The selector must denote an interface.
-        if ifaceType is not InterfaceSymbol ifaceSym {
+        let userInterface = ifaceType as InterfaceSymbol
+        let clrInterface = if userInterface == nil && ifaceType.ClrType is {IsInterface: true} clrIface {
+            clrIface
+        } else {
+            default(Type?)
+        }
+        if userInterface == nil && clrInterface == nil {
+            BindDiscardedOperands()
             Diagnostics.ReportBaseInterfaceCallTypeDoesNotImplementInterface(
                 syntax.InterfaceTypeClause.Location,
                 EnclosingTypeDisplayName(),
@@ -2847,37 +2875,158 @@ internal partial class ExpressionBinder {
             )
             return BoundErrorExpression(nil)
         }
-        // The call site must live in an instance member of a class/struct
-        // that implements `ifaceSym`. A top-level function, a `shared` static,
-        // or a generic-typeparameter-receiver call all fail this test.
-        let enclosingType StructSymbol? = function?.ReceiverType as StructSymbol
-        if enclosingType == nil || function?.ThisParameter == nil {
+        // The call site must live in an instance member of a class/struct (or a
+        // function literal inside one) that implements the selected interface.
+        let thisParameter = GetBaseAccessThisParameter()
+        let enclosingType StructSymbol? = thisParameter?.Type as StructSymbol
+        if enclosingType == nil || thisParameter == nil {
+            BindDiscardedOperands()
             Diagnostics.ReportBaseInterfaceCallTypeDoesNotImplementInterface(
                 syntax.BaseKeyword.Location,
                 "<top-level>",
-                ifaceSym.Name
+                ifaceType.Name
             )
             return BoundErrorExpression(nil)
         }
-        if !EnclosingTypeImplements(enclosingType, ifaceSym) {
+        if userInterface != nil {
+            if !EnclosingTypeImplements(enclosingType, userInterface) {
+                BindDiscardedOperands()
+                Diagnostics.ReportBaseInterfaceCallTypeDoesNotImplementInterface(
+                    syntax.InterfaceTypeClause.Location,
+                    enclosingType.Name,
+                    userInterface.Name
+                )
+                return BoundErrorExpression(nil)
+            }
+            if TypeSymbol.IsByRefLike(enclosingType) {
+                BindDiscardedOperands()
+                Diagnostics.ReportByRefLikeEscape(
+                    syntax.BaseKeyword.Location,
+                    enclosingType,
+                    "invoke interface member '${syntax.MethodIdentifier.ValueText}' because dispatch requires boxing the receiver"
+                )
+                return BoundErrorExpression(nil)
+            }
+            if syntax.IsPropertyAccess {
+                return BindBaseUserInterfacePropertyAccess(syntax, thisParameter, userInterface)
+            }
+            return BindBaseUserInterfaceMethodCall(syntax, thisParameter, userInterface)
+        }
+        if !EnclosingTypeImplementsClrInterface(enclosingType, ifaceType) {
+            BindDiscardedOperands()
             Diagnostics.ReportBaseInterfaceCallTypeDoesNotImplementInterface(
                 syntax.InterfaceTypeClause.Location,
                 enclosingType.Name,
-                ifaceSym.Name
+                ifaceType.Name
             )
             return BoundErrorExpression(nil)
         }
-        // Generic-method type arguments on the selector are reserved for a
-        // future ADR-0091 follow-up — reject for now with the "member is
-        // abstract"-shaped diagnostic name so users get a clear pointer.
-        if syntax.MethodTypeArgumentList != nil {
-            Diagnostics.ReportBaseInterfaceCallMemberNotFound(
+        if TypeSymbol.IsByRefLike(enclosingType) {
+            BindDiscardedOperands()
+            Diagnostics.ReportByRefLikeEscape(
+                syntax.BaseKeyword.Location,
+                enclosingType,
+                "invoke interface member '${syntax.MethodIdentifier.ValueText}' because dispatch requires boxing the receiver"
+            )
+            return BoundErrorExpression(nil)
+        }
+        if syntax.IsPropertyAccess {
+            return BindBaseClrInterfacePropertyAccess(syntax, thisParameter, ifaceType, clrInterface!!)
+        }
+        return BindBaseClrInterfaceMethodCall(syntax, thisParameter, ifaceType, clrInterface!!)
+    }
+
+    private func BindBaseUserInterfacePropertyAccess(
+        syntax BaseInterfaceCallExpressionSyntax,
+        thisParameter ParameterSymbol,
+        ifaceSym InterfaceSymbol
+    ) BoundExpression {
+        let propName = syntax.MethodIdentifier.ValueText
+        if !TypeMemberModel.TryGetPropertyWithOwner(ifaceSym, propName, out var prop, out var propOwner) ||
+            prop == nil ||
+            prop.IsStatic ||
+            prop
+            .IsIndexer {
+            if syntax.IsPropertyWrite && syntax.Value is {} valueSyntax {
+                let _ = BindExpression(valueSyntax)
+            }
+            Diagnostics.ReportBaseInterfaceCallMemberNotFound(syntax.MethodIdentifier.Location, ifaceSym.Name, propName)
+            return BoundErrorExpression(nil)
+        }
+        let effectiveOwner = (propOwner as InterfaceSymbol) ?? ifaceSym
+        let propType = effectiveOwner.SubstituteMemberType(prop.Type)
+        let receiver = BoundVariableExpression(nil, thisParameter)
+        if syntax.IsPropertyWrite {
+            if syntax.Value is not{} valueSyntax || syntax.EqualsToken is not{} equalsToken {
+                return BoundErrorExpression(nil)
+            }
+            let boundValue = BindAssignmentRhs(valueSyntax, propType)
+            if !prop.HasSetter || prop.SetterSymbol is not{} setterSymbol {
+                Diagnostics.ReportCannotAssign(equalsToken.Location, propName)
+                return BoundErrorExpression(nil)
+            }
+            if setterSymbol.IsAbstract {
+                Diagnostics.ReportBaseInterfaceCallMemberIsAbstract(
+                    syntax.MethodIdentifier.Location,
+                    ifaceSym.Name,
+                    propName
+                )
+                return BoundErrorExpression(nil)
+            }
+            EnforceInitOnlyAssignment(prop, receiver, equalsToken.Location)
+            let converted = conversions.BindConversion(valueSyntax.Location, boundValue, propType)
+            return BoundBaseInterfaceCallExpression(
+                syntax,
+                receiver,
+                effectiveOwner,
+                setterSymbol,
+                ImmutableArray.Create(converted),
+                TypeSymbol.Void,
+                property: prop,
+                isSetterAccessor: true
+            )
+        }
+        if !prop.HasGetter || prop.GetterSymbol is not{} getterSymbol {
+            Diagnostics.ReportBaseInterfaceCallMemberNotFound(syntax.MethodIdentifier.Location, ifaceSym.Name, propName)
+            return BoundErrorExpression(nil)
+        }
+        if getterSymbol.IsAbstract {
+            Diagnostics.ReportBaseInterfaceCallMemberIsAbstract(
                 syntax.MethodIdentifier.Location,
                 ifaceSym.Name,
-                syntax.MethodIdentifier.ValueText + "[…]"
+                propName
             )
             return BoundErrorExpression(nil)
         }
+        return BoundBaseInterfaceCallExpression(
+            syntax,
+            receiver,
+            effectiveOwner,
+            getterSymbol,
+            ImmutableArray[BoundExpression].Empty,
+            propType,
+            property: prop,
+            isSetterAccessor: false
+        )
+    }
+
+    private func BindBaseUserInterfaceMethodCall(
+        syntax BaseInterfaceCallExpressionSyntax,
+        thisParameter ParameterSymbol,
+        ifaceSym InterfaceSymbol
+    ) BoundExpression {
+        if syntax.OpenParenthesisToken is not{} openParenthesisToken ||
+            syntax.CloseParenthesisToken is not{} closeParenthesisToken {
+            return BoundErrorExpression(nil)
+        }
+        let synthesizedCall = CallExpressionSyntax(
+            syntax.SyntaxTree,
+            syntax.MethodIdentifier,
+            syntax.MethodTypeArgumentList,
+            openParenthesisToken,
+            syntax.Arguments,
+            closeParenthesisToken
+        )
         let methodName = syntax.MethodIdentifier.ValueText
         // Private helpers (ADR-0090) are intentionally invisible to
         // implementers; calling one through base[IFoo] would defeat that
@@ -2885,6 +3034,7 @@ internal partial class ExpressionBinder {
         // private case from a generic "no such member".
         let privateMatches = ifaceSym.GetPrivateMethods(methodName)
         if privateMatches.Length > 0 {
+            let _ = BindBaseCallArguments(synthesizedCall)
             Diagnostics.ReportBaseInterfaceCallTargetsPrivateHelper(
                 syntax.MethodIdentifier.Location,
                 ifaceSym.Name,
@@ -2892,41 +3042,9 @@ internal partial class ExpressionBinder {
             )
             return BoundErrorExpression(nil)
         }
-        // Look up the named method on the interface's public contract. Pick
-        // the overload whose callable arity matches the call site; if no
-        // overload matches at all, fall back to "member not found" — when
-        // overload-by-arity finds a match but its body is abstract, fall to
-        // GS0340 below. For a constructed generic interface, the method we
-        // find is the substituted one; we map it back to its open definition
-        // (preserved on InterfaceSymbol.Definition.Methods at the same
-        // index) so the emitter and interpreter can resolve through the
-        // single MethodHandles / program.Functions slot.
-        var arityMatch FunctionSymbol? = nil
-        var anyMatch FunctionSymbol? = nil
-        var matchIndex = -1
-        if CallCandidateRecorder.enabled.Value {
-            CallCandidateRecorder.RecordFunctions(ifaceSym.GetMethods(methodName), ifaceSym)
-        }
-        let overloads = ifaceSym.Methods
-        for var i = 0; i < overloads.Length; i++ {
-            let candidate = overloads[i]
-            if candidate.Name != methodName {
-                continue
-            }
-            anyMatch = candidate
-            let calleeOffset = if candidate.ExplicitReceiverParameter == nil {
-                0
-            } else {
-                1
-            }
-            let callableParameterCount = candidate.Parameters.Length - calleeOffset
-            if callableParameterCount == boundArguments.Count {
-                arityMatch = candidate
-                matchIndex = i
-                break
-            }
-        }
-        if anyMatch == nil {
+        let ifaceOverloads = TypeMemberModel.GetMethods(ifaceSym, methodName, MemberQuery.Instance(MemberKinds.Method))
+        if ifaceOverloads.IsDefaultOrEmpty {
+            let _ = BindBaseCallArguments(synthesizedCall)
             Diagnostics.ReportBaseInterfaceCallMemberNotFound(
                 syntax.MethodIdentifier.Location,
                 ifaceSym.Name,
@@ -2934,39 +3052,23 @@ internal partial class ExpressionBinder {
             )
             return BoundErrorExpression(nil)
         }
-        if arityMatch == nil {
-            // Member exists but no overload accepts this many arguments;
-            // report a wrong-arg-count diagnostic against the first overload
-            // for ergonomic recovery (the user will fix the arg count and
-            // re-bind).
-            let calleeOffset = if anyMatch.ExplicitReceiverParameter == nil {
-                0
-            } else {
-                1
-            }
-            let callableParameterCount = anyMatch.Parameters.Length - calleeOffset
-            Diagnostics.ReportWrongArgumentCount(
-                syntax.MethodIdentifier.Location,
-                methodName,
-                callableParameterCount,
-                boundArguments.Count
-            )
+        CallCandidateRecorder.RecordFunctions(ifaceOverloads, ifaceSym)
+        if !overloads.TryAnalyzeCallArgumentLayout(synthesizedCall.Arguments, out _, out var argumentNames) {
             return BoundErrorExpression(nil)
         }
-        // Map the substituted method on a constructed generic interface back
-        // to its open MethodDef slot (cache.MethodHandles is keyed on the
-        // open definition). CreateConstructed preserves declaration order
-        // 1:1, so the same index identifies the open slot.
-        var openMethod = arityMatch
-        if ifaceSym.Definition != nil && !object.ReferenceEquals(ifaceSym.Definition, ifaceSym) &&
-            matchIndex >= 0 &&
-            matchIndex < ifaceSym
-            .Definition
-            .Methods
-            .Length {
-            openMethod = ifaceSym.Definition.Methods[matchIndex]
+        let arguments = BindBaseCallArguments(synthesizedCall)
+        let selected FunctionSymbol? = overloads.SelectInstanceOverloadOrReport(
+            ifaceOverloads,
+            arguments,
+            synthesizedCall,
+            methodName,
+            argumentNames,
+            ifaceSym
+        )
+        if selected == nil {
+            return BoundErrorExpression(nil)
         }
-        if !InterfaceSymbol.HasDefaultBody(openMethod) {
+        if !InterfaceSymbol.HasDefaultBody(selected) {
             Diagnostics.ReportBaseInterfaceCallMemberIsAbstract(
                 syntax.MethodIdentifier.Location,
                 ifaceSym.Name,
@@ -2974,11 +3076,215 @@ internal partial class ExpressionBinder {
             )
             return BoundErrorExpression(nil)
         }
-        if function?.ThisParameter is not{} thisParameter {
+        let receiver = BoundVariableExpression(nil, thisParameter)
+        let selectedOwner = (selected.ContainingType as InterfaceSymbol) ?? ifaceSym
+        let bound = overloads.BindUserInstanceCall(
+            receiver,
+            selected,
+            arguments,
+            synthesizedCall,
+            argumentNames,
+            explicitOwnerType: selectedOwner
+        )
+        let completedSuspendingCall BoundUserInstanceCallExpression? = if selected.IsSuspending {
+            TryGetCompletedSuspendingInstanceCall(bound)
+        } else {
+            default(BoundUserInstanceCallExpression?)
+        }
+        if (completedSuspendingCall ?? bound) is not BoundUserInstanceCallExpression uic {
+            return bound
+        }
+        let baseCall = BoundBaseInterfaceCallExpression(
+            syntax,
+            uic.Receiver,
+            ifaceSym,
+            uic.Method,
+            uic.Arguments,
+            uic.Type
+        ){MethodTypeArguments = uic.MethodTypeArguments}
+        return if completedSuspendingCall != nil {
+            CompleteSuspendingCall(baseCall, bound.Type, synthesizedCall.Location, methodName)
+        } else {
+            cast[BoundExpression](baseCall)
+        }
+    }
+
+    private func BindBaseClrInterfacePropertyAccess(
+        syntax BaseInterfaceCallExpressionSyntax,
+        thisParameter ParameterSymbol,
+        ifaceType TypeSymbol,
+        clrInterface Type
+    ) BoundExpression {
+        let propName = syntax.MethodIdentifier.ValueText
+        let clrProp PropertyInfo? = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(
+            clrInterface,
+            propName,
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+        )
+        if clrProp == nil || clrProp.GetIndexParameters().Length > 0 {
+            if syntax.IsPropertyWrite && syntax.Value is {} valueSyntax {
+                let _ = BindExpression(valueSyntax)
+            }
+            Diagnostics.ReportBaseInterfaceCallMemberNotFound(
+                syntax.MethodIdentifier.Location,
+                ifaceType.Name,
+                propName
+            )
             return BoundErrorExpression(nil)
         }
+        let propType = MemberLookup.GetClrPropertyTypeSymbol(ifaceType, clrProp)
         let receiver = BoundVariableExpression(nil, thisParameter)
-        return BoundBaseInterfaceCallExpression(syntax, receiver, ifaceSym, openMethod, boundArguments.ToImmutable())
+        if syntax.IsPropertyWrite {
+            if syntax.Value is not{} valueSyntax || syntax.EqualsToken is not{} equalsToken {
+                return BoundErrorExpression(nil)
+            }
+            let boundValue = BindAssignmentRhs(valueSyntax, propType)
+            let setter MethodInfo? = if clrProp.CanWrite {
+                GetVisibleSetter(clrProp, fromDerivedType: true)
+            } else {
+                default(MethodInfo?)
+            }
+            if setter == nil {
+                Diagnostics.ReportCannotAssign(equalsToken.Location, propName)
+                return BoundErrorExpression(nil)
+            }
+            if setter.IsAbstract {
+                Diagnostics.ReportBaseInterfaceCallMemberIsAbstract(
+                    syntax.MethodIdentifier.Location,
+                    ifaceType.Name,
+                    propName
+                )
+                return BoundErrorExpression(nil)
+            }
+            EnforceImportedInitOnlyAssignment(clrProp, receiver, equalsToken.Location)
+            let converted = conversions.BindConversion(valueSyntax.Location, boundValue, propType)
+            return BoundImportedInstanceCallExpression(
+                syntax,
+                receiver,
+                setter,
+                TypeSymbol.Void,
+                ImmutableArray.Create(converted),
+                isNonVirtualBaseCall: true
+            ){NonVirtualBaseTargetType = ifaceType, AssociatedProperty = clrProp}
+        }
+        let getter MethodInfo? = GetVisibleGetter(clrProp, fromDerivedType: true)
+        if getter == nil {
+            Diagnostics.ReportBaseInterfaceCallMemberNotFound(
+                syntax.MethodIdentifier.Location,
+                ifaceType.Name,
+                propName
+            )
+            return BoundErrorExpression(nil)
+        }
+        if getter.IsAbstract {
+            Diagnostics.ReportBaseInterfaceCallMemberIsAbstract(
+                syntax.MethodIdentifier.Location,
+                ifaceType.Name,
+                propName
+            )
+            return BoundErrorExpression(nil)
+        }
+        return ConversionClassifier.AutoDereferenceRefReturn(
+            BoundImportedInstanceCallExpression(
+                syntax,
+                receiver,
+                getter,
+                propType,
+                ImmutableArray[BoundExpression].Empty,
+                isNonVirtualBaseCall: true
+            ){NonVirtualBaseTargetType = ifaceType, AssociatedProperty = clrProp}
+        )
+    }
+
+    private func BindBaseClrInterfaceMethodCall(
+        syntax BaseInterfaceCallExpressionSyntax,
+        thisParameter ParameterSymbol,
+        ifaceType TypeSymbol,
+        clrInterface Type
+    ) BoundExpression {
+        if syntax.OpenParenthesisToken is not{} openParenthesisToken ||
+            syntax.CloseParenthesisToken is not{} closeParenthesisToken {
+            return BoundErrorExpression(nil)
+        }
+        let synthesizedCall = CallExpressionSyntax(
+            syntax.SyntaxTree,
+            syntax.MethodIdentifier,
+            syntax.MethodTypeArgumentList,
+            openParenthesisToken,
+            syntax.Arguments,
+            closeParenthesisToken
+        )
+        let methodName = syntax.MethodIdentifier.ValueText
+        let candidates = List[MethodInfo]()
+        var sawPrivate = false
+        for m in ClrTypeUtilities.SafeGetMethodsIncludingInterfaces(
+            clrInterface,
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+        ) {
+            if !string.Equals(m.Name, methodName, StringComparison.Ordinal) {
+                continue
+            }
+            if !ClrMemberVisibility.IsVisibleFromDerived(m, CanAccessInternalsOf(m.DeclaringType)) {
+                if m.IsPrivate {
+                    sawPrivate = true
+                }
+                continue
+            }
+            if !MemberLookup.HasSameSignature(candidates, m) {
+                candidates.Add(m)
+            }
+        }
+        if candidates.Count == 0 {
+            let _ = BindBaseCallArguments(synthesizedCall)
+            if sawPrivate {
+                Diagnostics.ReportBaseInterfaceCallTargetsPrivateHelper(
+                    syntax.MethodIdentifier.Location,
+                    ifaceType.Name,
+                    methodName
+                )
+            } else {
+                Diagnostics.ReportBaseInterfaceCallMemberNotFound(
+                    syntax.MethodIdentifier.Location,
+                    ifaceType.Name,
+                    methodName
+                )
+            }
+            return BoundErrorExpression(nil)
+        }
+        if !overloads.TryAnalyzeCallArgumentLayout(synthesizedCall.Arguments, out _, out var argumentNames) {
+            return BoundErrorExpression(nil)
+        }
+        if !TryResolveExplicitMethodTypeArgs(
+            synthesizedCall.TypeArgumentList,
+            out var explicitTypeArgs,
+            out var typeArgSymbols
+        ) {
+            Diagnostics.ReportUnableToFindFunction(synthesizedCall.Location, methodName)
+            return BoundErrorExpression(nil)
+        }
+        let arguments = BindBaseCallArguments(synthesizedCall)
+        let receiver = BoundVariableExpression(nil, thisParameter)
+        if TryResolveAndBindClrInstanceCall(
+            receiver,
+            candidates,
+            clrInterface,
+            methodName,
+            arguments,
+            synthesizedCall,
+            out var clrResult,
+            explicitTypeArgs,
+            typeArgSymbols,
+            argumentNames,
+            nonVirtualBaseCall: true,
+            baseMemberLocation: syntax.MethodIdentifier.Location,
+            callSyntax: syntax,
+            nonVirtualBaseTargetType: ifaceType,
+            reportInterfaceAbstractAsGS0340: true
+        ) {
+            return clrResult
+        }
+        Diagnostics.ReportNoApplicableOverload(syntax.MethodIdentifier.Location, methodName)
+        return BoundErrorExpression(nil)
     }
 
     /// Issue #2534: binds the canonical `base.M(args)` syntax. A real
@@ -4843,16 +5149,56 @@ internal partial class ExpressionBinder {
         }
 
         /// ADR-0091 / issue #757: returns true when [`enclosingType`](paramref)
-        /// (or any of its base classes) appears in [`ifaceSym`](paramref)'s
-        /// implementer set. Constructed generic interfaces compare by
-        /// (cref:InterfaceSymbol.Definition) identity to allow
-        /// `base[IFoo[int]]` from a class declared as `: IFoo[int]`.
+        /// (or any of its base classes) implements [`ifaceSym`](paramref) with
+        /// matching constructed type arguments.
         private func EnclosingTypeImplements(enclosingType StructSymbol, ifaceSym InterfaceSymbol) bool {
-            let ifaceDef = ifaceSym.Definition ?? ifaceSym
             for t in enclosingType.GetHierarchy() {
                 for iface in t.Interfaces {
-                    let candidateDef = iface.Definition ?? iface
-                    if object.ReferenceEquals(candidateDef, ifaceDef) {
+                    for candidate in iface.SelfAndAllBaseInterfaces() {
+                        if object.ReferenceEquals(candidate, ifaceSym) ||
+                            TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(candidate, ifaceSym) {
+                            return true
+                        }
+                    }
+                }
+            }
+            return false
+        }
+
+        private func EnclosingTypeImplementsClrInterface(enclosingType StructSymbol, target TypeSymbol) bool {
+            let targetIsSymbolic = MemberLookup.TryGetSymbolicClrGenericInterface(target, out _, out _)
+            for t in enclosingType.GetHierarchy() {
+                for (symbolic, concrete) in DeclarationBinder.EnumerateClrInterfaceClosure(t) {
+                    if symbolic != nil && TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                        symbolic,
+                        target
+                    ) {
+                        return true
+                    }
+                    if concrete != nil && !targetIsSymbolic && target.ClrType != nil && ClrTypeUtilities.AreSame(
+                        concrete,
+                        target.ClrType
+                    ) {
+                        return true
+                    }
+                }
+                if t.ImportedBaseType is {} impBase {
+                    if MemberLookup.TryGetSymbolicClrGenericInterface(impBase, out var openBase, out var baseArgs) {
+                        for baseIface in ClrTypeUtilities.SafeGetInterfaces(openBase) {
+                            let projected = MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
+                                baseIface,
+                                openBase,
+                                baseArgs,
+                                NullabilityFreeReason.TypeStructure
+                            )
+                            if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(projected, target) {
+                                return true
+                            }
+                        }
+                    } else if !targetIsSymbolic &&
+                        impBase.ClrType != nil &&
+                        target.ClrType != nil &&
+                        ClrTypeUtilities.ImplementsInterfaceByName(impBase.ClrType, target.ClrType) {
                         return true
                     }
                 }

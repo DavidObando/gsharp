@@ -1357,8 +1357,23 @@ internal partial class StatementBinder {
                         call.ConstrainedReceiverTypeParameter,
                         call.ConstrainedInterfaceType,
                         call.IsNonVirtualBaseCall
-                    )
+                    ){
+                        NonVirtualBaseTargetType = call.NonVirtualBaseTargetType,
+                        AssociatedProperty = call.AssociatedProperty
+                    }
                 )
+            }
+            case call is BoundBaseInterfaceCallExpression {
+                rebuilt = BoundBaseInterfaceCallExpression(
+                    call.Syntax,
+                    captureReceiver(call.Receiver),
+                    call.Interface,
+                    call.Method,
+                    CaptureArguments(call.Arguments, captureArgument),
+                    call.Type,
+                    call.Property,
+                    call.IsSetterAccessor
+                ){MethodTypeArguments = call.MethodTypeArguments}
             }
             case call is BoundBaseClassCallExpression {
                 rebuilt = BoundBaseClassCallExpression(
