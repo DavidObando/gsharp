@@ -2891,7 +2891,7 @@ internal partial class StatementBinder {
         private func PatternProvesNonNil(pattern BoundPattern)(WhenTrue bool, WhenFalse bool) {
             switch pattern {
                 case constantPattern is BoundConstantPattern {
-                    if IsNilPatternConstant(constantPattern.Value) {
+                    if IsNullOperand(constantPattern.Value) {
                         return (false, true)
                     }
                     let unwrapped = BoundConstantPattern.UnwrapInputConversion(
@@ -2912,13 +2912,13 @@ internal partial class StatementBinder {
                         .Op
                         .Kind == BoundBinaryOperatorKind.Equals &&
                         (rel.Test == nil || rel.Test is BoundBinaryExpression) &&
-                        IsNilPatternConstant(rel.Value) {
+                        IsNullOperand(rel.Value) {
                         (false, true)
                     } else if rel
                         .Op
                         .Kind == BoundBinaryOperatorKind.NotEquals &&
                         (rel.Test == nil || rel.Test is BoundBinaryExpression) &&
-                        IsNilPatternConstant(rel.Value) {
+                        IsNullOperand(rel.Value) {
                         (true, false)
                     } else if rel.Op.Kind is not(BoundBinaryOperatorKind.Equals or BoundBinaryOperatorKind.NotEquals) {
                         (true, false)
@@ -2943,18 +2943,6 @@ internal partial class StatementBinder {
                     return (false, false)
                 }
             }
-        }
-
-        private func IsNilPatternConstant(expr BoundExpression) bool {
-            var current = expr
-            while current is BoundConversionExpression conversion {
-                current = conversion.Expression
-            }
-            return (current is BoundLiteralExpression lit && lit.Value == nil) ||
-                (
-                current is BoundDefaultExpression def &&
-                    (def.Type is NullableTypeSymbol || !Binder.IsNonNullableValueTypeForConstraint(def.Type))
-            )
         }
 
         internal func TryClassifyBoolCallNarrowingLeaf(

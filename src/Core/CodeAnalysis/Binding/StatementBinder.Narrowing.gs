@@ -13420,7 +13420,7 @@ internal partial class StatementBinder {
             default: true
         }
 
-        private func IsNullOperand(operand BoundExpression) bool {
+        internal func IsNullOperand(operand BoundExpression) bool {
             var value = operand
             while value is BoundConversionExpression conversion {
                 if conversion.Type.StripToBareShape() is PointerTypeSymbol or FunctionPointerTypeSymbol {

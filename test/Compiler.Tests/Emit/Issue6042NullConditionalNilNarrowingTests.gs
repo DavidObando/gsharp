@@ -421,6 +421,24 @@ class Holder {
         }
     }
 }`, 7)
+    @InlineData("unconstrained_generic_default_not_nil_pattern", `import System
+class Box { var Item object? = 1 }
+shared class P {
+    func Check[T](b Box?) {
+        if b?.Item is not default(T) {
+            Console.WriteLine(b.Item)
+        }
+    }
+}`, 6)
+    @InlineData("unconstrained_generic_default_else_branch", `import System
+class Box { var Item object? = 1 }
+shared class P {
+    func Check[T](b Box?) {
+        if b?.Item is default(T) { } else {
+            Console.WriteLine(b.Item)
+        }
+    }
+}`, 6)
     func NegativeControls_ReportGS0158(caseName string, source string, expectedLine int32) {
         let _ = caseName
         using let fixture = NativeSliceLanguageTests.Fixture()
