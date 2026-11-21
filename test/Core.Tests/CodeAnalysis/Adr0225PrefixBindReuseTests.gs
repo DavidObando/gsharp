@@ -134,6 +134,142 @@ func Value(x int32) int32 {
         )
     }
 
+    /// The same differential check with errors in a member before the cut: the cached body of that member
+    /// carries diagnostics with premises, a fixed callee and an argument typed by its candidate.
+    @Fact
+    func SuccessiveCuts_WithErrorsInAnotherMember_ReportWhatABindFromScratchReports() {
+        const errors = `
+    let local__ = func (a int32) int32 {
+        return a
+    }
+    let fixed__ = local__(1, 2)
+    let converted__ = local__("s")
+    let unknown__ = noSuchFunction__(1)
+    let member__ = System.Math.NoSuchMember__(1)
+    let lambda__ = System.Linq.Enumerable.Range(0, 2).Select((x) -> x.NoSuchMember__)
+    let operator__ = "s" * 2
+`
+        var checks = 0
+        var withErrors = 0
+        let wrong = List[string]()
+        using let measurements = CompilationMeasurements.Start("test")
+        for file in SampleFiles() {
+            let text = MemberForm(File.ReadAllText(file))
+            let plain = SyntaxTree.Parse(SourceText.From(text, file))
+            let bodies = FunctionBodies(plain)
+            if bodies.Count < 2 || plain.Root.Members.Any((m MemberSyntax) -> m is GlobalStatementSyntax) {
+                continue
+            }
+            // The errors go at the start of the first body; the cuts are in the later bodies.
+            let insertAt = bodies[0].OpenBraceToken.Span.End
+            let mutated = text.Substring(0, insertAt) + errors + text.Substring(insertAt)
+            let tree = SyntaxTree.Parse(SourceText.From(mutated, file))
+            let compilation = Compilation(tree)
+            for remainder in[]PrefixRemainder{PrefixRemainder.KeepDeclarations, PrefixRemainder.Nothing} {
+                for body in FunctionBodies(tree).Skip(1) {
+                    var previous PrefixBindResult? = nil
+                    for statement in body.Statements.Take(4) {
+                        let options = PrefixBindOptions(remainder)
+                        let scratch = compilation.BindPrefix(tree, statement.Span.End, options)
+                        let reused = compilation.BindPrefix(tree, statement.Span.End, options, previous)
+                        checks++
+                        if scratch.Diagnostics.Length > 5 {
+                            withErrors++
+                        }
+                        if Describe(scratch) != Describe(reused) {
+                            wrong.Add(
+                                "${Path.GetFileName(file)} ${remainder} cut ${statement.Span.End}:\n${Describe(scratch)}\n---\n${Describe(reused)}"
+                            )
+                        }
+                        previous = reused
+                    }
+                }
+            }
+        }
+        Assert.True(checks > 100, "checked ${checks} cuts")
+        Assert.True(withErrors > checks / 2, "${withErrors} of ${checks} cuts reported the injected errors")
+        Assert.True(wrong.Count == 0, string.Join("\n\n", wrong.Take(5)))
+        Assert.True(
+            measurements.GetCounter("bodies.cache-hits") > checks / 4,
+            "${measurements.GetCounter("bodies.cache-hits")} body reuses"
+        )
+    }
+
+    /// A host that parses the text again for each cut: the previous result comes from another compilation
+    /// whose tree has a shorter text. The bind reuses the declarations and binds the bodies again.
+    @Fact
+    func GrowingText_EachCutInANewCompilation_ReportsWhatABindFromScratchReports() {
+        const source = `package P
+
+func Helper(a int32) int32 {
+    return a + 1
+}
+
+func Main() {
+    let x = Helper(1)
+    let y = Helper(x, 2)
+    let z = noSuchName__
+    let w = x + y
+}
+`
+        let main = source.IndexOf("func Main", StringComparison.Ordinal)
+        let cuts = List[int32]()
+        var position = source.IndexOf('\n', main) + 1
+        while true {
+            let next = source.IndexOf('\n', position)
+            if next < 0 || source.Substring(position, next - position).Trim() == "}" {
+                break
+            }
+            cuts.Add(next)
+            position = next + 1
+        }
+        Assert.Equal(4, cuts.Count)
+        using let measurements = CompilationMeasurements.Start("test")
+        for remainder in[]PrefixRemainder{PrefixRemainder.Nothing, PrefixRemainder.KeepDeclarations} {
+            var previous PrefixBindResult? = nil
+            for cut in cuts {
+                let text = source.Substring(0, cut)
+                let tree = SyntaxTree.Parse(SourceText.From(text, "prefix.gs"))
+                let compilation = Compilation(tree)
+                let options = PrefixBindOptions(remainder)
+                let scratch = compilation.BindPrefix(tree, cut, options)
+                let reused = compilation.BindPrefix(tree, cut, options, previous)
+                Assert.Equal(Describe(scratch), Describe(reused))
+                previous = reused
+            }
+        }
+        Assert.True(
+            measurements.GetCounter("declarations.reuses") >= 4,
+            "${measurements.GetCounter("declarations.reuses")} reuses"
+        )
+    }
+
+    /// A host that rolls a cut back binds the next candidate from the same previous result again. The
+    /// second bind meets a retired compilation and binds from scratch.
+    @Fact
+    func SamePreviousTwice_ReportsWhatABindFromScratchReports() {
+        const source = `package P
+
+func Value(x int32) int32 {
+    let y = x + 1
+    let z = y + noSuchName__
+    let w = z + 1
+    return w
+}
+`
+        let tree = SyntaxTree.Parse(SourceText.From(source, "prefix.gs"))
+        let compilation = Compilation(tree)
+        let options = PrefixBindOptions(PrefixRemainder.KeepDeclarations)
+        let previous = compilation.BindPrefix(tree, source.IndexOf("let z", StringComparison.Ordinal), options)
+        for anchor in[]string{"let w", "return", "let w"} {
+            let cut = source.IndexOf(anchor, StringComparison.Ordinal)
+            Assert.Equal(
+                Describe(compilation.BindPrefix(tree, cut, options)),
+                Describe(compilation.BindPrefix(tree, cut, options, previous))
+            )
+        }
+    }
+
     shared {
         private func Describe(result PrefixBindResult) string {
             let diagnostics = string.Join(

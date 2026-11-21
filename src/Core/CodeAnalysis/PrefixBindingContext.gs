@@ -144,15 +144,22 @@ internal sealed class PrefixCut {
     }
 
     /// Returns a value that tells whether [`location`](paramref) is in a function literal or a lambda of
-    /// the open member before the cut. Such a body can use a local that a later statement declares.
+    /// the open member before the cut. Such a body can use a local that a later statement declares. When
+    /// nothing follows the cut, a literal of any member before the cut counts.
     /// @param location A diagnostic location.
     /// @returns `true` when a later statement of the open member can declare a name that the location sees.
     internal func IsInDeferredBodyOfOpenMember(location TextLocation) bool {
-        if OpenMemberStart < 0 || !object.ReferenceEquals(location.Text, Text) || Tree is not{} tree {
+        // When nothing follows the cut, any member before the cut can be the open one.
+        let memberStart = if Remainder == PrefixRemainder.Nothing {
+            0
+        } else {
+            OpenMemberStart
+        }
+        if memberStart < 0 || !object.ReferenceEquals(location.Text, Text) || Tree is not{} tree {
             return false
         }
         let position = location.Span.Start
-        if position < OpenMemberStart || position >= Cut {
+        if position < memberStart || position >= Cut {
             return false
         }
         var node SyntaxNode = tree.Root
@@ -169,7 +176,7 @@ internal sealed class PrefixCut {
             }
             if next
                 .Span
-                .Start >= OpenMemberStart &&
+                .Start >= memberStart &&
                 (next is LambdaExpressionSyntax || next is FunctionLiteralExpressionSyntax) {
                 return true
             }
@@ -312,13 +319,53 @@ internal shared class PrefixBindingContext {
     /// @param kind The callee of the call.
     /// @returns The finality and its reason, or `null`.
     internal func ClassifyCallResolution(location TextLocation, kind PrefixCallKind) PrefixPremise? {
+        // A function literal of the open member can call a local that a later statement declares.
         return if kind == PrefixCallKind.Fixed {
-            nil
+            if current.Value is {} cut && cut.IsInDeferredBodyOfOpenMember(location) {
+                PrefixPremise.LaterDeclaration
+            } else {
+                default(PrefixPremise?)
+            }
         } else if kind == PrefixCallKind.Member {
             ClassifyFailedLookup(location, PrefixLookupKind.Member)
         } else {
             ClassifyFailedLookup(location, PrefixLookupKind.Name)
         }
+    }
+
+    /// Returns a value that tells whether the type of [`value`](paramref) comes from the parameter that
+    /// it fills, so that a diagnostic inside it can depend on the candidate (ADR-0225 D6.5).
+    /// @param value An argument expression.
+    /// @returns `false` for an expression that has a type of its own.
+    internal func IsTypedByCandidate(value ExpressionSyntax) bool {
+        var current = value
+        while current is ParenthesizedExpressionSyntax parenthesized {
+            current = parenthesized.Expression
+        }
+        if current is BinaryExpressionSyntax binary {
+            return binary.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken
+        }
+        if current is LiteralExpressionSyntax literal {
+            return literal.LiteralToken.Kind == SyntaxKind.NilKeyword
+        }
+        return !(
+            current is NameExpressionSyntax ||
+                current is GenericNameExpressionSyntax ||
+                current is AccessorExpressionSyntax ||
+                current is CallExpressionSyntax ||
+                current is UnaryExpressionSyntax ||
+                current is InterpolatedStringExpressionSyntax ||
+                current is TypeOfExpressionSyntax ||
+                current is SizeOfExpressionSyntax ||
+                current is NameOfExpressionSyntax ||
+                current is IsExpressionSyntax ||
+                current is AsExpressionSyntax ||
+                current is ObjectCreationExpressionSyntax ||
+                current is ArrayCreationExpressionSyntax ||
+                current is AwaitExpressionSyntax ||
+                current is IndexExpressionSyntax ||
+                current is RefArgumentExpressionSyntax
+        )
     }
 
     /// Returns a value that tells whether [`node`](paramref) is open at the cut: its last token is a

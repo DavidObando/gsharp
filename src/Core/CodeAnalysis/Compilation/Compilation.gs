@@ -915,12 +915,15 @@ open class Compilation {
     /// Binds [`tree`](paramref) as if its text ended at [`cut`](paramref), as
     /// (cref:BindPrefix(SyntaxTree, int32, PrefixBindOptions, CancellationToken)) does, and reuses the
     /// declarations that [`previous`](paramref) bound when only the body of the open member differs
-    /// (ADR-0225 D6.6). The result is the same as without [`previous`](paramref).
+    /// (ADR-0225 D6.6). The classified diagnostics, the scope and the open constructs are the same as
+    /// without [`previous`](paramref).
     /// @remarks Reuse needs a previous result of a compilation with the same options, the same
     /// reference resolver and the same other trees, and a prefix tree whose declarations are the same as
     /// the previous prefix tree's: successive cuts in one member body, or a text that grew after the cut.
     /// Reuse **retires** [`previous`](paramref)'s compilation: its symbols then belong to the new result
     /// (ADR-0212 §7a). Otherwise the bind starts from scratch and does not change [`previous`](paramref).
+    /// A body that the result reuses keeps the syntax of the previous prefix tree, so a semantic query on
+    /// the result's compilation can answer nothing for a node in a member body other than the open one.
     /// @param tree A tree of this compilation. Its text can end at the cut or continue after it.
     /// @param cut A character offset into the text of [`tree`](paramref).
     /// @param options What follows the cut, and whether the result contains the scope at the cut.
@@ -964,23 +967,20 @@ open class Compilation {
                 successor.DirtyBodyTrees is {} dirty {
                 successor.DirtyBodyTrees = dirty.Remove(prefixTree)
             }
+            // A chain keeps a body cache, so that the next cut can reuse the bodies of this one. A bind
+            // without a previous result does not pay for one.
+            if !successor.IncrementalBodyReuse {
+                successor.IncrementalBodyReuse = true
+            }
         } else {
             successor = CreateSuccessor(SyntaxTrees.SetItem(index, prefixTree), shareBodyCache: false)
-            // ADR-0225 D6.6: a later cut can reuse the bodies of this bind.
-            successor.IncrementalBodyReuse = true
         }
         let diagnostics = successor.GetDiagnostics(cancellationToken)
         let classified = ImmutableArray.CreateBuilder[ClassifiedDiagnostic](diagnostics.Length)
         let model = successor.GetSemanticModel(prefixTree)
-        let classifier = PrefixDiagnosticClassifier(this, tree, prefixTree, prefixCut, () -> model, cancellationToken)
-        // The classifier reads the premises of the prefix cut.
-        let prefixScope = PrefixBindingContext.Enter(prefixCut)
-        try {
-            for diagnostic in diagnostics {
-                classified.Add(classifier.Classify(diagnostic))
-            }
-        } finally {
-            prefixScope.Dispose()
+        let classifier = PrefixDiagnosticClassifier(this, tree, prefixTree, prefixCut, cancellationToken)
+        for diagnostic in diagnostics {
+            classified.Add(classifier.Classify(diagnostic))
         }
         let openConstructs = ImmutableArray.CreateBuilder[OpenConstruct]()
         for token in prefixCut.SealedTokens {

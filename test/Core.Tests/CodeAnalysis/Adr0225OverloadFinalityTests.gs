@@ -333,6 +333,200 @@ func Name(v int32) object {
         )
     }
 
+    @Fact
+    func CallOfALocalInAFunctionLiteral_CanBeALaterLocal() {
+        const prefix = `package P
+
+func Main() {
+    let f = func (a int32) int32 {
+        return a
+    }
+    if true {
+        let g = func () int32 {
+            return f(1, 2)
+        }
+`
+        // A later local of the same name in the block is the one that the literal calls.
+        const witness = `        let f = func (a int32, b int32) int32 {
+            return a + b
+        }
+        let r = g()
+    }
+}
+`
+        let result = BindNothing(prefix, []string{witness})
+        AssertWitness(prefix + witness, "GS0144")
+        AssertFutureDependent(result, "GS0144", "later-declaration")
+        let source = prefix + "/*CUT*/" + witness
+        AssertFutureDependent(BindKeep(source), "GS0144", "later-declaration")
+    }
+
+    @Fact
+    func ReportOutsideACallFrame_BaseConstructor_CanBeALaterConstructor() {
+        const prefix = `package P
+
+partial open class Base {
+    init(a int32) {
+    }
+}
+
+class Derived : Base {
+    init() : base() {
+    }
+}
+`
+        const witness = `
+partial open class Base {
+    init() {
+    }
+}
+`
+        let result = BindNothing(prefix, []string{"", witness})
+        AssertWitness(prefix + witness, "GS0214")
+        AssertFutureDependent(result, "GS0214", "later-declaration")
+    }
+
+    @Fact
+    func StaticAndBaseCalls_WrongArguments_CanBeALaterMember() {
+        const staticPrefix = `package P
+
+partial class Util {
+    shared {
+        func Twice(a int32) int32 {
+            return a * 2
+        }
+    }
+}
+
+func Main() {
+    let x = Util.Twice()
+`
+        const staticWitness = `}
+
+partial class Util {
+    shared {
+        func Twice() int32 {
+            return 0
+        }
+    }
+}
+`
+        let staticResult = BindNothing(staticPrefix, []string{"}\n", staticWitness})
+        AssertWitness(staticPrefix + staticWitness, "GS0144")
+        AssertFutureDependent(staticResult, "GS0144", "later-member")
+        const basePrefix = `package P
+
+partial open class Base {
+    open func Run(a int32) {
+    }
+}
+
+class Derived : Base {
+    override func Run(a int32) {
+        base.Run()
+    }
+`
+        const baseWitness = `}
+
+partial open class Base {
+    func Run() {
+    }
+}
+`
+        let baseResult = BindNothing(basePrefix, []string{"}\n", baseWitness})
+        AssertWitness(basePrefix + baseWitness, "GS0144")
+        AssertFutureDependent(baseResult, "GS0144", "later-member")
+    }
+
+    @Fact
+    func MemberCallInTopLevelStatements_IsFinalWhenTheDeclarationsAreKept() {
+        const source = `package P
+
+class Box {
+    func Put(v int32) {
+    }
+}
+
+let b = Box()
+b.Put()
+/*CUT*/
+let c = 1
+`
+        let keep = Assert.Single(BindKeep(source).Diagnostics)
+        Assert.Equal("GS0144", keep.Diagnostic.Id)
+        Assert.Equal(DiagnosticFinality.Final, keep.Finality)
+    }
+
+    @Fact
+    func UndefinedUnaryOperator_CanBeALaterReceiverOperator() {
+        const prefix = `package P
+
+class V {
+    var X int32
+}
+
+func Main() {
+    let a = V()
+    let b = -a
+`
+        const witness = `}
+
+func (a V) operator - () V {
+    return a
+}
+`
+        let result = BindNothing(prefix, []string{"}\n", witness})
+        AssertWitness(prefix + witness, "GS0128")
+        AssertFutureDependent(result, "GS0128", "later-member")
+    }
+
+    @Fact
+    func MissingImplicitConversion_DependsOnTheTypes() {
+        const prefix = `package P
+
+open class Animal {
+}
+
+class Dog : Animal {
+}
+
+func Main() {
+    let a Animal = Dog()
+    let d Dog = a
+`
+        // An explicit conversion exists, so the report is the implicit form. Both types are of this package.
+        AssertFutureDependent(BindNothing(prefix, []string{"}\n"}), "GS0156", "later-declaration")
+        const builtin = "package P\n\nfunc Main() {\n    let big int64 = 5\n    let small int32 = big\n"
+        let final = BindNothing(builtin, []string{"}\n"})
+        Assert.Equal(DiagnosticFinality.Final, Assert.Single(final.Diagnostics).Finality)
+    }
+
+    @Fact
+    func GotoInAnOpenStaticInitializerOrAnonymousMethod_CanBeALaterLabel() {
+        let prefixes = []string{
+            "package P\n\nclass Holder {\n    shared {\n        init {\n            goto done\n",
+            "package P\n\nfunc Main() {\n    let o = object {\n        func Run() {\n            goto done\n"
+        }
+        let witnesses = []string{
+            "            done:\n            var x = 1\n        }\n    }\n}\n",
+            "            done:\n            var x = 1\n        }\n    }\n}\n"
+        }
+        for var i = 0; i < prefixes.Length; i++ {
+            let result = BindNothing(prefixes[i], []string{witnesses[i]})
+            AssertWitness(prefixes[i] + witnesses[i], "GS0469")
+            AssertFutureDependent(result, "GS0469", "rest-of-body")
+        }
+    }
+
+    @Fact
+    func OpenSwitchExpressionWithoutArms_CanGetTheArms() {
+        const prefix = "package P\n\nfunc Name(v int32) string {\n    let s = switch v {\n"
+        const witness = "        default: \"x\"\n    }\n    return s\n}\n"
+        let result = BindNothing(prefix, []string{witness})
+        AssertWitness(prefix + witness, "GS0176")
+        AssertFutureDependent(result, "GS0176", "rest-of-statement")
+    }
+
     shared {
         // Binds [`prefix`](paramref) as text that ends at the cut, with nothing after it, and checks that
         // each final diagnostic stays reported in every completion.

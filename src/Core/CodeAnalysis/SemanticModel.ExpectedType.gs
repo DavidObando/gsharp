@@ -20,8 +20,9 @@ partial class SemanticModel {
     /// @remarks The innermost of these contexts answers. An argument slot answers when every candidate of
     /// the call has the same parameter type at the slot. The candidates are the call's member group
     /// when the compilation records it ((cref:Compilation.Compilation.RecordMemberGroups)), and the
-    /// called function otherwise. A named argument, a variadic slot and a `return` in a lambda answer
-    /// nothing.
+    /// called function otherwise. Only source functions answer, a receiver function called as a member
+    /// included. An imported or generic callee, a parameter type with a type parameter, a named argument
+    /// at or before the slot, a variadic slot and a `return` in a lambda answer nothing.
     /// @param position A character offset into this model's tree.
     /// @param cancellationToken Cancels index construction on first use.
     /// @returns The expected type, or `null` when the context expects none, the candidates disagree,
@@ -139,8 +140,11 @@ partial class SemanticModel {
                 slot++
             }
         }
-        if slot < call.Arguments.Count && call.Arguments[slot] is NamedArgumentExpressionSyntax {
-            return nil
+        // A named argument at or before the slot moves the positional slots.
+        for var i = 0; i <= slot && i < call.Arguments.Count; i++ {
+            if call.Arguments[i] is NamedArgumentExpressionSyntax {
+                return nil
+            }
         }
         var candidates = GetMemberGroup(call, cancellationToken)
         if candidates.IsDefaultOrEmpty && GetSymbolInfo(call, cancellationToken).Symbol is {} called {
@@ -148,14 +152,29 @@ partial class SemanticModel {
         }
         var expected TypeSymbol? = nil
         for candidate in candidates {
-            if candidate is not FunctionSymbol function {
+            // Only a source function maps argument slots to its parameters one to one. An imported or
+            // extension method, or a generic one, answers nothing.
+            if candidate is not FunctionSymbol function || function.IsGeneric {
                 return nil
+            }
+            // A receiver function called as a member takes the receiver as its first parameter.
+            var parameterIndex = slot
+            if function.IsExtension {
+                if !(
+                    call.Parent is AccessorExpressionSyntax accessor && object.ReferenceEquals(accessor.RightPart, call)
+                ) {
+                    return nil
+                }
+                parameterIndex++
             }
             let parameters = function.Parameters
-            if slot >= parameters.Length || parameters[slot].IsVariadic {
+            if parameterIndex >= parameters.Length || parameters[parameterIndex].IsVariadic {
                 return nil
             }
-            let type = parameters[slot].Type
+            let type = parameters[parameterIndex].Type
+            if TypeSymbol.ContainsTypeParameter(type) {
+                return nil
+            }
             if expected == nil {
                 expected = type
             } else if expected != type {

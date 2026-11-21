@@ -164,6 +164,46 @@ func F() {
         Assert.Null(mix.Compilation.GetSemanticModel(mix.SyntaxTree).GetExpectedType(mixText.Length))
     }
 
+    @Fact
+    func GetExpectedType_AnswersOnlyWhenTheSlotMapsToASourceParameter() {
+        const source = `package P
+
+import System
+
+class Box {
+    func Put(v int32, w string) {
+    }
+}
+
+func (b Box) Tag(label string, weight float64) {
+}
+
+func Same[T](a T, b T) {
+}
+
+func Named(a int32, b string) {
+}
+
+func F() {
+    let box = Box()
+    box.Put(1, "a")
+    box.Tag("t", 2.0)
+    Same(1, 2)
+    Console.WriteLine("x")
+    Named(b: "q", a: 3)
+}
+`
+        let (_, model) = Model(source)
+        // An instance method and a receiver function map slots to their declared parameters.
+        Assert.Equal(TypeSymbol.String, model.GetExpectedType(source.IndexOf("\"a\")", StringComparison.Ordinal)))
+        Assert.Equal(TypeSymbol.String, model.GetExpectedType(source.IndexOf("\"t\"", StringComparison.Ordinal)))
+        Assert.Equal(TypeSymbol.Float64, model.GetExpectedType(source.IndexOf("2.0", StringComparison.Ordinal)))
+        // A generic callee, an imported method and a named argument answer nothing.
+        Assert.Null(model.GetExpectedType(source.IndexOf("1, 2)", StringComparison.Ordinal)))
+        Assert.Null(model.GetExpectedType(source.IndexOf("\"x\"", StringComparison.Ordinal)))
+        Assert.Null(model.GetExpectedType(source.IndexOf("3)", StringComparison.Ordinal)))
+    }
+
     shared {
         private func Model(source string)(SyntaxTree, SemanticModel) {
             let tree = SyntaxTree.Parse(SourceText.From(source, "query.gs"))

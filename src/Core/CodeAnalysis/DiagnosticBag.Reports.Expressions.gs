@@ -556,24 +556,6 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         toType
     )
 
-    // ADR-0225 D6.5: a later top-level `func operator implicit` can convert to or from a type of this
-    // package (ADR-0120), so the report of a missing conversion depends on the later declarations.
-    private func ReportConversion(
-        location TextLocation,
-        descriptor DiagnosticDescriptor,
-        fromType TypeSymbol,
-        toType TypeSymbol
-    ) {
-        let stack List[PrefixPremise]? = premises
-        let pushed = (stack == nil || stack.Count == 0) &&
-            PushPremiseIf(
-            PrefixBindingContext.LaterConversionCanFollow(fromType, toType),
-            PrefixPremise.LaterDeclaration
-        )
-        Report(location, descriptor, fromType, toType)
-        PopPremiseIf(pushed)
-    }
-
     /// Reports why a requested structural projection is unsafe or incomplete.
     /// @param location The projection source location.
     /// @param fromType The source type.
