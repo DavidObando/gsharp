@@ -86,11 +86,15 @@ internal class BinderContext {
 
     /// Issue #6150: the last bound value of each argument of a call being bound, by the argument's
     /// value syntax. (cref:CompleteCall) gives a call that failed the arguments it bound, and
-    /// forgets them either way. Allocated on the first argument.
+    /// forgets them either way. Allocated on the first argument. A (cref:BinderContext) belongs to
+    /// one (cref:Binder), and a body bind (parallel or not) has its own binder, so the table is
+    /// not shared between threads.
     private var callArguments Dictionary[SyntaxNode, BoundExpression]?
 
     /// Remembers [`bound`](paramref) when [`syntax`](paramref) is the value of a call argument, so a
-    /// call that fails keeps it for the semantic model (#6150).
+    /// call that fails keeps it for the semantic model (#6150). A `ref`/`out` argument is recorded
+    /// both at its operand and at the argument itself, whose bind builds the address-of, the
+    /// conditional reference or the inline declaration.
     /// @param syntax The expression the binder bound.
     /// @param bound Its bound node.
     internal func RecordCallArgument(syntax ExpressionSyntax, bound BoundExpression) {
@@ -107,6 +111,28 @@ internal class BinderContext {
         let table = callArguments ?? Dictionary[SyntaxNode, BoundExpression](ReferenceEqualityComparer.Instance)
         callArguments = table
         table[syntax] = bound
+    }
+
+    /// Finishes the bind of the call that [`syntax`](paramref) spells, if any: a call, a
+    /// `base[I].M(...)` call, or an accessor chain that ends in a call (`a.b.M(x)`). Every call is
+    /// bound through the expression of its syntax, so this completes a call whichever path bound
+    /// it; (cref:CompleteCall) at a call-binding entry point has already completed it with its
+    /// receiver.
+    /// @param syntax The expression the binder bound.
+    /// @param bound Its bound node.
+    internal func CompleteCallSyntax(syntax ExpressionSyntax, bound BoundExpression) {
+        if callArguments is not{Count: > 0} {
+            return
+        }
+        var terminal ExpressionSyntax = syntax
+        while terminal is AccessorExpressionSyntax accessor {
+            terminal = accessor.RightPart
+        }
+        if terminal is CallExpressionSyntax call {
+            CompleteCall(bound, call.Arguments)
+        } else if terminal is BaseInterfaceCallExpressionSyntax baseCall {
+            CompleteCall(bound, baseCall.Arguments)
+        }
     }
 
     /// Finishes the bind of a call: when [`bound`](paramref) is the error of a call that did not
@@ -127,7 +153,17 @@ internal class BinderContext {
         if callArguments is {Count: > 0} table {
             for argument in arguments {
                 let value = ArgumentValue(argument)
-                if value == nil || !table.Remove(value, out var argumentBound) {
+                var argumentBound BoundExpression? = nil
+                // A `ref`/`out` argument answers at the argument, else at its operand.
+                if value is RefArgumentExpressionSyntax refArgument {
+                    if refArgument.Expression is {} operand && table.Remove(operand, out var operandBound) {
+                        argumentBound = operandBound
+                    }
+                }
+                if table.Remove(value, out var valueBound) {
+                    argumentBound = valueBound
+                }
+                if argumentBound == nil {
                     continue
                 }
                 if error != nil && !object.ReferenceEquals(argumentBound, error) {
@@ -148,17 +184,10 @@ internal class BinderContext {
         }
     }
 
-    private func ArgumentValue(argument ExpressionSyntax) SyntaxNode? {
-        let value = switch argument {
-            case named is NamedArgumentExpressionSyntax: named.Expression
-            case namedTuple is NamedTupleElementSyntax: namedTuple.Expression
-            default: argument
-        }
-        return if value is RefArgumentExpressionSyntax refArgument {
-            refArgument.Expression
-        } else {
-            value
-        }
+    private func ArgumentValue(argument ExpressionSyntax) ExpressionSyntax -> switch argument {
+        case named is NamedArgumentExpressionSyntax: named.Expression
+        case namedTuple is NamedTupleElementSyntax: namedTuple.Expression
+        default: argument
     }
 
     internal var SourceNullableConstraintDepth int32

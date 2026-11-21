@@ -24,9 +24,11 @@ open class Issue6150FailedCallArgumentTests {
     @InlineData("let k = Missing(x)") // no such function
     @InlineData("let k = Use(x, 2) + 1") // the failed call is an operand
     @InlineData("let k = Use(Use(x, 2))") // the failed call is an argument of a call that binds
+    @InlineData("let k = Use(v: x, w: 2)") // named arguments
+    @InlineData("let k = R(ref x, x)") // a `ref` argument
     func LocalArgument_AnswersItsSymbolAndType(statement string) {
         let (model, tree, compilation) = CreateModel(
-            "package P\n\nfunc Use(v int32) int32 -> v\n\nfunc Pick(s string) int32 -> 0\nfunc Pick(b bool) int32 -> 1\n\nfunc F() {\n    let x = 1\n    " +
+            "package P\n\nfunc Use(v int32) int32 -> v\n\nfunc Pick(s string) int32 -> 0\nfunc Pick(b bool) int32 -> 1\n\nfunc R(ref v int32) int32 -> v\n\nfunc F() {\n    var x = 1\n    " +
                 statement +
                 "\n}\n"
         )
@@ -92,6 +94,66 @@ open class Issue6150FailedCallArgumentTests {
         Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(x).Type)
         let v = Assert.Single(Names(tree, "v"))
         Assert.Equal("v", Assert.IsType[ParameterSymbol](model.GetSymbolInfo(v).Symbol).Name)
+    }
+
+    @Fact
+    func FailedTupleElementCall_ArgumentAndReceiverAnswer() {
+        // A call through a tuple element is bound outside the accessor-call path.
+        let (model, tree, compilation) = CreateModel(
+            "package P\n\nfunc F() {\n    let x = 1\n    let t = (f: (v int32) -> v + 1, n: 0)\n    let k = t.f(x, 2)\n}\n"
+        )
+        Assert.Contains(compilation.GetDiagnostics(), (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+        let x = Assert.Single(Names(tree, "x"))
+        Assert.Equal("x", Assert.IsAssignableFrom[VariableSymbol](model.GetSymbolInfo(x).Symbol).Name)
+        Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(x).Type)
+        let t = Assert.Single(Names(tree, "t"))
+        Assert.Equal("t", Assert.IsAssignableFrom[VariableSymbol](model.GetSymbolInfo(t).Symbol).Name)
+    }
+
+    @Fact
+    func FailedColorColorUnifiedCall_ArgumentsAnswer() {
+        // `Box.Get(...)` names both a property value and a type with instance and static `Get`;
+        // the unified overload selection binds the arguments itself.
+        let (model, tree, compilation) = CreateModel(
+            "package P\n\nclass Tag { }\n\nclass Box {\n    func Get(name string) int32 -> 0\n    shared {\n        func Get(tag Tag?) int32 -> 1\n    }\n}\n\nclass Owner {\n    prop Box Box {\n        get { return Box() }\n    }\n\n    func Use(x int32) int32 {\n        return Box.Get(x, x)\n    }\n}\n"
+        )
+        Assert.Contains(compilation.GetDiagnostics(), (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+        for argument in Names(tree, "x") {
+            Assert.Equal("x", Assert.IsType[ParameterSymbol](model.GetSymbolInfo(argument).Symbol).Name)
+            Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(argument).Type)
+        }
+    }
+
+    @Fact
+    func ConditionalRefArgumentOfAFailedCall_ConditionAndBranchesAnswer() {
+        let (model, tree, compilation) = CreateModel(
+            "package P\n\nfunc R(ref v int32) int32 -> v\n\nfunc F(flag bool) {\n    var a = 1\n    var b = 2\n    let k = R(ref (flag ? a : b), 2)\n}\n"
+        )
+        Assert.Contains(compilation.GetDiagnostics(), (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+        Assert.Equal(
+            "flag",
+            Assert.IsType[ParameterSymbol](model.GetSymbolInfo(Assert.Single(Names(tree, "flag"))).Symbol).Name
+        )
+        for name in[]string{"a", "b"} {
+            let branch = Assert.Single(Names(tree, name))
+            Assert.Equal(name, Assert.IsAssignableFrom[VariableSymbol](model.GetSymbolInfo(branch).Symbol).Name)
+            Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(branch).Type)
+        }
+    }
+
+    @Fact
+    func InlineOutDeclarationOfAFailedCall_AnswersAsInACallThatBinds() {
+        let source = "package P\n\nfunc Try(s string, out v int32) bool {\n    v = 0\n    return true\n}\n\nfunc F(s string) {\n    let k = Try(s, out var y int32"
+        let (model, tree, compilation) = CreateModel(source + ", 2)\n}\n")
+        Assert.Contains(compilation.GetDiagnostics(), (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+        let (boundModel, boundTree, _) = CreateModel(source + ")\n}\n")
+        let s = Assert.Single(Names(tree, "s"))
+        Assert.Equal("s", Assert.IsType[ParameterSymbol](model.GetSymbolInfo(s).Symbol).Name)
+        let outArgument = tree.Root.DescendantNodes().OfType[RefArgumentExpressionSyntax]().Single()
+        let boundOutArgument = boundTree.Root.DescendantNodes().OfType[RefArgumentExpressionSyntax]().Single()
+        let expected = boundModel.GetTypeInfo(boundOutArgument).Type
+        Assert.NotNull(expected)
+        Assert.Equal(expected?.ToString(), model.GetTypeInfo(outArgument).Type?.ToString())
     }
 
     @Fact

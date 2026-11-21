@@ -88,6 +88,20 @@ open class Issue6149FunctionLiteralBodySymbolTests {
     }
 
     @Fact
+    func VoidExpressionBodiedLiteral_AnswersItsCall() {
+        // A void expression body is an expression statement anchored at the expression.
+        let (model, tree) = CreateModel(
+            "package P\n\nclass C {\n    func Touch(v int32) { }\n}\n\nfunc F(c C, k int32) {\n    let f = () -> c.Touch(k)\n}\n"
+        )
+        let call = tree.Root.DescendantNodes().OfType[AccessorExpressionSyntax]().Single()
+        let touched = Assert.IsAssignableFrom[FunctionSymbol](model.GetSymbolInfo(call).Symbol)
+        Assert.Equal("Touch", touched.Name)
+        Assert.Same(TypeSymbol.Void, model.GetTypeInfo(call).Type)
+        Assert.Equal("c", Assert.IsType[ParameterSymbol](model.GetSymbolInfo(Name(tree, "c")).Symbol).Name)
+        Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(Name(tree, "k")).Type)
+    }
+
+    @Fact
     func AssignmentInALiteral_AnswersTheFieldItWrites() {
         let (model, tree) = CreateModel(
             "package P\n\nclass C {\n    var N int32 = 1\n\n    func Set() {\n        let f = func() { N = 2 }\n        f()\n    }\n}\n"

@@ -4020,6 +4020,17 @@ internal partial class ExpressionBinder {
         syntax RefArgumentExpressionSyntax,
         parameter ParameterSymbol?
     ) BoundExpression {
+        let bound = BindRefArgumentExpressionCore(syntax, parameter)
+        // The argument's own bind builds the conditional reference or the inline declaration, so
+        // a call that fails keeps it for the semantic model (#6150).
+        binderCtx.RecordCallArgument(syntax, bound)
+        return bound
+    }
+
+    private func BindRefArgumentExpressionCore(
+        syntax RefArgumentExpressionSyntax,
+        parameter ParameterSymbol?
+    ) BoundExpression {
         if parameter == nil {
             recordDeferredArgumentSnapshot?(syntax)
         }

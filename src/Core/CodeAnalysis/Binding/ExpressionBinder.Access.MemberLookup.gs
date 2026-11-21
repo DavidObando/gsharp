@@ -779,13 +779,15 @@ internal partial class ExpressionBinder {
                         resolvedTuple,
                         tupleIndex
                     )
-                    return overloads.BindIndirectCallExpression(
+                    let tupleCall = overloads.BindIndirectCallExpression(
                         ce,
                         tupleElement,
                         ce.Identifier.ValueText,
                         ce.Identifier.Location,
                         nullSafeInvocation: "?(...)"
                     )
+                    binderCtx.CompleteCall(tupleCall, ce.Arguments, receiver, receiverSyntax)
+                    return tupleCall
                 }
                 let callResult = BindAccessorCall(receiver, classSymbol, ce, receiverSyntax, receiverStart)
                 CheckValueTaskGetAwaiterGetResult(callResult, ce)

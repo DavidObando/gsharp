@@ -454,21 +454,14 @@ partial class SemanticModel {
                 for parameter in literal.Function.Parameters {
                     SemanticModel.RecordDeclarations(parameter, tree, declaredBySyntax)
                 }
-                // The body of an expression-bodied literal (`() -> c.N`) is a block and a `return`
-                // (or an expression statement) anchored at the expression. The expression answers,
-                // not the statements the binder wrapped it in, so those are walked unrecorded.
+                // The body of an expression-bodied literal (`() -> c.N`) is a block whose statements
+                // (a `return`, or an expression statement and a `return` for a void body) the binder
+                // anchors at the expression. The expression answers, not those statements, so they
+                // are walked without being recorded; their children are recorded as usual.
                 if literal.Body is BoundBlockStatement{Syntax: ExpressionSyntax bodySyntax} block {
                     for statement in block.Statements {
-                        if statement is BoundReturnStatement{Expression: {} returned} && object.ReferenceEquals(
-                            statement.Syntax,
-                            bodySyntax
-                        ) {
-                            VisitExpression(returned)
-                        } else if statement is BoundExpressionStatement expressionStatement && object.ReferenceEquals(
-                            statement.Syntax,
-                            bodySyntax
-                        ) {
-                            VisitExpression(expressionStatement.Expression)
+                        if object.ReferenceEquals(statement.Syntax, bodySyntax) {
+                            base.VisitStatement(statement)
                         } else {
                             VisitStatement(statement)
                         }
