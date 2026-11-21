@@ -418,6 +418,129 @@ public static class ObliviousDemo {
         TranslationTestValidation.AssertBinds(obliviousPrinted)
     }
 
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Issue6159_MixedObliviousAndEnabledSameShape_ReconcilesDeterministicallyAcrossOrders(disabledFirst bool) {
+        let disabledBlock = `
+#nullable disable
+public static class DisabledHalf {
+    public static object MakeList() => new { Items = new List<string> { "dis" } };
+    public static object MakeArray() => new { Items = new[] { "disArr" } };
+}`
+        let enabledBlock = `
+#nullable enable
+public static class EnabledHalf {
+    public static object MakeList() => new { Items = new List<string> { "en" } };
+    public static object MakeArray() => new { Items = new[] { "enArr" } };
+    public static string Check() {
+        var enList = new { Items = new List<string> { "ok" } };
+        var enArr = new { Items = new[] { "arr" } };
+        var disList = DisabledHalf.MakeList();
+        var disArr = DisabledHalf.MakeArray();
+        return enList.Equals(disList).ToString() + ":" +
+            enArr.Equals(disArr).ToString() + ":" +
+            enList.Items.First().ToString() + ":" +
+            enArr.Items.First().ToString();
+    }
+}`
+        let body = if disabledFirst {
+            disabledBlock + "\n" + enabledBlock
+        } else {
+            enabledBlock + "\n" + disabledBlock
+        }
+        let printed = Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+using System;
+using System.Collections.Generic;
+using System.Linq;
+` + body + `
+public static class Demo {
+    public static string Run() => EnabledHalf.Check();
+}`, strictIl: true, expectedOutput: "False:False:ok:arr")
+        Assert.Contains("Items List[string?]", printed, StringComparison.Ordinal)
+        Assert.Contains("Items []string?", printed, StringComparison.Ordinal)
+        Assert.Equal(
+            2,
+            System.Text.RegularExpressions.Regex.Matches(printed, `data class AnonymousType\d+_[0-9A-F]{16}\(`).Count
+        )
+
+        // Same-shape equality across mixed contexts preserves anonymous-type identity.
+        let identityBody = if disabledFirst {
+            `
+    private static readonly List<string> SharedList = new List<string> { "same" };
+    private static readonly string[] SharedArr = new[] { "sameArr" };
+#nullable disable
+    public static object MakeDisabledList() {
+        List<string> items = SharedList;
+        return new { Items = items };
+    }
+    public static object MakeDisabledArray() {
+        string[] items = SharedArr;
+        return new { Items = items };
+    }
+#nullable enable
+    public static string Run() {
+        List<string> enItems = SharedList;
+        string[] enArr = SharedArr;
+        var listA = new { Items = enItems };
+        var listB = MakeDisabledList();
+        var arrA = new { Items = enArr };
+        var arrB = MakeDisabledArray();
+        return listA.Equals(listB).ToString() + ":" +
+            arrA.Equals(arrB).ToString() + ":" +
+            (listA.GetType() == listB.GetType()).ToString() + ":" +
+            (arrA.GetType() == arrB.GetType()).ToString() + ":" +
+            listA.Items.First().ToString() + ":" +
+            arrA.Items.First().ToString();
+    }`
+        } else {
+            `
+    private static readonly List<string> SharedList = new List<string> { "same" };
+    private static readonly string[] SharedArr = new[] { "sameArr" };
+#nullable enable
+    public static string Run() {
+        List<string> enItems = SharedList;
+        string[] enArr = SharedArr;
+        var listA = new { Items = enItems };
+        var listB = MakeDisabledList();
+        var arrA = new { Items = enArr };
+        var arrB = MakeDisabledArray();
+        return listA.Equals(listB).ToString() + ":" +
+            arrA.Equals(arrB).ToString() + ":" +
+            (listA.GetType() == listB.GetType()).ToString() + ":" +
+            (arrA.GetType() == arrB.GetType()).ToString() + ":" +
+            listA.Items.First().ToString() + ":" +
+            arrA.Items.First().ToString();
+    }
+#nullable disable
+    public static object MakeDisabledList() {
+        List<string> items = SharedList;
+        return new { Items = items };
+    }
+    public static object MakeDisabledArray() {
+        string[] items = SharedArr;
+        return new { Items = items };
+    }`
+        }
+        let identityPrinted = Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+using System;
+using System.Collections.Generic;
+using System.Linq;
+public static class Demo {` + identityBody + `
+}`, strictIl: true, expectedOutput: "True:True:True:True:same:sameArr")
+        Assert.Contains("Items List[string?]", identityPrinted, StringComparison.Ordinal)
+        Assert.Contains("Items []string?", identityPrinted, StringComparison.Ordinal)
+        Assert.Equal(
+            2,
+            System
+                .Text
+                .RegularExpressions
+                .Regex
+                .Matches(identityPrinted, `data class AnonymousType\d+_[0-9A-F]{16}\(`)
+                .Count
+        )
+    }
+
     @Fact
     func EmptyGenericCollectionInitializer_KeepsParenthesesAndBinds() {
         let collection = CollectionInitializerExpression(

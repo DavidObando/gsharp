@@ -2577,17 +2577,46 @@ partial class CSharpToGSharpTranslator {
                 ) &&
                     invokedMethod?.ReturnType is {} invocationReturn &&
                     sourceExpression != nil &&
-                    this
-                    .context
-                    .GetTypeInfo(sourceExpression)
-                    .Type is IArrayTypeSymbol receiverArray &&
-                    SymbolEqualityComparer
-                    .Default
-                    .Equals(invocationReturn, receiverArray.ElementType) &&
-                    this.GetManagedReferenceArrayProjectedExpressionType(
-                    sourceExpression
-                ) is IArrayTypeSymbol projectedReceiver {
-                    return projectedReceiver.ElementType
+                    this.GetManagedReferenceArrayProjectedExpressionType(sourceExpression) is {} projectedReceiver {
+                    if this
+                        .context
+                        .GetTypeInfo(sourceExpression)
+                        .Type is IArrayTypeSymbol receiverArray &&
+                        SymbolEqualityComparer
+                        .Default
+                        .Equals(invocationReturn, receiverArray.ElementType) &&
+                        projectedReceiver is IArrayTypeSymbol projectedArrayReceiver {
+                        return projectedArrayReceiver.ElementType
+                    }
+                    if this.TryGetProjectedTypeArgument(
+                        sourceParameter,
+                        projectedReceiver,
+                        returnTypeParameter,
+                        this.context.Compilation,
+                        out var projectedElementReturn,
+                        out var conflict,
+                        includeAllArguments: true
+                    ) &&
+                        !conflict &&
+                        projectedElementReturn != nil {
+                        let effectiveReturn = if sourceMethod
+                            .ReturnType
+                            .NullableAnnotation == Microsoft
+                            .CodeAnalysis
+                            .NullableAnnotation
+                            .Annotated &&
+                            projectedElementReturn
+                            .IsReferenceType {
+                            projectedElementReturn.WithNullableAnnotation(
+                                Microsoft.CodeAnalysis.NullableAnnotation.Annotated
+                            )
+                        } else {
+                            projectedElementReturn
+                        }
+                        if !SymbolEqualityComparer.IncludeNullability.Equals(invocationReturn, effectiveReturn) {
+                            return effectiveReturn
+                        }
+                    }
                 }
                 if invokedMethod != nil && !invokedMethod.IsGenericMethod {
                     let calledReceiver Microsoft

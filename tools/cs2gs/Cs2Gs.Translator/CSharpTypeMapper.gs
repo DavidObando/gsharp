@@ -3006,7 +3006,10 @@ class CSharpTypeMapper {
         if evidenceIndex.TryGetValue(shapeKey, out var evidence) {
             for (propertyTypes, acceptsNil) in evidence {
                 for var index = 0; index < merged.Count; index++ {
-                    merged[index] = MergeAnonymousNullability(merged[index], propertyTypes[index])
+                    merged[index] = NormalizeAnonymousProjectedStorage(
+                        propertyTypes[index],
+                        MergeAnonymousNullability(merged[index], propertyTypes[index])
+                    )
                     if (acceptsNil[index]) {
                         merged[index] = WithNullable(merged[index], true)!!
                     }
