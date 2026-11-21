@@ -2203,14 +2203,54 @@ partial class CSharpToGSharpTranslator {
             node TypeDeclarationSyntax,
             members IReadOnlyList[MemberDeclarationSyntax],
             symbol INamedTypeSymbol?,
-            kind TypeDeclarationKind
+            kind TypeDeclarationKind,
+            attachSynthHelpers bool = true
         ) ConstructorLift {
-            if symbol != nil && this.state.CachedConstructorLifts.TryGetValue(symbol, out var cached) {
-                return cast[ConstructorLift](cached)
+            let memberCount = members.Count
+            if this
+                .state
+                .CachedConstructorLifts
+                .TryGetValue(node, out var cached) &&
+                cached is (CachedMemberCount int32, Lift ConstructorLift) entry &&
+                entry.CachedMemberCount == memberCount {
+                if attachSynthHelpers {
+                    this.state.PendingInstanceSynthHelpers?.AddRange(entry.Lift.InstanceSynthHelpers)
+                    this.state.PendingStaticSynthHelpers?.AddRange(entry.Lift.StaticSynthHelpers)
+                }
+                return entry.Lift
             }
-            let lift = this.AnalyzeConstructorLift(node, members, symbol, kind)
-            if symbol != nil {
-                this.state.CachedConstructorLifts[symbol] = lift
+            let savedInstanceSynthHelpers = this.state.PendingInstanceSynthHelpers
+            let savedStaticSynthHelpers = this.state.PendingStaticSynthHelpers
+            let capturedInstanceHelpers = List[MethodDeclaration]()
+            let capturedStaticHelpers = List[MethodDeclaration]()
+            this.state.PendingInstanceSynthHelpers = capturedInstanceHelpers
+            this.state.PendingStaticSynthHelpers = capturedStaticHelpers
+            var lift ConstructorLift
+            try {
+                lift = this.AnalyzeConstructorLift(node, members, symbol, kind)
+            } finally {
+                this.state.PendingInstanceSynthHelpers = savedInstanceSynthHelpers
+                this.state.PendingStaticSynthHelpers = savedStaticSynthHelpers
+            }
+            if capturedInstanceHelpers.Count > 0 || capturedStaticHelpers.Count > 0 {
+                lift = ConstructorLift{
+                    Constructor: lift.Constructor,
+                    DropConstructor: lift.DropConstructor,
+                    PrimaryParameters: lift.PrimaryParameters,
+                    FieldsAsPrimaryParameters: lift.FieldsAsPrimaryParameters,
+                    PropertiesAsPrimaryParameters: lift.PropertiesAsPrimaryParameters,
+                    PropertiesAsBodyFields: lift.PropertiesAsBodyFields,
+                    FieldInitializers: lift.FieldInitializers,
+                    BodyFieldInitializers: lift.BodyFieldInitializers,
+                    ResidualInitStatements: lift.ResidualInitStatements,
+                    InstanceSynthHelpers: capturedInstanceHelpers,
+                    StaticSynthHelpers: capturedStaticHelpers
+                }
+            }
+            this.state.CachedConstructorLifts[node] = (memberCount, lift)
+            if attachSynthHelpers {
+                this.state.PendingInstanceSynthHelpers?.AddRange(lift.InstanceSynthHelpers)
+                this.state.PendingStaticSynthHelpers?.AddRange(lift.StaticSynthHelpers)
             }
             return lift
         }

@@ -3729,7 +3729,20 @@ partial class CSharpToGSharpTranslator {
 
         private func EnsureForwardAggregateFieldInitializerOverridesAnalyzed(owner INamedTypeSymbol) {
             this.state.AnalyzedFieldOverrideTypes.Add(owner)
-            let ownerParts = if !this.preservePartialParts && this.partialTypeParts.TryGetValue(owner, out var parts) {
+            if this.preservePartialParts {
+                for declRef in owner.DeclaringSyntaxReferences {
+                    if declRef.GetSyntax() is TypeDeclarationSyntax partDecl {
+                        this.AnalyzeAggregateFieldInitializerOverridesForPart(
+                            partDecl,
+                            partDecl.Members.ToList(),
+                            owner,
+                            onlyPartDeclaredFields: true
+                        )
+                    }
+                }
+                return
+            }
+            let ownerParts = if this.partialTypeParts.TryGetValue(owner, out var parts) {
                 parts
             } else {
                 default(List[TypeDeclarationSyntax]?)
@@ -3745,26 +3758,64 @@ partial class CSharpToGSharpTranslator {
                     mergedMembers.AddRange(part.Members)
                 }
             }
-            for (staticField, _) in this.EnumerateFoldableStaticConstructorAssignments(mergedMembers, owner) {
-                this.state.LiftedFieldInitializers.Add(staticField)
+            this.AnalyzeAggregateFieldInitializerOverridesForPart(
+                primaryDecl,
+                mergedMembers,
+                owner,
+                onlyPartDeclaredFields: false
+            )
+        }
+
+        private func AnalyzeAggregateFieldInitializerOverridesForPart(
+            node TypeDeclarationSyntax,
+            members IReadOnlyList[MemberDeclarationSyntax],
+            owner INamedTypeSymbol,
+            onlyPartDeclaredFields bool
+        ) {
+            for (staticField, _) in this.EnumerateFoldableStaticConstructorAssignments(members, owner) {
+                if !onlyPartDeclaredFields || staticField.DeclaringSyntaxReferences.Any(
+                    (r SyntaxReference) -> r.SyntaxTree == node.SyntaxTree && node.Span.Contains(r.Span)
+                ) {
+                    this.state.LiftedFieldInitializers.Add(staticField)
+                }
             }
             if owner.IsRecord && owner.IsValueType && GetPrimaryConstructorParameterList(owner) == nil {
                 let outerAggregate = this.state.CurrentEmittedAggregate
                 this.state.CurrentEmittedAggregate = owner
                 try {
                     let lift = this.GetOrAnalyzeConstructorLift(
-                        primaryDecl,
-                        mergedMembers,
+                        node,
+                        members,
                         owner,
-                        TypeDeclarationKind.DataStruct
+                        TypeDeclarationKind.DataStruct,
+                        attachSynthHelpers: false
                     )
                     if lift.FieldInitializers.Count > 0 || lift.FieldsAsPrimaryParameters.Count > 0 {
-                        for memberSymbol in owner.GetMembers().OfType[IFieldSymbol]() {
-                            if lift.FieldInitializers.ContainsKey(memberSymbol.Name) ||
-                                lift
-                                .FieldsAsPrimaryParameters
-                                .Contains(memberSymbol.Name) {
-                                this.state.LiftedFieldInitializers.Add(memberSymbol)
+                        if onlyPartDeclaredFields {
+                            using let fieldModelScope = this.context.UseSemanticModelForSymbol(node.SyntaxTree, owner)
+                            for memberDecl in members {
+                                if memberDecl is Microsoft.CodeAnalysis.CSharp.Syntax.FieldDeclarationSyntax fieldDecl {
+                                    for variable in fieldDecl.Declaration.Variables {
+                                        if this.context.GetDeclaredSymbol(variable) is IFieldSymbol fieldSymbol &&
+                                            (
+                                            lift.FieldInitializers.ContainsKey(fieldSymbol.Name) ||
+                                                lift
+                                                .FieldsAsPrimaryParameters
+                                                .Contains(fieldSymbol.Name)
+                                        ) {
+                                            this.state.LiftedFieldInitializers.Add(fieldSymbol)
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            for memberSymbol in owner.GetMembers().OfType[IFieldSymbol]() {
+                                if lift.FieldInitializers.ContainsKey(memberSymbol.Name) ||
+                                    lift
+                                    .FieldsAsPrimaryParameters
+                                    .Contains(memberSymbol.Name) {
+                                    this.state.LiftedFieldInitializers.Add(memberSymbol)
+                                }
                             }
                         }
                     }

@@ -212,12 +212,29 @@ public static class P
     public static void Main()
     {
         var s = new ForwardLiftedStruct();
-        Console.Write((s.Saved() == null) + "|" + (ForwardFoldedStatic.Saved() == null) + "|" + (ForwardResidualStatic.Saved() == null) + "|" + trace);
+        var pl = new PartialLift(() => "part");
+        Console.Write(
+            (s.Saved() == null) + "|" +
+            (ForwardFoldedStatic.Saved() == null) + "|" +
+            (ForwardResidualStatic.Saved() == null) + "|" +
+            (pl.Saved() == null) + "|" +
+            pl.Check() + "|" +
+            trace);
     }
     public record struct ForwardLiftedStruct
     {
         public Func<object?> Saved = LiveBox?.Fallback;
         public ForwardLiftedStruct() { Saved = () => "lifted"; }
+    }
+    public partial record struct PartialLift
+    {
+        public Func<object?> Saved;
+        public PartialLift(Func<object?> saved) { Saved = saved; }
+    }
+    public partial record struct PartialLift
+    {
+        public Func<object?>? Extra = LiveBox?.Fallback;
+        public bool Check() => Extra == null;
     }
     public static class ForwardFoldedStatic
     {
@@ -243,10 +260,11 @@ public static class P
                 Assert.DoesNotContain("s.Saved!!()", printed, StringComparison.Ordinal)
                 Assert.DoesNotContain("ForwardFoldedStatic.Saved!!()", printed, StringComparison.Ordinal)
                 Assert.Contains("ForwardResidualStatic.Saved!!()", printed, StringComparison.Ordinal)
+                Assert.Equal(2, printed.Split("partial data struct PartialLift(").Length)
             },
             verifyIL: true,
             nullableContextOptions: NullableContextOptions.Enable,
-            expectedOutput: "False|False|False|1"
+            expectedOutput: "False|False|False|False|False|1"
         )
     }
 

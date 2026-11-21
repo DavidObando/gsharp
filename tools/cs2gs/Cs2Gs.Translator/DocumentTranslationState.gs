@@ -58,7 +58,7 @@ internal class DocumentTranslationState {
         StaticFieldInitializers = Dictionary[ISymbol, GExpression](SymbolEqualityComparer.Default)
         LiftedFieldInitializers = HashSet[ISymbol](SymbolEqualityComparer.Default)
         AnalyzedFieldOverrideTypes = HashSet[INamedTypeSymbol](SymbolEqualityComparer.Default)
-        CachedConstructorLifts = Dictionary[INamedTypeSymbol, object](SymbolEqualityComparer.Default)
+        CachedConstructorLifts = Dictionary[TypeDeclarationSyntax, object](ReferenceEqualityComparer.Instance)
         SynthesizedPropertyBackingFieldNames = Dictionary[IPropertySymbol, string](SymbolEqualityComparer.Default)
         SymbolReassignedCache = Dictionary[(ISymbol?, SyntaxNode?), bool](SymbolScopeKeyComparer.Instance)
         UsedAsNullableCache = Dictionary[(ISymbol?, SyntaxNode?), bool](SymbolScopeKeyComparer.Instance)
@@ -279,7 +279,7 @@ internal class DocumentTranslationState {
         get;
     }
 
-    prop CachedConstructorLifts Dictionary[INamedTypeSymbol, object] {
+    prop CachedConstructorLifts Dictionary[TypeDeclarationSyntax, object] {
         get;
     }
 
