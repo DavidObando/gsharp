@@ -220,6 +220,65 @@ shared class P {
     }
 
     @Theory
+    @InlineData("property_stmt", "if value?.Self is { Label: \"safe\" } { return value.Label } return \"miss\"")
+    @InlineData("property_conditional_expr", "return if value?.Text is { Length: 4 } { value.Label } else { \"miss\" }")
+    @InlineData("list_stmt", "if value?.Parts is []string and [\"a\", \"b\"] { return value.Label } return \"miss\"")
+    @InlineData(
+        "list_short_circuit",
+        "return if (value?.Parts is []string and [\"a\", \"b\"]) && value.Label == \"safe\" { value.Label } else { \"miss\" }"
+    )
+    @InlineData("relational_stmt", "if value?.Count is > 0 { return value.Label } return \"miss\"")
+    @InlineData(
+        "relational_short_circuit",
+        "return if (value?.Count is >= 1) && value.Label == \"safe\" { value.Label } else { \"miss\" }"
+    )
+    @InlineData(
+        "composed_and_stmt",
+        "if value?.Text is not nil and { Length: 4 } { return value.Label } return \"miss\""
+    )
+    @InlineData("composed_or_stmt", "if value?.Count is 1 or 2 { return value.Label } return \"miss\"")
+    @InlineData("composed_not_or_stmt", "if value?.Text is not (nil or \"\") { return value.Label } return \"miss\"")
+    @InlineData(
+        "class_generic_default",
+        "return if CheckClass[string](value) != \"miss\" && value?.Text is not nil { value.Label } else { \"miss\" }"
+    )
+    func ConditionalAccessPatternKinds_ProveReceiverWithNilControlsAndConsumers(caseName string, body string) {
+        let _ = caseName
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = `import System
+class Box {
+    var Label string = "safe"
+    var Text string? = "safe"
+    var Count int32? = 2
+    var Parts []?string = []string{"a", "b"}
+    var Item object? = "safe"
+    prop Self Box { get -> this }
+}
+shared class P {
+    func CheckClass[T class](b Box?) string {
+        if b?.Item is not default(T) { return b.Label }
+        return "miss"
+    }
+    func Check(value Box?) string {
+        ` + body + `
+    }
+    func Main() {
+        Console.WriteLine(Check(Box()))
+        Console.WriteLine(Check(Box{Label: "other", Text: nil, Count: nil, Parts: nil, Item: nil}))
+        Console.WriteLine(Check(nil))
+    }
+}`
+        let program = fixture.Compile(source, "PatternKinds6042_" + caseName, executable: true)
+        IlVerifier.Verify(program)
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(
+                "safe" + Environment.NewLine + "miss" + Environment.NewLine + "miss" + Environment.NewLine
+            ),
+            fixture.RunBytes(program)
+        )
+    }
+
+    @Theory
     @InlineData("if a?.B?.Text != nil { return a.B.Text ?? \"none\" } return \"nil\"")
     @InlineData("return if a?.B?.Text != nil && a.B.Text == \"safe\" { a.B.Text ?? \"none\" } else { \"nil\" }")
     @InlineData("if a?.B?.Text == nil { return \"nil\" }\n        return a.B.Text ?? \"none\"")
