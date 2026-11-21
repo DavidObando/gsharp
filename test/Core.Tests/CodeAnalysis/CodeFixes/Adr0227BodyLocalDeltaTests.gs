@@ -333,6 +333,26 @@ open class Adr0227BodyLocalDeltaTests {
     }
 
     @Fact
+    func EditThatAddsAnAwaitInALockBody_FallsBack() {
+        // The suspension rewrite of the program's bind reports GS0575; the collector of suspension
+        // points skips a `lock` body, so the body has no suspension fact.
+        const source = "package P\n\nimport System.Threading.Tasks\n\nfunc F(g object, t Task[int32]) int32 {\n    lock g {\n        return 1\n    }\n}\n"
+        let (full, local) = Both(ImmutableArray.Create(source), 0, "return 1", "return await t")
+        Assert.Contains(full.Added, (d Diagnostic) -> d.Id == "GS0575")
+        Assert.False(local.BodyLocal)
+        AssertSameDelta(full, local, "await in lock added")
+    }
+
+    @Fact
+    func EditThatRemovesAnAwaitFromALockBody_FallsBack() {
+        const source = "package P\n\nimport System.Threading.Tasks\n\nfunc F(g object, t Task[int32]) int32 {\n    lock g {\n        return await t\n    }\n}\n"
+        let (full, local) = Both(ImmutableArray.Create(source), 0, "return await t", "return 1")
+        Assert.Contains(full.Removed, (d Diagnostic) -> d.Id == "GS0575")
+        Assert.False(local.BodyLocal)
+        AssertSameDelta(full, local, "await in lock removed")
+    }
+
+    @Fact
     func EditBeforeASuppressedMissingDocumentation_KeepsItSuppressed_BodyLocally() {
         const source = "package Lib\n\n/// Documented.\nfunc F() int32 {\n    return 1\n}\n\n@SuppressDiagnostic(\"GS0228\")\nfunc Quiet() {}\n\nfunc Loud() {}\n"
         let tree = SyntaxTree.Parse(SourceText.From(source, "a.gs"))

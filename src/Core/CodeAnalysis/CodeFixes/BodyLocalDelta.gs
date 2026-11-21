@@ -179,6 +179,9 @@ internal shared class BodyLocalDelta {
         if HasSuspensionFacts(oldBound) || HasSuspensionFacts(newBound) {
             return BodyLocalResult("a body has a suspension point or calls a suspending function")
         }
+        if ReportsSuspensionRewriteFindings(function, newBound, declarations.References ?? compilation.References) {
+            return BodyLocalResult("the suspension rewrite reports on the new body")
+        }
         if ReportsWholeProgramFindings(function, oldBound, compilation.References) ||
             ReportsWholeProgramFindings(function, newBound, compilation.References) {
             return BodyLocalResult("a whole-program analysis reports on a body")
@@ -204,10 +207,16 @@ internal shared class BodyLocalDelta {
             remove[d] = n + 1
         }
         let body = List[Diagnostic]()
+        let oldBodySpan = oldDeclaration.Body!!.Span
         for d in program.Diagnostics {
             if remove.TryGetValue(d, out var left) && left > 0 {
                 remove[d] = left - 1
                 continue
+            }
+            // A later pass of the program's bind (the suspension rewrite, for one) reported it in the
+            // declared body, and the body-local check does not run that pass again.
+            if IsInside(d.Location, oldText, oldBodySpan) {
+                return BodyLocalResult("a later pass of the bind reports in the declared body")
             }
             if !TryRelocate(d, oldText, newTree.Text, spanMap, out var moved) {
                 return BodyLocalResult("a body diagnostic outside the edited body touches the edit")
@@ -333,6 +342,45 @@ internal shared class BodyLocalDelta {
             }
         }
         return false
+    }
+
+    private func IsInside(location TextLocation, text SourceText, span TextSpan) bool {
+        let start = location.Span.Start
+        let end = location.Span.End
+        return object.ReferenceEquals(location.Text, text) && start >= span.Start && end <= span.End
+    }
+
+    // SuspensionInference rewrites every body after the bind (SuspendingCallRewriter) and reports there:
+    // an await in a `lock` body or nested in a `go` operand, an await or a blocking bridge where the
+    // container does not suspend, a `case cancelled` arm without a context. The member does not suspend
+    // and its body names no suspending function, so no other function is newly suspending.
+    private func ReportsSuspensionRewriteFindings(
+        function FunctionSymbol,
+        body BoundBlockStatement,
+        references ReferenceResolver?
+    ) bool {
+        if references == nil {
+            return true
+        }
+        let runtime = ChannelRuntimeBinder(references)
+        if !runtime.IsAvailable {
+            return false
+        }
+        let bag = DiagnosticBag()
+        var adapted = false
+        let _ = SuspendingCallRewriter.Rewrite(
+            body,
+            function,
+            containerIsRoot: false,
+            ImmutableHashSet[FunctionSymbol].Empty,
+            runtime,
+            bag,
+            (container FunctionSymbol, group BoundMethodGroupExpression) -> {
+                adapted = true
+                return group
+            }
+        )
+        return adapted || bag.Count > 0
     }
 
     // The analyses that BindProgram runs over every body after the bind. Each looks at one body at a

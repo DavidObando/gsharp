@@ -491,6 +491,8 @@ An edit inside a body can still change what other code reports. The check falls 
 - the bind of either body asks for a synthesized ref-kind delegate, or adds an anonymous type, an adapter or a native protocol operation, whose names depend on the order of the full pass.
 - either body names a function that suspends, has a suspension point or calls a suspending function, so the suspension inference can change or the bind meets its marks.
 - the managed-reference, ref-struct-liveness or rendezvous-batch analysis reports on either body.
+- the suspension rewrite that the bind runs after every body is bound (`SuspendingCallRewriter`) reports on the edited body: an await in a `lock` body or nested in a `go` operand, an await or a blocking bridge where the member does not suspend, a `case cancelled` arm without a context. The collector of suspension points skips a `lock` body, so such an await is not a suspension fact.
+- the program's bind reported, in the declared body, a diagnostic that the member's body bind did not record (a later pass reported it, and the check does not run that pass again).
 
 `Adr0227BodyLocalDeltaTests` checks the two paths against each other: every fix of the ADR-0227 fix corpus (alone, inside class methods and across files), four synthetic edits of each function body of that corpus and of the repository samples, and one test per fallback. It compares Removed, Added, Persisting and AddedSyntax as sorted multisets of document, ID, severity, span, message, additional locations and suggestion count, and the flags. Another test binds the body-local path several times on a compilation with a body cache, then checks that the compilation, a fresh compilation and a `ReplaceSyntaxTree` successor report what a fresh compilation reports.
 
