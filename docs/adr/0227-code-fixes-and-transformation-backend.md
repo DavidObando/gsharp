@@ -496,11 +496,11 @@ An edit inside a body can still change what other code reports. The check falls 
 
 | Corpus | Candidates | Body-local | Full delta p50 / p95 | Default delta p50 / p95 | Body-local only p50 / p95 |
 | --- | --- | --- | --- | --- | --- |
-| Oats S0 dev repair log, 304 distinct broken programs (built-in fixes) | 50 | 26 | 5.1 ms / 21.5 ms | 4.5 ms / 27.6 ms | 3.1 ms / 8.2 ms (the full delta of the same 26: 4.6 ms / 7.0 ms) |
-| `src/LanguageServer` (37 files), one statement inserted at the start of a function body, 30 edits | 30 | 19 | 670 ms / 1694 ms | 31 ms / 689 ms | 16 ms / 102 ms |
-| `src/Core` (814 files), the same edit, 6 edits | 6 | 1 | 32.9 s / 34.9 s | 30.6 s / 37.5 s | 0.21 s |
+| Oats S0 dev repair log, 304 distinct broken programs (built-in fixes) | 50 | 26 | 4.8 ms / 9.9 ms | 4.3 ms / 11.9 ms | 3.0 ms / 9.7 ms (the full delta of the same 26: 4.2 ms / 7.2 ms) |
+| `src/LanguageServer` (37 files), one statement inserted at the start of a function body, 30 edits | 30 | 19 | 652 ms / 1617 ms | 33 ms / 687 ms | 16 ms / 97 ms |
+| `src/Core` (814 files), the same edit, 6 edits | 6 | 1 | 31.0 s / 33.6 s | 28.3 s / 36.8 s | 0.23 s |
 
-A warm check costs 5.1 ms / 19.2 ms for the Oats programs, 1.8 s for `src/LanguageServer` and 23.6 s for `src/Core`. For a single-file program the body-local check costs about what the full check costs, because it binds two bodies in two passes and the program is small; its p95 is a little higher. For a project it is one to two orders of magnitude cheaper when it applies. The Oats fallbacks: 18 deferred LINQ calls, 3 parse-only exits, 2 call-effect changes, 1 async member. The project fallbacks: deferred LINQ calls (8), cross-body syntax (5), cycles in the call-effect summary (3). No candidate gave a different delta.
+A warm check costs 5.3 ms / 19.0 ms for the Oats programs, 1.8 s for `src/LanguageServer` and 22.4 s for `src/Core`. For a single-file program the body-local check costs about what the full check costs, because it binds two bodies in two passes and the program is small; its p95 is a little higher. For a project it is one to two orders of magnitude cheaper when it applies. The Oats fallbacks: 18 deferred LINQ calls, 3 parse-only exits, 2 call-effect changes, 1 async member. The project fallbacks: deferred LINQ calls (8), cross-body syntax (5), cycles in the call-effect summary (3). No candidate gave a different delta.
 
 The 50 candidates are fewer than the 118 of the phase-1–3 measurement. That measurement ran before the numeric conversion was narrowed to simple operands, and over the 327 records rather than the 304 distinct programs; how the difference splits between the two was not measured.
 
