@@ -741,10 +741,21 @@ internal partial class ExpressionBinder {
             HashSet[VariableSymbol](GetCurrentExpressionCallableAliases())
         }
         setCallableAliases(initialAliases)
-        let pushed = if frame != nil && frame.Count > 0 {
-            binderCtx.PushNarrowingFrame(Dictionary[AccessPath, TypeSymbol](frame))
-        } else {
-            default(NarrowingFrame?)
+        var pushed NarrowingFrame? = nil
+        if frame != nil && frame.Count > 0 {
+            let refined = Dictionary[AccessPath, TypeSymbol]()
+            for fact in frame {
+                let held = binderCtx.NarrowedVariables.Query(fact.Key)
+                // Preserve surviving stronger refinements, matching PushConditionNarrowingFrame.
+                refined[fact.Key] = if !StatementBinder.IsNullableWidening(fact.Key, fact.Value) &&
+                    held != nil &&
+                    NarrowingState.IsNoStrongerThan(fact.Value, held) {
+                    held
+                } else {
+                    fact.Value
+                }
+            }
+            pushed = binderCtx.PushNarrowingFrame(refined)
         }
         nextExpressionFrameId += 1
         let id = nextExpressionFrameId

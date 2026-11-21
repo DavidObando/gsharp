@@ -2882,6 +2882,19 @@ internal partial class StatementBinder {
                     .IsStableClrMember(ca.Member) {
                     return TryResolveStablePathWithCaptures(ca.Receiver!!, captures)?.Append(ca.Member)
                 }
+                case nested is BoundNullConditionalAccessExpression {
+                    let hadPrevious = captures.TryGetValue(nested.Capture, out var previous)
+                    captures[nested.Capture] = nested.Receiver
+                    try {
+                        return TryResolveStablePathWithCaptures(nested.WhenNotNull, captures)
+                    } finally {
+                        if hadPrevious && previous != nil {
+                            captures[nested.Capture] = previous
+                        } else {
+                            captures.Remove(nested.Capture)
+                        }
+                    }
+                }
                 default {
                     return nil
                 }

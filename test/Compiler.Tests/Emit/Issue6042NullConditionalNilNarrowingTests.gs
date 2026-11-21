@@ -321,6 +321,113 @@ shared class P {
     }
 
     @Fact
+    func ParenthesizedThreeHopChain_NarrowsAllReceivers() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = `import System
+class Leaf {
+    var Text string? = "safe"
+}
+class Mid {
+    let C Leaf?
+    init(c Leaf?) { C = c }
+}
+class Outer {
+    let B Mid?
+    init(b Mid?) { B = b }
+}
+shared class P {
+    func Check(a Outer?) string {
+        if (a?.B)?.C?.Text != nil {
+            return a.B.C.Text ?? "none"
+        }
+        return "nil"
+    }
+    func Main() {
+        Console.WriteLine(Check(Outer(Mid(Leaf()))))
+        Console.WriteLine(Check(Outer(Mid(Leaf{Text: nil}))))
+        Console.WriteLine(Check(Outer(Mid(nil))))
+        Console.WriteLine(Check(Outer(nil)))
+        Console.WriteLine(Check(nil))
+    }
+}`
+        let program = fixture.Compile(source, "Chain3Hop6042", executable: true)
+        IlVerifier.Verify(program)
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(
+                "safe" +
+                    Environment.NewLine +
+                    "nil" +
+                    Environment.NewLine +
+                    "nil" +
+                    Environment.NewLine +
+                    "nil" +
+                    Environment.NewLine +
+                    "nil" +
+                    Environment.NewLine
+            ),
+            fixture.RunBytes(program)
+        )
+    }
+
+    @Theory
+    @InlineData(
+        "short_circuit_and",
+        "if value is Derived { return if value?.Text != nil && Pick(value) + \":\" + value.DerivedOnly() == \"derived:only\" { Pick(value) } else { \"miss\" } } return \"miss\""
+    )
+    @InlineData(
+        "conditional_if_expr",
+        "if value is Derived { return if value?.Text != nil { Pick(value) + \":\" + value.DerivedOnly() } else { \"miss\" } } return \"miss\""
+    )
+    @InlineData(
+        "ternary_expr",
+        "if value is Derived { return value?.Text != nil ? (Pick(value) + \":\" + value.DerivedOnly()) : \"miss\" } return \"miss\""
+    )
+    func ExistingStrongerRefinement_IsPreservedAcrossConditionalAccessExpressionProofs(caseName string, body string) {
+        let _ = caseName
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = `import System
+open class Base {
+    var Text string? = "safe"
+}
+class Derived : Base {
+    func DerivedOnly() string -> "only"
+}
+shared class P {
+    func Pick(x Base) string -> "base"
+    func Pick(x Derived) string -> "derived"
+    func Check(value Base?) string {
+        ` + body + `
+    }
+    func Main() {
+        Console.WriteLine(Check(Derived()))
+        Console.WriteLine(Check(Derived{Text: nil}))
+        Console.WriteLine(Check(Base()))
+        Console.WriteLine(Check(nil))
+    }
+}`
+        let program = fixture.Compile(source, "PreserveRefinement6042_" + caseName, executable: true)
+        IlVerifier.Verify(program)
+        let first = if caseName == "short_circuit_and" {
+            "derived"
+        } else {
+            "derived:only"
+        }
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(
+                first +
+                    Environment.NewLine +
+                    "miss" +
+                    Environment.NewLine +
+                    "miss" +
+                    Environment.NewLine +
+                    "miss" +
+                    Environment.NewLine
+            ),
+            fixture.RunBytes(program)
+        )
+    }
+
+    @Fact
     func ChainedNullConditional_DoesNotNarrowUnstableIntermediateMember() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let source = `import System
