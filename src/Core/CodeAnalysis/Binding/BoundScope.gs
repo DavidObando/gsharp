@@ -2063,7 +2063,10 @@ partial class BoundScope {
         let previous = currentReferencingSyntaxTree.Value
         // ADR-0227 D4 (issue #6128): a speculative body pass binds an edited body of a file whose
         // declarations, imports included, belong to the file's tree before the edit.
-        this.currentReferencingSyntaxTree.Value = if tree != nil && speculativeEditedTree != nil &&
+        this
+            .currentReferencingSyntaxTree
+            .Value = if tree != nil &&
+            speculativeEditedTree != nil &&
             object.ReferenceEquals(tree, speculativeEditedTree) {
             speculativeDeclaringTree
         } else {

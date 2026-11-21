@@ -44,16 +44,22 @@ class TransformationsPackageTests {
         let nupkg = LatestPackage()
         using let archive = ZipFile.OpenRead(nupkg)
         let entries = archive.Entries.Select((e ZipArchiveEntry) -> e.FullName.Replace('\\', '/')).ToHashSet()
-        Assert.Single(entries, (e string) -> e.StartsWith("lib/", StringComparison.Ordinal) && e.EndsWith(
-            "/GSharp.CodeAnalysis.Transformations.dll",
-            StringComparison.Ordinal
-        ))
+        Assert.Single(
+            entries,
+            (e string) -> e.StartsWith("lib/", StringComparison.Ordinal) && e.EndsWith(
+                "/GSharp.CodeAnalysis.Transformations.dll",
+                StringComparison.Ordinal
+            )
+        )
         Assert.Contains("schema/transformation-program.schema.json", entries)
         Assert.Contains("README.md", entries)
         Assert.Contains("icon.png", entries)
         // Core is host-supplied: neither bundled nor a package dependency.
         Assert.DoesNotContain(entries, (e string) -> e.EndsWith("/GSharp.Core.dll", StringComparison.OrdinalIgnoreCase))
-        let nuspecEntry = Assert.Single(archive.Entries, (e ZipArchiveEntry) -> e.FullName.EndsWith(".nuspec", StringComparison.Ordinal))
+        let nuspecEntry = Assert.Single(
+            archive.Entries,
+            (e ZipArchiveEntry) -> e.FullName.EndsWith(".nuspec", StringComparison.Ordinal)
+        )
         using let stream = nuspecEntry.Open()
         let nuspec = XDocument.Load(stream)
         let metadata = nuspec.Root!!.Elements().Single((e XElement) -> e.Name.LocalName == "metadata")
@@ -65,7 +71,10 @@ class TransformationsPackageTests {
             .Where((e XElement) -> e.Name.LocalName == "dependency")
             .Select((e XElement) -> e.Attribute(XName?("id")!!)?.Value ?? "")
             .ToList()
-        Assert.DoesNotContain(dependencies, (id string) -> id.StartsWith("GSharp.Core", StringComparison.OrdinalIgnoreCase))
+        Assert.DoesNotContain(
+            dependencies,
+            (id string) -> id.StartsWith("GSharp.Core", StringComparison.OrdinalIgnoreCase)
+        )
         Assert.DoesNotContain(dependencies, (id string) -> id == "Core")
     }
 
@@ -87,7 +96,10 @@ class TransformationsPackageTests {
                 }
             }
         }
-        Assert.True(packages.Count > 0, "No GSharp.CodeAnalysis.Transformations package in ${nupkgs}; the build packs it.")
+        Assert.True(
+            packages.Count > 0,
+            "No GSharp.CodeAnalysis.Transformations package in ${nupkgs}; the build packs it."
+        )
         return packages.OrderByDescending((f FileInfo) -> f.LastWriteTimeUtc).First().FullName
     }
 

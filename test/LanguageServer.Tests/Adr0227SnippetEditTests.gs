@@ -99,7 +99,11 @@ open class Adr0227SnippetEditTests {
 
     @Fact
     func LazyClient_ResolvesTheSnippetEdit() {
-        let client = CodeActionClientOptions{SupportsDocumentChanges: true, SupportsSnippetEdits: true, SupportsResolveEdit: true}
+        let client = CodeActionClientOptions{
+            SupportsDocumentChanges: true,
+            SupportsSnippetEdits: true,
+            SupportsResolveEdit: true
+        }
         let content = LanguageServerTestHelpers.Content(Source).WithVersion(1)
         let uri = DocumentUri.From("file:///a.gs")!!
         let at = LanguageServerTestHelpers.PositionOf(Source, "null")

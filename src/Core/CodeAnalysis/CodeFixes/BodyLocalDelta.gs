@@ -61,7 +61,10 @@ internal shared class BodyLocalDelta {
         }
         let declarations = compilation.PublishedGlobalScope
         let program = compilation.PublishedBoundProgram
-        if declarations == nil || program == nil || program.BodyDiagnostics == nil || declarations.Previous != nil ||
+        if declarations == nil ||
+            program == nil ||
+            program.BodyDiagnostics == nil ||
+            declarations.Previous != nil ||
             declarations.HasNativeProtocols {
             return BodyLocalResult("the compilation has no published body pass")
         }
@@ -129,15 +132,22 @@ internal shared class BodyLocalDelta {
         if count != 1 || function == nil {
             return BodyLocalResult("the body is not the body of one function or method")
         }
-        if function.IsPInvoke || function.NullableSequenceSpecialization != NullableSequenceSpecializationKind.None ||
-            function.IsReturnTypeInferred {
-            return BodyLocalResult("the member is a P/Invoke stub, a nullable-sequence specialization or has an inferred return type")
+        if function.IsPInvoke ||
+            function.NullableSequenceSpecialization != NullableSequenceSpecializationKind.None ||
+            function
+            .IsReturnTypeInferred {
+            return BodyLocalResult(
+                "the member is a P/Invoke stub, a nullable-sequence specialization or has an inferred return type"
+            )
         }
         if owner != nil && declarations.LatestRichAnonymousObjectPlans.ContainsKey(owner) {
             return BodyLocalResult("the member belongs to a rich anonymous type")
         }
-        if !program.BodyDiagnostics!!.TryGetValue(function, out var recorded) || recorded.IsDefault ||
-            !program.Functions.TryGetValue(function, out var oldBound) {
+        if !program.BodyDiagnostics!!.TryGetValue(function, out var recorded) ||
+            recorded.IsDefault ||
+            !program
+            .Functions
+            .TryGetValue(function, out var oldBound) {
             return BodyLocalResult("the compilation recorded no single body bind of the member")
         }
         // The suspension inference marks functions after every body is bound, and the speculative bind
@@ -152,7 +162,8 @@ internal shared class BodyLocalDelta {
                 suspending.Add(member.Name)
             }
         }
-        if suspending.Count > 0 && (NamesAny(oldDeclaration.Body!!, suspending) || NamesAny(newDeclaration.Body!!, suspending)) {
+        if suspending.Count > 0 &&
+            (NamesAny(oldDeclaration.Body!!, suspending) || NamesAny(newDeclaration.Body!!, suspending)) {
             return BodyLocalResult("a body names a suspending function")
         }
         cancellationToken.ThrowIfCancellationRequested()
@@ -168,11 +179,8 @@ internal shared class BodyLocalDelta {
         if HasSuspensionFacts(oldBound) || HasSuspensionFacts(newBound) {
             return BodyLocalResult("a body has a suspension point or calls a suspending function")
         }
-        if ReportsWholeProgramFindings(function, oldBound, compilation.References) || ReportsWholeProgramFindings(
-            function,
-            newBound,
-            compilation.References
-        ) {
+        if ReportsWholeProgramFindings(function, oldBound, compilation.References) ||
+            ReportsWholeProgramFindings(function, newBound, compilation.References) {
             return BodyLocalResult("a whole-program analysis reports on a body")
         }
         cancellationToken.ThrowIfCancellationRequested()
@@ -229,7 +237,9 @@ internal shared class BodyLocalDelta {
         return BodyLocalResult(items)
     }
 
-    private func NonDefault(members ImmutableArray[FunctionSymbol]) ImmutableArray[FunctionSymbol] -> if members.IsDefault {
+    private func NonDefault(members ImmutableArray[FunctionSymbol]) ImmutableArray[
+        FunctionSymbol
+    ] -> if members.IsDefault {
         ImmutableArray[FunctionSymbol].Empty
     } else {
         members
@@ -272,8 +282,20 @@ internal shared class BodyLocalDelta {
             for var i = 0; i < right.Length; i++ {
                 let other = right[i]
                 if !used[i] && object.ReferenceEquals(d.Location.Text, other.Location.Text) &&
-                    d.Location.Span.Start == other.Location.Span.Start &&
-                    d.Location.Span.Length == other.Location.Span.Length &&
+                    d
+                    .Location
+                    .Span
+                    .Start == other
+                    .Location
+                    .Span
+                    .Start &&
+                    d
+                    .Location
+                    .Span
+                    .Length == other
+                    .Location
+                    .Span
+                    .Length &&
                     d.Id == other.Id &&
                     d.Severity == other.Severity &&
                     d.Message == other.Message {

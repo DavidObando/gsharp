@@ -20,7 +20,11 @@ internal class SpeculativeBodyBind {
         NewDiagnostics = ImmutableArray[Diagnostic].Empty
     }
 
-    internal init(oldDiagnostics ImmutableArray[Diagnostic], newDiagnostics ImmutableArray[Diagnostic], newBody BoundBlockStatement) {
+    internal init(
+        oldDiagnostics ImmutableArray[Diagnostic],
+        newDiagnostics ImmutableArray[Diagnostic],
+        newBody BoundBlockStatement
+    ) {
         OldDiagnostics = oldDiagnostics
         NewDiagnostics = newDiagnostics
         NewBody = newBody
@@ -100,10 +104,8 @@ partial class Binder {
             if newPass.FallbackReason != nil {
                 return SpeculativeBodyBind(newPass.FallbackReason)
             }
-            if !SameSummary(oldPass.Direct!!, newPass.Direct!!) || !SameSummary(
-                oldPass.WithOverrides!!,
-                newPass.WithOverrides!!
-            ) {
+            if !SameSummary(oldPass.Direct!!, newPass.Direct!!) ||
+                !SameSummary(oldPass.WithOverrides!!, newPass.WithOverrides!!) {
                 return SpeculativeBodyBind("the edit changes the call-effect summary of the member")
             }
             if function.ReceiverType is StructSymbol || function.StaticOwnerType is StructSymbol || owner != nil {
@@ -115,7 +117,7 @@ partial class Binder {
                 let byRef = function.ReturnRefKind != RefKind.None
                 for name in names {
                     if probe.statements.TakesReferenceToNameForSpeculation(oldBody, name, byRef) !=
-                        probe.statements.TakesReferenceToNameForSpeculation(newBody, name, byRef) {
+                    probe.statements.TakesReferenceToNameForSpeculation(newBody, name, byRef) {
                         return SpeculativeBodyBind("the edit changes a reference to the member '${name}'")
                     }
                 }
@@ -161,7 +163,9 @@ partial class Binder {
                 let probe = Binder(parentScope, function)
                 for call in body.DescendantNodesAndSelf() {
                     if call is CallExpressionSyntax deferred &&
-                        probe.statements.IsDeferredLinqOperatorNameForSpeculation(deferred.Identifier.ValueText) {
+                        probe
+                        .statements
+                        .IsDeferredLinqOperatorNameForSpeculation(deferred.Identifier.ValueText) {
                         return SpeculativePass("the body calls a deferred LINQ operator")
                     }
                 }
@@ -193,13 +197,23 @@ partial class Binder {
                     convenienceConstructor: nil
                 )
                 if (globalScope.RefDelegateCache is {} && parentScope.GetSynthesizedRefDelegateCache().WasQueried) ||
-                    parentScope.GetAnonymousTypeCache().Symbols.Count != anonymousTypes ||
-                    parentScope.GetRichAnonymousObjectPlans().Count != richPlans ||
-                    parentScope.GetLatestRichAnonymousObjectPlans().Count != latestRichPlans ||
-                    registry.Types.Count != adapterTypes ||
-                    registry.MethodBodies.Count != adapterBodies ||
+                    parentScope
+                    .GetAnonymousTypeCache()
+                    .Symbols
+                    .Count != anonymousTypes ||
+                    parentScope
+                    .GetRichAnonymousObjectPlans().Count != richPlans || parentScope.GetLatestRichAnonymousObjectPlans()
+                    .Count != latestRichPlans ||
+                    registry
+                    .Types
+                    .Count != adapterTypes ||
+                    registry
+                    .MethodBodies
+                    .Count != adapterBodies ||
                     registry.Counter != adapterCounter ||
-                    registry.ProtocolOperations.Count > 0 {
+                    registry
+                    .ProtocolOperations
+                    .Count > 0 {
                     return SpeculativePass("the body synthesizes a type that the pass shares")
                 }
                 return SpeculativePass(result.Body, result.Diagnostics, direct, withOverrides, probe)
@@ -246,10 +260,8 @@ partial class Binder {
                 left.InvokesCallbackParameter != right.InvokesCallbackParameter {
                 return false
             }
-            return SameTypes(left.WrittenFieldTypes, right.WrittenFieldTypes) && SameTypes(
-                left.WrittenElementTypes,
-                right.WrittenElementTypes
-            )
+            return SameTypes(left.WrittenFieldTypes, right.WrittenFieldTypes) &&
+                SameTypes(left.WrittenElementTypes, right.WrittenElementTypes)
         }
 
         private func SameTypes(left List[TypeSymbol], right List[TypeSymbol]) bool {

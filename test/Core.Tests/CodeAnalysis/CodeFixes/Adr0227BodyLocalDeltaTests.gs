@@ -24,102 +24,102 @@ import Xunit
 /// multisets of document, ID, severity, span and message, and the flags.
 open class Adr0227BodyLocalDeltaTests {
     // The programs of the ADR-0227 fix tests.
-    private let FixCorpus []string = []string{
-            "package P\n\nfunc F() string? {\n    // a\n    return /* b */ null // c\n}\n",
-            "package P\n\nfunc F() string? {\n    // a\n    return /* b */ nil // c\n}\n",
-            "package P\n\nfunc F() string? -> null\n",
-            "package P\n\nfunc F(n int32) string {\n    return switch n {\n        case 0 -> \"zero\" // z\n        default: \"other\"\n    }\n}\n",
-            "package P\n\nfunc F(n int32) string {\n    return switch n {\n        case 0: \"zero\" // z\n        default: \"other\"\n    }\n}\n",
-            "package P\n\nimport System.Text\n\nfunc F() string {\n    let sb = new StringBuilder() // keep\n    return sb.ToString()\n}\n",
-            "package P\n\nimport System.Text\n\nfunc F() string {\n    let sb = StringBuilder() // keep\n    return sb.ToString()\n}\n",
-            "package P\n\nclass C { }\n\nfunc F() C {\n    return new C()\n}\n",
-            "package P\n\nclass C { }\n\nfunc F() C {\n    return C()\n}\n",
-            "package P\n\nfunc F(chars []char) string {\n    return new string(chars)\n}\n",
-            "package P\n\nfunc F(chars []char) string {\n    return string(chars)\n}\n",
-            "package P\n\nstruct S { var X int32 }\n\nfunc F() S {\n    return new S(1)\n}\n",
-            "package P\n\nclass C { }\n\nfunc Make() C -> C()\n\nfunc F() C {\n    return new Make()\n}\n",
-            "package P\n\nfunc F() int32 {\n    let /* k */ x = 1\n    x = 2\n    return x\n}\n",
-            "package P\n\nfunc F() int32 {\n    var /* k */ x = 1\n    x = 2\n    return x\n}\n",
-            "package P\n\nfunc F() int32 {\n    let x = 1\n    x += 2\n    return x\n}\n",
-            "package P\n\nfunc F() int32 {\n    var x = 1\n    x += 2\n    return x\n}\n",
-            "package P\n\nfunc F(a bool, b bool) bool {\n    return a or b // x\n}\n",
-            "package P\n\nfunc F(a bool, b bool) bool {\n    return a || b // x\n}\n",
-            "package P\n\nfunc F(a bool, b bool) bool {\n    return a and b\n}\n",
-            "package P\n\nfunc F(a bool, b bool) bool {\n    return a && b\n}\n",
-            "package P\n\nfunc F(a bool) bool {\n    if not a {\n        return false\n    }\n    return true\n}\n",
-            "package P\n\nfunc F(a bool) bool {\n    if !a {\n        return false\n    }\n    return true\n}\n",
-            "package P\n\nfunc F(a bool, b bool) bool {\n    if not (a and b) {\n        return false\n    }\n    return true\n}\n",
-            "package P\n\nclass C {\n    var N int32\n}\n\nfunc F(c C?) int32 {\n    return c.N\n}\n",
-            "package P\n\nclass C {\n    var N int32\n}\n\nfunc F(c C?) int32 {\n    return c?.N\n}\n",
-            "package P\n\nfunc Use(s string) int32 -> s.Length\n\nfunc F(t string?) int32 {\n    return Use(t)\n}\n",
-            "package P\n\nclass C {\n    let N int32 = 0\n}\n\nfunc F() {\n    let c = C()\n    c.N = 1\n}\n",
-            "package P\n\nclass C {\n    let c int32 = 0\n}\n\nfunc F() {\n    let c = C()\n    c.c = 1\n}\n",
-            "package P\n\nfunc F(y int32?) int32 {\n    var x int32? = nil\n    return x = y\n}\n",
-            "package P\n\nfunc F(a bool) bool {\n    return not !a\n}\n",
-            "package P\n\nclass C { }\n\nfunc F(make () -> C) C {\n    return new make()\n}\n",
-            "package P\n\nclass C { }\n\ntype D = C\n\nfunc F() C {\n    return new D()\n}\n",
-            "package P\n\nfunc F(x uint8?) uint8 -> x\n",
-            "package P\n\nfunc F() bool {\n    return or\n}\n",
-            "package P\n\nfunc G(x bool) bool -> x\n\nfunc F() bool {\n    return G(or)\n}\n",
-            "package P\n\nfunc F(a bool) bool {\n    return a and\n}\n",
-            "package P\n\nfunc F(a int32?, b int32?) int32 {\n    return a + b\n}\n",
-            "package P\n\nfunc F(n int64) int32 {\n    let m int32 = n // keep\n    return m\n}\n",
-            "package P\n\nfunc F(n int64) int32 {\n    let m int32 = checked(cast[int32](n)) // keep\n    return m\n}\n",
-            "package P\n\nclass C {\n    let N int32 = 1\n\n    func Set() {\n        N = 2\n    }\n}\n",
-            "package P\n\nclass C {\n    var N int32 = 1\n\n    func Set() {\n        N = 2\n    }\n}\n",
-            "package P\n\nfunc F(y int64) int32 {\n    var x int32 = 100\n    x /= y\n    return x\n}\n",
-            "package P\n\nfunc F(n int32) {\n    let values = [](int32, uint8){(1, n)}\n}\n",
-            "package P\n\nfunc F(y int64) int32 {\n    var x int64 = 0\n    return x = y\n}\n",
-            "package P\n\nfunc F(y int64) int32 {\n    var x int32 = 100\n    x &^= y\n    return x\n}\n",
-            "package P\n\nconst Big int64 = 300\n\nfunc F() int8 {\n    let a int8 = Big\n    return a\n}\n",
-            "package P\n\nfunc F(n nint) int32 {\n    let m int32 = n\n    return m\n}\n",
-            "package P\n\nfunc F(n nint) int32 {\n    let m int32 = checked(cast[int32](n))\n    return m\n}\n",
-            "package P\n\nfunc int32(n int64) int32 -> 0\n\nfunc F(n int64) int32 {\n    let m int32 = n\n    return m\n}\n",
-            "package P\n\nfunc int32(n int64) int32 -> 0\n\nfunc F(n int64) int32 {\n    let m int32 = checked(cast[int32](n))\n    return m\n}\n",
-            "package P\n\nfunc F(n int64) int32 {\n    let m int32 = (n)\n    return m\n}\n",
-            "package P\n\nfunc F(n int64) int32 {\n    let m int32 = checked(cast[int32]((n)))\n    return m\n}\n",
-            "package P\n\ninline struct S {\n    shared {\n        let Count int32 = 0\n\n        func Set() {\n            Count = 2\n        }\n    }\n}\n",
-            "package P\n\ninline struct S {\n    shared {\n        var Count int32 = 0\n\n        func Set() {\n            Count = 2\n        }\n    }\n}\n",
-            "package P\n\ninline struct S {\n    let N int32 = 1\n\n    func Set() {\n        N = 2\n    }\n}\n",
-            "package P\n\npartial class C {\n    func Set() {\n        N = 2\n    }\n}\n",
-            "package P\n\nfunc F() int32 {\n    let x = 1\n    x = 2\n    return missing\n}\n",
-            "package P\n\nfunc F() string? {\n    // keep\n    return missing\n}\n",
-            "package P\n\nfunc F() string? {\n    // keep\n    return nil\n}\n",
-            "package P\n\nstruct S { var field int32 }\n\nfunc F(p *S) int32 -> p->field\n",
-            "package P\n\nfunc F() string? {\n    // a\n    return null\n}\n\nfunc G() string? -> null\n",
-            "package P\n\nfunc F() string? {\n    // a\n    return nil\n}\n\nfunc G() string? -> nil\n",
-            "package P\n\nfunc Use(a string?, b string?) int32 -> 0\n\nfunc F() int32 -> Use(null,null)\n",
-            "package P\n\nfunc A() string? -> null\n",
-            "package P\n\nfunc B() string? -> null\n",
-            "package P\n\nfunc F(a bool, b bool) bool {\n    let x = new System.Text.StringBuilder()\n    return a or b\n}\n",
-            "package P\n\nfunc B() int32 -> 1\n",
-            "package P\n\nfunc F() string? -> null\n\nfunc G() int32 -> missing\n",
-            "package P\n\nfunc F() string? -> null\n\nlet g string? = null\n",
-            "package P\n\nfunc F() int32 -> 1\n",
-            "package P\n\nfunc F() int32 {\n    let x = 1\n    x = 2\n    return x\n}\n\nfunc G() int32 -> missing\n",
-            "package P\n\nfunc F() string? {\n    return null\n}\n\nfunc G() int32 {\n    return missing\n}\n",
-            "package P\n\nfunc F() int32 {\n    return 1 +\n}\n",
-            "package P\n\nfunc Helper() int32 -> 1\n",
-            "package P\n\nfunc User() int32 -> Helper()\n",
-            "package P\n\nfunc F(n int32) string {\n    return switch n {\n        case 0 -> \"zero\"\n        default: \"other\"\n    }\n}\n",
-            "package P\n\n@SuppressDiagnostic(\"GS0302\")\nfunc F(n int32) string {\n    return switch n {\n        case 0: \"zero\"\n        default: \"other\"\n    }\n}\n\nfunc G() string? -> null\n",
-            "package P\n\nfunc F(n int32) string {\n    return 1 +\n}\n",
-            "package P\n\nfunc F() string? {\n    let foo = 1\n    return null\n}\n",
-            "package P\n\nclass C { }\n\nfunc F() C {\n    return new C() // keep\n}\n",
-            "package P\n\nfunc F(a bool, b bool) bool {\n    return a or b\n}\n",
-            "package P\n\nfunc F(a bool, b bool) bool {\n    return a or\n        b\n}\n",
-            "package P\n\nclass C {\n    var N int32\n}\n\nfunc F(c C?) int32? {\n    return c.N\n}\n",
-            "package P\n\nclass C {\n    var M int32\n}\n\nfunc F(c C) int32 {\n    return c.N\n}\n",
-            "package P\n\nfunc F() int32 -> missing\n",
-            "package P\n\nfunc F() int32 {\n    return missing\n}\n",
-            "package P\n\nimport System\n\nclass C { }\n\nfunc F(make Func[C]) C {\n    return new make()\n}\n",
-            "package P\n\nclass C { }\n\nfunc F(c C) int32 {\n    let N = 1\n    return c.N\n}\n",
-            "package P\n\nclass C { }\n\nfunc F(make () -> C?) C? {\n    return new make()\n}\n",
-            "package P\n\nclass C { }\n\nfunc F(c C) int32 {\n    let B = 1\n    return c.B.N\n}\n"
+    private let FixCorpus[]string = []string{
+        "package P\n\nfunc F() string? {\n    // a\n    return /* b */ null // c\n}\n",
+        "package P\n\nfunc F() string? {\n    // a\n    return /* b */ nil // c\n}\n",
+        "package P\n\nfunc F() string? -> null\n",
+        "package P\n\nfunc F(n int32) string {\n    return switch n {\n        case 0 -> \"zero\" // z\n        default: \"other\"\n    }\n}\n",
+        "package P\n\nfunc F(n int32) string {\n    return switch n {\n        case 0: \"zero\" // z\n        default: \"other\"\n    }\n}\n",
+        "package P\n\nimport System.Text\n\nfunc F() string {\n    let sb = new StringBuilder() // keep\n    return sb.ToString()\n}\n",
+        "package P\n\nimport System.Text\n\nfunc F() string {\n    let sb = StringBuilder() // keep\n    return sb.ToString()\n}\n",
+        "package P\n\nclass C { }\n\nfunc F() C {\n    return new C()\n}\n",
+        "package P\n\nclass C { }\n\nfunc F() C {\n    return C()\n}\n",
+        "package P\n\nfunc F(chars []char) string {\n    return new string(chars)\n}\n",
+        "package P\n\nfunc F(chars []char) string {\n    return string(chars)\n}\n",
+        "package P\n\nstruct S { var X int32 }\n\nfunc F() S {\n    return new S(1)\n}\n",
+        "package P\n\nclass C { }\n\nfunc Make() C -> C()\n\nfunc F() C {\n    return new Make()\n}\n",
+        "package P\n\nfunc F() int32 {\n    let /* k */ x = 1\n    x = 2\n    return x\n}\n",
+        "package P\n\nfunc F() int32 {\n    var /* k */ x = 1\n    x = 2\n    return x\n}\n",
+        "package P\n\nfunc F() int32 {\n    let x = 1\n    x += 2\n    return x\n}\n",
+        "package P\n\nfunc F() int32 {\n    var x = 1\n    x += 2\n    return x\n}\n",
+        "package P\n\nfunc F(a bool, b bool) bool {\n    return a or b // x\n}\n",
+        "package P\n\nfunc F(a bool, b bool) bool {\n    return a || b // x\n}\n",
+        "package P\n\nfunc F(a bool, b bool) bool {\n    return a and b\n}\n",
+        "package P\n\nfunc F(a bool, b bool) bool {\n    return a && b\n}\n",
+        "package P\n\nfunc F(a bool) bool {\n    if not a {\n        return false\n    }\n    return true\n}\n",
+        "package P\n\nfunc F(a bool) bool {\n    if !a {\n        return false\n    }\n    return true\n}\n",
+        "package P\n\nfunc F(a bool, b bool) bool {\n    if not (a and b) {\n        return false\n    }\n    return true\n}\n",
+        "package P\n\nclass C {\n    var N int32\n}\n\nfunc F(c C?) int32 {\n    return c.N\n}\n",
+        "package P\n\nclass C {\n    var N int32\n}\n\nfunc F(c C?) int32 {\n    return c?.N\n}\n",
+        "package P\n\nfunc Use(s string) int32 -> s.Length\n\nfunc F(t string?) int32 {\n    return Use(t)\n}\n",
+        "package P\n\nclass C {\n    let N int32 = 0\n}\n\nfunc F() {\n    let c = C()\n    c.N = 1\n}\n",
+        "package P\n\nclass C {\n    let c int32 = 0\n}\n\nfunc F() {\n    let c = C()\n    c.c = 1\n}\n",
+        "package P\n\nfunc F(y int32?) int32 {\n    var x int32? = nil\n    return x = y\n}\n",
+        "package P\n\nfunc F(a bool) bool {\n    return not !a\n}\n",
+        "package P\n\nclass C { }\n\nfunc F(make () -> C) C {\n    return new make()\n}\n",
+        "package P\n\nclass C { }\n\ntype D = C\n\nfunc F() C {\n    return new D()\n}\n",
+        "package P\n\nfunc F(x uint8?) uint8 -> x\n",
+        "package P\n\nfunc F() bool {\n    return or\n}\n",
+        "package P\n\nfunc G(x bool) bool -> x\n\nfunc F() bool {\n    return G(or)\n}\n",
+        "package P\n\nfunc F(a bool) bool {\n    return a and\n}\n",
+        "package P\n\nfunc F(a int32?, b int32?) int32 {\n    return a + b\n}\n",
+        "package P\n\nfunc F(n int64) int32 {\n    let m int32 = n // keep\n    return m\n}\n",
+        "package P\n\nfunc F(n int64) int32 {\n    let m int32 = checked(cast[int32](n)) // keep\n    return m\n}\n",
+        "package P\n\nclass C {\n    let N int32 = 1\n\n    func Set() {\n        N = 2\n    }\n}\n",
+        "package P\n\nclass C {\n    var N int32 = 1\n\n    func Set() {\n        N = 2\n    }\n}\n",
+        "package P\n\nfunc F(y int64) int32 {\n    var x int32 = 100\n    x /= y\n    return x\n}\n",
+        "package P\n\nfunc F(n int32) {\n    let values = [](int32, uint8){(1, n)}\n}\n",
+        "package P\n\nfunc F(y int64) int32 {\n    var x int64 = 0\n    return x = y\n}\n",
+        "package P\n\nfunc F(y int64) int32 {\n    var x int32 = 100\n    x &^= y\n    return x\n}\n",
+        "package P\n\nconst Big int64 = 300\n\nfunc F() int8 {\n    let a int8 = Big\n    return a\n}\n",
+        "package P\n\nfunc F(n nint) int32 {\n    let m int32 = n\n    return m\n}\n",
+        "package P\n\nfunc F(n nint) int32 {\n    let m int32 = checked(cast[int32](n))\n    return m\n}\n",
+        "package P\n\nfunc int32(n int64) int32 -> 0\n\nfunc F(n int64) int32 {\n    let m int32 = n\n    return m\n}\n",
+        "package P\n\nfunc int32(n int64) int32 -> 0\n\nfunc F(n int64) int32 {\n    let m int32 = checked(cast[int32](n))\n    return m\n}\n",
+        "package P\n\nfunc F(n int64) int32 {\n    let m int32 = (n)\n    return m\n}\n",
+        "package P\n\nfunc F(n int64) int32 {\n    let m int32 = checked(cast[int32]((n)))\n    return m\n}\n",
+        "package P\n\ninline struct S {\n    shared {\n        let Count int32 = 0\n\n        func Set() {\n            Count = 2\n        }\n    }\n}\n",
+        "package P\n\ninline struct S {\n    shared {\n        var Count int32 = 0\n\n        func Set() {\n            Count = 2\n        }\n    }\n}\n",
+        "package P\n\ninline struct S {\n    let N int32 = 1\n\n    func Set() {\n        N = 2\n    }\n}\n",
+        "package P\n\npartial class C {\n    func Set() {\n        N = 2\n    }\n}\n",
+        "package P\n\nfunc F() int32 {\n    let x = 1\n    x = 2\n    return missing\n}\n",
+        "package P\n\nfunc F() string? {\n    // keep\n    return missing\n}\n",
+        "package P\n\nfunc F() string? {\n    // keep\n    return nil\n}\n",
+        "package P\n\nstruct S { var field int32 }\n\nfunc F(p *S) int32 -> p->field\n",
+        "package P\n\nfunc F() string? {\n    // a\n    return null\n}\n\nfunc G() string? -> null\n",
+        "package P\n\nfunc F() string? {\n    // a\n    return nil\n}\n\nfunc G() string? -> nil\n",
+        "package P\n\nfunc Use(a string?, b string?) int32 -> 0\n\nfunc F() int32 -> Use(null,null)\n",
+        "package P\n\nfunc A() string? -> null\n",
+        "package P\n\nfunc B() string? -> null\n",
+        "package P\n\nfunc F(a bool, b bool) bool {\n    let x = new System.Text.StringBuilder()\n    return a or b\n}\n",
+        "package P\n\nfunc B() int32 -> 1\n",
+        "package P\n\nfunc F() string? -> null\n\nfunc G() int32 -> missing\n",
+        "package P\n\nfunc F() string? -> null\n\nlet g string? = null\n",
+        "package P\n\nfunc F() int32 -> 1\n",
+        "package P\n\nfunc F() int32 {\n    let x = 1\n    x = 2\n    return x\n}\n\nfunc G() int32 -> missing\n",
+        "package P\n\nfunc F() string? {\n    return null\n}\n\nfunc G() int32 {\n    return missing\n}\n",
+        "package P\n\nfunc F() int32 {\n    return 1 +\n}\n",
+        "package P\n\nfunc Helper() int32 -> 1\n",
+        "package P\n\nfunc User() int32 -> Helper()\n",
+        "package P\n\nfunc F(n int32) string {\n    return switch n {\n        case 0 -> \"zero\"\n        default: \"other\"\n    }\n}\n",
+        "package P\n\n@SuppressDiagnostic(\"GS0302\")\nfunc F(n int32) string {\n    return switch n {\n        case 0: \"zero\"\n        default: \"other\"\n    }\n}\n\nfunc G() string? -> null\n",
+        "package P\n\nfunc F(n int32) string {\n    return 1 +\n}\n",
+        "package P\n\nfunc F() string? {\n    let foo = 1\n    return null\n}\n",
+        "package P\n\nclass C { }\n\nfunc F() C {\n    return new C() // keep\n}\n",
+        "package P\n\nfunc F(a bool, b bool) bool {\n    return a or b\n}\n",
+        "package P\n\nfunc F(a bool, b bool) bool {\n    return a or\n        b\n}\n",
+        "package P\n\nclass C {\n    var N int32\n}\n\nfunc F(c C?) int32? {\n    return c.N\n}\n",
+        "package P\n\nclass C {\n    var M int32\n}\n\nfunc F(c C) int32 {\n    return c.N\n}\n",
+        "package P\n\nfunc F() int32 -> missing\n",
+        "package P\n\nfunc F() int32 {\n    return missing\n}\n",
+        "package P\n\nimport System\n\nclass C { }\n\nfunc F(make Func[C]) C {\n    return new make()\n}\n",
+        "package P\n\nclass C { }\n\nfunc F(c C) int32 {\n    let N = 1\n    return c.N\n}\n",
+        "package P\n\nclass C { }\n\nfunc F(make () -> C?) C? {\n    return new make()\n}\n",
+        "package P\n\nclass C { }\n\nfunc F(c C) int32 {\n    let B = 1\n    return c.B.N\n}\n"
     }
 
     // The fix corpus inside methods of a class and across files.
-    private let WrappedCorpus [][]string = [][]string{
+    private let WrappedCorpus[][]string = [][]string{
         []string{
             "package P\n\nclass C {\n    var N int32 = 0\n\n    func F() string? {\n        return null\n    }\n\n    func G(a bool, b bool) bool {\n        return a or b\n    }\n\n    shared {\n        func H() int32 {\n            let x = 1\n            x = 2\n            return x\n        }\n    }\n}\n"
         },
@@ -288,7 +288,12 @@ open class Adr0227BodyLocalDeltaTests {
     @Fact
     func EditAfterOtherMembers_MovesTheirDiagnostics_AndKeepsSuppressions() {
         const source = "package P\n\nfunc F() int32 {\n    return 1\n}\n\nfunc G() int32 {\n    return missing\n}\n\n@SuppressDiagnostic(\"GS0302\")\nfunc H(n int32) string {\n    return switch n {\n        case 0 -> \"zero\"\n        default: \"other\"\n    }\n}\n"
-        let (full, local) = Both(ImmutableArray.Create(source), 0, "    return 1\n", "    let a = 1\n    let b = 2\n    return a + b\n")
+        let (full, local) = Both(
+            ImmutableArray.Create(source),
+            0,
+            "    return 1\n",
+            "    let a = 1\n    let b = 2\n    return a + b\n"
+        )
         Assert.True(local.BodyLocal, local.BodyLocalFallbackReason)
         Assert.NotEmpty(local.Persisting)
         AssertSameDelta(full, local, "shift")
@@ -350,7 +355,11 @@ open class Adr0227BodyLocalDeltaTests {
             []string{"        let x = 1\n", "        let s = \"x\"\n        let t = s.Length\n"}
         }
         for edit in edits {
-            let delta = service.ComputeDelta(baseline, Changes(tree, edit[0], edit[1]), ImmutableArray[Diagnostic].Empty)
+            let delta = service.ComputeDelta(
+                baseline,
+                Changes(tree, edit[0], edit[1]),
+                ImmutableArray[Diagnostic].Empty
+            )
             if delta.BodyLocal {
                 local++
             }
@@ -364,13 +373,15 @@ open class Adr0227BodyLocalDeltaTests {
     }
 
     private class NoAnalyzer : GSharpDiagnosticAnalyzer {
-        override prop SupportedDiagnostics ImmutableArray[DiagnosticDescriptor] -> ImmutableArray[DiagnosticDescriptor].Empty
+        override prop SupportedDiagnostics ImmutableArray[DiagnosticDescriptor] -> ImmutableArray[
+            DiagnosticDescriptor
+        ].Empty
 
         override func Initialize(context AnalysisContext) { }
     }
 
     // Computes the delta of every fix of every diagnostic both ways.
-    private func CompareFixes(sources ImmutableArray[string]) (int32, int32) {
+    private func CompareFixes(sources ImmutableArray[string])(int32, int32) {
         let trees = Parse(sources)
         let compilation = Compilation(trees.ToArray())
         let service = CodeFixService(CodeFixRegistry.CreateDefault())
@@ -419,9 +430,9 @@ open class Adr0227BodyLocalDeltaTests {
                 let edits = List[TextChange]()
                 edits.Add(TextChange(TextSpan(start, 0), "\n    let probe__ = 1\n"))
                 edits.Add(TextChange(TextSpan(start, 0), "\n    undefinedName__\n"))
-                let identifier = body
-                    .DescendantTokens()
-                    .FirstOrDefault((t SyntaxToken) -> t.Kind == SyntaxKind.IdentifierToken && !t.IsMissing && t.Span.Length > 0)
+                let identifier = body.DescendantTokens().FirstOrDefault(
+                    (t SyntaxToken) -> t.Kind == SyntaxKind.IdentifierToken && !t.IsMissing && t.Span.Length > 0
+                )
                 if identifier != nil {
                     edits.Add(TextChange(identifier.Span, "undefinedName__"))
                 }
@@ -458,12 +469,10 @@ open class Adr0227BodyLocalDeltaTests {
         return bodyLocal
     }
 
-    private func Both(
-        sources ImmutableArray[string],
-        treeIndex int32,
-        oldText string,
-        newText string
-    ) (DiagnosticDelta, DiagnosticDelta) {
+    private func Both(sources ImmutableArray[string], treeIndex int32, oldText string, newText string)(
+        DiagnosticDelta,
+        DiagnosticDelta
+    ) {
         let trees = Parse(sources)
         let compilation = Compilation(trees.ToArray())
         let service = CodeFixService(CodeFixRegistry())
@@ -507,8 +516,14 @@ open class Adr0227BodyLocalDeltaTests {
     private func AssertSameDelta(full DiagnosticDelta, local DiagnosticDelta, what string) {
         Assert.False(full.BodyLocal)
         let context = "${what} (body-local: ${local.BodyLocal}, fallback: ${local.BodyLocalFallbackReason})"
-        Assert.True(Keys(full.Removed) == Keys(local.Removed), "Removed differs for ${context}:\n${Keys(full.Removed)}\n---\n${Keys(local.Removed)}")
-        Assert.True(Keys(full.Added) == Keys(local.Added), "Added differs for ${context}:\n${Keys(full.Added)}\n---\n${Keys(local.Added)}")
+        Assert.True(
+            Keys(full.Removed) == Keys(local.Removed),
+            "Removed differs for ${context}:\n${Keys(full.Removed)}\n---\n${Keys(local.Removed)}"
+        )
+        Assert.True(
+            Keys(full.Added) == Keys(local.Added),
+            "Added differs for ${context}:\n${Keys(full.Added)}\n---\n${Keys(local.Added)}"
+        )
         Assert.True(
             Keys(full.Persisting) == Keys(local.Persisting),
             "Persisting differs for ${context}:\n${Keys(full.Persisting)}\n---\n${Keys(local.Persisting)}"
@@ -522,9 +537,10 @@ open class Adr0227BodyLocalDeltaTests {
     // The document is the file name, so the keys of the old and the new text of one file compare.
     private func Keys(diagnostics IEnumerable[Diagnostic]) string -> string.Join(
         "\n",
-        diagnostics
-            .Select(
-            (d Diagnostic) -> "${d.Location.Text?.FileName}|${d.Id}|${d.Severity}|${d.Location.Span.Start}|${d.Location.Span.Length}|${d.Message}|${d.AdditionalLocations.Length}|${string.Join(",", d.AdditionalLocations.Select((l TextLocation) -> "${l.Text?.FileName}:${l.Span.Start}:${l.Span.Length}"))}|${d.Suggestions.Length}"
+        diagnostics.Select(
+            (
+                d Diagnostic
+            ) -> "${d.Location.Text?.FileName}|${d.Id}|${d.Severity}|${d.Location.Span.Start}|${d.Location.Span.Length}|${d.Message}|${d.AdditionalLocations.Length}|${string.Join(",", d.AdditionalLocations.Select((l TextLocation) -> "${l.Text?.FileName}:${l.Span.Start}:${l.Span.Length}"))}|${d.Suggestions.Length}"
         )
             .OrderBy((k string) -> k, StringComparer.Ordinal)
     )

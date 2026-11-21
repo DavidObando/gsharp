@@ -273,7 +273,10 @@ class BoundProgram {
     /// the whole-program analyses (ADR-0227 D4, issue #6128). A member that no body bind produced,
     /// such as a P/Invoke stub or a rich anonymous plan's method, has no entry. `null` for a
     /// program that a pass other than (cref:Binder.BindProgram(BoundGlobalScope, ReferenceResolver?)) built.
-    internal prop BodyDiagnostics System.Collections.Concurrent.ConcurrentDictionary[FunctionSymbol, ImmutableArray[Diagnostic]]? {
+    internal prop BodyDiagnostics System
+        .Collections
+        .Concurrent
+        .ConcurrentDictionary[FunctionSymbol, ImmutableArray[Diagnostic]]? {
         get;
         init;
     }

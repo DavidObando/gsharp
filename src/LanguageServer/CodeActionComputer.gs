@@ -369,8 +369,11 @@ shared class CodeActionComputer {
                 }
                 otherVersions[documentUri.ToString()] = version
             }
-            let edits = if client.SupportsDocumentChanges && client.SupportsSnippetEdits &&
-                !document.Placeholders.IsEmpty {
+            let edits = if client.SupportsDocumentChanges &&
+                client.SupportsSnippetEdits &&
+                !document
+                .Placeholders
+                .IsEmpty {
                 SnippetEdits(document)
             } else {
                 PlainEdits(document)
@@ -442,11 +445,7 @@ shared class CodeActionComputer {
             }
             snippet.Append(EscapeSnippet(change.NewText.Substring(position)))
             edits.Add(
-                SnippetTextEdit{
-                    Range: $range,
-                    NewText: change.NewText,
-                    Snippet: StringValue{Value: snippet.ToString()}
-                }
+                SnippetTextEdit{Range: $range, NewText: change.NewText, Snippet: StringValue{Value: snippet.ToString()}}
             )
         }
         if used != placeholders.Count {

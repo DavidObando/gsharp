@@ -43,11 +43,22 @@ internal shared class BodyEditLocator {
         }
         var found FunctionDeclarationSyntax? = nil
         for node in oldTree.Root.DescendantNodes() {
-            if node is FunctionDeclarationSyntax declaration && declaration.Body is {} body &&
-                !body.OpenBraceToken.IsMissing &&
-                !body.CloseBraceToken.IsMissing &&
-                body.OpenBraceToken.Span.End <= start &&
-                end <= body.CloseBraceToken.Span.Start &&
+            if node is FunctionDeclarationSyntax declaration &&
+                declaration.Body is {} body &&
+                !body
+                .OpenBraceToken
+                .IsMissing &&
+                !body
+                .CloseBraceToken
+                .IsMissing &&
+                body
+                .OpenBraceToken
+                .Span
+                .End <= start &&
+                end <= body
+                .CloseBraceToken
+                .Span
+                .Start &&
                 (found == nil || declaration.Span.Start < found.Span.Start) {
                 found = declaration
             }
@@ -69,10 +80,25 @@ internal shared class BodyEditLocator {
         // The edit starts after the opening brace, so the declaration keeps its position.
         var match FunctionDeclarationSyntax? = nil
         for node in newTree.Root.DescendantNodes() {
-            if node is FunctionDeclarationSyntax candidate && candidate.Span.Start == found.Span.Start &&
+            if node is FunctionDeclarationSyntax candidate &&
+                candidate
+                .Span
+                .Start == found
+                .Span
+                .Start &&
                 candidate.Body is {} candidateBody &&
-                candidateBody.OpenBraceToken.Span.Start == found.Body!!.OpenBraceToken.Span.Start &&
-                candidate.Identifier.Text == found.Identifier.Text {
+                candidateBody
+                .OpenBraceToken
+                .Span
+                .Start == found.Body!!
+                .OpenBraceToken
+                .Span
+                .Start &&
+                candidate
+                .Identifier
+                .Text == found
+                .Identifier
+                .Text {
                 match = candidate
                 break
             }

@@ -80,8 +80,10 @@ internal class BindingServices {
     /// one replaces the declared body, else the declared body.
     func BodyOf(function FunctionSymbol) BlockStatementSyntax? {
         let declaration FunctionDeclarationSyntax? = function.Declaration
-        if declaration != nil && SpeculativeBodies != nil &&
-            SpeculativeBodies!!.TryGetValue(declaration, out var replacement) {
+        if declaration != nil && SpeculativeBodies != nil && SpeculativeBodies!!.TryGetValue(
+            declaration,
+            out var replacement
+        ) {
             return replacement
         }
         return declaration?.Body
