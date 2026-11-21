@@ -2942,8 +2942,8 @@ internal partial class ExpressionBinder {
             if syntax.Value is not{} valueSyntax || syntax.EqualsToken is not{} equalsToken {
                 return BoundErrorExpression(nil)
             }
-            let boundValue = BindExpression(valueSyntax)
-            if !prop.HasSetter || prop.SetterSymbol is not{} setterSymbol || prop.IsInitOnly {
+            let boundValue = BindAssignmentRhs(valueSyntax, propType)
+            if !prop.HasSetter || prop.SetterSymbol is not{} setterSymbol {
                 Diagnostics.ReportCannotAssign(equalsToken.Location, propName)
                 return BoundErrorExpression(nil)
             }
@@ -2955,6 +2955,7 @@ internal partial class ExpressionBinder {
                 )
                 return BoundErrorExpression(nil)
             }
+            EnforceInitOnlyAssignment(prop, receiver, equalsToken.Location)
             let converted = conversions.BindConversion(valueSyntax.Location, boundValue, propType)
             return BoundBaseInterfaceCallExpression(
                 syntax,
@@ -3119,7 +3120,7 @@ internal partial class ExpressionBinder {
             if syntax.Value is not{} valueSyntax || syntax.EqualsToken is not{} equalsToken {
                 return BoundErrorExpression(nil)
             }
-            let boundValue = BindExpression(valueSyntax)
+            let boundValue = BindAssignmentRhs(valueSyntax, propType)
             let setter MethodInfo? = if clrProp.CanWrite {
                 GetVisibleSetter(clrProp, fromDerivedType: true)
             } else {

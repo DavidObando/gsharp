@@ -1063,6 +1063,14 @@ class InterfaceSymbol : TypeSymbol {
                 }
             )
             substMethod.ReturnRefKind = m.ReturnRefKind
+            substMethod.IsAsync = m.IsAsync
+            substMethod.IsAsyncVoid = m.IsAsyncVoid
+            substMethod.AsyncReturnsValueTask = m.AsyncReturnsValueTask
+            substMethod.SuspendingKind = m.SuspendingKind
+            substMethod.IsUnsafe = m.IsUnsafe
+            substMethod.IsSpecialName = m.IsSpecialName
+            substMethod.IsInitOnlySetter = m.IsInitOnlySetter
+            substMethod.StateMachineType = m.StateMachineType
             if m.HasUnscopedRef {
                 substMethod.MarkUnscopedRef()
             }

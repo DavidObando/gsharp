@@ -374,6 +374,76 @@ class C : IClrProps[int32] {
         Assert.Empty(Compile(refPropRead, refs))
     }
 
+    @Fact
+    func ConstructedGenericBaseInterface_PropertyRhsTargetTypeAndInitOnly_AreEnforced() {
+        let validSource = `
+interface IDefault[T] {
+    prop Transform (T) -> T {
+        get { return (x T) -> x }
+        set { }
+    }
+    prop InitVal T {
+        get { return default(T) }
+        init { }
+    }
+}
+
+class C : IDefault[int32] {
+    init() {
+        base[IDefault[int32]].InitVal = 5
+    }
+    func Configure() {
+        base[IDefault[int32]].Transform = (x) -> x + 1
+    }
+}
+`
+        Assert.Empty(Compile(validSource))
+
+        let invalidInitSource = `
+interface IDefault[T] {
+    prop InitVal T {
+        get { return default(T) }
+        init { }
+    }
+}
+
+class C : IDefault[int32] {
+    func Bad() {
+        base[IDefault[int32]].InitVal = 5
+    }
+}
+`
+        Assert.Contains(Compile(invalidInitSource), (d Diagnostic) -> d.Id == "GS0372")
+    }
+
+    @Fact
+    func ConstructedGenericBaseInterface_AsyncMethod_PreservesTaskReturnType() {
+        let source = `
+import System.Threading.Tasks
+
+interface IAsyncDefault[T] {
+    func ReadAsync() Task[T] {
+        return Task.FromResult(default(T))
+    }
+    func StreamAsync() async sequence[T] {
+        await Task.Yield()
+        yield default(T)
+    }
+}
+
+class C : IAsyncDefault[int32] {
+    async func UseAsync() Task[int32] {
+        var total = (await base[IAsyncDefault[int32]].ReadAsync()) + 42
+        await for item in base[IAsyncDefault[int32]].StreamAsync() {
+            total += item
+        }
+        return total
+    }
+}
+`
+        Assert.Empty(Compile(source))
+    }
+
     shared {
         private func Compile(source string, references ReferenceResolver? = nil) System
             .Collections

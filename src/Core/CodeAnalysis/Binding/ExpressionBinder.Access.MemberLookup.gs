@@ -449,7 +449,7 @@ internal partial class ExpressionBinder {
                         importedCall.ConstrainedReceiverTypeParameter,
                         importedCall.ConstrainedInterfaceType,
                         importedCall.IsNonVirtualBaseCall
-                    )
+                    ){NonVirtualBaseTargetType = importedCall.NonVirtualBaseTargetType}
                 )
             )
         } else if receiver != nil && binderCtx.TryGetNarrowedAccessPath(receiver, out receiverPath, out _) &&
