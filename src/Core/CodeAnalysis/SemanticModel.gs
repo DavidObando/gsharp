@@ -131,7 +131,8 @@ partial class SemanticModel {
     /// Returns the symbol declared by [`node`](paramref) — the
     /// counterpart of Roslyn's `GetDeclaredSymbol`. Covers functions,
     /// structs, interfaces, enums, delegates, properties, globals, parameters,
-    /// and locals whose declaration lives in this tree.
+    /// and locals whose declaration lives in this tree. A parameter or a local answers for its
+    /// declaration node and for its identifier token.
     /// @param node The declaration syntax node.
     /// @param cancellationToken Cancels index construction on first use.
     /// @returns The declared symbol, or null when the node declares nothing.
@@ -140,6 +141,18 @@ partial class SemanticModel {
         index.Get(cancellationToken)
         if index.Value.DeclaredBySyntax.TryGetValue(node, out var symbol) {
             return symbol
+        }
+        // A parameter or a local is declared by its identifier token; its declaration node answers for
+        // it (#6079).
+        let identifier SyntaxToken? = if node is ParameterSyntax parameter {
+            parameter.Identifier
+        } else if node is VariableDeclarationSyntax variable {
+            variable.Identifier
+        } else {
+            default(SyntaxToken?)
+        }
+        if identifier != nil && index.Value.DeclaredBySyntax.TryGetValue(identifier, out var declaredVariable) {
+            return declaredVariable
         }
         // A shared class or a part of a partial type is declared by a node the binder copied or
         // merged; its identifier is the same token in the copy and in the tree.
@@ -182,7 +195,8 @@ partial class SemanticModel {
     /// counterpart of Roslyn's `GetSymbolInfo`: the invoked function of a
     /// call, the variable of a name expression, the member of an access, and
     /// so on. Implicit conversion wrappers sharing the node's syntax are
-    /// unwrapped, and a parenthesized node answers for its operand (ADR-0212).
+    /// unwrapped, and a parenthesized node answers for its operand (ADR-0212). A call of a source
+    /// type's `init` answers the function of the chosen constructor.
     /// @remarks The query answers what a bound node means, not only the first
     /// symbol it holds: the field or enum member behind a constant-folded
     /// literal, the property behind an auto-property backing-field read (at the
@@ -238,6 +252,10 @@ partial class SemanticModel {
             ) &&
                 ReferencedSourceSymbol(expression) is {} widened {
                 return SymbolInfo(widened)
+            }
+            // A constructor call answers the `init` that overload resolution chose (#6079).
+            if current is BoundConstructorCallExpression{SelectedConstructor: {} constructor} {
+                return SymbolInfo(constructor.Function)
             }
             if current is BoundImportedInstanceCallExpression{AssociatedProperty: not nil} importedPropertyCall &&
                 ReferencedImportedSymbol(importedPropertyCall) is {} importedPropertySymbol {
