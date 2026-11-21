@@ -7413,6 +7413,25 @@ internal partial class StatementBinder {
         enclosingReturnsByRef bool
     ) bool -> SyntaxTreeTakesReferenceToName(node, memberName, enclosingReturnsByRef)
 
+    /// Returns a value that tells whether a declared type of the compilation has a callable field named
+    /// [`name`](paramref), whose initializer the call-effect analysis reads while no tree writes the
+    /// name (ADR-0227 D4).
+    internal func IsCallableFieldNameForSpeculation(name string) bool {
+        for s in binderCtx.RootScope.GetDeclaredStructs() {
+            if IsCallableFieldOfStruct(s.Definition ?? s, name) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Returns a value that tells whether [`node`](paramref) writes the name [`fieldName`](paramref),
+    /// as the whole-compilation write scan of the callable-field analysis decides it (ADR-0227 D4).
+    internal func WritesFieldNameForSpeculation(node SyntaxNode, fieldName string) bool -> SyntaxTreeWritesFieldName(
+        node,
+        fieldName
+    )
+
     private var activeTraversalDirectMemo Dictionary[FunctionSymbol, CallEffectSummary]? = nil
     private var activeTraversalOverridesMemo Dictionary[FunctionSymbol, CallEffectSummary]? = nil
     private var activeRootVisitingFunction FunctionSymbol? = nil

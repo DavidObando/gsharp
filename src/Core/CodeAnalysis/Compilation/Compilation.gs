@@ -541,6 +541,11 @@ open class Compilation {
     internal func GetDocumentationDiagnostics(program BoundProgram) ImmutableArray[Diagnostic] ->
     ApplySourceSuppressions(ValidateDocumentation(program).ToImmutableArray())
 
+    /// Gets the diagnostics of the documentation pass over [`program`](paramref) before source
+    /// suppressions apply (the body-local check of ADR-0227 D4 relocates them first).
+    internal func ValidateDocumentationUnsuppressed(program BoundProgram) ImmutableArray[Diagnostic] ->
+    ValidateDocumentation(program).ToImmutableArray()
+
     /// Gets the global scope when a caller has bound it, else `null`.
     internal prop PublishedGlobalScope BoundGlobalScope? -> Volatile.Read[BoundGlobalScope?](&this.globalScope)
 

@@ -300,6 +300,51 @@ open class Adr0227BodyLocalDeltaTests {
     }
 
     @Fact
+    func EditThatRemovesTheNonNilReturnProof_FallsBack() {
+        // A caller's narrowing reads the callee's body for a proof that it returns a non-nil value.
+        let (full, local) = Both(
+            ImmutableArray.Create(
+                "package P\n\nfunc F[T class?](v T) T {\n    return 1\n}\n",
+                "package P\n\nfunc Caller[T class?](v T) object {\n    let x = F[T](v)\n    return x\n}\n"
+            ),
+            0,
+            "return 1",
+            "return v"
+        )
+        Assert.Contains(full.Added, (d Diagnostic) -> d.Location.FileName == "f1.gs")
+        Assert.False(local.BodyLocal)
+        AssertSameDelta(full, local, "non-nil return proof")
+    }
+
+    @Fact
+    func EditThatWritesTheNameOfACallableField_FallsBack() {
+        // The call-effect summary of `Touch` reads the initializer of the callable field `Clear` while no
+        // tree writes the name `Clear`, so `Run` keeps the narrowing of `a` across the call.
+        const source = "package P\n\nclass C {\n    var Value int32 = 1\n}\n\nclass H {\n    var Clear () -> void = func() { }\n\n    func Touch() {\n        Clear()\n    }\n}\n\nfunc Run(ref a C?, h H) int32 {\n    if a == nil {\n        return 0\n    }\n    h.Touch()\n    return a.Value\n}\n\nfunc Other() int32 {\n    var x = 1\n    x = 2\n    return x\n}\n"
+        let (full, local) = Both(
+            ImmutableArray.Create(source),
+            0,
+            "    var x = 1\n    x = 2\n    return x\n",
+            "    var Clear = 1\n    Clear = 2\n    return Clear\n"
+        )
+        Assert.Contains(full.Added, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.False(local.BodyLocal)
+        AssertSameDelta(full, local, "callable field write")
+    }
+
+    @Fact
+    func EditBeforeASuppressedMissingDocumentation_KeepsItSuppressed_BodyLocally() {
+        const source = "package Lib\n\n/// Documented.\nfunc F() int32 {\n    return 1\n}\n\n@SuppressDiagnostic(\"GS0228\")\nfunc Quiet() {}\n\nfunc Loud() {}\n"
+        let tree = SyntaxTree.Parse(SourceText.From(source, "a.gs"))
+        let compilation = Compilation(tree){IsLibrary = true, WarnOnMissingDocumentation = true}
+        Assert.Contains(compilation.GetDiagnostics(), (d Diagnostic) -> d.Id == "GS0228")
+        let (full, local) = BothOn(compilation, tree, "    return 1\n", "    let a = 1\n    return a\n")
+        Assert.True(local.BodyLocal, local.BodyLocalFallbackReason)
+        Assert.Empty(local.Added)
+        AssertSameDelta(full, local, "documentation suppression")
+    }
+
+    @Fact
     func SnapshotOfACompilationWithoutReferences_UsesItsResolver_AndAnEditThatChangesNothingHasAnEmptyDelta() {
         // A default resolver depends on what the process has loaded when it is made. The snapshot of the
         // gate binds against the resolver of the compilation before the edit, so it compares like with like.
@@ -474,9 +519,15 @@ open class Adr0227BodyLocalDeltaTests {
         DiagnosticDelta
     ) {
         let trees = Parse(sources)
-        let compilation = Compilation(trees.ToArray())
+        return BothOn(Compilation(trees.ToArray()), trees[treeIndex], oldText, newText)
+    }
+
+    private func BothOn(compilation Compilation, tree SyntaxTree, oldText string, newText string)(
+        DiagnosticDelta,
+        DiagnosticDelta
+    ) {
         let service = CodeFixService(CodeFixRegistry())
-        let changes = Changes(trees[treeIndex], oldText, newText)
+        let changes = Changes(tree, oldText, newText)
         let full = service.ComputeDelta(
             DeltaBaseline.Create(compilation, DeltaOptions{BodyLocalBind: false, StopOnNewSyntaxError: false}),
             changes,

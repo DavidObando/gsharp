@@ -108,6 +108,31 @@ partial class Binder {
                 !SameSummary(oldPass.WithOverrides!!, newPass.WithOverrides!!) {
                 return SpeculativeBodyBind("the edit changes the call-effect summary of the member")
             }
+            // The narrowing of every caller reads the body for a proof that the member returns a non-nil
+            // value. A value of a value type is never nil, so no caller asks.
+            let statements = oldPass.Probe!!.statements
+            if !function.Type.IsValueType {
+                let oldProof = statements.ReturnsDefinitelyNonNullForSpeculation(function, oldBody)
+                let newProof = statements.ReturnsDefinitelyNonNullForSpeculation(function, newBody)
+                if oldProof != newProof {
+                    return SpeculativeBodyBind("the edit changes whether the member provably returns a non-nil value")
+                }
+            }
+            // The call-effect analysis of a callable field reads its initializer while no tree writes the
+            // field's name.
+            let written = HashSet[string](StringComparer.Ordinal)
+            CollectIdentifierNames(oldBody, written)
+            CollectIdentifierNames(newBody, written)
+            for name in written {
+                if !statements.IsCallableFieldNameForSpeculation(name) {
+                    continue
+                }
+                let oldWrites = statements.WritesFieldNameForSpeculation(oldBody, name)
+                let newWrites = statements.WritesFieldNameForSpeculation(newBody, name)
+                if oldWrites != newWrites {
+                    return SpeculativeBodyBind("the edit changes a write of the callable field name '${name}'")
+                }
+            }
             if function.ReceiverType is StructSymbol || function.StaticOwnerType is StructSymbol || owner != nil {
                 // The narrowing analysis scans every member body of a struct for a reference to a member.
                 let probe = oldPass.Probe!!

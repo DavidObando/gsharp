@@ -226,13 +226,15 @@ internal shared class BodyLocalDelta {
         var items = declarationItems.AddRange(bodyItems)
         if !items.Any((d Diagnostic) -> d.IsError) {
             let documentation = List[Diagnostic]()
-            for d in snapshot.GetDocumentationDiagnostics(program) {
+            // The documentation pass of the old program reports at the old text, so the snapshot's
+            // suppressions apply once the diagnostics are relocated.
+            for d in snapshot.ValidateDocumentationUnsuppressed(program) {
                 if !TryRelocate(d, oldText, newTree.Text, spanMap, out var moved) {
                     return BodyLocalResult("a documentation diagnostic touches the edit")
                 }
                 documentation.Add(moved!!)
             }
-            items = items.AddRange(documentation)
+            items = items.AddRange(snapshot.ApplySourceSuppressions(documentation.ToImmutableArray()))
         }
         return BodyLocalResult(items)
     }
