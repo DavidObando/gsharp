@@ -39,7 +39,7 @@ shared class BaseCallForwarderRewriter {
         private let classDef StructSymbol
         private let containingFunction FunctionSymbol
         private let forwarders Dictionary[
-            (Class StructSymbol, Method FunctionSymbol, ReturnType TypeSymbol),
+            (Class StructSymbol, TargetInterface InterfaceSymbol?, Method FunctionSymbol, ReturnType TypeSymbol),
             FunctionSymbol
         ]
         private let forwarderBodies Dictionary[FunctionSymbol, BoundBlockStatement]
@@ -50,7 +50,10 @@ shared class BaseCallForwarderRewriter {
         init(
             classDef StructSymbol,
             containingFunction FunctionSymbol,
-            forwarders Dictionary[(Class StructSymbol, Method FunctionSymbol, ReturnType TypeSymbol), FunctionSymbol],
+            forwarders Dictionary[
+                (Class StructSymbol, TargetInterface InterfaceSymbol?, Method FunctionSymbol, ReturnType TypeSymbol),
+                FunctionSymbol
+            ],
             forwarderBodies Dictionary[FunctionSymbol, BoundBlockStatement],
             ordinalByClass Dictionary[StructSymbol, int32],
             isStateMachine bool
@@ -119,6 +122,33 @@ shared class BaseCallForwarderRewriter {
                 expression: "rewritten.Method"
             )
             let forwarder = this.GetOrCreateForwarder(rewritten.BaseClass, method, rewritten.Type)
+            return BoundUserInstanceCallExpression(
+                rewritten.Syntax,
+                rewritten.Receiver,
+                forwarder,
+                rewritten.Arguments,
+                rewritten.Type
+            ){MethodTypeArguments = rewritten.MethodTypeArguments}
+        }
+
+        protected override func RewriteBaseInterfaceCallExpression(
+            node BoundBaseInterfaceCallExpression
+        ) BoundExpression {
+            let rewritten = cast[BoundBaseInterfaceCallExpression](base.RewriteBaseInterfaceCallExpression(node))
+            if !this.ForwardsBaseCalls {
+                return rewritten
+            }
+            if rewritten.Property != nil {
+                let accessorForwarder = this.CreateAccessorForwarder(rewritten)
+                return BoundUserInstanceCallExpression(
+                    rewritten.Syntax,
+                    rewritten.Receiver,
+                    accessorForwarder,
+                    rewritten.Arguments,
+                    rewritten.Type
+                )
+            }
+            let forwarder = this.GetOrCreateInterfaceForwarder(rewritten.Interface, rewritten.Method, rewritten.Type)
             return BoundUserInstanceCallExpression(
                 rewritten.Syntax,
                 rewritten.Receiver,
@@ -234,7 +264,7 @@ shared class BaseCallForwarderRewriter {
             // Everything else in the signature (type parameters, by-ref
             // kinds, the base class's type arguments for this derived class)
             // is fixed by the method and the forwarder's class.
-            let key = (this.classDef, method, returnType)
+            let key = (this.classDef, default(InterfaceSymbol?), method, returnType)
             if this.forwarders.TryGetValue(key, out var existing) {
                 return existing
             }
@@ -323,6 +353,89 @@ shared class BaseCallForwarderRewriter {
             return forwarder
         }
 
+        private func GetOrCreateInterfaceForwarder(
+            targetInterface InterfaceSymbol,
+            method FunctionSymbol,
+            returnType TypeSymbol
+        ) FunctionSymbol {
+            var returnType = returnType
+            let key = (this.classDef, targetInterface, method, returnType)
+            if this.forwarders.TryGetValue(key, out var existing) {
+                return existing
+            }
+            this.ordinalByClass.TryGetValue(this.classDef, out var ordinal)
+            this.ordinalByClass[this.classDef] = ordinal + 1
+            let substitution = Dictionary[TypeParameterSymbol, TypeSymbol]()
+            GSharp
+                .Core
+                .CodeAnalysis
+                .Binding
+                .OverloadResolution
+                .OverloadResolver
+                .SeedFixedOwnerTypeParameters(targetInterface, substitution)
+            let typeParameters = CloneMethodTypeParameters(method.TypeParameters, substitution)
+            let Substitute = func (type TypeSymbol) TypeSymbol {
+                return if substitution.Count == 0 {
+                    type
+                } else {
+                    GSharp.Core.CodeAnalysis.Binding.Binder.SubstituteType(type, substitution)
+                }
+            }
+            let forwarderReturnType = GetForwarderReturnType(method, returnType, Substitute)
+            let paramBuilder = ImmutableArray.CreateBuilder[ParameterSymbol](method.EmittedParameters.Length)
+            for p in method.EmittedParameters {
+                paramBuilder.Add(ParameterSymbol(p, Substitute(p.Type), p.DeclaringSyntax))
+            }
+            let parameters = paramBuilder.ToImmutable()
+            let forwarder = FunctionSymbol(
+                "<>n__" + ordinal.ToString(),
+                parameters,
+                forwarderReturnType,
+                declaration: nil,
+                this.containingFunction.Package,
+                Accessibility.Private,
+                receiverType: this.classDef,
+                explicitReceiverParameter: nil
+            ){ReturnRefKind = method.ReturnRefKind}
+            if !typeParameters.IsDefaultOrEmpty {
+                forwarder.TypeParameters = typeParameters
+            }
+            let thisExpr = BoundVariableExpression(
+                nil,
+                Invariant.Required(
+                    forwarder.ThisParameter,
+                    "a synthesized forwarder has an instance receiver",
+                    expression: "forwarder.ThisParameter"
+                )
+            )
+            let argBuilder = ImmutableArray.CreateBuilder[BoundExpression](parameters.Length)
+            for p in parameters {
+                var argument BoundExpression = BoundVariableExpression(nil, p)
+                if p.RefKind != RefKind.None {
+                    argument = BoundAddressOfExpression(nil, argument)
+                }
+                argBuilder.Add(argument)
+            }
+            let innerCall = BoundBaseInterfaceCallExpression(
+                nil,
+                thisExpr,
+                targetInterface,
+                method,
+                argBuilder.ToImmutable(),
+                forwarderReturnType
+            ){
+                MethodTypeArguments = if typeParameters.IsDefaultOrEmpty {
+                    default(ImmutableArray[TypeSymbol])
+                } else {
+                    typeParameters.CastArray[TypeSymbol]()
+                }
+            }
+            returnType = forwarderReturnType
+            this.forwarders[key] = forwarder
+            this.forwarderBodies[forwarder] = CreateForwarderBody(forwarder, innerCall, returnType)
+            return forwarder
+        }
+
         private func CreateAccessorForwarder(node BoundExpression) FunctionSymbol {
             this.ordinalByClass.TryGetValue(this.classDef, out var ordinal)
             this.ordinalByClass[this.classDef] = ordinal + 1
@@ -331,12 +444,19 @@ shared class BaseCallForwarderRewriter {
             let parameters = ImmutableArray.CreateBuilder[ParameterSymbol](
                 if node is BoundBaseClassCallExpression baseCall {
                     baseCall.Arguments.Length
+                } else if node is BoundBaseInterfaceCallExpression baseIface {
+                    baseIface.Arguments.Length
                 } else {
                     1
                 }
             )
             switch node {
                 case call is BoundBaseClassCallExpression {
+                    for argument in call.Arguments {
+                        parameters.Add(ParameterSymbol("value", argument.Type))
+                    }
+                }
+                case call is BoundBaseInterfaceCallExpression {
                     for argument in call.Arguments {
                         parameters.Add(ParameterSymbol("value", argument.Type))
                     }
@@ -393,6 +513,17 @@ shared class BaseCallForwarderRewriter {
                     nil,
                     receiver,
                     call.BaseClass,
+                    call.Method,
+                    argumentArray,
+                    call.Type,
+                    call.Property,
+                    call.IsSetterAccessor
+                )
+                case call is BoundBaseInterfaceCallExpression:
+                BoundBaseInterfaceCallExpression(
+                    nil,
+                    receiver,
+                    call.Interface,
                     call.Method,
                     argumentArray,
                     call.Type,
@@ -564,7 +695,7 @@ shared class BaseCallForwarderRewriter {
                 node.ArgumentRefKinds,
                 typeArgumentSymbols,
                 isNonVirtualBaseCall: true
-            )
+            ){NonVirtualBaseTargetType = node.NonVirtualBaseTargetType}
             this.forwarderBodies[forwarder] = CreateForwarderBody(forwarder, innerCall, returnType)
             return forwarder
         }
@@ -827,7 +958,7 @@ shared class BaseCallForwarderRewriter {
         // Forwarders shared across the whole program, keyed by (containing class
         // definition, base method) so repeated base calls reuse one forwarder.
         let forwarders = Dictionary[
-            (Class StructSymbol, Method FunctionSymbol, ReturnType TypeSymbol),
+            (Class StructSymbol, TargetInterface InterfaceSymbol?, Method FunctionSymbol, ReturnType TypeSymbol),
             FunctionSymbol
         ]()
         let forwarderBodies = Dictionary[FunctionSymbol, BoundBlockStatement]()

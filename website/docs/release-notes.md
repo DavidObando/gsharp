@@ -38,6 +38,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Substitute constructed interface type arguments through `base[Interface[Args]].Member` calls, parameters, generic interface method type arguments, default interface properties, value-type (`struct`) receiver boxing, async/lambda forwarders, and imported C# default interface methods, while rejecting mismatched interface type arguments with `GS0338`. (Fixes #6045)
+
 - Allow writable `ref this`, `out this`, and `&this` in non-constructor struct instance methods and property accessors (preserving `ldarg.0` receiver identity, rejecting constructors with unassigned `this` via `GS0239`, rejecting class `this` and captured lambda `this` via `GS9005`), and emit `ref this` / `out this` in `cs2gs` for writable struct receiver calls and `this ref` extensions. (Fixes #6064)
 
 - Preserve symbolic element types and declaration-site nullability across imported generic constructor parameter conversions and `params` array expansion, accepting `nil` at nullable generic constructor slots and matching symbolic `params` elements while preserving invariant slice and generic-argument rejection. (Fixes #6059, #6061)

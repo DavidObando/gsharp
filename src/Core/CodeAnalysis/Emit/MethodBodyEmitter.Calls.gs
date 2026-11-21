@@ -424,16 +424,39 @@ internal partial class MethodBodyEmitter {
     /// the override and cause infinite recursion).
     /// @param call The bound base-interface call to emit.
     private func EmitBaseInterfaceCall(call BoundBaseInterfaceCallExpression) {
-        // Load `this` (the implementing class instance).
-        this.EmitInstanceReceiver(call.Receiver)
+        // Value-type `this` is a managed pointer (S&); interface instance methods expect an object reference.
+        if ReflectionMetadataEmitter.IsValueTypeSymbol(call.Receiver.Type) {
+            this.EmitExpression(call.Receiver)
+            this.il.OpCode(ILOpCode.Box)
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(call.Receiver.Type))
+        } else {
+            // Load `this` (the implementing class instance).
+            this.EmitInstanceReceiver(call.Receiver)
+        }
         // Evaluate each argument left-to-right.
         for arg in call.Arguments {
             this.EmitExpression(arg)
         }
-        // Resolve the right token for the interface's default-body MethodDef.
-        // Non-generic interfaces: bare MethodDef. Generic interfaces:
-        // MemberRef parented at the constructed TypeSpec.
-        let methodToken = this.outer.userTokens.ResolveUserInterfaceInstanceMethodToken(call.Interface, call.Method)
+        var methodToken EntityHandle
+        if call.Property is {} prop {
+            methodToken = this
+                .outer
+                .userTokens
+                .ResolveUserPropertyAccessorToken(call.Interface, prop, call.IsSetterAccessor)
+        } else {
+            let (slotIface, openMethod) = ResolveInterfaceSlotOwner(call.Interface, call.Method)
+            methodToken = this.outer.userTokens.ResolveUserInterfaceInstanceMethodToken(slotIface, openMethod)
+            if call.Method.IsGeneric && !call.Method.TypeParameters.IsDefaultOrEmpty {
+                let asInstanceCall = BoundUserInstanceCallExpression(
+                    call.Syntax,
+                    call.Receiver,
+                    call.Method,
+                    call.Arguments,
+                    call.Type
+                ){MethodTypeArguments = call.MethodTypeArguments}
+                methodToken = this.outer.userTokens.BuildMethodSpecForGenericInstanceCall(methodToken, asInstanceCall)
+            }
+        }
         // ADR-0091: non-virtual `call`, NOT `callvirt`. Using callvirt would
         // re-dispatch through the v-table and re-enter the same override
         // that issued the base-call.

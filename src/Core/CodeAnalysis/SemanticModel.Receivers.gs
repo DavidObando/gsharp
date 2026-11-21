@@ -806,6 +806,7 @@ partial class SemanticModel {
     /// Gets the symbol a bound read or call refers to, whatever its origin.
     private func ReferencedSymbol(node BoundExpression) Symbol? -> switch node {
         case variable is BoundVariableExpression: variable.Variable
+        case call is BoundBaseInterfaceCallExpression when call.Property is {} baseProp: baseProp
         case call is BoundCallOperationExpression when call.CalledFunction is FunctionSymbol{
             AssociatedSymbol: PropertySymbol property
         } function &&
@@ -862,10 +863,11 @@ partial class SemanticModel {
             } else {
                 default(Symbol?)
             }
-            case baseCall is BoundBaseInterfaceCallExpression: SubstituteGroupMember(
-                baseCall.Interface,
-                baseCall.Method
-            )
+            case baseCall is BoundBaseInterfaceCallExpression: if let property = baseCall.Property {
+                SubstituteSourceMember(baseCall.Interface, property)
+            } else {
+                SubstituteGroupMember(baseCall.Interface, baseCall.Method)
+            }
             // A read through a constructed generic interface keeps the
             // declaration's property and records the substituted type beside
             // it; show the property at that type. References still match it

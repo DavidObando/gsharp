@@ -1351,7 +1351,7 @@ abstract class BoundTreeRewriter {
             node.ConstrainedReceiverTypeParameter,
             node.ConstrainedInterfaceType,
             node.IsNonVirtualBaseCall
-        )
+        ){NonVirtualBaseTargetType = node.NonVirtualBaseTargetType}
         node.CopySignatureReturnTypeTo(copy)
         node.CopyMemberGroupTo(copy)
         return copy
@@ -2093,8 +2093,11 @@ abstract class BoundTreeRewriter {
             receiver,
             node.Interface,
             node.Method,
-            builder?.ToImmutable() ?? node.Arguments
-        )
+            builder?.ToImmutable() ?? node.Arguments,
+            node.Type,
+            node.Property,
+            node.IsSetterAccessor
+        ){MethodTypeArguments = node.MethodTypeArguments}
         node.CopyMemberGroupTo(copy)
         return copy
     }

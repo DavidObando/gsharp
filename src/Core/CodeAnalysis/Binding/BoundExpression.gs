@@ -338,6 +338,7 @@ abstract class BoundExpression : BoundNode {
             replacement.ConstrainedReceiverTypeParameter
         ) &&
             object.ReferenceEquals(call.ConstrainedInterfaceType, replacement.ConstrainedInterfaceType) &&
+            object.ReferenceEquals(call.NonVirtualBaseTargetType, replacement.NonVirtualBaseTargetType) &&
             call.IsNonVirtualBaseCall == replacement.IsNonVirtualBaseCall &&
             call
             .TypeArgumentSymbols
@@ -369,7 +370,12 @@ abstract class BoundExpression : BoundNode {
         object.ReferenceEquals(call.Interface, replacement.Interface) && object.ReferenceEquals(
             call.Method,
             replacement.Method
-        )
+        ) &&
+            object.ReferenceEquals(call.Property, replacement.Property) &&
+            call.IsSetterAccessor == replacement.IsSetterAccessor &&
+            call
+            .MethodTypeArguments
+            .Equals(replacement.MethodTypeArguments)
         case call is BoundClrStaticCallExpression when copy is BoundClrStaticCallExpression replacement:
         object.ReferenceEquals(call.Method, replacement.Method) && call.ArgumentRefKinds.Equals(
             replacement.ArgumentRefKinds
