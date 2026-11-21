@@ -7387,6 +7387,51 @@ internal partial class StatementBinder {
         }
     }
 
+    /// Computes the call-effect summary of [`function`](paramref) as the root of a traversal, for
+    /// the body-local check of the diagnostic-delta gate (ADR-0227 D4, issue #6128).
+    internal func GetFunctionEffectSummaryForSpeculation(
+        function FunctionSymbol,
+        includeOverrides bool,
+        out hitCycle bool
+    ) CallEffectSummary -> GetFunctionEffectSummaryCore(
+        function,
+        includeOverrides,
+        HashSet[FunctionSymbol](),
+        out hitCycle
+    )
+
+    /// Returns a value that tells whether the call-effect analysis treats a call named
+    /// [`name`](paramref) as a deferred LINQ operator (ADR-0227 D4, issue #6128).
+    internal func IsDeferredLinqOperatorNameForSpeculation(name string) bool -> IsDeferredLinqOperatorName(name)
+
+    /// Returns a value that tells whether [`node`](paramref) takes a reference to the member
+    /// [`memberName`](paramref), as the narrowing analysis decides it for the members of a
+    /// struct (ADR-0227 D4, issue #6128).
+    internal func TakesReferenceToNameForSpeculation(
+        node SyntaxNode?,
+        memberName string,
+        enclosingReturnsByRef bool
+    ) bool -> SyntaxTreeTakesReferenceToName(node, memberName, enclosingReturnsByRef)
+
+    /// Returns a value that tells whether a declared type of the compilation has a callable field named
+    /// [`name`](paramref), whose initializer the call-effect analysis reads while no tree writes the
+    /// name (ADR-0227 D4).
+    internal func IsCallableFieldNameForSpeculation(name string) bool {
+        for s in binderCtx.RootScope.GetDeclaredStructs() {
+            if IsCallableFieldOfStruct(s.Definition ?? s, name) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Returns a value that tells whether [`node`](paramref) writes the name [`fieldName`](paramref),
+    /// as the whole-compilation write scan of the callable-field analysis decides it (ADR-0227 D4).
+    internal func WritesFieldNameForSpeculation(node SyntaxNode, fieldName string) bool -> SyntaxTreeWritesFieldName(
+        node,
+        fieldName
+    )
+
     private var activeTraversalDirectMemo Dictionary[FunctionSymbol, CallEffectSummary]? = nil
     private var activeTraversalOverridesMemo Dictionary[FunctionSymbol, CallEffectSummary]? = nil
     private var activeRootVisitingFunction FunctionSymbol? = nil
@@ -7969,6 +8014,8 @@ internal partial class StatementBinder {
     }
 
     private func VisitingChainAcceptsEnumerable(visiting HashSet[FunctionSymbol]) bool {
+        // The answer depends on the root of the traversal, not on the function being summarized.
+        binderCtx.Services.EnumerationEffectsDependOnRoot = true
         if activeRootVisitingFunction is {} rootFn {
             for p in rootFn.Parameters {
                 if IsLazyEnumerableType(p.Type) {
@@ -9714,9 +9761,8 @@ internal partial class StatementBinder {
                 }
             }
         }
-        var body BlockStatementSyntax? = orig
-            .Declaration
-            ?.Body ??
+        // ADR-0227 D4 (issue #6128): a speculative pass reads the replaced body of an edited member.
+        var body BlockStatementSyntax? = binderCtx.Services.BodyOf(orig) ??
             (orig.LocalDeclaration?.Initializer as FunctionLiteralExpressionSyntax)?.Body
         if body == nil && orig.AssociatedSymbol is PropertySymbol assocProp {
             let origProp = assocProp.OriginalDefinition ?? assocProp

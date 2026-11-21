@@ -13,6 +13,7 @@ import System.Collections.Immutable
 class DeltaOptions {
     private var analyzers ImmutableArray[GSharpDiagnosticAnalyzer] = ImmutableArray[GSharpDiagnosticAnalyzer].Empty
     private var stopOnNewSyntaxError bool = true
+    private var bodyLocalBind bool = true
 
     /// Initializes a new instance of the (cref:DeltaOptions) class with the defaults.
     init() { }
@@ -24,6 +25,7 @@ class DeltaOptions {
         copy.StopOnNewSyntaxError = StopOnNewSyntaxError
         copy.DiagnosticFilter = DiagnosticFilter
         copy.SyntaxOnly = SyntaxOnly
+        copy.BodyLocalBind = BodyLocalBind
         // AnalyzerOptions is mutable, so the snapshot gets its own copy.
         let analyzerOptions AnalyzerOptions? = AnalyzerOptions
         copy.AnalyzerOptions = if analyzerOptions == nil {
@@ -49,6 +51,15 @@ class DeltaOptions {
     prop StopOnNewSyntaxError bool {
         get -> stopOnNewSyntaxError
         set -> stopOnNewSyntaxError = value
+    }
+
+    /// Gets or sets a value that tells whether the check binds only the edited function body when
+    /// the edit is confined to one (ADR-0227 D4). The result is the result of the full check: the
+    /// check binds the whole compilation whenever the edit can change what anything outside the
+    /// body reports, and whenever (cref:Analyzers) is not empty. The default is `true`.
+    prop BodyLocalBind bool {
+        get -> bodyLocalBind
+        set -> bodyLocalBind = value
     }
 
     /// Gets or sets the options of the analyzer driver, such as a time budget for each analyzer.

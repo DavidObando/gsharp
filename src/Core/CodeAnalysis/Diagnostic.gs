@@ -75,6 +75,26 @@ class Diagnostic {
         this.prefixReason = prefixReason
     }
 
+    // ADR-0227 D4: a copy at other locations, for the body-local delta.
+    private init(
+        source Diagnostic,
+        location TextLocation,
+        additionalLocations ImmutableArray[TextLocation],
+        suggestions ImmutableArray[DiagnosticSuggestion]
+    ) {
+        Descriptor = source.Descriptor
+        Location = location
+        Id = source.Id
+        Severity = source.Severity
+        Message = source.Message
+        AdditionalLocations = additionalLocations
+        Properties = source.Properties
+        MessageArguments = source.MessageArguments
+        Suggestions = suggestions
+        PrefixFinality = source.PrefixFinality
+        this.prefixReason = source.prefixReason
+    }
+
     /// Gets the stable diagnostic identifier (e.g. `GS0001`).
     prop Id string {
         get;
@@ -151,6 +171,20 @@ class Diagnostic {
             return this
         }
         return Diagnostic(this, severity, PrefixFinality, PrefixReason)
+    }
+
+    /// Returns a copy of this diagnostic at other locations, with every other field kept: the
+    /// diagnostic as a bind of the edited text reports it (ADR-0227 D4, issue #6128).
+    /// @param location The primary location of the copy.
+    /// @param additionalLocations The additional locations of the copy.
+    /// @param suggestions The suggestions of the copy, with their changes on the edited text.
+    /// @returns The copy.
+    internal func WithLocations(
+        location TextLocation,
+        additionalLocations ImmutableArray[TextLocation],
+        suggestions ImmutableArray[DiagnosticSuggestion]
+    ) Diagnostic {
+        return Diagnostic(this, location, additionalLocations, suggestions)
     }
 
     /// Returns a copy of this diagnostic with the given prefix finality (ADR-0225).

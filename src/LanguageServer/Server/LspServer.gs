@@ -72,6 +72,9 @@ class LspServer {
 
     // ADR-0227 D7: what the client supports for code-action edits, from initialize.
     private let codeActionClientOptions CodeActionClientOptions = CodeActionClientOptions()
+
+    // Tests read what initialize detected.
+    internal prop CodeActionOptions CodeActionClientOptions -> codeActionClientOptions
     private var refreshTimer Timer?
     private var initializationOptions LanguageServerInitializationOptions = LanguageServerInitializationOptions()
     private var pendingWorkspaceRootPath string?
@@ -1341,6 +1344,15 @@ class LspServer {
                     editCapabilities.TryGetProperty("documentChanges", out var documentChanges) &&
                     documentChanges.ValueKind == JsonValueKind.True {
                     this.codeActionClientOptions.SupportsDocumentChanges = true
+                }
+                // ADR-0227 D5: LSP 3.18 snippet edits for fixes with placeholders.
+                if capabilities.TryGetProperty("workspace", out var snippetWorkspace) &&
+                    snippetWorkspace.ValueKind == JsonValueKind.Object &&
+                    snippetWorkspace.TryGetProperty("workspaceEdit", out var snippetEdit) &&
+                    snippetEdit.ValueKind == JsonValueKind.Object &&
+                    snippetEdit.TryGetProperty("snippetEditSupport", out var snippetSupport) &&
+                    snippetSupport.ValueKind == JsonValueKind.True {
+                    this.codeActionClientOptions.SupportsSnippetEdits = true
                 }
                 if capabilities.TryGetProperty("textDocument", out var textDocumentActions) &&
                     textDocumentActions.ValueKind == JsonValueKind.Object &&

@@ -32,7 +32,7 @@ RIDS = ("linux-x64", "linux-arm64", "win-x64", "win-arm64", "osx-x64", "osx-arm6
 COMPILER_PACKAGES = tuple(f"Gsharp.NET.Sdk.Compiler.{rid}" for rid in RIDS)
 # Gsharp.NET.Sdk comes first: the group is pushed in this order.
 SDK_PACKAGES = ("Gsharp.NET.Sdk", "Gsharp.Compiler", "Gsharp.Templates", "Gsharp.Repl", "Gsharp.Gsfmt", "Gsharp.Cs2Gs",
-                "GSharp.CodeAnalysis.Analyzers.Testing")
+                "GSharp.CodeAnalysis.Analyzers.Testing", "GSharp.CodeAnalysis.Transformations")
 # Gsharp.Templates has no symbols (Gsharp.Templates.gsproj). Gsharp.Compiler carries GSharp.Core.pdb in lib/
 # (Gsharp.Compiler.gsproj), and the RID packages set IncludeSymbols=false.
 SYMBOL_PACKAGES = tuple(p for p in SDK_PACKAGES if p not in ("Gsharp.Templates", "Gsharp.Compiler"))
