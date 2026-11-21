@@ -1058,16 +1058,12 @@ shared class GSharpPrinter {
     }
 
     private func RenderCollectionInitializer(collection CollectionInitializerExpression, indent int32) string {
-        // Canonical form: drop the empty `()` on a zero-argument GENERIC
-        // construction so `List[int32](){...}` renders as `List[int32]{...}`
-        // — gsc's parser recognises a bare `Type[args]{ ... }` as a collection
-        // initializer for ANY element shape (`BraceLooksLikeGenericCollectionInitializer`).
-        // A NON-generic zero-arg target (`IndexKeyed()`) has no such carve-out:
-        // gsc's bare `Identifier{ ... }` grammar commits to a STRUCT LITERAL
-        // (`Identifier :` fields only, `IsStructLiteralFollowingBrace`) and
-        // silently fails to parse a `key: value`/`[key] = value` collection
-        // element there (issue #1967) — so the `()` must stay so the parser
-        // takes its `LooksLikeCollectionInitializerBrace` path instead.
+        // Canonical form: drop `()` on a zero-argument generic construction when
+        // gsc's `BraceLooksLikeGenericCollectionInitializer` parses the brace as
+        // a collection initializer. Keep `()` for non-generic targets (#1967),
+        // empty braces, spread elements, and braces starting with an identifier
+        // key (`Identifier: value`, #6011), which `gsc` would parse as a struct
+        // literal.
         var target string
         if collection.Target == nil {
             // Issue #1567: a target-less collection initializer is the member
@@ -1082,6 +1078,17 @@ shared class GSharpPrinter {
             invocation
             .TypeArguments
             .Count > 0 &&
+            collection
+            .Elements
+            .Count > 0 &&
+            !(
+            collection
+                .Elements[0]
+                .Kind == CollectionInitializerElementKind.Keyed &&
+                collection
+                .Elements[0]
+                .Key is IdentifierExpression
+        ) &&
             !collection
             .Elements
             .Any((element CollectionInitializerElement) -> element.Value is SpreadElementExpression) {
