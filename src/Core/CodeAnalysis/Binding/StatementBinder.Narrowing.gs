@@ -10797,7 +10797,13 @@ internal partial class StatementBinder {
         // Validate addressable storage and, for writable aliases, write permission.
         // The same restrictions that govern `&expr` apply here (issue #491 / ADR-0039 §3).
         var rhsValid = true
-        if !isReadOnly && RefCapabilities.IsReadOnlyStorage(initializer) {
+        if !isReadOnly &&
+            (
+            RefCapabilities.IsReadOnlyStorage(initializer) || RefCapabilities.IsCapturedValueTypeReceiverStorage(
+                initializer,
+                function?.ThisParameter
+            )
+        ) {
             // Aliasing a read-only binding would let the alias mutate it; mirror
             // the existing `&readonly` rejection (GS9005 / GS0237 for `in`).
             if initializer is BoundVariableExpression{Variable: ParameterSymbol inParam} &&

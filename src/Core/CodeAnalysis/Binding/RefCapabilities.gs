@@ -698,6 +698,37 @@ internal shared class RefCapabilities {
         default: ExpressionBinder.IsLvalue(value)
     }
 
+    internal func IsCapturedValueTypeReceiverStorage(
+        expression BoundExpression,
+        ownReceiver ParameterSymbol?
+    ) bool -> switch expression {
+        case BoundVariableExpression{
+            Variable: ParameterSymbol{IsReceiverParameter: true} receiver
+        }: !Binder.IsReferenceTypeForConstraint(expression.Type) && !object.ReferenceEquals(receiver, ownReceiver)
+        case tuple is BoundTupleElementAccessExpression: IsCapturedValueTypeReceiverStorage(tuple.Receiver, ownReceiver)
+        case block is BoundBlockExpression: IsCapturedValueTypeReceiverStorage(block.Expression, ownReceiver)
+        case conditional is BoundConditionalExpression: IsCapturedValueTypeReceiverStorage(
+            conditional.WhenTrue,
+            ownReceiver
+        ) ||
+            IsCapturedValueTypeReceiverStorage(conditional.WhenFalse, ownReceiver)
+        case conditionalAddress is BoundConditionalAddressExpression: IsCapturedValueTypeReceiverStorage(
+            conditionalAddress.WhenTrueOperand,
+            ownReceiver
+        ) ||
+            IsCapturedValueTypeReceiverStorage(conditionalAddress.WhenFalseOperand, ownReceiver)
+        case BoundFieldAccessExpression{Receiver: {} fieldReceiver}: !Binder.IsReferenceTypeForConstraint(
+            fieldReceiver.Type
+        ) &&
+            IsCapturedValueTypeReceiverStorage(fieldReceiver, ownReceiver)
+        case BoundClrPropertyAccessExpression{
+            Member: FieldInfo,
+            Receiver: {} clrReceiver
+        }: !Binder.IsReferenceTypeForConstraint(clrReceiver.Type) &&
+            IsCapturedValueTypeReceiverStorage(clrReceiver, ownReceiver)
+        default: false
+    }
+
     internal func IsReadOnlyStorage(expression BoundExpression) bool -> switch expression {
         case BoundVariableExpression{Variable: ParameterSymbol{IsReceiverParameter: true}} receiver: receiver
             .Variable

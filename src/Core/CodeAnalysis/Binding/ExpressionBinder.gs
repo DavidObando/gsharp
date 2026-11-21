@@ -5917,17 +5917,22 @@ internal partial class ExpressionBinder {
 
         internal func TryGetReadOnlyAddressTarget(
             expression BoundExpression,
-            @NotNullWhen(true) out variable VariableSymbol?
+            @NotNullWhen(true) out variable VariableSymbol?,
+            ownReceiver ParameterSymbol? = nil
         ) bool {
             switch expression {
                 case block is BoundBlockExpression {
-                    return TryGetReadOnlyAddressTarget(block.Expression, out variable)
+                    return TryGetReadOnlyAddressTarget(block.Expression, out variable, ownReceiver)
                 }
                 case conditional is BoundConditionalExpression {
-                    return TryGetReadOnlyAddressTarget(conditional.WhenTrue, out variable) ||
-                        TryGetReadOnlyAddressTarget(conditional.WhenFalse, out variable)
+                    return TryGetReadOnlyAddressTarget(conditional.WhenTrue, out variable, ownReceiver) ||
+                        TryGetReadOnlyAddressTarget(conditional.WhenFalse, out variable, ownReceiver)
                 }
-                case BoundVariableExpression{Variable: {IsReadOnly: true}} readOnly {
+                case BoundVariableExpression{Variable: {IsReadOnly: true}} readOnly
+                when RefCapabilities.IsReadOnlyStorage(readOnly) || RefCapabilities.IsCapturedValueTypeReceiverStorage(
+                    readOnly,
+                    ownReceiver
+                ) {
                     variable = readOnly.Variable
                     return true
                 }

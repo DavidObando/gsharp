@@ -1355,11 +1355,18 @@ internal partial class ExpressionBinder {
         }
         let requiresWritable = outerText == "ref" || outerText == "out" || outerText == "&"
         if requiresWritable {
-            if RefCapabilities.IsReadOnlyStorage(whenTrue) {
+            let ownReceiver = function?.ThisParameter
+            if RefCapabilities.IsReadOnlyStorage(whenTrue) || RefCapabilities.IsCapturedValueTypeReceiverStorage(
+                whenTrue,
+                ownReceiver
+            ) {
                 Diagnostics.ReportCannotTakeAddressOfConstant(whenTrueSyntax.Location, whenTrueSyntax.ToString())
                 return BoundErrorExpression(nil)
             }
-            if RefCapabilities.IsReadOnlyStorage(whenFalse) {
+            if RefCapabilities.IsReadOnlyStorage(whenFalse) || RefCapabilities.IsCapturedValueTypeReceiverStorage(
+                whenFalse,
+                ownReceiver
+            ) {
                 Diagnostics.ReportCannotTakeAddressOfConstant(whenFalseSyntax.Location, whenFalseSyntax.ToString())
                 return BoundErrorExpression(nil)
             }
