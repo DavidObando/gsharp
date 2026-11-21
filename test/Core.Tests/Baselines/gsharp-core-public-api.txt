@@ -333,6 +333,7 @@ type abstract class GSharp.Core.CodeAnalysis.Syntax.SyntaxNode : System.Object
   property public GSharp.Core.CodeAnalysis.Text.TextSpan Span { get; }
 type class GSharp.Core.CodeAnalysis.Analyzers.AnalysisContext : System.Object
   method public Void ConfigureGeneratedCodeAnalysis(GSharp.Core.CodeAnalysis.Analyzers.GeneratedCodeAnalysisFlags flags)
+  method public Void ConfigureScope(GSharp.Core.CodeAnalysis.Analyzers.AnalyzerScope analyzerScope)
   method public Void EnableConcurrentExecution()
   method public Void RegisterBoundBodyAction(System.Action`1<GSharp.Core.CodeAnalysis.Analyzers.BoundBodyAnalysisContext> action)
   method public Void RegisterBoundNodeAction(System.Action`1<GSharp.Core.CodeAnalysis.Analyzers.BoundNodeAnalysisContext> action, GSharp.Core.CodeAnalysis.Binding.BoundNodeKind[] boundNodeKinds)
@@ -613,6 +614,9 @@ type class GSharp.Core.CodeAnalysis.Syntax.UnaryExpressionSyntax : GSharp.Core.C
   property public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax Operand { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxKind Kind { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken OperatorToken { get; }
+type enum GSharp.Core.CodeAnalysis.Analyzers.AnalyzerScope : Int32
+  field public const GSharp.Core.CodeAnalysis.Analyzers.AnalyzerScope Compilation = 0
+  field public const GSharp.Core.CodeAnalysis.Analyzers.AnalyzerScope MemberBody = 1
 type enum GSharp.Core.CodeAnalysis.Analyzers.GeneratedCodeAnalysisFlags : Int32
   field public const GSharp.Core.CodeAnalysis.Analyzers.GeneratedCodeAnalysisFlags Analyze = 1
   field public const GSharp.Core.CodeAnalysis.Analyzers.GeneratedCodeAnalysisFlags None = 0

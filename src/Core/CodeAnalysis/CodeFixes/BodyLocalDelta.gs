@@ -5,6 +5,7 @@
 package GSharp.Core.CodeAnalysis.CodeFixes
 
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Analyzers
 import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Binding.Suspension
 import GSharp.Core.CodeAnalysis.Compilation
@@ -42,10 +43,18 @@ import System.Threading
 ///   or calls a suspending function, so the suspension inference can change or the bind meets its marks;
 /// - a whole-program analysis (managed references, ref-struct liveness, rendezvous batches) reports on
 ///   either body;
-/// - a diagnostic outside the body touches a changed span.
+/// - a diagnostic outside the body touches a changed span;
+/// - an analyzer runs that is not body-local in scope (cref:AnalyzerScope.MemberBody), an analyzer
+///   failed, ran out of time or reported an unsupported ID, or the analyzers report on the declared
+///   body, bound speculatively, other than they reported on it in the baseline (issue #6165).
+///
+/// The analyzers' diagnostics after the edit are the baseline's, without those that the dispatch on
+/// the edited member reported and with spans moved by the edit, and those that they report on the new
+/// body.
 internal shared class BodyLocalDelta {
     /// Assembles the diagnostics after the edit, before the host's filter, or gives the reason why it cannot.
     func TryCollect(
+        baseline DeltaBaseline,
         compilation Compilation,
         snapshot Compilation,
         oldTree SyntaxTree,
@@ -73,6 +82,7 @@ internal shared class BodyLocalDelta {
         }
         try {
             return Collect(
+                baseline,
                 compilation,
                 snapshot,
                 declarations,
@@ -90,6 +100,7 @@ internal shared class BodyLocalDelta {
     }
 
     private func Collect(
+        baseline DeltaBaseline,
         compilation Compilation,
         snapshot Compilation,
         declarations BoundGlobalScope,
@@ -131,6 +142,19 @@ internal shared class BodyLocalDelta {
         }
         if count != 1 || function == nil {
             return BodyLocalResult("the body is not the body of one function or method")
+        }
+        let options = baseline.EffectiveOptions
+        if !options.Analyzers.IsEmpty {
+            let run = baseline.AnalyzerRun
+            if run == nil {
+                return BodyLocalResult("the baseline has no analyzer run")
+            }
+            if !GSharpAnalyzerDriver.AreBodyLocal(options.Analyzers, compilation) {
+                return BodyLocalResult("an analyzer is not body-local in scope")
+            }
+            if run.Diagnostics.Any(IsAnalyzerHostDiagnostic) {
+                return BodyLocalResult("an analyzer failed, ran out of time or reported an unsupported ID")
+            }
         }
         if function.IsPInvoke ||
             function.NullableSequenceSpecialization != NullableSequenceSpecializationKind.None ||
@@ -230,6 +254,27 @@ internal shared class BodyLocalDelta {
             }
             body.Add(moved!!)
         }
+        // The analyzers' diagnostics (issue #6165).
+        let analyzerItems = List[Diagnostic]()
+        if !options.Analyzers.IsEmpty {
+            let reason = CollectAnalyzerDiagnostics(
+                baseline,
+                compilation,
+                snapshot,
+                function,
+                oldDeclaration,
+                newDeclaration,
+                speculative,
+                oldText,
+                newTree.Text,
+                spanMap,
+                analyzerItems,
+                cancellationToken
+            )
+            if reason != nil {
+                return BodyLocalResult(reason)
+            }
+        }
         let declarationItems = snapshot.ApplySourceSuppressions(declaration.ToImmutableArray())
         let bodyItems = snapshot.ApplySourceSuppressions(body.ToImmutableArray())
         var items = declarationItems.AddRange(bodyItems)
@@ -245,8 +290,95 @@ internal shared class BodyLocalDelta {
             }
             items = items.AddRange(snapshot.ApplySourceSuppressions(documentation.ToImmutableArray()))
         }
-        return BodyLocalResult(items)
+        return BodyLocalResult(items.AddRange(analyzerItems))
     }
+
+    // Issue #6165: the analyzers' diagnostics after the edit, or the reason why the check cannot give
+    // them. Every analyzer is body-local in scope, so the dispatch on one body reports what depends on
+    // that body only.
+    private func CollectAnalyzerDiagnostics(
+        baseline DeltaBaseline,
+        compilation Compilation,
+        snapshot Compilation,
+        function FunctionSymbol,
+        oldDeclaration FunctionDeclarationSyntax,
+        newDeclaration FunctionDeclarationSyntax,
+        speculative SpeculativeBodyBind,
+        oldText SourceText,
+        newText SourceText,
+        spanMap DocumentMap,
+        result List[Diagnostic],
+        cancellationToken CancellationToken
+    ) string? {
+        let options = baseline.EffectiveOptions
+        let run = baseline.AnalyzerRun!!
+        let oldBodySpan = oldDeclaration.Body!!.Span
+        // The program's bind anchors every node without syntax at the nearest anchored ancestor, and the
+        // body at its declaration, before the analyzers see it (ADR-0169).
+        let oldBody = speculative.OldBody!!
+        let newBody = speculative.NewBody!!
+        SyntaxAnchoringWalker.Anchor(oldBody, oldDeclaration)
+        SyntaxAnchoringWalker.Anchor(newBody, newDeclaration)
+        // What the analyzers reported on the declared body in the baseline.
+        let recorded = ImmutableArray.CreateBuilder[Diagnostic]()
+        for var i = 0; i < run.Diagnostics.Length; i++ {
+            let d = run.Diagnostics[i]
+            if object.ReferenceEquals(run.Origins[i], function) {
+                recorded.Add(d)
+                continue
+            }
+            if IsInside(d.Location, oldText, oldBodySpan) {
+                return "an analyzer reports in the declared body from another dispatch"
+            }
+            if !TryRelocate(d, oldText, newText, spanMap, out var moved) {
+                return "an analyzer diagnostic outside the edited body touches the edit"
+            }
+            // The driver drops a diagnostic that a source suppression of the compilation covers.
+            if !snapshot.DiagnosticSuppressions.IsSuppressed(moved!!) {
+                result.Add(moved!!)
+            }
+        }
+        cancellationToken.ThrowIfCancellationRequested()
+        // The dispatch on the declared body, bound speculatively, must report what the baseline recorded.
+        let before = GSharpAnalyzerDriver.TryRunOnBody(
+            compilation,
+            options.Analyzers,
+            options.AnalyzerOptions,
+            function,
+            oldBody,
+            compilation.DiagnosticSuppressions,
+            cancellationToken
+        )
+        if before == nil || before.Diagnostics.Any(IsAnalyzerHostDiagnostic) {
+            return "an analyzer failed on the declared body"
+        }
+        if !SameOccurrences(before.Diagnostics, recorded.ToImmutable()) {
+            return "the analyzers report on the speculative bind of the declared body other than on the compilation's"
+        }
+        let after = GSharpAnalyzerDriver.TryRunOnBody(
+            compilation,
+            options.Analyzers,
+            options.AnalyzerOptions,
+            function,
+            newBody,
+            snapshot.DiagnosticSuppressions,
+            cancellationToken
+        )
+        if after == nil || after.Diagnostics.Any(IsAnalyzerHostDiagnostic) {
+            return "an analyzer failed on the new body"
+        }
+        for d in after.Diagnostics {
+            if !TryRelocate(d, oldText, newText, spanMap, out var moved) {
+                return "an analyzer diagnostic of the new body touches the edit outside the new body"
+            }
+            result.Add(moved!!)
+        }
+        return nil
+    }
+
+    // GS9300 (an analyzer threw), GS9302 (it ran out of time) and GS9304 (it reported an ID it does not
+    // support, once per run): a run on one body would not report them as a run on the compilation does.
+    private func IsAnalyzerHostDiagnostic(d Diagnostic) bool -> d.Id is "GS9300" or "GS9302" or "GS9304"
 
     private func NonDefault(members ImmutableArray[FunctionSymbol]) ImmutableArray[
         FunctionSymbol

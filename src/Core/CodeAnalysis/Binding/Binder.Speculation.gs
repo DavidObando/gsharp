@@ -23,10 +23,12 @@ internal class SpeculativeBodyBind {
     internal init(
         oldDiagnostics ImmutableArray[Diagnostic],
         newDiagnostics ImmutableArray[Diagnostic],
+        oldBody BoundBlockStatement,
         newBody BoundBlockStatement
     ) {
         OldDiagnostics = oldDiagnostics
         NewDiagnostics = newDiagnostics
+        OldBody = oldBody
         NewBody = newBody
     }
 
@@ -42,6 +44,11 @@ internal class SpeculativeBodyBind {
 
     /// Gets the diagnostics of the replacement body.
     prop NewDiagnostics ImmutableArray[Diagnostic] {
+        get;
+    }
+
+    /// Gets the lowered declared body, bound speculatively.
+    prop OldBody BoundBlockStatement? {
         get;
     }
 
@@ -151,7 +158,7 @@ partial class Binder {
                     }
                 }
             }
-            return SpeculativeBodyBind(oldPass.Diagnostics, newPass.Diagnostics, newPass.Body!!)
+            return SpeculativeBodyBind(oldPass.Diagnostics, newPass.Diagnostics, oldPass.Body!!, newPass.Body!!)
         }
 
         private func BindSpeculativePass(

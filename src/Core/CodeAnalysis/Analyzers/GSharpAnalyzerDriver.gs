@@ -44,6 +44,12 @@ class GSharpAnalyzerDriver {
         (Owner GSharpDiagnosticAnalyzer, Id string)
     ]()
     private var suppressions DiagnosticSuppressionMap?
+    // Issue #6165: the function or field whose body the driver is dispatching, and the diagnostics that
+    // each such dispatch reported.
+    private var origin Symbol? = nil
+    private let origins Dictionary[Diagnostic, Symbol] = Dictionary[Diagnostic, Symbol](
+        ReferenceEqualityComparer.Instance
+    )
 
     private init(compilation Compilation, options AnalyzerOptions, cancellationToken CancellationToken) {
         this.compilation = compilation
@@ -52,15 +58,7 @@ class GSharpAnalyzerDriver {
     }
 
     private func RunCore(analyzers ImmutableArray[GSharpDiagnosticAnalyzer]) {
-        for analyzer in analyzers {
-            elapsed[analyzer] = Stopwatch()
-            supportedIds[analyzer] = Guarded(
-                analyzer,
-                () -> analyzer.SupportedDiagnostics.Select((d DiagnosticDescriptor) -> d.Id).ToImmutableHashSet()
-            ) ??
-                ImmutableHashSet[string].Empty
-            Guarded(analyzer, () -> analyzer.Initialize(AnalysisContext(registry, analyzer)))
-        }
+        InitializeAnalyzers(analyzers)
         for entry in registry.CompilationStartActions.ToArray() {
             let context = CompilationStartAnalysisContext(registry, entry.Owner, compilation, cancellationToken)
             Guarded(entry.Owner, () -> entry.Action(context))
@@ -76,6 +74,40 @@ class GSharpAnalyzerDriver {
         for entry in registry.CompilationEndActions.Concat(registry.CompilationActions) {
             let context = CompilationAnalysisContext(compilation, Sink(entry.Owner), cancellationToken)
             Guarded(entry.Owner, () -> entry.Action(context))
+        }
+    }
+
+    // Issue #6165: the actions of a run on one function body, when every analyzer is body-local.
+    private func RunOnBodyCore(
+        analyzers ImmutableArray[GSharpDiagnosticAnalyzer],
+        function FunctionSymbol,
+        body BoundBlockStatement
+    ) bool {
+        InitializeAnalyzers(analyzers)
+        if !registry.IsBodyLocal(analyzers) {
+            return false
+        }
+        let provenance = ProvenanceTree(function, body)
+        if registry.BoundNodeActions.Count > 0 {
+            origin = function
+            DispatchingBoundTreeWalker(this, function, provenance is {} tree && IsGeneratedTree(tree)).Visit(body)
+            origin = nil
+        }
+        if registry.BoundBodyActions.Count > 0 {
+            DispatchBoundBody(function, body, provenance)
+        }
+        return true
+    }
+
+    private func InitializeAnalyzers(analyzers ImmutableArray[GSharpDiagnosticAnalyzer]) {
+        for analyzer in analyzers {
+            elapsed[analyzer] = Stopwatch()
+            supportedIds[analyzer] = Guarded(
+                analyzer,
+                () -> analyzer.SupportedDiagnostics.Select((d DiagnosticDescriptor) -> d.Id).ToImmutableHashSet()
+            ) ??
+                ImmutableHashSet[string].Empty
+            Guarded(analyzer, () -> analyzer.Initialize(AnalysisContext(registry, analyzer)))
         }
     }
 
@@ -127,7 +159,9 @@ class GSharpAnalyzerDriver {
             } else {
                 ProvenanceTree(function, body) is {} tree && IsGeneratedTree(tree)
             }
+            origin = function
             DispatchingBoundTreeWalker(this, function, isGenerated).Visit(body)
+            origin = nil
             dispatchedStatement |= object.ReferenceEquals(body, program.Statement)
         }
         if !dispatchedStatement {
@@ -163,6 +197,7 @@ class GSharpAnalyzerDriver {
 
     private func DispatchBoundBody(owner Symbol, body BoundNode, provenance SyntaxTree?) {
         let isGenerated = provenance is {} tree && IsGeneratedTree(tree)
+        origin = owner
         for entry in registry.BoundBodyActions {
             if SkipsGenerated(entry.Owner, isGenerated) {
                 continue
@@ -170,6 +205,7 @@ class GSharpAnalyzerDriver {
             let context = BoundBodyAnalysisContext(owner, body, compilation, Sink(entry.Owner), cancellationToken)
             Guarded(entry.Owner, () -> entry.Action(context))
         }
+        origin = nil
     }
 
     private func DispatchSemanticModels() {
@@ -240,6 +276,24 @@ class GSharpAnalyzerDriver {
             return
         }
         diagnostics.Report(diagnostic)
+        if origin is {} source {
+            origins[diagnostic] = source
+        }
+    }
+
+    private func Result() AnalyzerRun {
+        let produced = diagnostics.ToImmutableArray()
+        let sources = ImmutableArray.CreateBuilder[Symbol?](produced.Length)
+        for d in produced {
+            sources.Add(
+                if origins.TryGetValue(d, out var source) {
+                    source
+                } else {
+                    default(Symbol?)
+                }
+            )
+        }
+        return AnalyzerRun(produced, sources.MoveToImmutable())
     }
 
     private func Guarded(owner GSharpDiagnosticAnalyzer, action() -> void) -> Guarded[object?](
@@ -407,6 +461,51 @@ class GSharpAnalyzerDriver {
             return driver.diagnostics.ToImmutableArray()
         }
 
+        // Issue #6165: a run that records, for each diagnostic, the function or field whose body's
+        // dispatch reported it.
+        internal func RunRecordingOrigins(
+            compilation Compilation,
+            analyzers ImmutableArray[GSharpDiagnosticAnalyzer],
+            options AnalyzerOptions?,
+            cancellationToken CancellationToken
+        ) AnalyzerRun {
+            if analyzers.IsDefaultOrEmpty {
+                return AnalyzerRun(ImmutableArray[Diagnostic].Empty, ImmutableArray[Symbol?].Empty)
+            }
+            using let measurement = CompilationMeasurements.BeginPhase("analyzers")
+            let driver = GSharpAnalyzerDriver(compilation, options ?? AnalyzerOptions(), cancellationToken)
+            driver.RunCore(analyzers)
+            return driver.Result()
+        }
+
+        // Issue #6165: runs the analyzers on one function body, as a run over the compilation would
+        // dispatch them on it, with the given source suppressions. It returns `null` when an analyzer is
+        // not body-local in scope (AnalyzerScope.MemberBody).
+        internal func TryRunOnBody(
+            compilation Compilation,
+            analyzers ImmutableArray[GSharpDiagnosticAnalyzer],
+            options AnalyzerOptions?,
+            function FunctionSymbol,
+            body BoundBlockStatement,
+            suppressions DiagnosticSuppressionMap,
+            cancellationToken CancellationToken
+        ) AnalyzerRun? {
+            let driver = GSharpAnalyzerDriver(compilation, options ?? AnalyzerOptions(), cancellationToken)
+            driver.suppressions = suppressions
+            if !driver.RunOnBodyCore(analyzers, function, body) {
+                return nil
+            }
+            return driver.Result()
+        }
+
+        // Issue #6165: whether every analyzer is body-local in scope. It initializes the analyzers on a
+        // registry of its own.
+        internal func AreBodyLocal(analyzers ImmutableArray[GSharpDiagnosticAnalyzer], compilation Compilation) bool {
+            let driver = GSharpAnalyzerDriver(compilation, AnalyzerOptions(), default(CancellationToken))
+            driver.InitializeAnalyzers(analyzers)
+            return driver.diagnostics.Count == 0 && driver.registry.IsBodyLocal(analyzers)
+        }
+
         private func IsEntirelyGenerated(body BoundBlockStatement) bool {
             var sawTree = false
             for statement in body.Statements {
@@ -477,5 +576,22 @@ class GSharpAnalyzerDriver {
             .Text
             .FileName
             ?.EndsWith(".g.gs", StringComparison.OrdinalIgnoreCase) == true
+    }
+}
+
+/// The diagnostics of an analyzer run, and for each one the function or field whose body's dispatch
+/// reported it, or `null` (issue #6165).
+internal class AnalyzerRun {
+    init(diagnostics ImmutableArray[Diagnostic], origins ImmutableArray[Symbol?]) {
+        Diagnostics = diagnostics
+        Origins = origins
+    }
+
+    prop Diagnostics ImmutableArray[Diagnostic] {
+        get;
+    }
+
+    prop Origins ImmutableArray[Symbol?] {
+        get;
     }
 }
