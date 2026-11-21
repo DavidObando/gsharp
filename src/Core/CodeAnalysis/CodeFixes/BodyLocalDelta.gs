@@ -152,6 +152,10 @@ internal shared class BodyLocalDelta {
             if !GSharpAnalyzerDriver.AreBodyLocal(options.Analyzers, compilation) {
                 return BodyLocalResult("an analyzer is not body-local in scope")
             }
+            // A time budget covers an analyzer's whole run, and a run on one body starts its own clock.
+            if options.AnalyzerOptions?.TimeBudgetMilliseconds != nil {
+                return BodyLocalResult("the analyzers have a time budget, which covers the whole run")
+            }
             if run.Diagnostics.Any(IsAnalyzerHostDiagnostic) {
                 return BodyLocalResult("an analyzer failed, ran out of time or reported an unsupported ID")
             }

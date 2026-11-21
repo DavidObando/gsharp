@@ -533,6 +533,34 @@ open class Adr0227BodyLocalDeltaTests {
     }
 
     @Fact
+    func BodyLocalAnalyzersWithATimeBudget_FallBack() {
+        // The budget covers the whole run; a run on the edited body alone would start a clock of its own.
+        const source = "package P\n\nfunc F() int32 {\n    return 1\n}\n"
+        let tree = SyntaxTree.Parse(SourceText.From(source, "f0.gs"))
+        let compilation = Compilation(tree)
+        let changes = Changes(tree, "return 1", "return 2")
+        let service = CodeFixService(CodeFixRegistry())
+        let set = Analyzers(BodyLocalAnalyzers())
+        let budget = AnalyzerOptions{TimeBudgetMilliseconds: 60000}
+        let full = service.ComputeDelta(
+            DeltaBaseline.Create(
+                compilation,
+                DeltaOptions{BodyLocalBind: false, Analyzers: set, AnalyzerOptions: budget}
+            ),
+            changes,
+            ImmutableArray[Diagnostic].Empty
+        )
+        let local = service.ComputeDelta(
+            DeltaBaseline.Create(compilation, DeltaOptions{Analyzers: set, AnalyzerOptions: budget}),
+            changes,
+            ImmutableArray[Diagnostic].Empty
+        )
+        Assert.False(local.BodyLocal)
+        Assert.Equal("the analyzers have a time budget, which covers the whole run", local.BodyLocalFallbackReason)
+        AssertSameDelta(full, local, "time budget")
+    }
+
+    @Fact
     func BodyLocalAnalyzerThatThrowsOnTheNewBody_FallsBack() {
         const source = "package P\n\nfunc F() int32 {\n    return 1\n}\n"
         let (full, local) = BothWith(

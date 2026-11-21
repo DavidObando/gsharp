@@ -16,8 +16,10 @@ enum AnalyzerScope {
 
     /// The analyzer registers only bound-node and bound-body actions, and what it reports from the
     /// actions on one function body depends only on that body and the compilation's declarations, not
-    /// on another body. A diagnostic-delta check of an edit inside one body runs it on the edited body
-    /// alone and keeps its earlier results for the other bodies. An analyzer that declares this scope
-    /// and registers another kind of action counts as (cref:AnalyzerScope.Compilation).
+    /// on another body. Its messages and properties do not depend on where the body sits in the file:
+    /// a diagnostic of another body keeps its message when an edit before it moves its span. A
+    /// diagnostic-delta check of an edit inside one body runs it on the edited body alone and keeps its
+    /// earlier results for the other bodies. An analyzer that declares this scope and registers another
+    /// kind of action counts as (cref:AnalyzerScope.Compilation).
     MemberBody
 }
