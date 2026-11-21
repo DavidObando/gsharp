@@ -239,6 +239,10 @@ partial class SemanticModel {
                 ReferencedSourceSymbol(expression) is {} widened {
                 return SymbolInfo(widened)
             }
+            if current is BoundImportedInstanceCallExpression{AssociatedProperty: not nil} importedPropertyCall &&
+                ReferencedImportedSymbol(importedPropertyCall) is {} importedPropertySymbol {
+                return SymbolInfo(importedPropertySymbol)
+            }
             let accessors = GetAccessors(current.GetType())
             for getter in accessors.SymbolProperties {
                 if (getter(current) is Symbol symbol and not TypeSymbol) {

@@ -2572,26 +2572,28 @@ internal partial class OverloadResolver {
                     }
                 }
             } else if owner is InterfaceSymbol ifaceOwner {
-                let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(ifaceOwner)
-                let enclosingArgs = ifaceOwner.EnclosingTypeArguments
-                for var i = 0; i < enclosingParams.Length; i++ {
-                    if !substitution.ContainsKey(enclosingParams[i]) {
-                        substitution[enclosingParams[i]] = if !enclosingArgs.IsDefaultOrEmpty &&
-                            i < enclosingArgs.Length {
-                            enclosingArgs[i]
-                        } else {
-                            enclosingParams[i]
+                for iface in ifaceOwner.SelfAndAllBaseInterfaces() {
+                    let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(iface)
+                    let enclosingArgs = iface.EnclosingTypeArguments
+                    for var i = 0; i < enclosingParams.Length; i++ {
+                        if !substitution.ContainsKey(enclosingParams[i]) {
+                            substitution[enclosingParams[i]] = if !enclosingArgs.IsDefaultOrEmpty &&
+                                i < enclosingArgs.Length {
+                                enclosingArgs[i]
+                            } else {
+                                enclosingParams[i]
+                            }
                         }
                     }
-                }
-                let ownParams = (ifaceOwner.Definition ?? ifaceOwner).DeclaredTypeParameters
-                let ownArgs = ifaceOwner.TypeArguments
-                for var i = 0; i < ownParams.Length; i++ {
-                    if !substitution.ContainsKey(ownParams[i]) {
-                        substitution[ownParams[i]] = if !ownArgs.IsDefaultOrEmpty && i < ownArgs.Length {
-                            ownArgs[i]
-                        } else {
-                            ownParams[i]
+                    let ownParams = (iface.Definition ?? iface).DeclaredTypeParameters
+                    let ownArgs = iface.TypeArguments
+                    for var i = 0; i < ownParams.Length; i++ {
+                        if !substitution.ContainsKey(ownParams[i]) {
+                            substitution[ownParams[i]] = if !ownArgs.IsDefaultOrEmpty && i < ownArgs.Length {
+                                ownArgs[i]
+                            } else {
+                                ownParams[i]
+                            }
                         }
                     }
                 }

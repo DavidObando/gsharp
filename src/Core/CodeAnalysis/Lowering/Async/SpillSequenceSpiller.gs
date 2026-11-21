@@ -1685,7 +1685,7 @@ shared class SpillSequenceSpiller {
                 call.ConstrainedReceiverTypeParameter,
                 call.ConstrainedInterfaceType,
                 call.IsNonVirtualBaseCall
-            )
+            ){NonVirtualBaseTargetType = call.NonVirtualBaseTargetType, AssociatedProperty = call.AssociatedProperty}
             call.CopySignatureReturnTypeTo(value)
             return BoundSpillSequenceExpression(nil, locals, sideEffects, value)
         }
@@ -1712,7 +1712,16 @@ shared class SpillSequenceSpiller {
             if locals.IsEmpty && sideEffects.IsEmpty {
                 return Trivial(call)
             }
-            let value = BoundBaseInterfaceCallExpression(nil, receiver, call.Interface, call.Method, args)
+            let value = BoundBaseInterfaceCallExpression(
+                nil,
+                receiver,
+                call.Interface,
+                call.Method,
+                args,
+                call.Type,
+                call.Property,
+                call.IsSetterAccessor
+            ){MethodTypeArguments = call.MethodTypeArguments}
             return BoundSpillSequenceExpression(nil, locals, sideEffects, value)
         }
 
