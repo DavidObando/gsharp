@@ -38,6 +38,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Verify C# `params` method-group conversions (`List<T>`, arrays, `IEnumerable<T>`) through `cs2gs` with strict IL verification and confirm unknown method-group consumers preserve non-null element contracts. (Fixes #6001)
+
 - Narrow nullable receivers and stable intermediate `?.` chain members when a conditional-access result is compared with `nil` (`!= nil`, `nil !=`, `== nil` else/early-exit branches, conditional expressions, `&&`/`||`, `is not nil`/non-nil patterns, method calls, and `?[]` indexers), while preserving side-effect invalidation when a getter, call, or index mutates the receiver. (Fixes #6042)
 
 - Substitute constructed interface type arguments through `base[Interface[Args]].Member` calls, parameters, generic interface method type arguments, default interface properties, value-type (`struct`) receiver boxing, async/lambda forwarders, and imported C# default interface methods, while rejecting mismatched interface type arguments with `GS0338`. (Fixes #6045)
