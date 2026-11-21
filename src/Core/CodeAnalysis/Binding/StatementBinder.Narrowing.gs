@@ -2616,12 +2616,12 @@ internal partial class StatementBinder {
             }
         }
         var (thenNarrow, elseNarrow) = TryClassifyNilGuard(condition, forShortCircuitOperand)
-        let (conditionalThen, conditionalElse) = TryClassifyNullConditionalBoolNarrowing(
+        let (conditionalThen, conditionalElse) = TryClassifyNullConditionalNarrowing(
             condition,
             forShortCircuitOperand,
             beforeAliases,
             (node BoundNode, state Dictionary[AccessPath, TypeSymbol], aliases IReadOnlyCollection[VariableSymbol]?) ->
-            ClearAssignedRoots(node, state, aliases)
+            ClearAssignedRootsForConditionOperand(node, state, aliases)
         )
         thenNarrow = MergeNarrowingFrames(thenNarrow, conditionalThen)
         elseNarrow = MergeNarrowingFrames(elseNarrow, conditionalElse)
@@ -13420,7 +13420,7 @@ internal partial class StatementBinder {
             default: true
         }
 
-        private func IsNullOperand(operand BoundExpression) bool {
+        internal func IsNullOperand(operand BoundExpression) bool {
             var value = operand
             while value is BoundConversionExpression conversion {
                 if conversion.Type.StripToBareShape() is PointerTypeSymbol or FunctionPointerTypeSymbol {

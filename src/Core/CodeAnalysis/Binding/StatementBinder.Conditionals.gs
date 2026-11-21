@@ -1006,24 +1006,34 @@ internal partial class StatementBinder {
                     }
                     let operandType = TypeTestOperandTypeAfterEffects(isExpr, removedFacts)
                     if isExpr.Pattern is BoundNotPattern notPattern {
-                        return (
-                            nil,
-                            TryClassifyPatternNarrowing(
-                                isExpr.Expression,
-                                notPattern.Pattern,
-                                allowReadOnlyGlobals: false,
-                                operandType
-                            )
+                        let notFrame = TryClassifyPatternNarrowing(
+                            isExpr.Expression,
+                            notPattern.Pattern,
+                            allowReadOnlyGlobals: false,
+                            operandType
                         )
-                    }
-                    return (
-                        TryClassifyPatternNarrowing(
+                        if notFrame != nil {
+                            return (nil, notFrame)
+                        }
+                    } else {
+                        let patternFrame = TryClassifyPatternNarrowing(
                             isExpr.Expression,
                             isExpr.Pattern,
                             allowReadOnlyGlobals: false,
                             operandType
-                        ),
-                        nil
+                        )
+                        if patternFrame != nil {
+                            return (patternFrame, nil)
+                        }
+                    }
+                    return TryClassifyNullConditionalPatternNarrowing(
+                        isExpr,
+                        callableAliases,
+                        (
+                            node BoundNode,
+                            state Dictionary[AccessPath, TypeSymbol],
+                            aliases IReadOnlyCollection[VariableSymbol]?
+                        ) -> ClearAssignedRootsForConditionOperand(node, state, aliases)
                     )
                 }
             }
@@ -2582,9 +2592,10 @@ internal partial class StatementBinder {
             return joined
         }
 
-        /// Equality with a Boolean requires a non-nil conditional receiver (#5849).
+        /// Equality with a Boolean (#5849) or comparison with `nil` (#6042)
+        /// requires a non-nil conditional receiver.
         /// Effects after the receiver read must preserve the tested storage.
-        internal func TryClassifyNullConditionalBoolNarrowing(
+        internal func TryClassifyNullConditionalNarrowing(
             condition BoundExpression,
             restrictBareVariableToLocalsAndParams bool,
             callableAliases IReadOnlyCollection[VariableSymbol]?,
@@ -2594,54 +2605,356 @@ internal partial class StatementBinder {
                 IReadOnlyCollection[VariableSymbol]?
             ) -> void
         )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
-            if condition is not BoundBinaryExpression binary ||
-                binary
-                .Op
-                .Kind is not(BoundBinaryOperatorKind.Equals or BoundBinaryOperatorKind.NotEquals) {
+            if condition is not BoundBinaryOperationExpression binary ||
+                binary.BinaryOperatorKind is not(BoundBinaryOperatorKind.Equals or BoundBinaryOperatorKind.NotEquals) {
                 return (nil, nil)
             }
-            let Unwrap = func (expression BoundExpression) BoundExpression {
-                var expression = expression
-                while expression is BoundConversionExpression conversion && IsFlowTransparentConversion(conversion) {
-                    expression = conversion.Expression
+            let left = UnwrapFlowTransparentConversions(binary.Left)
+            let right = UnwrapFlowTransparentConversions(binary.Right)
+            var access BoundNullConditionalAccessExpression? = nil
+            var narrowWhenTrue = false
+            if right is BoundLiteralExpression{Value: bool} &&
+                left is BoundNullConditionalAccessExpression leftBoolAccess &&
+                !(binary is BoundClrBinaryOperatorExpression) &&
+                StripNullability(leftBoolAccess.Type) == TypeSymbol.Bool {
+                access = leftBoolAccess
+                narrowWhenTrue = binary.BinaryOperatorKind == BoundBinaryOperatorKind.Equals
+            } else if left is BoundLiteralExpression{Value: bool} &&
+                right is BoundNullConditionalAccessExpression rightBoolAccess &&
+                !(binary is BoundClrBinaryOperatorExpression) &&
+                StripNullability(rightBoolAccess.Type) == TypeSymbol.Bool {
+                access = rightBoolAccess
+                narrowWhenTrue = binary.BinaryOperatorKind == BoundBinaryOperatorKind.Equals
+            } else if IsNilLiteral(right) && left is BoundNullConditionalAccessExpression leftNilAccess {
+                if binary is BoundClrBinaryOperatorExpression &&
+                    StripNullability(leftNilAccess.Type) != TypeSymbol.String {
+                    return (nil, nil)
                 }
-                return expression
-            }
-            let left = Unwrap(binary.Left)
-            let right = Unwrap(binary.Right)
-            let access = if right is BoundLiteralExpression{Value: bool} {
-                left as BoundNullConditionalAccessExpression
-            } else if left is BoundLiteralExpression{Value: bool} {
-                right as BoundNullConditionalAccessExpression
+                access = leftNilAccess
+                narrowWhenTrue = binary.BinaryOperatorKind == BoundBinaryOperatorKind.NotEquals
+            } else if IsNilLiteral(left) && right is BoundNullConditionalAccessExpression rightNilAccess {
+                if binary is BoundClrBinaryOperatorExpression &&
+                    StripNullability(rightNilAccess.Type) != TypeSymbol.String {
+                    return (nil, nil)
+                }
+                access = rightNilAccess
+                narrowWhenTrue = binary.BinaryOperatorKind == BoundBinaryOperatorKind.NotEquals
             } else {
-                default(BoundNullConditionalAccessExpression?)
-            }
-            if access == nil || StripNullability(access.Type) != TypeSymbol.Bool {
                 return (nil, nil)
             }
-            let receiver = Unwrap(access.Receiver)
-            var path AccessPath? = nil
-            var declared TypeSymbol? = nil
-            if receiver is BoundVariableExpression variable &&
-                (!restrictBareVariableToLocalsAndParams || variable.Variable is LocalVariableSymbol) {
-                path = AccessPath.ForVariable(variable.Variable)
-                declared = variable.Variable.Type
-            } else if SmartCastStability.TryGetStableMemberPath(receiver, out var memberPath, out var memberType) {
-                path = memberPath
-                declared = MemberLookup.GetDeclaredAccessPathType(memberPath, memberType)
-            }
-            if path == nil || declared is not(NullableTypeSymbol or PlatformTypeSymbol) {
+            let frame = TryClassifyNullConditionalAccessChain(
+                access,
+                restrictBareVariableToLocalsAndParams,
+                callableAliases,
+                clearAssignedRoots,
+                postEffects: nil
+            )
+            if frame == nil || frame.Count == 0 {
                 return (nil, nil)
             }
-            let frame = Dictionary[AccessPath, TypeSymbol]{[path] = StripNullability(declared)!!}
-            clearAssignedRoots(access.WhenNotNull, frame, callableAliases)
-            if frame.Count == 0 {
-                return (nil, nil)
-            }
-            return if binary.Op.Kind == BoundBinaryOperatorKind.Equals {
+            return if narrowWhenTrue {
                 (frame, default(Dictionary[AccessPath, TypeSymbol]?))
             } else {
                 (default(Dictionary[AccessPath, TypeSymbol]?), frame)
+            }
+        }
+
+        internal func TryClassifyNullConditionalPatternNarrowing(
+            isExpr BoundIsExpression,
+            callableAliases IReadOnlyCollection[VariableSymbol]?,
+            clearAssignedRoots(
+                BoundNode,
+                Dictionary[AccessPath, TypeSymbol],
+                IReadOnlyCollection[VariableSymbol]?
+            ) -> void
+        )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
+            if UnwrapFlowTransparentConversions(isExpr.Expression) is not BoundNullConditionalAccessExpression access {
+                return (nil, nil)
+            }
+            let (provesWhenTrue, provesWhenFalse) = PatternProvesNonNil(isExpr.Pattern)
+            if !provesWhenTrue && !provesWhenFalse {
+                return (nil, nil)
+            }
+            let frame = TryClassifyNullConditionalAccessChain(
+                access,
+                restrictBareVariableToLocalsAndParams: true,
+                callableAliases,
+                clearAssignedRoots,
+                postEffects: isExpr.Pattern
+            )
+            if frame == nil || frame.Count == 0 {
+                return (nil, nil)
+            }
+            return (
+                if provesWhenTrue {
+                    frame
+                } else {
+                    default(Dictionary[AccessPath, TypeSymbol]?)
+                },
+                if provesWhenFalse {
+                    frame
+                } else {
+                    default(Dictionary[AccessPath, TypeSymbol]?)
+                }
+            )
+        }
+
+        private func UnwrapFlowTransparentConversions(expression BoundExpression) BoundExpression {
+            var expression = expression
+            while expression is BoundConversionExpression conversion && IsFlowTransparentConversion(conversion) {
+                expression = conversion.Expression
+            }
+            return expression
+        }
+
+        private func TryClassifyNullConditionalAccessChain(
+            access BoundNullConditionalAccessExpression,
+            restrictBareVariableToLocalsAndParams bool,
+            callableAliases IReadOnlyCollection[VariableSymbol]?,
+            clearAssignedRoots(
+                BoundNode,
+                Dictionary[AccessPath, TypeSymbol],
+                IReadOnlyCollection[VariableSymbol]?
+            ) -> void,
+            postEffects BoundNode?
+        ) Dictionary[AccessPath, TypeSymbol]? {
+            let captures = Dictionary[VariableSymbol, BoundExpression]()
+            let frame = CollectNullConditionalChainNarrowings(
+                access,
+                captures,
+                restrictBareVariableToLocalsAndParams,
+                callableAliases,
+                clearAssignedRoots
+            )
+            if frame == nil || frame.Count == 0 {
+                return nil
+            }
+            if postEffects != nil {
+                clearAssignedRoots(postEffects, frame, callableAliases)
+            }
+            return if frame.Count > 0 {
+                frame
+            } else {
+                default(Dictionary[AccessPath, TypeSymbol]?)
+            }
+        }
+
+        private func CollectNullConditionalChainNarrowings(
+            access BoundNullConditionalAccessExpression,
+            captures Dictionary[VariableSymbol, BoundExpression],
+            restrictBareVariableToLocalsAndParams bool,
+            callableAliases IReadOnlyCollection[VariableSymbol]?,
+            clearAssignedRoots(
+                BoundNode,
+                Dictionary[AccessPath, TypeSymbol],
+                IReadOnlyCollection[VariableSymbol]?
+            ) -> void
+        ) Dictionary[AccessPath, TypeSymbol]? {
+            let receiver = UnwrapFlowTransparentConversions(access.Receiver)
+            var frame Dictionary[AccessPath, TypeSymbol]? = nil
+            if receiver is BoundNullConditionalAccessExpression leftNested {
+                frame = CollectNullConditionalChainNarrowings(
+                    leftNested,
+                    captures,
+                    restrictBareVariableToLocalsAndParams,
+                    callableAliases,
+                    clearAssignedRoots
+                )
+            } else if TryResolveNullConditionalTarget(
+                receiver,
+                captures,
+                restrictBareVariableToLocalsAndParams,
+                out var path,
+                out var underlying
+            ) {
+                frame = Dictionary[AccessPath, TypeSymbol]{[path] = underlying}
+            }
+            if frame != nil && frame.Count > 0 {
+                clearAssignedRoots(access.WhenNotNull, frame, callableAliases)
+                if frame.Count == 0 {
+                    frame = nil
+                }
+            }
+            let whenNotNull = UnwrapFlowTransparentConversions(access.WhenNotNull)
+            captures[access.Capture] = access.Receiver
+            try {
+                if whenNotNull is BoundNullConditionalAccessExpression rightNested {
+                    let nestedFrame = CollectNullConditionalChainNarrowings(
+                        rightNested,
+                        captures,
+                        restrictBareVariableToLocalsAndParams,
+                        callableAliases,
+                        clearAssignedRoots
+                    )
+                    frame = MergeNarrowingFrames(frame, nestedFrame)
+                } else if TryResolveNullConditionalTarget(
+                    whenNotNull,
+                    captures,
+                    restrictBareVariableToLocalsAndParams,
+                    out var leafPath,
+                    out var leafUnderlying
+                ) {
+                    frame ??= Dictionary[AccessPath, TypeSymbol]()
+                    frame[leafPath] = leafUnderlying
+                }
+            } finally {
+                captures.Remove(access.Capture)
+            }
+            return frame
+        }
+
+        private func TryResolveNullConditionalTarget(
+            expr BoundExpression,
+            captures Dictionary[VariableSymbol, BoundExpression],
+            restrictBareVariableToLocalsAndParams bool,
+            @NotNullWhen(true) out path AccessPath?,
+            @NotNullWhen(true) out underlying TypeSymbol?
+        ) bool {
+            path = nil
+            underlying = nil
+            let unwrapped = UnwrapFlowTransparentConversions(expr)
+            var declared TypeSymbol? = nil
+            if unwrapped is BoundVariableExpression variable {
+                if captures.TryGetValue(variable.Variable, out var capturedReceiver) {
+                    return TryResolveNullConditionalTarget(
+                        capturedReceiver,
+                        captures,
+                        restrictBareVariableToLocalsAndParams,
+                        out path,
+                        out underlying
+                    )
+                }
+                if !restrictBareVariableToLocalsAndParams || variable.Variable is LocalVariableSymbol {
+                    path = AccessPath.ForVariable(variable.Variable)
+                    declared = if variable.NarrowedType is NullableTypeSymbol {
+                        variable.NarrowedType
+                    } else {
+                        variable.Variable.Type
+                    }
+                }
+            } else if TryResolveStablePathWithCaptures(unwrapped, captures) is {} memberPath && memberPath.HasMembers {
+                path = memberPath
+                declared = MemberLookup.GetDeclaredAccessPathType(memberPath, unwrapped.Type)
+            }
+            let narrowed TypeSymbol? = switch declared {
+                case nullableTarget is NullableTypeSymbol: nullableTarget.UnderlyingType
+                case platformTarget is PlatformTypeSymbol: platformTarget.UnderlyingType
+                case tpTarget is TypeParameterSymbol when !Binder.SatisfiesNotNullConstraint(tpTarget): tpTarget
+                default: default(TypeSymbol?)
+            }
+            if path == nil || narrowed == nil {
+                path = nil
+                return false
+            }
+            underlying = narrowed
+            return true
+        }
+
+        private func TryResolveStablePathWithCaptures(
+            expr BoundExpression,
+            captures Dictionary[VariableSymbol, BoundExpression]
+        ) AccessPath? {
+            let unwrapped = UnwrapFlowTransparentConversions(expr)
+            switch unwrapped {
+                case bve is BoundVariableExpression {
+                    if captures.TryGetValue(bve.Variable, out var capturedReceiver) {
+                        return TryResolveStablePathWithCaptures(capturedReceiver, captures)
+                    }
+                    return if SmartCastStability.IsStableRoot(bve.Variable) {
+                        AccessPath.ForVariable(bve.Variable)
+                    } else {
+                        default(AccessPath?)
+                    }
+                }
+                case fa is BoundFieldAccessExpression when fa.Receiver != nil &&
+                    fa.InterfaceType == nil &&
+                    SmartCastStability
+                    .IsStableField(fa.Field) {
+                    return TryResolveStablePathWithCaptures(fa.Receiver!!, captures)?.Append(fa.Field)
+                }
+                case pa is BoundPropertyAccessExpression when pa.Receiver != nil && SmartCastStability.IsStableProperty(
+                    pa.Property
+                ) {
+                    return TryResolveStablePathWithCaptures(pa.Receiver!!, captures)?.Append(pa.Property)
+                }
+                case ca is BoundClrPropertyAccessExpression when ca.Receiver != nil &&
+                    SmartCastStability
+                    .IsStableClrMember(ca.Member) {
+                    return TryResolveStablePathWithCaptures(ca.Receiver!!, captures)?.Append(ca.Member)
+                }
+                case nested is BoundNullConditionalAccessExpression {
+                    let hadPrevious = captures.TryGetValue(nested.Capture, out var previous)
+                    captures[nested.Capture] = nested.Receiver
+                    try {
+                        return TryResolveStablePathWithCaptures(nested.WhenNotNull, captures)
+                    } finally {
+                        if hadPrevious && previous != nil {
+                            captures[nested.Capture] = previous
+                        } else {
+                            captures.Remove(nested.Capture)
+                        }
+                    }
+                }
+                default {
+                    return nil
+                }
+            }
+        }
+
+        private func PatternProvesNonNil(pattern BoundPattern)(WhenTrue bool, WhenFalse bool) {
+            switch pattern {
+                case constantPattern is BoundConstantPattern {
+                    if IsNullOperand(constantPattern.Value) {
+                        return (false, true)
+                    }
+                    let unwrapped = BoundConstantPattern.UnwrapInputConversion(
+                        constantPattern.Type,
+                        constantPattern.Value
+                    )
+                    return if unwrapped is BoundLiteralExpression literal && literal.Value != nil {
+                        (true, false)
+                    } else {
+                        (false, false)
+                    }
+                }
+                case _ is BoundTypePattern or BoundPropertyPattern or BoundListPattern {
+                    return (true, false)
+                }
+                case rel is BoundRelationalPattern {
+                    return if rel
+                        .Op
+                        .Kind == BoundBinaryOperatorKind.Equals &&
+                        (rel.Test == nil || rel.Test is BoundBinaryExpression) &&
+                        IsNullOperand(rel.Value) {
+                        (false, true)
+                    } else if rel
+                        .Op
+                        .Kind == BoundBinaryOperatorKind.NotEquals &&
+                        (rel.Test == nil || rel.Test is BoundBinaryExpression) &&
+                        IsNullOperand(rel.Value) {
+                        (true, false)
+                    } else if rel.Op.Kind is not(BoundBinaryOperatorKind.Equals or BoundBinaryOperatorKind.NotEquals) {
+                        (true, false)
+                    } else {
+                        (false, false)
+                    }
+                }
+                case notPattern is BoundNotPattern {
+                    let (innerTrue, innerFalse) = PatternProvesNonNil(notPattern.Pattern)
+                    return (innerFalse, innerTrue)
+                }
+                case binaryPattern is BoundBinaryPattern {
+                    let (leftTrue, leftFalse) = PatternProvesNonNil(binaryPattern.Left)
+                    let (rightTrue, rightFalse) = PatternProvesNonNil(binaryPattern.Right)
+                    return if binaryPattern.IsConjunction {
+                        (leftTrue || rightTrue, leftFalse && rightFalse)
+                    } else {
+                        (leftTrue && rightTrue, leftFalse || rightFalse)
+                    }
+                }
+                default {
+                    return (false, false)
+                }
             }
         }
 
