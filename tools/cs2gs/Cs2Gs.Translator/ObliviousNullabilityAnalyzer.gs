@@ -1474,7 +1474,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         model SemanticModel,
         siblings IReadOnlyList[CSharpCompilation]?
     ) bool {
-        let type = model.GetTypeInfo(value).Type
+        let unwrapped = UnwrapConfigureAwait(value, model)
+        let type = model.GetTypeInfo(unwrapped).Type
         if type is not INamedTypeSymbol{IsGenericType: true, TypeArguments: {Length: 1}} || !IsTaskLike(type) {
             return false
         }
@@ -1488,10 +1489,10 @@ internal shared class ObliviousNullabilityAnalyzer {
         if !IsEligibleTupleLeaf(result) {
             return false
         }
-        let target = model.GetEnclosingSymbol(value.SpanStart) ?? compilation.Assembly
+        let target = model.GetEnclosingSymbol(unwrapped.SpanStart) ?? compilation.Assembly
         let tainted = HashSet[ISymbol](SymbolEqualityComparer.Default)
         let edges = List[(Target ISymbol, Source ISymbol)]()
-        AddEdges(target, value, model, tainted, edges, position: ScalarFlowPosition.AwaitedResult)
+        AddEdges(target, unwrapped, model, tainted, edges, position: ScalarFlowPosition.AwaitedResult)
         return AwaitedSourcesAreTainted(compilation, target, tainted, edges, siblings)
     }
 
@@ -5497,6 +5498,69 @@ internal shared class ObliviousNullabilityAnalyzer {
         ?.ToDisplayString() == "System.Threading.Tasks" &&
         (named.OriginalDefinition.Name == "Task" || named.OriginalDefinition.Name == "ValueTask")
 
+    private func UnwrapConfigureAwait(expression ExpressionSyntax, model SemanticModel) ExpressionSyntax {
+        let unwrapped = Unwrap(expression)
+        if unwrapped is InvocationExpressionSyntax{
+            Expression: MemberAccessExpressionSyntax{Name: {Identifier: {ValueText: "ConfigureAwait"}}} configured
+        } configureAwaitCall &&
+            model
+            .GetSymbolInfo(configureAwaitCall).Symbol is IMethodSymbol{ContainingType: {} owner} && IsTaskLike(owner) {
+            return Unwrap(configured.Expression)
+        }
+        return unwrapped
+    }
+
+    internal func TryGetSynchronousAwaiterTarget(
+        expression ExpressionSyntax?,
+        model SemanticModel,
+        out taskExpression ExpressionSyntax?
+    ) bool {
+        taskExpression = nil
+        if expression == nil {
+            return false
+        }
+        if Unwrap(expression) is not InvocationExpressionSyntax getResultCall ||
+            getResultCall
+            .ArgumentList
+            .Arguments
+            .Count != 0 ||
+            getResultCall.Expression is not MemberAccessExpressionSyntax{
+            Name: {Identifier: {ValueText: "GetResult"}}
+        } getResultAccess {
+            return false
+        }
+        if model.GetSymbolInfo(getResultCall)
+            .Symbol is not IMethodSymbol getResultMethod ||
+            getResultMethod
+            .ContainingType
+            ?.ContainingNamespace
+            ?.ToDisplayString() != "System.Runtime.CompilerServices" {
+            return false
+        }
+        if Unwrap(getResultAccess.Expression) is not InvocationExpressionSyntax getAwaiterCall ||
+            getAwaiterCall
+            .ArgumentList
+            .Arguments
+            .Count != 0 ||
+            getAwaiterCall.Expression is not MemberAccessExpressionSyntax{
+            Name: {Identifier: {ValueText: "GetAwaiter"}}
+        } getAwaiterAccess ||
+            model
+            .GetSymbolInfo(getAwaiterCall)
+            .Symbol is not IMethodSymbol getAwaiterMethod ||
+            getAwaiterMethod.Name != "GetAwaiter" {
+            return false
+        }
+        let candidate = UnwrapConfigureAwait(getAwaiterAccess.Expression, model)
+        if model.GetTypeInfo(candidate)
+            .Type is not INamedTypeSymbol{IsGenericType: true, TypeArguments: {Length: 1}} taskType ||
+            !IsTaskLike(taskType) {
+            return false
+        }
+        taskExpression = candidate
+        return true
+    }
+
     // `null`, `null!`, `default`, a parenthesized form, or a conditional with
     // such an arm: the argument shapes in which the AUTHOR writes null. Purely
     // syntactic on purpose — a `T?`-typed local passed to a `T` parameter is
@@ -7040,7 +7104,12 @@ internal shared class ObliviousNullabilityAnalyzer {
             node is BaseObjectCreationExpressionSyntax ||
             node is ConstructorInitializerSyntax ||
             node is ElementAccessExpressionSyntax ||
-            node is ElementBindingExpressionSyntax {
+            node is ElementBindingExpressionSyntax ||
+            (
+            node is InitializerExpressionSyntax initSyntax && initSyntax.IsKind(
+                SyntaxKind.CollectionInitializerExpression
+            )
+        ) {
             CollectArgumentEdges(node, model, tainted, edges, scalarTupleEdges)
             CollectExpandedParamsElementEdges(node, model, paramsElementTainted, paramsElementEdges)
         }
@@ -7116,6 +7185,52 @@ internal shared class ObliviousNullabilityAnalyzer {
         paramsElementTainted HashSet[string],
         paramsElementEdges List[(Target string?, Source ISymbol)]
     ) {
+        let RecordParamsElement = func (target string?, elementExpression ExpressionSyntax) {
+            if IsDirectlyNullable(elementExpression, model) {
+                paramsElementTainted.Add(target)
+                return
+            }
+            for source in ResolveSources(elementExpression, model) {
+                paramsElementEdges.Add((target, source!!))
+            }
+        }
+        if call is InitializerExpressionSyntax initSyntax && initSyntax.IsKind(
+            SyntaxKind.CollectionInitializerExpression
+        ) &&
+            model.GetOperation(call) is IObjectOrCollectionInitializerOperation initializerOp {
+            for element in initializerOp.Initializers {
+                if element is not IInvocationOperation addInvocation {
+                    continue
+                }
+                let addParameters = addInvocation.TargetMethod.Parameters
+                if addParameters.IsDefaultOrEmpty ||
+                    !(addParameters[^1] is {IsParams: true, Type: IArrayTypeSymbol addArray} addParamsParameter) ||
+                    addArray.ElementType is not{IsReferenceType: true} ||
+                    addArray
+                    .ElementType
+                    .NullableAnnotation == Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated {
+                    continue
+                }
+                if ParamsElementId(addParamsParameter) is not{} addTarget {
+                    continue
+                }
+                for argument in addInvocation.Arguments {
+                    if SymbolEqualityComparer.Default.Equals(argument.Parameter, addParamsParameter) &&
+                        argument.ArgumentKind == ArgumentKind.ParamArray &&
+                        argument.Value is IArrayCreationOperation{Initializer: {} arrayInitializer} {
+                        for item in arrayInitializer.ElementValues {
+                            if item.Syntax is ExpressionSyntax itemSyntax {
+                                RecordParamsElement(addTarget, itemSyntax)
+                            }
+                        }
+                    }
+                }
+            }
+            return
+        }
         let argumentList BaseArgumentListSyntax? = switch call {
             case invocation is InvocationExpressionSyntax: cast[BaseArgumentListSyntax](invocation.ArgumentList)
             case creation is BaseObjectCreationExpressionSyntax: (creation.ArgumentList as BaseArgumentListSyntax)
@@ -7160,13 +7275,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             if convertedType != nil && SymbolEqualityComparer.Default.Equals(convertedType, parameter.Type) {
                 continue
             }
-            if IsDirectlyNullable(argument.Expression, model) {
-                paramsElementTainted.Add(target)
-                continue
-            }
-            for source in ResolveSources(argument.Expression, model) {
-                paramsElementEdges.Add((target, source!!))
-            }
+            RecordParamsElement(target, argument.Expression)
         }
     }
 
@@ -7333,7 +7442,13 @@ internal shared class ObliviousNullabilityAnalyzer {
             not BaseObjectCreationExpressionSyntax and
             not ConstructorInitializerSyntax and
             not ElementAccessExpressionSyntax and
-            not ElementBindingExpressionSyntax {
+            not ElementBindingExpressionSyntax and
+            not InitializerExpressionSyntax {
+            yield break
+        }
+        if call is InitializerExpressionSyntax collectionInitializer && !collectionInitializer.IsKind(
+            SyntaxKind.CollectionInitializerExpression
+        ) {
             yield break
         }
         let arguments = GetCallArguments(call, model)
@@ -7364,14 +7479,36 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
     }
 
-    private func GetCallArguments(call SyntaxNode, model SemanticModel) ImmutableArray[
-        IArgumentOperation
-    ] -> switch model
-        .GetOperation(call) {
-        case invocation is IInvocationOperation: invocation.Arguments
-        case creation is IObjectCreationOperation: creation.Arguments
-        case property is IPropertyReferenceOperation: property.Arguments
-        default: default(ImmutableArray[IArgumentOperation])
+    private func GetCallArguments(call SyntaxNode, model SemanticModel) ImmutableArray[IArgumentOperation] {
+        switch model.GetOperation(call) {
+            case invocation is IInvocationOperation {
+                return invocation.Arguments
+            }
+            case creation is IObjectCreationOperation {
+                return creation.Arguments
+            }
+            case property is IPropertyReferenceOperation {
+                return property.Arguments
+            }
+            case initializer is IObjectOrCollectionInitializerOperation when call.IsKind(
+                SyntaxKind.CollectionInitializerExpression
+            ) {
+                let builder = ImmutableArray.CreateBuilder[IArgumentOperation]()
+                for element in initializer.Initializers {
+                    if element is IInvocationOperation addInvocation {
+                        for argument in addInvocation.Arguments {
+                            if argument.Value is not IInstanceReferenceOperation {
+                                builder.Add(argument)
+                            }
+                        }
+                    }
+                }
+                return builder.ToImmutable()
+            }
+            default {
+                return default(ImmutableArray[IArgumentOperation])
+            }
+        }
     }
 
     // Issue #2469: tuple-valued declarations need the same direct/transitive
@@ -12265,7 +12402,19 @@ internal shared class ObliviousNullabilityAnalyzer {
             return
         }
         if value is AwaitExpressionSyntax awaited {
-            AddEdges(target, awaited.Expression, model, tainted, edges, $scope, ScalarFlowPosition.AwaitedResult)
+            AddEdges(
+                target,
+                UnwrapConfigureAwait(awaited.Expression, model),
+                model,
+                tainted,
+                edges,
+                $scope,
+                ScalarFlowPosition.AwaitedResult
+            )
+            return
+        }
+        if TryGetSynchronousAwaiterTarget(value, model, out var awaitedTask) {
+            AddEdges(target, awaitedTask, model, tainted, edges, $scope, ScalarFlowPosition.AwaitedResult)
             return
         }
         if IsDirectlyNullable(value, model, readConversion: false) {
@@ -12546,7 +12695,12 @@ internal shared class ObliviousNullabilityAnalyzer {
                 }
             }
             case awaitExpression is AwaitExpressionSyntax {
-                for source in ResolveSourceFlows(awaitExpression.Expression, model, $scope, respectNullGuards) {
+                for source in ResolveSourceFlows(
+                    UnwrapConfigureAwait(awaitExpression.Expression, model),
+                    model,
+                    $scope,
+                    respectNullGuards
+                ) {
                     yield (source.Symbol, source.AwaitDepth + 1, false, false)
                 }
             }
@@ -12587,7 +12741,11 @@ internal shared class ObliviousNullabilityAnalyzer {
                 }
             }
             case invocation is InvocationExpressionSyntax {
-                if model.GetSymbolInfo(invocation).Symbol is IMethodSymbol called && !called.ReturnsVoid {
+                if TryGetSynchronousAwaiterTarget(invocation, model, out var awaitedTask) {
+                    for source in ResolveSourceFlows(awaitedTask, model, $scope, respectNullGuards) {
+                        yield (source.Symbol, source.AwaitDepth + 1, false, false)
+                    }
+                } else if model.GetSymbolInfo(invocation).Symbol is IMethodSymbol called && !called.ReturnsVoid {
                     yield (called, 0, false, false)
                 }
             }
@@ -13193,10 +13351,10 @@ internal shared class ObliviousNullabilityAnalyzer {
         if respectNullGuards && IsNullGuardDominatedRead(expression, model) {
             return false
         }
+        if expression == nil || IsCallableValueExpression(expression, model) {
+            return false
+        }
         switch expression {
-            case nil {
-                return false
-            }
             case paren is ParenthesizedExpressionSyntax {
                 return IsDirectlyNullable(paren.Expression, model, respectNullGuards)
             }
@@ -13204,7 +13362,15 @@ internal shared class ObliviousNullabilityAnalyzer {
                 return IsDirectlyNullable(checkedExpression.Expression, model, respectNullGuards)
             }
             case awaitExpression is AwaitExpressionSyntax {
-                let awaited = model.GetTypeInfo(awaitExpression.Expression).Type
+                let awaited = model.GetTypeInfo(UnwrapConfigureAwait(awaitExpression.Expression, model)).Type
+                return awaited != nil && IsDeclaredNullablePosition(UnwrapAwaitedType(awaited))
+            }
+            case invocation is InvocationExpressionSyntax when TryGetSynchronousAwaiterTarget(
+                invocation,
+                model,
+                out var awaitedTask
+            ) {
+                let awaited = model.GetTypeInfo(awaitedTask!!).Type
                 return awaited != nil && IsDeclaredNullablePosition(UnwrapAwaitedType(awaited))
             }
             case suppress is PostfixUnaryExpressionSyntax when suppress.IsKind(
@@ -13250,7 +13416,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         // Flow nullability when the context happens to be enabled (inert in a
         // truly oblivious compilation, but harmless).
-        let info = model.GetTypeInfo(expression!!)
+        let info = model.GetTypeInfo(expression)
         if info.Nullability.Annotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
             return true
         }
@@ -13264,7 +13430,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         // is "no", and `CollectScalarValueFlow` records a forwarding edge so
         // the fixpoint can still promote both together.
         if ConditionalNotNullPostcondition.TryGetForwardedArgument(
-            expression!!,
+            expression,
             func (node ExpressionSyntax) ISymbol? {
                 return model.GetSymbolInfo(node).Symbol
             },
@@ -13276,7 +13442,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         // survives in BCL/source metadata regardless of the consuming context
         // (e.g. `AssemblyName.Name` and `Path.GetFileNameWithoutExtension(...)`
         // are declared `string?`).
-        let symbol ISymbol? = model.GetSymbolInfo(expression!!).Symbol
+        let symbol ISymbol? = model.GetSymbolInfo(expression).Symbol
         let symbolType ITypeSymbol? = switch symbol {
             case m is IMethodSymbol: m.ReturnType
             case p is IPropertySymbol: p.Type

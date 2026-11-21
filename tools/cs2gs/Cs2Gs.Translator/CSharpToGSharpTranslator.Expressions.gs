@@ -3600,25 +3600,29 @@ partial class CSharpToGSharpTranslator {
         private func ReceiverIsNullableReferenceFieldOrProperty(
             recv Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
         ) bool {
-            if recv is PostfixUnaryExpressionSyntax &&
-                recv.RawKind == int32(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression) ||
-                recv is ThisExpressionSyntax ||
-                recv is BaseExpressionSyntax ||
-                recv is Microsoft
+            let unwrappedRecv = Unparenthesize(recv)
+            if unwrappedRecv == nil ||
+                unwrappedRecv is PostfixUnaryExpressionSyntax &&
+                unwrappedRecv.RawKind == int32(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression
+            ) ||
+                unwrappedRecv is ThisExpressionSyntax ||
+                unwrappedRecv is BaseExpressionSyntax ||
+                unwrappedRecv is Microsoft
                 .CodeAnalysis
                 .CSharp
                 .Syntax
                 .LiteralExpressionSyntax ||
-                recv is ConditionalAccessExpressionSyntax {
+                unwrappedRecv is ConditionalAccessExpressionSyntax {
                 return false
             }
-            let symbol ISymbol? = this.context.GetSymbolInfo(recv).Symbol
+            let symbol ISymbol? = this.context.GetSymbolInfo(unwrappedRecv).Symbol
             // Issue #4356: in ADR-0169 analyzer mode the read is retargeted
             // onto the G# analyzer API, whose counterpart of some Roslyn
             // members is declared `T?` although Roslyn's is non-null — often a
             // SyntaxToken STRUCT, which the reference-type test below would
             // reject outright. The C# type cannot say so, so ask the map.
-            if this.IsGSharpNullableAnalyzerExpression(recv) {
+            if this.IsGSharpNullableAnalyzerExpression(unwrappedRecv) {
                 return true
             }
             // Issue #2113: in a nullable-OBLIVIOUS compilation the whole-program
@@ -3652,8 +3656,8 @@ partial class CSharpToGSharpTranslator {
             let declared ITypeSymbol? = switch symbol {
                 case property is IPropertySymbol: property.Type
                 case field is IFieldSymbol: field.Type
-                case local is ILocalSymbol when this.IsWithinExpressionTreeLambda(recv): local.Type
-                case parameter is IParameterSymbol when this.IsWithinExpressionTreeLambda(recv): parameter.Type
+                case local is ILocalSymbol when this.IsWithinExpressionTreeLambda(unwrappedRecv): local.Type
+                case parameter is IParameterSymbol when this.IsWithinExpressionTreeLambda(unwrappedRecv): parameter.Type
                 default: default(ITypeSymbol?)
             }
             if !(declared != nil && declared.IsReferenceType == true) {
@@ -3664,7 +3668,37 @@ partial class CSharpToGSharpTranslator {
                 .NullableAnnotation
                 .Annotated ||
                 this.ShouldPromoteToNullableReference(symbol) || this.IsTranslatorWidenedDeclaration(symbol) ||
-                this.IsInferredNullableLocal(symbol)
+                this.IsInferredNullableLocal(symbol) || this.FieldOrPropertyHasNullableInitializer(symbol)
+        }
+
+        private func FieldOrPropertyHasNullableInitializer(symbol ISymbol?) bool {
+            if symbol is IFieldSymbol field {
+                if this.state.StaticFieldInitializers.ContainsKey(field) {
+                    return false
+                }
+                for reference in field.DeclaringSyntaxReferences {
+                    if reference.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} initializer}} {
+                        using let modelScope = this.context.UseSemanticModelForSymbol(reference.SyntaxTree, field)
+                        if modelScope != nil && this.IsNullableInitializer(initializer) {
+                            return true
+                        }
+                    }
+                }
+            } else if symbol is IPropertySymbol property {
+                for reference in property.DeclaringSyntaxReferences {
+                    if reference.GetSyntax() is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .PropertyDeclarationSyntax{Initializer: {Value: {} initializer}} {
+                        using let modelScope = this.context.UseSemanticModelForSymbol(reference.SyntaxTree, property)
+                        if modelScope != nil && this.IsNullableInitializer(initializer) {
+                            return true
+                        }
+                    }
+                }
+            }
+            return false
         }
 
         /// Issue #4356: whether [`symbol`](paramref) is a Roslyn property or
@@ -23892,11 +23926,22 @@ partial class CSharpToGSharpTranslator {
                 (configuredOwner.Name == "Task" || configuredOwner.Name == "ValueTask") {
                 awaitedTask = configured.Expression
             }
-            return this.IsAnnotationsContextWithoutFlowAnalysis(awaited) &&
+            return this.DeclaredAwaitedTaskIsAnnotatedNullable(awaitedTask, awaited)
+        }
+
+        private func DeclaredAwaitedTaskIsAnnotatedNullable(
+            awaitedTask Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            site Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+        ) bool {
+            if !this.IsAnnotationsContextWithoutFlowAnalysis(site) {
+                return false
+            }
+            let taskType = (this.context.GetSymbolInfo(awaitedTask).Symbol as IMethodSymbol)?.ReturnType ??
                 this
                 .context
-                .GetSymbolInfo(awaitedTask)
-                .Symbol is IMethodSymbol{ReturnType: INamedTypeSymbol{TypeArguments: {Length: 1} typeArguments} task} &&
+                .GetTypeInfo(awaitedTask)
+                .Type
+            return taskType is INamedTypeSymbol{TypeArguments: {Length: 1} typeArguments} task &&
                 (task.OriginalDefinition.Name == "Task" || task.OriginalDefinition.Name == "ValueTask") &&
                 task
                 .ContainingNamespace
@@ -25527,6 +25572,10 @@ partial class CSharpToGSharpTranslator {
                     .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceAssignmentExpression) {
                     return !this.CoalesceAssignmentResultIsStaticallyNonNull(coalesceAssignment) &&
                         this.ReceiverValueIsPromotedNullable(coalesceAssignment.Right)
+                }
+                case invocation is InvocationExpressionSyntax when ObliviousNullabilityAnalyzer
+                    .TryGetSynchronousAwaiterTarget(invocation, this.context.SemanticModel, out var awaitedTask) {
+                    return this.AwaitedReceiverValueIsPromotedNullable(awaitedTask!!)
                 }
                 case invocation is InvocationExpressionSyntax when this
                     .context
