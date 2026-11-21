@@ -119,7 +119,7 @@ Console.WriteLine("answer=${n *
 
 Malformed interpolation is reported by dedicated diagnostics: `GS0220` (non-constant alignment), `GS0221` (handler forwarding), `GS0222` (unterminated hole), `GS0223` (empty hole), `GS0224` (empty format specifier), and `GS0225` (newline in the literal portion of the string). By default an interpolated string lowers to `System.Runtime.CompilerServices.DefaultInterpolatedStringHandler`; when its contextual target type is `IFormattable` or `FormattableString` it instead lowers to `FormattableStringFactory.Create`, deferring formatting so the caller selects the culture. See the [CLR interop reference](./clr-interop.md#interpolated-strings-and-formatting).
 
-### UTF-8 span literals (Next)
+### UTF-8 span literals {/* #utf-8-span-literals-next */}
 
 An adjacent lowercase `u8"` starts a noninterpolating UTF-8 text literal.
 Its natural type is the target core library's `System.ReadOnlySpan[byte]`,
@@ -127,10 +127,17 @@ also spelled `readonly span[byte]`.
 The identifier `u8` remains available outside this adjacent prefix.
 
 ```gsharp
-let view readonly span[byte] = u8"Aé\0"
-Console.WriteLine(view.Length) // 4: 41 C3 A9 00
-let combined = (u8"A" + u8"é") + u8"\0"
+func ShowUtf8() {
+    let view readonly span[byte] = u8"Aé\0"
+    Console.WriteLine(view.Length) // 4: 41 C3 A9 00
+    let combined = (u8"A" + u8"é") + u8"\0"
+    Console.WriteLine(combined.Length) // 4
+}
+ShowUtf8()
 ```
+
+Declare span locals inside a function. Top-level variables become heap-rooted
+static fields and cannot hold CLR ref structs.
 
 Source scalars and decoded text escapes encode to UTF-8 without normalization
 or a BOM. Supported escapes are `\0`, `\a`, `\b`, `\f`, `\n`, `\r`,
@@ -171,8 +178,8 @@ Use explicit copying APIs at mutable-array, byte-string, or native-slice
 ownership boundaries.
 Reference assemblies retain public CLR signatures but omit the private data.
 Formatter and editor tooling preserve the adjacent spelling.
-This is an unreleased compiler feature, not permission to use the syntax
-with an older SDK. cs2gs adoption follows a language release and a separate
+UTF-8 span literals are available in the published SDK for 0.5.767.
+Do not assume that older SDKs support this syntax. cs2gs adoption requires a separate
 repository SDK-pin update.
 
 <span id="byte-string-literals-development"></span>

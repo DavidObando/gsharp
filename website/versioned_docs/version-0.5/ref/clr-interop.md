@@ -41,7 +41,7 @@ dict["answer"] = 42
 
 Constructor overload resolution uses the same imported member machinery as method calls, including numeric conversion ranking and optional/default argument support where metadata supplies defaults.
 
-### Native CLR span aliases (Next)
+### Native CLR span aliases {/* #native-clr-span-aliases-next */}
 
 `span[T]` denotes `System.Span[T]`.
 `readonly span[T]` denotes `System.ReadOnlySpan[T]`.
@@ -49,12 +49,17 @@ These contextual aliases use the target core library and preserve CLR type ident
 They are not native slices, bytestrings, or new wrapper types.
 
 ```gsharp
-let bytes = []byte{65, 0, 195, 169}
-let writable = span[byte](bytes)
-writable[0] = 66
-let view readonly span[byte] = writable
-Console.WriteLine(view.Length) // 4
+func ShowSpan() {
+    let bytes = []byte{65, 0, 195, 169}
+    let writable = span[byte](bytes)
+    writable[0] = 66
+    let view readonly span[byte] = writable
+    Console.WriteLine(view.Length) // 4
+}
+ShowSpan()
 ```
+
+Declare span locals inside a function, not as top-level variables.
 
 Use existing CLR constructors and conversions.
 The aliases add no collection allocation syntax or implicit conversions.
@@ -112,7 +117,7 @@ for kv in oddsAndEvens {
 
 The sample above relies on an imported extension method whose trailing optional comparer argument is omitted.
 
-## Native protocol contract boundary (Next)
+## Native protocol contract boundary {/* #native-protocol-contract-boundary-next */}
 
 Native protocols are distinct from nominal interfaces and `adapt`. The admitted
 profile is metadata-aware G# to G# with finite, canonical conformance evidence.

@@ -47,7 +47,7 @@ Source variadic collection carriers can emit `ParamCollection`; their source-cal
 | GS0605 | Error | A rich anonymous field with an omitted type has no unambiguous heap-storable inferred type. | Add an explicit field type; `nil`, untyped lambdas/method groups, cycles, and ref-like values are not widened to `object`. |
 | GS0606 | Error | `adapt[I](source)` cannot produce a complete exact forwarding plan. | Supply an interface target and a non-null admitted source whose accessible public instance members exactly match every required slot. Static abstract/virtual members and operators require a separate design. |
 
-## Fixed-array ABI imports (Next, ADR-0210 F1)
+## Fixed-array ABI imports {/* #fixed-array-abi-imports-next-adr-0210-f1 */}
 
 | Code | Severity | Meaning | Remedy |
 | --- | --- | --- | --- |
@@ -56,13 +56,13 @@ Source variadic collection carriers can emit `ParamCollection`; their source-cal
 This validates explicitly marked CLR contracts; it does not enable the planned
 value lowering of ordinary source `[N]T`.
 
-## Native protocols (Next, ADR-0205)
+## Native protocols {/* #native-protocols-next-adr-0205 */}
 
 | Code | Severity | Meaning | Remedy |
 | --- | --- | --- | --- |
 | GS0629 | Error | Unsupported native protocol declaration, payload/signature/escape, absent required initialization, or unknown/invalid/incompatible canonical evidence. | Use the admitted nongeneric synchronous by-value core and exact accessible witnesses; initialize required storage, reference the canonical origin/contracts and matching implementation/ref metadata. Unknown evidence is not negative conformance. |
 
-## Native CLR span aliases (Next, ADR-0211)
+## Native CLR span aliases {/* #native-clr-span-aliases-next-adr-0211 */}
 
 | Code | Severity | Meaning | Remedy |
 | --- | --- | --- | --- |

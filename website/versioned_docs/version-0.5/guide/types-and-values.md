@@ -15,12 +15,12 @@ G# combines concise aggregate and collection syntax with CLR type identity. Use 
 
 If you type the C# spelling `null` in a value position and no symbol named `null` exists in scope, the binder reports `GS0273` ("`'null'` is not a literal in G#. Did you mean `'nil'`?") and recovers by treating the identifier as `nil`, so target-type contexts (`let x string? = null`, `Foo(null)` where `Foo` takes `T?`, `x == null`) continue to typecheck. The diagnostic is suppressed when `null` resolves to a real symbol (a function, local, or field named `null` is legal because `null` is not a keyword).
 
-## Native protocols (Next, ADR-0205)
+## Native protocols {/* #native-protocols-next-adr-0205 */}
 
-The bounded native protocol core is a development feature, not part of the
-published 0.5.212 SDK. `protocol` is contextual: ordinary identifiers with that
-name remain legal. A protocol currently contains only nongeneric, synchronous,
-by-value method signatures.
+The bounded native protocol core is available in the published SDK for
+0.5.767. `protocol` is contextual: ordinary identifiers with that name remain
+legal. A protocol currently contains only nongeneric, synchronous, by-value
+method signatures.
 
 ```gsharp
 protocol Advance { func Next() int32; }
