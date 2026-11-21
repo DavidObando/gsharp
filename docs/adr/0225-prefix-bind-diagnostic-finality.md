@@ -56,6 +56,18 @@ class PrefixBindResult {
 class Compilation {
     func BindPrefix(tree SyntaxTree, cut int32, options PrefixBindOptions,
                     cancellationToken CancellationToken = default(CancellationToken)) PrefixBindResult
+    // D6.6: reuses the declarations and unchanged bodies of the previous cut
+    func BindPrefix(tree SyntaxTree, cut int32, options PrefixBindOptions, previous PrefixBindResult?,
+                    cancellationToken CancellationToken = default(CancellationToken)) PrefixBindResult
+}
+
+class SemanticModel {
+    func GetExpectedType(position int32, cancellationToken CancellationToken = default(CancellationToken)) TypeSymbol?
+}
+
+class SyntaxTree {
+    shared func ParseExpression(text string) ExpressionSyntax?
+    shared func ParseStatement(text string) StatementSyntax?
 }
 ```
 
@@ -128,8 +140,8 @@ Every premise is conditional on a prefix tree. A tree from `SyntaxTree.Parse` ha
 3. **Unknown members of imported types are not always final.** The note made a member of an imported type final. A later receiver function can declare an instance member of any type, and member lookup reads receiver functions. A later source type can also hide an imported type of the same name. With `Nothing`, every unknown member is therefore `FutureDependent` (`later-member`); with `KeepDeclarations` it is final. A host that expects neither later receiver functions nor hiding types can treat `later-member` as final.
 4. **`KeepDeclarations` is not final for every unknown name.** The note made it final because all later declarations are present. Later top-level statements and later statements of the open member are not present, and a function literal can use a later local.
 5. **Overload resolution** (#6078). An overload or argument failure has the premise of a failed lookup of its callee. The binder pushes a call frame when it resolves a call (a simple-name call, a member call, a base call). The overload reports read the innermost frame. A report outside a frame, or in a function literal of a call, gets the simple-name premise, which holds whenever the member premise holds. With `Nothing`, every failure is `FutureDependent`: a later overload of a source function, a later member of an open or partial type, a later receiver function, or a later type that hides an imported type can add a candidate. A static call of an imported class also stays `FutureDependent` with `Nothing`. Its failure is reported as an unknown member (`GS0159`), and a later source type of the same simple name hides the imported class (a later `class Math` removes the `GS0159` of `Math.Max(1)`). The note and #6078 made it final; D6.3 rules it out. With `KeepDeclarations`, a failure is final, except for a simple-name callee in the top-level statements or in a function literal of the open member, as for an unknown name. A call of a local or a parameter of a function type is always final: no later text changes its signature, and a later local of the same name is a redeclaration. A candidate also types its function literal arguments and converts each argument. `BindPrefix` gives the call's premise to a diagnostic of such an argument. Instance calls of a closed, non-partial source type are `FutureDependent` with `Nothing` as a conservative choice: a later receiver function of the same name did not remove the report in the tests. Two related families have the same kind of premise: an undefined operator (a later receiver-form `operator`, also on `string` and `int32`) and a missing conversion that involves a type of this compilation (a later `func operator implicit`).
-6. **No reuse.** Each `BindPrefix` binds the prefix compilation from scratch. The cost is the cost of a plain bind of the prefix (see Consequences). Per-member body reuse inside the edited tree is a follow-up.
-7. **Deferred members.** `SemanticModel.GetSpeculativeStatementDiagnostics`, `SemanticModel.GetExpectedType`, `SyntaxTree.ParseExpression` and `SyntaxTree.ParseStatement` are not in this change. `PrefixBindResult` also has `SyntaxTree`, so that a host can query the prefix tree.
+6. **Reuse for successive cuts** (#6079). The overload with `previous` builds the prefix compilation as `previous.Compilation.ReplaceSyntaxTree(previous.SyntaxTree, prefixTree)` when the previous result comes from a compilation with the same other trees, the same reference resolver, the same options and the same `PrefixRemainder`. Otherwise it binds from scratch. `ReplaceSyntaxTree` reuses the global scope when the two prefix trees differ only in member bodies (ADR-0105 phase 2), and binds from scratch otherwise. For a prefix tree, the skeleton of the body-only check gives the open body the text that the bind removed after the cut, so that two cuts in one body have the same skeleton. When both prefix trees have the same host text, the spans of the unchanged bodies do not move, so the edited tree is not marked dirty and the body cache (ADR-0105 phase 1, which a prefix compilation now enables) serves every body whose text did not change; the open body misses its hash and binds again. Reuse retires `previous.Compilation` (ADR-0212 §7a). A body served from the cache keeps the syntax nodes of the previous prefix tree, so a semantic-model query on `result.Compilation` answers for the open member and for the declarations, and can answer nothing for a node in another member body. The result is the same as without `previous`. A file with top-level statements or a partial type, or whose declarations report a diagnostic, never reuses the global scope (the limits of `IncrementalGlobalScopeReuse`). The test plan compares the two binds at successive statement boundaries of 145 samples, in both modes, with the top-level statements moved into a function.
+7. **Library-host members** (#6079). `SemanticModel.GetExpectedType` answers the parameter type of an argument slot when every candidate agrees (the member group when the compilation records it, the called function otherwise), the declared type of a variable initializer, the return type of a `return` (a function literal's own; none in a lambda), and the variable type of an assignment. `SyntaxTree.ParseExpression` and `ParseStatement` parse a fragment on its own and return `null` when the text is not exactly one expression or statement. `GetDeclaredSymbol` answers for a `ParameterSyntax` and a `VariableDeclarationSyntax`, and `GetSymbolInfo` of a call of a source type's `init` answers the chosen constructor's function. `SemanticModel.GetSpeculativeStatementDiagnostics`, `GetSymbolInfo` of an imported constructor, `Diagnostic.Phase` and a `LookupMembers` cache are not in this change (see Follow-ups). `PrefixBindResult` also has `SyntaxTree`, so that a host can query the prefix tree.
 
 ## Consequences
 
@@ -137,7 +149,8 @@ Every premise is conditional on a prefix tree. A tree from `SyntaxTree.Parse` ha
 - On the samples, cut at up to 30 statement boundaries each (3922 checks in both modes), no final diagnostic is missing from the complete file at the same ID and span. Before the premises, 370 were.
 - For each sample, `BindPrefix` at the end of the text with `KeepDeclarations` reports exactly `GetDiagnostics()`, all final. For the 194 programs in `samples/` and the Core test data, `GetDiagnostics()` gives the same ID, span, severity, message, property count and additional-location count before and after the change.
 - The cost of a check is the cost of a plain bind of the prefix text plus the scope query. On the samples (3922 checks, scope included), `BindPrefix` takes 2.5 ms at p50 and 9.8 ms at p95. A plain `Compilation(...).GetDiagnostics()` of the same prefix texts takes 2.3 ms and 8.8 ms on the same machine.
-- The `DiagnosticBag` failed-lookup reports read one `AsyncLocal` value. Other reports do not change.
+- The `DiagnosticBag` failed-lookup, overload, operator and conversion reports read one `AsyncLocal` value. A call binding pushes a call frame only in a prefix bind; outside one it reads the same `AsyncLocal` value once.
+- Reuse (D6.6): on the 145 samples in member form, 2818 cuts in both modes, a bind with `previous` took 2.1 ms at p50 and 3.7 ms mean, against 4.2 ms and 6.1 ms for a bind from scratch on the same machine (a shared machine, so the numbers vary by about 20% between runs). 2444 of the 2460 chained binds reused the declarations.
 
 ## Alternatives considered
 
@@ -149,6 +162,5 @@ Every premise is conditional on a prefix tree. A tree from `SyntaxTree.Parse` ha
 ## Follow-ups
 
 - A call that succeeds before the cut can resolve to a later, better overload after it. A diagnostic of the call's result (`let x int32 = F(1)` with `F(object) string`) is then removable, but no premise states it.
-- Per-member body reuse for successive cuts of one member (D6.6).
-- `GetSpeculativeStatementDiagnostics`, `GetExpectedType`, `ParseExpression` and `ParseStatement` (D6.7).
-- The smaller asks of the Oats note: `GetDeclaredSymbol` for parameters and local declarations, `GetSymbolInfo` for constructor calls, the concurrency contract (ADR-0223 D5), the cost of `LookupMembers`, and `Diagnostic.Phase`.
+- Reuse of the global scope for a file with top-level statements, the main shape of the samples (D6.6).
+- `GetSpeculativeStatementDiagnostics`, `GetSymbolInfo` of an imported constructor, the cost of `LookupMembers`, and `Diagnostic.Phase` (D6.7).
