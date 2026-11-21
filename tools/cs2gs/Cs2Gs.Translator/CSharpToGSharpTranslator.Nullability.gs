@@ -819,6 +819,13 @@ partial class CSharpToGSharpTranslator {
             if this.IsCallableValueExpression(expression) {
                 return false
             }
+            if ObliviousNullabilityAnalyzer.TryGetSynchronousAwaiterTarget(
+                expression,
+                this.context.SemanticModel,
+                out var awaitedTask
+            ) {
+                return this.AwaitedReceiverValueIsPromotedNullable(awaitedTask!!)
+            }
             if this.IsNullableInitializer(expression) {
                 return true
             }
@@ -1542,7 +1549,7 @@ partial class CSharpToGSharpTranslator {
         // (e.g. `AssemblyName.Name` and `Path.GetFileNameWithoutExtension(...)`
         // are declared `string?`). `x!` suppresses nullability.
         private func IsNullableInitializer(expression ExpressionSyntax?) bool {
-            if expression == nil {
+            if expression == nil || this.IsCallableValueExpression(expression) {
                 return false
             }
             switch expression {
@@ -1570,13 +1577,21 @@ partial class CSharpToGSharpTranslator {
                     return this.IsNullableInitializer(ternary.WhenTrue) || this.IsNullableInitializer(ternary.WhenFalse)
                 }
             }
-            // Issue #5527: an await of a `Task<T?>` where C# runs no flow analysis.
+            // Issue #5527: an await (or synchronous GetAwaiter().GetResult()) of a `Task<T?>` where C# runs no flow analysis.
             if expression is Microsoft
                 .CodeAnalysis
                 .CSharp
                 .Syntax
                 .AwaitExpressionSyntax awaited &&
                 this.DeclaredAwaitedResultIsAnnotatedNullable(awaited) {
+                return true
+            }
+            if ObliviousNullabilityAnalyzer.TryGetSynchronousAwaiterTarget(
+                expression,
+                this.context.SemanticModel,
+                out var awaitedTask
+            ) &&
+                this.DeclaredAwaitedTaskIsAnnotatedNullable(awaitedTask!!, expression) {
                 return true
             }
             // Flow nullability when the nullable context happens to be enabled.

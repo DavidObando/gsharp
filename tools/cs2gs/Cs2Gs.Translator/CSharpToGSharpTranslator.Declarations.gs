@@ -1164,7 +1164,7 @@ partial class CSharpToGSharpTranslator {
             let lift = if autoPropertyLift != ConstructorLift.None {
                 autoPropertyLift
             } else {
-                this.AnalyzeConstructorLift(node, mergedMembers, symbol, kind!!)
+                this.GetOrAnalyzeConstructorLift(node, mergedMembers, symbol, kind!!)
             }
             // Issues #1990/#2435: G# data structs have no explicit `init`
             // member, but a C# record-struct constructor whose complete effect is a
@@ -1305,6 +1305,19 @@ partial class CSharpToGSharpTranslator {
                 SymbolEqualityComparer.Default
             )
             this.CollectStaticFieldInitializers(mergedMembers, symbol)
+            if symbol != nil {
+                this.state.AnalyzedFieldOverrideTypes.Add(symbol)
+                if lift.FieldInitializers.Count > 0 || lift.FieldsAsPrimaryParameters.Count > 0 {
+                    for memberSymbol in symbol.GetMembers().OfType[IFieldSymbol]() {
+                        if lift.FieldInitializers.ContainsKey(memberSymbol.Name) ||
+                            lift
+                            .FieldsAsPrimaryParameters
+                            .Contains(memberSymbol.Name) {
+                            this.state.LiftedFieldInitializers.Add(memberSymbol)
+                        }
+                    }
+                }
+            }
             let membersToTranslate = mergedMembers.Select(
                 (member MemberDeclarationSyntax) -> (Member: member, OwnedExtensionTarget: default(INamedTypeSymbol))
             )
@@ -2184,6 +2197,62 @@ partial class CSharpToGSharpTranslator {
                 BodyFieldInitializers: bodyFieldInitializers,
                 ResidualInitStatements: List[GStatement]()
             }
+        }
+
+        private func GetOrAnalyzeConstructorLift(
+            node TypeDeclarationSyntax,
+            members IReadOnlyList[MemberDeclarationSyntax],
+            symbol INamedTypeSymbol?,
+            kind TypeDeclarationKind,
+            attachSynthHelpers bool = true
+        ) ConstructorLift {
+            let memberCount = members.Count
+            if this
+                .state
+                .CachedConstructorLifts
+                .TryGetValue(node, out var cached) &&
+                cached is (CachedMemberCount int32, Lift ConstructorLift) entry &&
+                entry.CachedMemberCount == memberCount {
+                if attachSynthHelpers {
+                    this.state.PendingInstanceSynthHelpers?.AddRange(entry.Lift.InstanceSynthHelpers)
+                    this.state.PendingStaticSynthHelpers?.AddRange(entry.Lift.StaticSynthHelpers)
+                }
+                return entry.Lift
+            }
+            let savedInstanceSynthHelpers = this.state.PendingInstanceSynthHelpers
+            let savedStaticSynthHelpers = this.state.PendingStaticSynthHelpers
+            let capturedInstanceHelpers = List[MethodDeclaration]()
+            let capturedStaticHelpers = List[MethodDeclaration]()
+            this.state.PendingInstanceSynthHelpers = capturedInstanceHelpers
+            this.state.PendingStaticSynthHelpers = capturedStaticHelpers
+            var lift ConstructorLift
+            try {
+                lift = this.AnalyzeConstructorLift(node, members, symbol, kind)
+            } finally {
+                this.state.PendingInstanceSynthHelpers = savedInstanceSynthHelpers
+                this.state.PendingStaticSynthHelpers = savedStaticSynthHelpers
+            }
+            if capturedInstanceHelpers.Count > 0 || capturedStaticHelpers.Count > 0 {
+                lift = ConstructorLift{
+                    Constructor: lift.Constructor,
+                    DropConstructor: lift.DropConstructor,
+                    PrimaryParameters: lift.PrimaryParameters,
+                    FieldsAsPrimaryParameters: lift.FieldsAsPrimaryParameters,
+                    PropertiesAsPrimaryParameters: lift.PropertiesAsPrimaryParameters,
+                    PropertiesAsBodyFields: lift.PropertiesAsBodyFields,
+                    FieldInitializers: lift.FieldInitializers,
+                    BodyFieldInitializers: lift.BodyFieldInitializers,
+                    ResidualInitStatements: lift.ResidualInitStatements,
+                    InstanceSynthHelpers: capturedInstanceHelpers,
+                    StaticSynthHelpers: capturedStaticHelpers
+                }
+            }
+            this.state.CachedConstructorLifts[node] = (memberCount, lift)
+            if attachSynthHelpers {
+                this.state.PendingInstanceSynthHelpers?.AddRange(lift.InstanceSynthHelpers)
+                this.state.PendingStaticSynthHelpers?.AddRange(lift.StaticSynthHelpers)
+            }
+            return lift
         }
 
         private func AnalyzeConstructorLift(

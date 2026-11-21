@@ -570,10 +570,10 @@ partial class CSharpToGSharpTranslator {
         /// Collects the static-field initializers of a foldable `static`
         /// constructor so they can be re-attached to the corresponding fields
         /// (G# has no static-constructor form; ADR-0115 §B.11).
-        private func CollectStaticFieldInitializers(
+        private func EnumerateFoldableStaticConstructorAssignments(
             members IReadOnlyList[MemberDeclarationSyntax],
             typeSymbol INamedTypeSymbol?
-        ) {
+        ) sequence[(Field IFieldSymbol, Assignment Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax)] {
             for member in members {
                 if member is not Microsoft
                     .CodeAnalysis
@@ -617,9 +617,22 @@ partial class CSharpToGSharpTranslator {
                         .context
                         .GetSymbolInfo(assignment.Left)
                         .Symbol is IFieldSymbol field {
-                        this.state.StaticFieldInitializers[field] = this.TranslateExpression(assignment.Right)!!
+                        yield (field, assignment)
                     }
                 }
+            }
+        }
+
+        /// Collects the static-field initializers of a foldable `static`
+        /// constructor so they can be re-attached to the corresponding fields
+        /// (G# has no static-constructor form; ADR-0115 §B.11).
+        private func CollectStaticFieldInitializers(
+            members IReadOnlyList[MemberDeclarationSyntax],
+            typeSymbol INamedTypeSymbol?
+        ) {
+            for (field, assignment) in this.EnumerateFoldableStaticConstructorAssignments(members, typeSymbol) {
+                using let modelScope = this.context.UseSemanticModelFor(assignment.SyntaxTree, this.context.Compilation)
+                this.state.StaticFieldInitializers[field] = this.TranslateExpression(assignment.Right)!!
             }
         }
 
