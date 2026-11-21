@@ -1305,6 +1305,19 @@ partial class CSharpToGSharpTranslator {
                 SymbolEqualityComparer.Default
             )
             this.CollectStaticFieldInitializers(mergedMembers, symbol)
+            if symbol != nil {
+                this.state.AnalyzedFieldOverrideTypes.Add(symbol)
+                if lift.FieldInitializers.Count > 0 || lift.FieldsAsPrimaryParameters.Count > 0 {
+                    for memberSymbol in symbol.GetMembers().OfType[IFieldSymbol]() {
+                        if lift.FieldInitializers.ContainsKey(memberSymbol.Name) ||
+                            lift
+                            .FieldsAsPrimaryParameters
+                            .Contains(memberSymbol.Name) {
+                            this.state.LiftedFieldInitializers.Add(memberSymbol)
+                        }
+                    }
+                }
+            }
             let membersToTranslate = mergedMembers.Select(
                 (member MemberDeclarationSyntax) -> (Member: member, OwnedExtensionTarget: default(INamedTypeSymbol))
             )

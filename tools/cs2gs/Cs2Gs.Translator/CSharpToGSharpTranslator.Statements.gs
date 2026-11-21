@@ -501,22 +501,22 @@ partial class CSharpToGSharpTranslator {
                         }
                         let returnList = inferredArrow.ReturnTypes.ToList()
                         var returnTypes IReadOnlyList[GTypeReference] = returnList
-                        var returnsChanged = false
-                        if !methodGroupTarget.ReturnsVoid &&
-                            returnList.Count == 1 &&
-                            !returnList[0].IsNullable &&
-                            (
-                            this.ShouldPromoteToNullableReference(methodGroupTarget) ||
-                                ObliviousNullabilityAnalyzer.ReturnContractIsNullable(
-                                this.context.Compilation,
-                                methodGroupTarget
-                            )
-                        ) {
-                            returnTypes = List[GTypeReference]{MakeNullable(returnList[0])!!}
+                        var returnsChanged = inferredArrow.IsAsync
+                        if methodGroupTarget.ReturnsVoid {
+                            if returnList.Count != 0 {
+                                returnTypes = List[GTypeReference]()
+                                returnsChanged = true
+                            }
+                        } else if this.MapDelegateLikeReturnType(
+                            methodGroupTarget,
+                            isAsync: false,
+                            declaration!!.Type.GetLocation()
+                        ) is {} mappedMethodReturn {
+                            returnTypes = List[GTypeReference]{mappedMethodReturn}
                             returnsChanged = true
                         }
                         if parametersChanged || returnsChanged {
-                            type = ArrowTypeReference(parameterTypes, returnTypes, inferredArrow.IsAsync){
+                            type = ArrowTypeReference(parameterTypes, returnTypes, isAsync: false){
                                 IsNullable = inferredArrow.IsNullable
                             }
                         }

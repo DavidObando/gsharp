@@ -3673,7 +3673,7 @@ partial class CSharpToGSharpTranslator {
 
         private func FieldOrPropertyHasNullableInitializer(symbol ISymbol?) bool {
             if symbol is IFieldSymbol field {
-                if this.state.StaticFieldInitializers.ContainsKey(field) {
+                if this.InlineFieldInitializerOverriddenByConstructor(field) {
                     return false
                 }
                 for reference in field.DeclaringSyntaxReferences {
@@ -3693,6 +3693,65 @@ partial class CSharpToGSharpTranslator {
                         .PropertyDeclarationSyntax{Initializer: {Value: {} initializer}} {
                         using let modelScope = this.context.UseSemanticModelForSymbol(reference.SyntaxTree, property)
                         if modelScope != nil && this.IsNullableInitializer(initializer) {
+                            return true
+                        }
+                    }
+                }
+            }
+            return false
+        }
+
+        private func InlineFieldInitializerOverriddenByConstructor(field IFieldSymbol) bool {
+            if this
+                .state
+                .StaticFieldInitializers
+                .ContainsKey(field) ||
+                this
+                .state
+                .LiftedFieldInitializers
+                .Contains(field) {
+                return true
+            }
+            let owner = field.ContainingType
+            if owner == nil || this.state.AnalyzedFieldOverrideTypes.Contains(owner) {
+                return false
+            }
+            // Forward-referenced types not yet visited by VisitAggregate may still discard inline initializers
+            // via static constructors or non-positional record-struct constructor lifts.
+            let isNonPositionalRecordStruct = owner.IsRecord &&
+                owner.IsValueType &&
+                GetPrimaryConstructorParameterList(owner) == nil
+            if !field.IsStatic && !isNonPositionalRecordStruct {
+                return false
+            }
+            for constructor in owner.Constructors {
+                let matchesConstructor = if field.IsStatic {
+                    constructor.IsStatic
+                } else {
+                    !constructor.IsStatic && !constructor.IsImplicitlyDeclared
+                }
+                if !matchesConstructor {
+                    continue
+                }
+                for reference in constructor.DeclaringSyntaxReferences {
+                    if reference.GetSyntax() is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ConstructorDeclarationSyntax ctorSyntax &&
+                        ctorSyntax.Body != nil {
+                        using let modelScope = this.context.UseSemanticModelForSymbol(reference.SyntaxTree, owner)
+                        if modelScope != nil &&
+                            ctorSyntax.Body!!
+                            .DescendantNodes()
+                            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax]()
+                            .Any(
+                            (assignment Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax) ->
+                            assignment.OperatorToken.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.EqualsToken) &&
+                                SymbolEqualityComparer
+                                .Default
+                                .Equals(this.context.GetSymbolInfo(assignment.Left).Symbol, field)
+                        ) {
                             return true
                         }
                     }

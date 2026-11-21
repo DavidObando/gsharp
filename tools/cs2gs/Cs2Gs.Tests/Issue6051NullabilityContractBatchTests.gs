@@ -47,6 +47,8 @@ public static class P
         let mixedMethodGroup = `
 #nullable enable
 using System;
+using System.Diagnostics.CodeAnalysis;
+using System.Threading.Tasks;
 public class Resolver
 {
     public Type? MapClrTypeToReferences(Type? hostType) => hostType;
@@ -55,13 +57,17 @@ public class Resolver
 public static class P
 {
     static string Maybe() => null;
+    [return: MaybeNull] static Task<int> MissingTask() => null;
+    static async Task<string> AsyncMissing() { await Task.Yield(); return null; }
     public static void Main()
     {
         var resolver = new Resolver();
         var mapClrType = resolver.MapClrTypeToReferences;
         var unusedMap = resolver.MapClrTypeToReferences;
         var local = Maybe;
-        Console.Write((mapClrType(null) == null) + "|" + (local() == null));
+        var readTask = MissingTask;
+        var readAsync = AsyncMissing;
+        Console.Write((mapClrType(null) == null) + "|" + (local() == null) + "|" + (readTask() == null) + "|" + (readAsync().GetAwaiter().GetResult() == null));
     }
 }`
         LiteralConstructionRuntimeParity.AssertMatches(
@@ -78,12 +84,15 @@ public static class P
                     StringComparison.Ordinal
                 )
                 Assert.Contains("let local () -> string? = Maybe", printed, StringComparison.Ordinal)
+                Assert.Contains("let readTask () -> Task[int32]? = MissingTask", printed, StringComparison.Ordinal)
+                Assert.Contains("let readAsync () -> Task[string?] = AsyncMissing", printed, StringComparison.Ordinal)
                 Assert.DoesNotContain("((Type?) -> Type?)?", printed, StringComparison.Ordinal)
                 Assert.DoesNotContain("(() -> string?)?", printed, StringComparison.Ordinal)
+                Assert.DoesNotContain("async () -> int32?", printed, StringComparison.Ordinal)
             },
             verifyIL: true,
             nullableContextOptions: NullableContextOptions.Disable,
-            expectedOutput: "True|True"
+            expectedOutput: "True|True|True|True"
         )
     }
 
@@ -159,6 +168,35 @@ public static class P
             verifyIL: true,
             nullableContextOptions: NullableContextOptions.Enable,
             expectedOutput: "True"
+        )
+
+        let liftedRecordStructField = `
+#nullable enable
+using System;
+#pragma warning disable CS8601
+public static class P
+{
+    static Func<object?>? Maybe() => null;
+    public record struct S
+    {
+        public Func<object?> Saved = Maybe();
+        public S() { Saved = () => "old"; }
+    }
+    public static void Main()
+    {
+        var s = new S();
+        Console.Write(s.Saved() == null);
+    }
+}`
+        LiteralConstructionRuntimeParity.AssertMatches(
+            liftedRecordStructField,
+            verifyTranslation: (printed string) -> {
+                Assert.Contains("var Saved () -> object? = () -> \"old\"", printed, StringComparison.Ordinal)
+                Assert.DoesNotContain("Saved!!()", printed, StringComparison.Ordinal)
+            },
+            verifyIL: true,
+            nullableContextOptions: NullableContextOptions.Enable,
+            expectedOutput: "False"
         )
     }
 

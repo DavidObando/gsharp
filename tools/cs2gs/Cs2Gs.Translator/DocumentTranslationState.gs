@@ -56,6 +56,8 @@ internal class DocumentTranslationState {
         HoistedExpressionValues = Dictionary[ExpressionSyntax, GExpression]()
         GuardCapturedFieldReads = Dictionary[ExpressionSyntax, string]()
         StaticFieldInitializers = Dictionary[ISymbol, GExpression](SymbolEqualityComparer.Default)
+        LiftedFieldInitializers = HashSet[ISymbol](SymbolEqualityComparer.Default)
+        AnalyzedFieldOverrideTypes = HashSet[INamedTypeSymbol](SymbolEqualityComparer.Default)
         SynthesizedPropertyBackingFieldNames = Dictionary[IPropertySymbol, string](SymbolEqualityComparer.Default)
         SymbolReassignedCache = Dictionary[(ISymbol?, SyntaxNode?), bool](SymbolScopeKeyComparer.Instance)
         UsedAsNullableCache = Dictionary[(ISymbol?, SyntaxNode?), bool](SymbolScopeKeyComparer.Instance)
@@ -265,6 +267,14 @@ internal class DocumentTranslationState {
     // simple static ctor is folded into the corresponding `shared { }` field
     // initializers and the ctor itself is dropped (ADR-0115 §B.11).
     prop StaticFieldInitializers Dictionary[ISymbol, GExpression] {
+        get;
+    }
+
+    prop LiftedFieldInitializers HashSet[ISymbol] {
+        get;
+    }
+
+    prop AnalyzedFieldOverrideTypes HashSet[INamedTypeSymbol] {
         get;
     }
 
