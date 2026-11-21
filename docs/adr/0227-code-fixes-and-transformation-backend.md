@@ -483,7 +483,7 @@ The check binds the declared body and the edited body, each in a body pass of it
 
 An edit inside a body can still change what other code reports. The check falls back when:
 
-- the call-effect summary of the member changes, or has a cycle. The narrowing of every caller reads it, through the callee's body syntax. The summary is computed with the edited body in place of the declared one.
+- the call-effect summary of the member changes, or has a cycle. The narrowing of every caller reads it, through the callee's body syntax. The summary is computed with the edited body in place of the declared one. The traversal caches its callees' summaries as seen from the member, which can differ from a callee's own summary (an enumeration in a callee can run a deferred callback only when the root takes a sequence), so the bind of each body starts without those cached summaries. The full pass shares that cache across members in bind order; the check that the declared body reports what the compilation recorded catches an order effect on the declared body.
 - for a struct or class member, the edit changes whether the body takes a reference to a member name. The narrowing scans every body of the type for that.
 - the edit changes whether the member provably returns a non-nil value. The narrowing of a caller reads the callee's body for that proof.
 - the edit changes whether the body writes the name of a callable field of a declared type. The call-effect analysis reads the field's initializer only while no tree writes that name.

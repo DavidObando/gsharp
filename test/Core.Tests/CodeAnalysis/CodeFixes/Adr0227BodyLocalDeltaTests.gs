@@ -8,6 +8,7 @@ import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Analyzers
 import GSharp.Core.CodeAnalysis.CodeFixes
 import GSharp.Core.CodeAnalysis.Compilation
+import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 import GSharp.Tests
@@ -350,6 +351,39 @@ open class Adr0227BodyLocalDeltaTests {
         Assert.Contains(full.Removed, (d Diagnostic) -> d.Id == "GS0575")
         Assert.False(local.BodyLocal)
         AssertSameDelta(full, local, "await in lock removed")
+    }
+
+    @Fact
+    func SummaryProbeOfAMemberThatTakesASequence_DoesNotSeedTheCalleeSummariesOfTheBind() {
+        // Under the root `F`, which takes a sequence, `G`'s enumeration of a local sequence may run the
+        // deferred callback of `H`, which writes a `C?`. The bind asks for `G`'s own summary, which does
+        // not, so the full check keeps the narrowing of `a` across `G()`.
+        const source = "package P\n\nimport System.Collections.Generic\nimport System.Linq\n\nclass C {\n    var Value int32 = 1\n}\n\nclass Box {\n    var Item C? = nil\n}\n\nfunc H(items IEnumerable[int32], box Box) IEnumerable[int32] -> items.Select((x int32) -> {\n    box.Item = nil\n    return x\n})\n\nfunc G() int32 {\n    let xs IEnumerable[int32] = List[int32]()\n    return xs.Count()\n}\n\nfunc F(items IEnumerable[int32], ref a C?) int32 {\n    let n = G()\n    if a == nil {\n        return n\n    }\n    return a.Value\n}\n"
+        // A default resolver depends on what the process has loaded, and so does this program's bind: an
+        // explicit resolver over the assemblies it uses.
+        let tree = SyntaxTree.Parse(SourceText.From(source, "f0.gs"))
+        let compilation = Compilation(
+            ReferenceResolver.WithReferences(
+                []string{
+                    typeof(object).Assembly.Location,
+                    typeof(List[int32]).Assembly.Location,
+                    typeof(Enumerable).Assembly.Location,
+                    Path.Combine(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "System.Runtime.dll"),
+                    Path.Combine(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "System.Collections.dll")
+                }
+                    .Distinct().ToArray()
+            ),
+            tree
+        )
+        let (full, local) = BothOn(
+            compilation,
+            tree,
+            "    let n = G()\n    if a == nil {\n        return n\n    }\n    return a.Value\n",
+            "    if a == nil {\n        return 0\n    }\n    let n = G()\n    return a.Value + n\n"
+        )
+        Assert.Empty(full.Added)
+        Assert.True(local.BodyLocal, local.BodyLocalFallbackReason)
+        AssertSameDelta(full, local, "root-dependent callee summary")
     }
 
     @Fact
