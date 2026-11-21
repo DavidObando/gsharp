@@ -5,6 +5,7 @@
 package GSharp.Core.CodeAnalysis.Binding
 
 import System
+import System.Collections.Concurrent
 import System.Collections.Generic
 import System.Collections.Immutable
 import System.Diagnostics.CodeAnalysis
@@ -7753,91 +7754,22 @@ partial class Binder {
             bodyOptions BodyBindingOptions,
             workBudget CompilationWorkBudget? = nil
         ) BoundProgram {
-            let parentScope = CreateParentScope(
+            // ADR-0227 D4 (issue #6128): the diagnostics of each member body, for the body-local
+            // check of the diagnostic-delta gate.
+            let recordedBodyDiagnostics = ConcurrentDictionary[FunctionSymbol, ImmutableArray[Diagnostic]](
+                ReferenceEqualityComparer.Instance
+            )
+            let parentScope = CreateBodyPassScope(
                 globalScope,
                 references,
-                preprocessorSymbols: globalScope?.PreprocessorSymbols,
-                preserveLatestImportSyntaxTrees: true
+                bodyOptions,
+                recordedBodyDiagnostics,
+                speculative: false
             )
-            if !globalScope.HasNativeProtocols {
-                parentScope.GetBindingServices().BodyBindingOptions = bodyOptions
-            }
-            // Issue #3501 A2: reuse the global-scope pass's ref-kind delegate
-            // cache on this pass's scope chain, so a shape spelled in a
-            // declaration's type clause and the same shape appearing inside a
-            // method body resolve to ONE synthesized delegate symbol.
-            if globalScope?.RefDelegateCache != nil {
-                parentScope.InstallSynthesizedRefDelegateCache(globalScope.RefDelegateCache!!)
-            }
-            // Issue #5281: continue the declaration pass's anonymous-type cache so a shape
-            // used at top level and in a body is ONE type and no two types share a name.
-            if globalScope?.AnonymousTypeCache != nil {
-                parentScope.InstallAnonymousTypeCache(globalScope.AnonymousTypeCache!!.CreateBodyPassCopy())
-            }
-            // ADR-0146 / issue #2243: rehydrate the rich anonymous-object literal →
-            // synthesized-class map onto this pass's scope chain so a literal
-            // inside a function or method body binds to its synthesized class (the
-            // map was built while binding the global scope, on a scope chain that
-            // is not reused here).
-            if globalScope?.RichAnonymousClassMap != nil && globalScope.RichAnonymousClassMap.Count > 0 {
-                let richMap = parentScope.GetRichAnonymousClassMap()
-                for kv in globalScope.RichAnonymousClassMap {
-                    richMap[kv.Key] = kv.Value
-                }
-            }
-            if globalScope?.RichAnonymousObjectPlans != nil && globalScope.RichAnonymousObjectPlans.Count > 0 {
-                let richPlans = parentScope.GetRichAnonymousObjectPlans()
-                for kv in globalScope.RichAnonymousObjectPlans {
-                    richPlans[kv.Key] = kv.Value
-                }
-            }
-            if globalScope?.LatestRichAnonymousObjectPlans != nil &&
-                globalScope
-                .LatestRichAnonymousObjectPlans
-                .Count > 0 {
-                let latestRichPlans = parentScope.GetLatestRichAnonymousObjectPlans()
-                for kv in globalScope.LatestRichAnonymousObjectPlans {
-                    latestRichPlans[kv.Key] = kv.Value
-                }
-            }
-            if globalScope?.StructuralAdapters != nil {
-                let adapters = parentScope.GetStructuralAdapterRegistry()
-                adapters.ProtocolCoverage = globalScope.StructuralAdapters.ProtocolCoverage
-                adapters.ProtocolCoverageFailed = globalScope.StructuralAdapters.ProtocolCoverageFailed
-                adapters.Counter = Math.Max(adapters.Counter, globalScope.StructuralAdapters.Counter)
-                adapters.Types.AddRange(globalScope.StructuralAdapters.Types)
-                adapters.ProtocolEntries.AddRange(globalScope.StructuralAdapters.ProtocolEntries)
-                adapters.ImportedProtocolEntries.AddRange(globalScope.StructuralAdapters.ImportedProtocolEntries)
-                adapters.ProtocolQueries.AddRange(globalScope.StructuralAdapters.ProtocolQueries)
-                for operation in globalScope.StructuralAdapters.ProtocolOperations {
-                    adapters.ProtocolOperations[operation.Key] = operation.Value
-                }
-                for pair in globalScope.StructuralAdapters.MethodBodies {
-                    adapters.MethodBodies[pair.Key] = pair.Value
-                }
-            }
             let functionBodies = ImmutableDictionary.CreateBuilder[FunctionSymbol, BoundBlockStatement]()
             let diagnostics = ImmutableArray.CreateBuilder[Diagnostic]()
             let nativeBinder = Binder(parentScope, function: nil)
-            for protocol in globalScope.Interfaces.Where((item InterfaceSymbol) -> item.IsProtocol) {
-                NativeProtocolOperations.GetOrCreate(parentScope, protocol)
-            }
-            if parentScope.References is {} nativeReferences {
-                for assembly in nativeReferences.Assemblies.OrderBy(
-                    (item Assembly) -> item.FullName,
-                    StringComparer.Ordinal
-                ) {
-                    for protocol in NativeProtocolMetadata
-                        .Read(assembly)
-                        .Protocols
-                        .Where((item Type) -> item.IsVisible) {
-                        NativeProtocolOperations.GetOrCreate(
-                            parentScope,
-                            TypeSymbol.FromClrTypeWithoutNullability(protocol, NullabilityFreeReason.ResolvedTypeName)
-                        )
-                    }
-                }
-            }
+            RegisterNativeProtocolOperations(globalScope, parentScope)
             nativeBinder.CheckExplicitNativeProtocolConformance(globalScope.Structs)
             for member in GetDeclaredBodyFunctions(globalScope) {
                 let function = member.Function
@@ -8441,6 +8373,7 @@ partial class Binder {
                 allDelegates
             ){
                 OrderedFunctions = orderedFunctions,
+                BodyDiagnostics = recordedBodyDiagnostics,
                 Imports = globalScope.Imports,
                 FriendAssemblies = globalScope.FriendAssemblies,
                 AssemblyAttributes = globalScope.AssemblyAttributes,
@@ -8451,6 +8384,117 @@ partial class Binder {
                     parentScope.GetStructuralAdapterRegistry().ProtocolOperations.ToImmutableDictionary(),
                     parentScope.GetStructuralAdapterRegistry().ImportedProtocolEntries.ToImmutableArray()
                 )
+            }
+        }
+
+        // The scope chain of a body pass over [`globalScope`](paramref): the declarations, the
+        // synthesis registries that the declaration pass started, and the body-binding options. A
+        // speculative pass (ADR-0227 D4, issue #6128) gets copies of every registry, so it cannot
+        // change the compilation that it binds against.
+        private func CreateBodyPassScope(
+            globalScope BoundGlobalScope,
+            references ReferenceResolver?,
+            bodyOptions BodyBindingOptions,
+            recordedBodyDiagnostics ConcurrentDictionary[FunctionSymbol, ImmutableArray[Diagnostic]]?,
+            speculative bool
+        ) BoundScope {
+            let parentScope = CreateParentScope(
+                globalScope,
+                references,
+                preprocessorSymbols: globalScope?.PreprocessorSymbols,
+                preserveLatestImportSyntaxTrees: true
+            )
+            if !globalScope.HasNativeProtocols {
+                parentScope.GetBindingServices().BodyBindingOptions = bodyOptions
+            }
+            // ADR-0227 D4 (issue #6128): the diagnostics of each member body, for the body-local
+            // check of the diagnostic-delta gate.
+            parentScope.GetBindingServices().RecordedBodyDiagnostics = recordedBodyDiagnostics
+            // Issue #3501 A2: reuse the global-scope pass's ref-kind delegate
+            // cache on this pass's scope chain, so a shape spelled in a
+            // declaration's type clause and the same shape appearing inside a
+            // method body resolve to ONE synthesized delegate symbol.
+            // A speculative pass binds against a compilation that keeps its cache, so it gets a copy.
+            if globalScope?.RefDelegateCache != nil {
+                parentScope.InstallSynthesizedRefDelegateCache(
+                    if speculative {
+                        globalScope.RefDelegateCache!!.CreateSpeculativeCopy()
+                    } else {
+                        globalScope.RefDelegateCache!!
+                    }
+                )
+            }
+            // Issue #5281: continue the declaration pass's anonymous-type cache so a shape
+            // used at top level and in a body is ONE type and no two types share a name.
+            if globalScope?.AnonymousTypeCache != nil {
+                parentScope.InstallAnonymousTypeCache(globalScope.AnonymousTypeCache!!.CreateBodyPassCopy())
+            }
+            // ADR-0146 / issue #2243: rehydrate the rich anonymous-object literal →
+            // synthesized-class map onto this pass's scope chain so a literal
+            // inside a function or method body binds to its synthesized class (the
+            // map was built while binding the global scope, on a scope chain that
+            // is not reused here).
+            if globalScope?.RichAnonymousClassMap != nil && globalScope.RichAnonymousClassMap.Count > 0 {
+                let richMap = parentScope.GetRichAnonymousClassMap()
+                for kv in globalScope.RichAnonymousClassMap {
+                    richMap[kv.Key] = kv.Value
+                }
+            }
+            if globalScope?.RichAnonymousObjectPlans != nil && globalScope.RichAnonymousObjectPlans.Count > 0 {
+                let richPlans = parentScope.GetRichAnonymousObjectPlans()
+                for kv in globalScope.RichAnonymousObjectPlans {
+                    richPlans[kv.Key] = kv.Value
+                }
+            }
+            if globalScope?.LatestRichAnonymousObjectPlans != nil &&
+                globalScope
+                .LatestRichAnonymousObjectPlans
+                .Count > 0 {
+                let latestRichPlans = parentScope.GetLatestRichAnonymousObjectPlans()
+                for kv in globalScope.LatestRichAnonymousObjectPlans {
+                    latestRichPlans[kv.Key] = kv.Value
+                }
+            }
+            if globalScope?.StructuralAdapters != nil {
+                let adapters = parentScope.GetStructuralAdapterRegistry()
+                adapters.ProtocolCoverage = globalScope.StructuralAdapters.ProtocolCoverage
+                adapters.ProtocolCoverageFailed = globalScope.StructuralAdapters.ProtocolCoverageFailed
+                adapters.Counter = Math.Max(adapters.Counter, globalScope.StructuralAdapters.Counter)
+                adapters.Types.AddRange(globalScope.StructuralAdapters.Types)
+                adapters.ProtocolEntries.AddRange(globalScope.StructuralAdapters.ProtocolEntries)
+                adapters.ImportedProtocolEntries.AddRange(globalScope.StructuralAdapters.ImportedProtocolEntries)
+                adapters.ProtocolQueries.AddRange(globalScope.StructuralAdapters.ProtocolQueries)
+                for operation in globalScope.StructuralAdapters.ProtocolOperations {
+                    adapters.ProtocolOperations[operation.Key] = operation.Value
+                }
+                for pair in globalScope.StructuralAdapters.MethodBodies {
+                    adapters.MethodBodies[pair.Key] = pair.Value
+                }
+            }
+            return parentScope
+        }
+
+        // Creates the operations of every native protocol that a body pass can see, in the order
+        // that the body pass uses.
+        private func RegisterNativeProtocolOperations(globalScope BoundGlobalScope, parentScope BoundScope) {
+            for protocol in globalScope.Interfaces.Where((item InterfaceSymbol) -> item.IsProtocol) {
+                NativeProtocolOperations.GetOrCreate(parentScope, protocol)
+            }
+            if parentScope.References is {} nativeReferences {
+                for assembly in nativeReferences.Assemblies.OrderBy(
+                    (item Assembly) -> item.FullName,
+                    StringComparer.Ordinal
+                ) {
+                    for protocol in NativeProtocolMetadata
+                        .Read(assembly)
+                        .Protocols
+                        .Where((item Type) -> item.IsVisible) {
+                        NativeProtocolOperations.GetOrCreate(
+                            parentScope,
+                            TypeSymbol.FromClrTypeWithoutNullability(protocol, NullabilityFreeReason.ResolvedTypeName)
+                        )
+                    }
+                }
             }
         }
 
@@ -8512,6 +8556,7 @@ partial class Binder {
                         allPathsReturnLocation,
                         convenienceConstructor
                     )
+                    RecordBodyDiagnostics(parentScope, member, uncachedResult.Diagnostics)
                     AppendBodyDiagnostics(diagnostics, uncachedResult.Diagnostics, member)
                     return uncachedResult.Body
                 }
@@ -8523,6 +8568,7 @@ partial class Binder {
                     out var reusedBody,
                     out var reusedDiagnostics
                 ) {
+                    RecordBodyDiagnostics(parentScope, member, reusedDiagnostics)
                     AppendBodyDiagnostics(diagnostics, reusedDiagnostics, member)
                     return reusedBody!!
                 }
@@ -8542,6 +8588,7 @@ partial class Binder {
                 } finally {
                     recordedFailedCalls = CallCandidateRecorder.EndBody(bodyFailedCalls)
                 }
+                RecordBodyDiagnostics(parentScope, member, result.Diagnostics)
                 AppendBodyDiagnostics(diagnostics, result.Diagnostics, member)
                 if cacheable {
                     cache.Store(member, bodySyntax, result.Body, result.Diagnostics, recordedFailedCalls)
@@ -8629,6 +8676,20 @@ partial class Binder {
                 }
             }
             return false
+        }
+
+        // ADR-0227 D4 (issue #6128): a member bound twice in one pass keeps no entry, so the
+        // body-local check falls back to the full check for it.
+        private func RecordBodyDiagnostics(
+            parentScope BoundScope,
+            member FunctionSymbol,
+            bodyDiagnostics ImmutableArray[Diagnostic]
+        ) {
+            if parentScope.GetBindingServices().RecordedBodyDiagnostics is {} recorded {
+                if !recorded.TryAdd(member, bodyDiagnostics) {
+                    recorded[member] = default(ImmutableArray[Diagnostic])
+                }
+            }
         }
 
         private func AppendBodyDiagnostics(

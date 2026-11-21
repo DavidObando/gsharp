@@ -10,12 +10,38 @@
     <!-- The default DocumentationFile is computed from GSharp.$(MSBuildProjectName); see
          GSharp.CodeAnalysis.Analyzers.Testing.gsproj for the same override. -->
     <DocumentationFile>$(OutputPath)/$(AssemblyName).xml</DocumentationFile>
-    <!-- Not packed yet: a host references the project or the built assembly. -->
-    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <!-- Issue #6130: published as its own NuGet package next to GSharp.CodeAnalysis.Analyzers.Testing,
+       with the same layout (see that project). A library host such as Oats takes a PackageReference
+       and keeps GSharp.Core from the SDK. -->
+  <PropertyGroup>
+    <PackageId>GSharp.CodeAnalysis.Transformations</PackageId>
+    <IsPackable>true</IsPackable>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <Title>GSharp transformation programs</Title>
+    <Description>Data-defined code fixes for GSharp (ADR-0227 D6): transformation programs, their JSON schema and the provider that interprets them.</Description>
+    <PackageTags>gsharp;codefix;transformation;program-synthesis</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/DavidObando/gsharp</PackageProjectUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
+    <NoPackageAnalysis>true</NoPackageAnalysis>
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="../../Core/Core.gsproj" />
+    <None Include="$(MSBuildThisFileDirectory)..\..\..\assets\PACKAGE_README.md" Pack="true" PackagePath="README.md" Visible="false" />
+    <None Include="$(MSBuildThisFileDirectory)..\..\..\assets\gsharp-icon.png" Pack="true" PackagePath="icon.png" Visible="false" />
+    <!-- The published schema of the canonical JSON form (ADR-0227 D6). -->
+    <None Include="transformation-program.schema.json" Pack="true" PackagePath="schema/transformation-program.schema.json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- GSharp.Core is host-supplied, as for GSharp.CodeAnalysis.Analyzers.Testing: the SDK and
+         Gsharp.Compiler carry it, and Core is not a NuGet package of its own. Private="false" keeps
+         the edge compile-time only, and PrivateAssets="all" keeps `dotnet pack` from writing a
+         <dependency> on a "GSharp.Core" package that does not exist (NU1101 for every consumer). -->
+    <ProjectReference Include="../../Core/Core.gsproj" Private="false" PrivateAssets="all" />
   </ItemGroup>
 
 </Project>
