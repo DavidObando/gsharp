@@ -266,6 +266,8 @@ public static class Second { public static string Run() => ""; }
         )
         Assert.Contains("Dictionary[Alias, string](){ element: \"same\" }.Values", printed, StringComparison.Ordinal)
         Assert.DoesNotContain("Dictionary[Alias, string]{ element: \"same\" }", printed, StringComparison.Ordinal)
+        Assert.Contains("Value Dictionary[Alias, string].ValueCollection", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("Dictionary[Alias, string?]", printed, StringComparison.Ordinal)
 
         let compiler = FindCompiler()
         Assert.NotNull(compiler)
@@ -298,19 +300,122 @@ public static class Second { public static string Run() => ""; }
             }
             let output = stdout.GetAwaiter().GetResult() + stderr.GetAwaiter().GetResult()
             Assert.DoesNotContain("GS0158", output, StringComparison.Ordinal)
-            if process.ExitCode != 0 {
-                let errorIds = Regex
-                    .Matches(output, `(?m):\s*error\s+(GS\d+):`)
-                    .Select((match Match) -> match.Groups[1].Value)
-                    .ToArray()
-                Assert.True(errorIds.Length > 0, "Expected gsc diagnostics on non-zero exit:\n" + output)
-                Assert.All(errorIds, (id string) -> Assert.Equal("GS0159", id))
-            }
+            Assert.DoesNotContain("GS0159", output, StringComparison.Ordinal)
+            Assert.True(process.ExitCode == 0, "Expected clean gsc compilation:\n" + output)
         } finally {
             try {
                 Directory.Delete(workDir, recursive: true)
             } catch (IOException) { } catch (UnauthorizedAccessException) { }
         }
+    }
+
+    @Fact
+    func Issue6159_NullableEnableAnonymousProjectedStorage_PreservesNonNullArgumentsAcrossContainersAndRunsLikeCSharp() {
+        let printed = Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Alias = System.Text.StringBuilder;
+
+public static class Demo {
+    public static string Run() {
+        var element = new System.Text.StringBuilder("same");
+        var value = new Dictionary<Alias, string> { { element, "same" } }.Values;
+        var first = new { Value = value };
+        var keys = new { Keys = new Dictionary<Alias, string> { { element, "same" } }.Keys };
+        var list = new { Items = new List<string> { "item" } };
+        var array = new { Items = new[] { "arr" } };
+        var tuple = new { Pair = ("tup", 7) };
+        {
+            int Alias = 0;
+            var second = new { Value = value };
+            return first.Equals(second).ToString() + ":" +
+                second.Value.First().ToString() + ":" +
+                keys.Keys.First().ToString() + ":" +
+                list.Items.First().ToString() + ":" +
+                array.Items.First().ToString() + ":" +
+                tuple.Pair.Item1.ToString() + ":" +
+                Alias;
+        }
+    }
+}`, strictIl: true, expectedOutput: "True:same:same:item:arr:tup:0")
+        Assert.Contains("Value Dictionary[Alias, string].ValueCollection", printed, StringComparison.Ordinal)
+        Assert.Contains("Keys Dictionary[Alias, string].KeyCollection", printed, StringComparison.Ordinal)
+        Assert.Contains("Items List[string]", printed, StringComparison.Ordinal)
+        Assert.Contains("Items []string", printed, StringComparison.Ordinal)
+        Assert.Contains("Pair (string, int32)", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("string?", printed, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func Issue6159_ExplicitNullableAndObliviousAnonymousProjectedStorage_PreserveWidenedContracts() {
+        let nullablePrinted = Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Alias = System.Text.StringBuilder;
+
+public static class Demo {
+    public static string Run() {
+        var element = new System.Text.StringBuilder("same");
+        var values = new Dictionary<Alias, string?> { { element, null } }.Values;
+        var list = new List<string?> { "ok", null };
+        var array = new string?[] { null, "ok" };
+        var tuple = ((string?)null, 7);
+        var box = new { Values = values, Items = list, Arr = array, Pair = tuple };
+        return (box.Values.First() ?? "nil") + ":" +
+            (box.Items.Last() ?? "nil") + ":" +
+            (box.Arr[0] ?? "nil") + ":" +
+            (box.Pair.Item1 ?? "nil");
+    }
+}`, strictIl: true, expectedOutput: "nil:nil:nil:nil")
+        Assert.Contains("Values Dictionary[Alias, string?].ValueCollection", nullablePrinted, StringComparison.Ordinal)
+        Assert.Contains("Items List[string?]", nullablePrinted, StringComparison.Ordinal)
+        Assert.Contains("Arr []string?", nullablePrinted, StringComparison.Ordinal)
+        Assert.Contains("Pair (string?, int32)", nullablePrinted, StringComparison.Ordinal)
+
+        let obliviousTree = Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(`
+#nullable disable
+using System.Collections.Generic;
+
+public static class ObliviousDemo {
+    public static object Make() {
+        var dict = new Dictionary<string, string> { { "k", "v" } };
+        var values = dict.Values;
+        var list = new List<string> { "item" };
+        var array = new[] { "arr" };
+        var tuple = ("tup", 7);
+        return new { Dict = dict, Values = values, Items = list, Arr = array, Pair = tuple };
+    }
+}`, path: "ObliviousDemo.cs")
+        let obliviousProject = CSharpProjectLoader.LoadInMemory(
+            [](string, string){("ObliviousDemo.cs", obliviousTree.ToString())}
+        )
+        Assert.True(
+            obliviousProject.BoundWithoutErrors,
+            string.Join(Environment.NewLine, obliviousProject.ErrorDiagnostics)
+        )
+        let obliviousDoc = Assert.Single(obliviousProject.Documents)
+        let obliviousCtx = TranslationContext(
+            obliviousProject.Compilation,
+            obliviousDoc.SemanticModel,
+            obliviousDoc.FilePath
+        )
+        let obliviousPrinted = GSharpPrinter.Print(
+            CSharpToGSharpTranslator().TranslateDocument(obliviousDoc, obliviousCtx)
+        )
+        Assert.Contains("Dict Dictionary[string, string?]", obliviousPrinted, StringComparison.Ordinal)
+        Assert.Contains(
+            "Values Dictionary[string, string?].ValueCollection",
+            obliviousPrinted,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("Items List[string?]", obliviousPrinted, StringComparison.Ordinal)
+        Assert.Contains("Arr []string?", obliviousPrinted, StringComparison.Ordinal)
+        Assert.Contains("Pair (string?, int32)", obliviousPrinted, StringComparison.Ordinal)
+        TranslationTestValidation.AssertBinds(obliviousPrinted)
     }
 
     @Fact

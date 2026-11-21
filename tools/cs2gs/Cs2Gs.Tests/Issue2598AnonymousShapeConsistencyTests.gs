@@ -130,7 +130,13 @@ public static class Consumer {
     }
     public static object StrictAnon() => new { Pair = Builder.StrictPair() };
     public static object FlexibleAnon() => new { Pair = Builder.FlexibleNonNull() };
+    public static object FlexibleNullableAnon() => new { NullablePair = Builder.FlexibleNullable() };
     public static object MultiBoundAnon() => new { Box = Builder.MultiBound() };
+#nullable disable
+    public static object ObliviousFlexibleAnon() =>
+        new { ObliviousPair = new FlexiblePairBuilder<MigrationOperation, AddColumnOperation>() };
+    public static object ObliviousMultiBoundAnon() =>
+        new { ObliviousBox = new MultiBoundBox<object, object, string, string>() };
 }`)}, CSharpProjectLoader.RuntimeReferences().Append(MetadataReference.CreateFromFile(contractPath)).ToArray())
             Assert.True(loaded.BoundWithoutErrors, string.Join(Environment.NewLine, loaded.ErrorDiagnostics))
             let compilation = loaded.Compilation.WithOptions(
@@ -149,11 +155,26 @@ public static class Consumer {
                 StringComparison.Ordinal
             )
             Assert.Contains(
-                "FlexiblePairBuilder[MigrationOperation?, AddColumnOperation?]",
+                "Pair FlexiblePairBuilder[MigrationOperation, AddColumnOperation]",
                 printed,
                 StringComparison.Ordinal
             )
-            Assert.Contains("MultiBoundBox[object?, object, string, string]", printed, StringComparison.Ordinal)
+            Assert.Contains(
+                "NullablePair FlexiblePairBuilder[MigrationOperation?, AddColumnOperation?]",
+                printed,
+                StringComparison.Ordinal
+            )
+            Assert.Contains(
+                "ObliviousPair FlexiblePairBuilder[MigrationOperation?, AddColumnOperation?]",
+                printed,
+                StringComparison.Ordinal
+            )
+            Assert.Contains("Box MultiBoundBox[object, object, string, string]", printed, StringComparison.Ordinal)
+            Assert.Contains(
+                "ObliviousBox MultiBoundBox[object?, object, string, string]",
+                printed,
+                StringComparison.Ordinal
+            )
             Assert.DoesNotContain("MultiBoundBox[object?, object, string, string?]", printed, StringComparison.Ordinal)
             let sourcePath = Path.Combine(workDir, "Consumer.gs")
             let outputPath = Path.Combine(workDir, "Consumer.dll")
