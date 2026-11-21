@@ -202,9 +202,15 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// @param location The text location where the error was found.
     /// @param operatorText The operator text.
     /// @param operandType The operand type.
-    func ReportUndefinedUnaryOperator(location TextLocation, operatorText string, operandType TypeSymbol) -> Report(
+    /// @remarks ADR-0225 D6.5: a later receiver-form `operator` can declare the operator for any type.
+    func ReportUndefinedUnaryOperator(
+        location TextLocation,
+        operatorText string,
+        operandType TypeSymbol
+    ) -> ReportFailedLookup(
         location,
         DiagnosticDescriptors.UndefinedUnaryOperator,
+        PrefixLookupKind.Member,
         operatorText,
         operandType
     )
@@ -214,12 +220,20 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// @param operatorText The operator text.
     /// @param leftType The left operand type.
     /// @param rightType The right operand type.
+    /// @remarks ADR-0225 D6.5: a later receiver-form `operator` can declare the operator for any type.
     func ReportUndefinedBinaryOperator(
         location TextLocation,
         operatorText string,
         leftType TypeSymbol,
         rightType TypeSymbol
-    ) -> Report(location, DiagnosticDescriptors.UndefinedBinaryOperator, operatorText, leftType, rightType)
+    ) -> ReportFailedLookup(
+        location,
+        DiagnosticDescriptors.UndefinedBinaryOperator,
+        PrefixLookupKind.Member,
+        operatorText,
+        leftType,
+        rightType
+    )
 
     /// Issue #3501: reports that tuple equality (`==` / `!=`) was
     /// applied to tuple operands of different arities.
@@ -337,13 +351,12 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// @param name The function name.
     /// @param expectedCount The expected argument count.
     /// @param actualCount The actual argument count.
-    func ReportWrongArgumentCount(location TextLocation, name string, expectedCount int32, actualCount int32) -> Report(
-        location,
-        DiagnosticDescriptors.WrongArgumentCount,
-        name,
-        expectedCount,
-        actualCount
-    )
+    func ReportWrongArgumentCount(
+        location TextLocation,
+        name string,
+        expectedCount int32,
+        actualCount int32
+    ) -> ReportCallResolution(location, DiagnosticDescriptors.WrongArgumentCount, name, expectedCount, actualCount)
 
     /// Reports a call to a variadic function with too few fixed arguments (Phase 4.8).
     /// @param location The text location of the call.
@@ -355,7 +368,13 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         name string,
         minimumCount int32,
         actualCount int32
-    ) -> Report(location, DiagnosticDescriptors.TooFewArgumentsForVariadic, name, minimumCount, actualCount)
+    ) -> ReportCallResolution(
+        location,
+        DiagnosticDescriptors.TooFewArgumentsForVariadic,
+        name,
+        minimumCount,
+        actualCount
+    )
 
     /// Reports a generic call whose explicit type-argument list has the wrong arity (Phase 4.1 / ADR-0020).
     /// @param location The text location of the type-argument list.
@@ -367,7 +386,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         name string,
         expectedCount int32,
         actualCount int32
-    ) -> Report(location, DiagnosticDescriptors.WrongTypeArgumentCount, name, expectedCount, actualCount)
+    ) -> ReportCallResolution(location, DiagnosticDescriptors.WrongTypeArgumentCount, name, expectedCount, actualCount)
 
     /// Reports a type-clause type-argument list applied to a non-generic type (Phase 4.3c / ADR-0020).
     /// @param location The text location of the offending identifier.
@@ -390,7 +409,11 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// @param location The text location of the call.
     /// @param name The callee name.
     /// @param typeParameterName The unresolved type-parameter name.
-    func ReportTypeArgumentInferenceFailed(location TextLocation, name string, typeParameterName string) -> Report(
+    func ReportTypeArgumentInferenceFailed(
+        location TextLocation,
+        name string,
+        typeParameterName string
+    ) -> ReportCallResolution(
         location,
         DiagnosticDescriptors.TypeArgumentInferenceFailed,
         typeParameterName,
@@ -448,7 +471,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         name string,
         expectedType TypeSymbol,
         actualType TypeSymbol
-    ) -> Report(location, DiagnosticDescriptors.WrongArgumentType, name, expectedType, actualType)
+    ) -> ReportCallResolution(location, DiagnosticDescriptors.WrongArgumentType, name, expectedType, actualType)
 
     /// Issue #4422: GS0154 for a by-reference argument whose storage is a
     /// value-type `V?` at a `V` parameter (or the reverse). The text
@@ -484,7 +507,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         name string,
         expectedType TypeSymbol,
         actualDescription string
-    ) -> Report(location, DiagnosticDescriptors.WrongArgumentType, name, expectedType, actualDescription)
+    ) -> ReportCallResolution(location, DiagnosticDescriptors.WrongArgumentType, name, expectedType, actualDescription)
 
     /// Issue #4422: GS0612 — a by-reference argument's storage type differs
     /// from the parameter type only in reference nullability.
@@ -501,7 +524,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         parameterType TypeSymbol,
         storageType TypeSymbol,
         reason string
-    ) -> Report(
+    ) -> ReportCallResolution(
         location,
         DiagnosticDescriptors.ByRefArgumentNullabilityMismatch,
         refKind,
@@ -526,12 +549,30 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// @param location The text location where the error was found.
     /// @param fromType From type.
     /// @param toType To type.
-    func ReportCannotConvert(location TextLocation, fromType TypeSymbol, toType TypeSymbol) -> Report(
+    func ReportCannotConvert(location TextLocation, fromType TypeSymbol, toType TypeSymbol) -> ReportConversion(
         location,
         DiagnosticDescriptors.CannotConvert,
         fromType,
         toType
     )
+
+    // ADR-0225 D6.5: a later top-level `func operator implicit` can convert to or from a type of this
+    // package (ADR-0120), so the report of a missing conversion depends on the later declarations.
+    private func ReportConversion(
+        location TextLocation,
+        descriptor DiagnosticDescriptor,
+        fromType TypeSymbol,
+        toType TypeSymbol
+    ) {
+        let stack List[PrefixPremise]? = premises
+        let pushed = (stack == nil || stack.Count == 0) &&
+            PushPremiseIf(
+            PrefixBindingContext.LaterConversionCanFollow(fromType, toType),
+            PrefixPremise.LaterDeclaration
+        )
+        Report(location, descriptor, fromType, toType)
+        PopPremiseIf(pushed)
+    }
 
     /// Reports why a requested structural projection is unsafe or incomplete.
     /// @param location The projection source location.
@@ -549,12 +590,11 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// @param location The text location where the error was found.
     /// @param fromType From type.
     /// @param toType To type.
-    func ReportCannotConvertImplicitly(location TextLocation, fromType TypeSymbol, toType TypeSymbol) -> Report(
-        location,
-        DiagnosticDescriptors.CannotConvertImplicitly,
-        fromType,
-        toType
-    )
+    func ReportCannotConvertImplicitly(
+        location TextLocation,
+        fromType TypeSymbol,
+        toType TypeSymbol
+    ) -> ReportConversion(location, DiagnosticDescriptors.CannotConvertImplicitly, fromType, toType)
 
     /// Issue #337: reports that a CLR member method group cannot be converted to
     /// the expected target type (it is not a compatible delegate type, or no
@@ -762,7 +802,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         } else {
             string.Empty
         }
-        Report(location, DiagnosticDescriptors.AmbiguousOverload, name, candidateCount, candidateList)
+        ReportCallResolution(location, DiagnosticDescriptors.AmbiguousOverload, name, candidateCount, candidateList)
     }
 
     /// Reports that copy/with syntax was applied to a non-data-struct value.
@@ -856,12 +896,11 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// @param location The text location of the argument.
     /// @param argumentIndex The 1-based argument position.
     /// @param methodName The target method name.
-    func ReportArgumentMustBePassedByRef(location TextLocation, argumentIndex int32, methodName string) -> Report(
-        location,
-        DiagnosticDescriptors.ArgumentMustBePassedByRef,
-        argumentIndex,
-        methodName
-    )
+    func ReportArgumentMustBePassedByRef(
+        location TextLocation,
+        argumentIndex int32,
+        methodName string
+    ) -> ReportCallResolution(location, DiagnosticDescriptors.ArgumentMustBePassedByRef, argumentIndex, methodName)
 
     /// GS9009: Readonly storage cannot satisfy a writable ref/out parameter.
     /// @param location The call location.
@@ -873,7 +912,13 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         argumentIndex int32,
         methodName string,
         refKind string
-    ) -> Report(location, DiagnosticDescriptors.ReadOnlyArgumentForWritableRef, argumentIndex, methodName, refKind)
+    ) -> ReportCallResolution(
+        location,
+        DiagnosticDescriptors.ReadOnlyArgumentForWritableRef,
+        argumentIndex,
+        methodName,
+        refKind
+    )
 
     /// GS9004: By-ref value cannot escape its declaring scope.
     /// @param location The text location of the escape attempt.
@@ -973,18 +1018,17 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// @param location The location of the offending named argument.
     /// @param callee The callee name (for diagnostic context).
     /// @param name The argument name that did not match any parameter.
-    func ReportNamedArgumentParameterNotFound(location TextLocation, callee string, name string) -> Report(
-        location,
-        DiagnosticDescriptors.NamedArgumentParameterNotFound,
-        name,
-        callee
-    )
+    func ReportNamedArgumentParameterNotFound(
+        location TextLocation,
+        callee string,
+        name string
+    ) -> ReportCallResolution(location, DiagnosticDescriptors.NamedArgumentParameterNotFound, name, callee)
 
     /// Issue #343: reports a named call argument whose target parameter is
     /// already supplied by a positional argument earlier in the same call.
     /// @param location The location of the offending named argument.
     /// @param name The parameter name that was double-bound.
-    func ReportNamedArgumentAlsoSpecifiedPositionally(location TextLocation, name string) -> Report(
+    func ReportNamedArgumentAlsoSpecifiedPositionally(location TextLocation, name string) -> ReportCallResolution(
         location,
         DiagnosticDescriptors.NamedArgumentAlsoSpecifiedPositionally,
         name,
@@ -1052,7 +1096,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// "fewest expanded defaults" tie-break.
     /// @param location The call-site location.
     /// @param name The callable name.
-    func ReportAmbiguousOverloadResolution(location TextLocation, name string) -> Report(
+    func ReportAmbiguousOverloadResolution(location TextLocation, name string) -> ReportCallResolution(
         location,
         DiagnosticDescriptors.AmbiguousOverloadResolution,
         name
@@ -1074,7 +1118,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// and named-argument reordering).
     /// @param location The call-site location.
     /// @param name The callable name.
-    func ReportNoApplicableOverload(location TextLocation, name string) -> Report(
+    func ReportNoApplicableOverload(location TextLocation, name string) -> ReportCallResolution(
         location,
         DiagnosticDescriptors.NoApplicableOverload,
         name

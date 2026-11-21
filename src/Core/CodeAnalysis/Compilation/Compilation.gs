@@ -929,11 +929,17 @@ open class Compilation {
         let successor = CreateSuccessor(SyntaxTrees.SetItem(index, prefixTree), shareBodyCache: false)
         let diagnostics = successor.GetDiagnostics(cancellationToken)
         let classified = ImmutableArray.CreateBuilder[ClassifiedDiagnostic](diagnostics.Length)
-        let classifier = PrefixDiagnosticClassifier(this, tree, prefixTree, prefixCut, cancellationToken)
-        for diagnostic in diagnostics {
-            classified.Add(classifier.Classify(diagnostic))
-        }
         let model = successor.GetSemanticModel(prefixTree)
+        let classifier = PrefixDiagnosticClassifier(this, tree, prefixTree, prefixCut, () -> model, cancellationToken)
+        // The classifier reads the premises of the prefix cut.
+        let prefixScope = PrefixBindingContext.Enter(prefixCut)
+        try {
+            for diagnostic in diagnostics {
+                classified.Add(classifier.Classify(diagnostic))
+            }
+        } finally {
+            prefixScope.Dispose()
+        }
         let openConstructs = ImmutableArray.CreateBuilder[OpenConstruct]()
         for token in prefixCut.SealedTokens {
             if GetOpenConstruct(prefixTree, model, token, cancellationToken) is {} construct {

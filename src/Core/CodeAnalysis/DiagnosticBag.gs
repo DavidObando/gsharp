@@ -638,6 +638,84 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         }
     }
 
+    // ADR-0225 D6.5: the calls that the binder resolves, innermost last. It is null outside a prefix bind.
+    private var callFrames List[(Syntax SyntaxNode, Kind PrefixCallKind)]?
+
+    /// Starts a call frame for the overload and argument reports of [`syntax`](paramref) (ADR-0225 D6.5).
+    /// The frame does nothing outside a prefix bind.
+    /// @param syntax The call that the binder resolves.
+    /// @param kind The callee of the call.
+    /// @returns `true` when the frame started, for (cref:PopCallFrame).
+    internal func PushCallFrame(syntax SyntaxNode?, kind PrefixCallKind) bool {
+        if syntax == nil || PrefixBindingContext.Current == nil {
+            return false
+        }
+        if callFrames == nil {
+            callFrames = List[(Syntax SyntaxNode, Kind PrefixCallKind)]()
+        }
+        callFrames!!.Add((syntax, kind))
+        return true
+    }
+
+    /// Stops the call frame that (cref:PushCallFrame) started when it returned `true`.
+    /// @param pushed The value that (cref:PushCallFrame) returned.
+    internal func PopCallFrame(pushed bool) {
+        if pushed {
+            callFrames!!.RemoveAt(callFrames!!.Count - 1)
+        }
+    }
+
+    // ADR-0225 D6.5: the callee of the innermost call frame. A report outside a frame, or inside a
+    // function literal of a call, has a simple-name premise, which holds whenever a member premise holds.
+    // A fixed callee covers its own reports only: a report inside one of its arguments has another source.
+    private func CallKindAt(location TextLocation) PrefixCallKind {
+        let frames = callFrames
+        if frames == nil || frames.Count == 0 {
+            return PrefixCallKind.Name
+        }
+        let frame = frames[frames.Count - 1]
+        if frame.Kind == PrefixCallKind.Body {
+            return PrefixCallKind.Name
+        }
+        if frame.Kind == PrefixCallKind.Fixed && frame.Syntax is CallExpressionSyntax call {
+            let span = location.Span
+            for argument in call.Arguments {
+                let argumentSpan = argument.Span
+                if argumentSpan.Start <= span.Start &&
+                    span.End <= argumentSpan.End &&
+                    (argumentSpan.Start != span.Start || argumentSpan.End != span.End) {
+                    return PrefixCallKind.Name
+                }
+            }
+        }
+        return frame.Kind
+    }
+
+    // ADR-0225 D6.5: a report of overload resolution or of an argument check. A later declaration can
+    // add a candidate unless the callee is fixed. A premise of the binder wins.
+    private func ReportCallResolution(
+        location TextLocation,
+        descriptor DiagnosticDescriptor,
+        messageArguments ...object
+    ) {
+        let stack List[PrefixPremise]? = premises
+        let premise PrefixPremise? = if (stack == nil || stack.Count == 0) && PrefixBindingContext.Current != nil {
+            PrefixBindingContext.ClassifyCallResolution(location, CallKindAt(location))
+        } else {
+            default(PrefixPremise?)
+        }
+        if premise != nil {
+            PushPremise(premise)
+            try {
+                Report(location, descriptor, descriptor.Severity, messageArguments)
+            } finally {
+                PopPremise()
+            }
+        } else {
+            Report(location, descriptor, descriptor.Severity, messageArguments)
+        }
+    }
+
     internal class Transaction : IDisposable {
         private let owner DiagnosticBag
         private let added List[Diagnostic]
