@@ -84,6 +84,83 @@ internal class BinderContext {
     /// Instance access is unavailable until the selected constructor has run.
     var ConstructorInitializerDepth int32
 
+    /// Issue #6150: the last bound value of each argument of a call being bound, by the argument's
+    /// value syntax. (cref:CompleteCall) gives a call that failed the arguments it bound, and
+    /// forgets them either way. Allocated on the first argument.
+    private var callArguments Dictionary[SyntaxNode, BoundExpression]?
+
+    /// Remembers [`bound`](paramref) when [`syntax`](paramref) is the value of a call argument, so a
+    /// call that fails keeps it for the semantic model (#6150).
+    /// @param syntax The expression the binder bound.
+    /// @param bound Its bound node.
+    internal func RecordCallArgument(syntax ExpressionSyntax, bound BoundExpression) {
+        var argument SyntaxNode = syntax
+        if argument.Parent is RefArgumentExpressionSyntax refArgument {
+            argument = refArgument
+        }
+        if argument.Parent is {} wrapper and (NamedArgumentExpressionSyntax or NamedTupleElementSyntax) {
+            argument = wrapper
+        }
+        if argument.Parent is not(CallExpressionSyntax or BaseInterfaceCallExpressionSyntax) {
+            return
+        }
+        let table = callArguments ?? Dictionary[SyntaxNode, BoundExpression](ReferenceEqualityComparer.Instance)
+        callArguments = table
+        table[syntax] = bound
+    }
+
+    /// Finishes the bind of a call: when [`bound`](paramref) is the error of a call that did not
+    /// bind, it keeps the call's receiver (#6151) and the arguments the binder bound (#6150), for
+    /// the semantic model only. The arguments' records are forgotten either way.
+    /// @param bound The bound call.
+    /// @param arguments The call's argument list.
+    /// @param receiver The call's bound receiver, when any.
+    /// @param receiverSyntax The receiver's syntax, when the receiver does not carry it.
+    internal func CompleteCall(
+        bound BoundExpression,
+        arguments SeparatedSyntaxList[ExpressionSyntax],
+        receiver BoundExpression? = nil,
+        receiverSyntax SyntaxNode? = nil
+    ) {
+        var failed ImmutableArray[BoundExpression].Builder? = nil
+        let error = bound as BoundErrorExpression
+        if callArguments is {Count: > 0} table {
+            for argument in arguments {
+                let value = ArgumentValue(argument)
+                if value == nil || !table.Remove(value, out var argumentBound) {
+                    continue
+                }
+                if error != nil && !object.ReferenceEquals(argumentBound, error) {
+                    failed ??= ImmutableArray.CreateBuilder[BoundExpression]()
+                    failed.Add(argumentBound)
+                }
+            }
+        }
+        if error == nil {
+            return
+        }
+        if failed != nil && error.FailedArguments.IsDefault {
+            error.FailedArguments = failed.ToImmutable()
+        }
+        if error.FailedReceiver == nil && receiver != nil && !(receiver is BoundErrorExpression) {
+            error.FailedReceiver = receiver
+            error.FailedReceiverSyntax = receiverSyntax
+        }
+    }
+
+    private func ArgumentValue(argument ExpressionSyntax) SyntaxNode? {
+        let value = switch argument {
+            case named is NamedArgumentExpressionSyntax: named.Expression
+            case namedTuple is NamedTupleElementSyntax: namedTuple.Expression
+            default: argument
+        }
+        return if value is RefArgumentExpressionSyntax refArgument {
+            refArgument.Expression
+        } else {
+            value
+        }
+    }
+
     internal var SourceNullableConstraintDepth int32
     internal let PendingSourceNullableAnnotations List[
         (Location TextLocation, Parameter TypeParameterSymbol, CanonicalParameter TypeParameterSymbol, IsOperator bool)

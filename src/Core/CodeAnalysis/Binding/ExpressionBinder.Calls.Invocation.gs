@@ -1532,6 +1532,7 @@ internal partial class ExpressionBinder {
                 ) ??
                     bound
             }
+            binderCtx.CompleteCall(bound, ce.Arguments, receiver, receiverSyntax)
             CallCandidateRecorder.Stamp(frame, bound)
             return bound
         } finally {

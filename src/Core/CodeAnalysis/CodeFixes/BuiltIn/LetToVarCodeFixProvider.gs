@@ -87,9 +87,9 @@ internal class LetToVarCodeFixProvider : GSharpCodeFixProvider {
 
     // The assigned variable: the symbol of the assignment, or of its first child (the target name of
     // a compound assignment such as `x += 1`). For a bare field write (`N = 2`) the assignment
-    // answers the field, not the implicit `this` receiver. The semantic model does not answer
-    // inside a function literal (#6149) or in an argument of a failed call (#6150); there the name
-    // is looked up at the assignment.
+    // answers the field, not the implicit `this` receiver. The semantic model does not answer in
+    // an argument the binder never bound (a function literal argument of a failed call); there the
+    // name is looked up at the assignment.
     private func TargetSymbol(model SemanticModel, assignment SyntaxNode, context CodeFixContext) Symbol? {
         let direct Symbol? = model.GetSymbolInfo(assignment, context.CancellationToken).Symbol
         if direct != nil {

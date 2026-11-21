@@ -5653,6 +5653,9 @@ internal partial class ExpressionBinder {
         try {
             let result = BindTypeParameterStaticAccessorStepCore(tpSym, leftName, rightPart)
             RecordStaticTypeQualifier(result, tpSym, rightPart)
+            if rightPart is CallExpressionSyntax call {
+                binderCtx.CompleteCall(result, call.Arguments)
+            }
             CallCandidateRecorder.Stamp(frame, result)
             return result
         } finally {

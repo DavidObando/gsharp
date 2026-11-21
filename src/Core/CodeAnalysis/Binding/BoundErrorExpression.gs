@@ -54,9 +54,10 @@ class BoundErrorExpression : BoundExpression {
         set;
     }
 
-    /// Gets or sets the bound receiver of a member access whose member did not bind (GS0158), so
-    /// the semantic model still answers the receiver's symbol and type (#6127). The receiver is
-    /// not a child of this node: walkers and rewriters do not visit it.
+    /// Gets or sets the bound receiver of a member access whose member did not bind (GS0158), or of
+    /// a call that did not bind (GS0159 and every other failed call, #6151), so the semantic model
+    /// still answers the receiver's symbol and type (#6127). The receiver is not a child of this
+    /// node: walkers and rewriters do not visit it.
     internal prop FailedReceiver BoundExpression? {
         get;
         set;
@@ -68,6 +69,22 @@ class BoundErrorExpression : BoundExpression {
         get;
         set;
     }
+
+    /// Gets or sets the bound arguments of a call that did not bind, so the semantic model still
+    /// answers their symbols and types (#6150). An argument the binder never bound (a function
+    /// literal waiting for a target type) is absent. The arguments are not children of this node:
+    /// walkers and rewriters do not visit them.
+    internal prop FailedArguments ImmutableArray[BoundExpression] {
+        get;
+        set;
+    }
+
+    /// Gets whether this error keeps a record the semantic model reads: a candidate group, an
+    /// inner failed call, a failed receiver or failed arguments.
+    internal prop HasFailedRecords bool -> !MemberGroup.IsDefaultOrEmpty ||
+        !FailedChildren.IsDefaultOrEmpty ||
+        FailedReceiver != nil ||
+        !FailedArguments.IsDefaultOrEmpty
 
     shared {
         /// Creates the error of a member access whose member did not bind, keeping its receiver.
@@ -90,29 +107,11 @@ class BoundErrorExpression : BoundExpression {
         internal func WithFailedOperands(left BoundExpression, right BoundExpression? = nil) BoundErrorExpression {
             let error = BoundErrorExpression(nil)
             var builder ImmutableArray[BoundErrorExpression].Builder? = nil
-            if left is BoundErrorExpression leftError &&
-                (
-                !leftError
-                    .MemberGroup
-                    .IsDefaultOrEmpty ||
-                    !leftError
-                    .FailedChildren
-                    .IsDefaultOrEmpty ||
-                    leftError.FailedReceiver != nil
-            ) {
+            if left is BoundErrorExpression leftError && leftError.HasFailedRecords {
                 builder ??= ImmutableArray.CreateBuilder[BoundErrorExpression]()
                 builder.Add(leftError)
             }
-            if right is BoundErrorExpression rightError &&
-                (
-                !rightError
-                    .MemberGroup
-                    .IsDefaultOrEmpty ||
-                    !rightError
-                    .FailedChildren
-                    .IsDefaultOrEmpty ||
-                    rightError.FailedReceiver != nil
-            ) {
+            if right is BoundErrorExpression rightError && rightError.HasFailedRecords {
                 builder ??= ImmutableArray.CreateBuilder[BoundErrorExpression]()
                 if !builder.Contains(rightError) {
                     builder.Add(rightError)
