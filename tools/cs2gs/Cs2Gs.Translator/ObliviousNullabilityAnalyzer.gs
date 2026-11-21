@@ -7497,7 +7497,9 @@ internal shared class ObliviousNullabilityAnalyzer {
                 for element in initializer.Initializers {
                     if element is IInvocationOperation addInvocation {
                         for argument in addInvocation.Arguments {
-                            if argument.Value is not IInstanceReferenceOperation {
+                            if argument.Value is not IInstanceReferenceOperation &&
+                                argument.ArgumentKind != ArgumentKind.ParamArray &&
+                                argument.ArgumentKind != ArgumentKind.ParamCollection {
                                 builder.Add(argument)
                             }
                         }

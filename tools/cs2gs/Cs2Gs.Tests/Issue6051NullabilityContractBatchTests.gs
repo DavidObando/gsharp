@@ -277,6 +277,52 @@ public static class P
     }
 
     @Fact
+    func ImplicitCollectionInitializerAdd_ParamsElementInference_DistinguishesExpandedFromArrayControl() {
+        let source = `
+#nullable disable
+using System;
+using System.Collections;
+public class ExpandedBag : IEnumerable
+{
+    public string First;
+    public int Count;
+    public void Add(params string[] values) { First = values[0]; Count += values.Length; }
+    public IEnumerator GetEnumerator() => Array.Empty<object>().GetEnumerator();
+}
+public class NormalArrayBag : IEnumerable
+{
+    public string First;
+    public int Count;
+    public void Add(params string[] values) { First = values[0]; Count += values.Length; }
+    public IEnumerator GetEnumerator() => Array.Empty<object>().GetEnumerator();
+}
+public static class P
+{
+    static string Maybe() => null;
+    public static void Main()
+    {
+        var single = new ExpandedBag { Maybe() };
+        var multi = new ExpandedBag { { Maybe(), "x" } };
+        var arr = new string[] { "ok" };
+        var normal = new NormalArrayBag { arr };
+        Console.Write((single.First == null) + "|" + single.Count + "|" + (multi.First == null) + "|" + multi.Count + "|" + normal.First.Length + "|" + normal.Count);
+    }
+}`
+        LiteralConstructionRuntimeParity.AssertMatches(
+            source,
+            verifyTranslation: (printed string) -> {
+                Assert.Contains("func Add(values ...string?)", printed, StringComparison.Ordinal)
+                Assert.Contains("func Add(values ...string)", printed, StringComparison.Ordinal)
+                Assert.DoesNotContain("Maybe()!!", printed, StringComparison.Ordinal)
+                Assert.DoesNotContain("(...string?)?", printed, StringComparison.Ordinal)
+            },
+            verifyIL: true,
+            nullableContextOptions: NullableContextOptions.Disable,
+            expectedOutput: "True|1|True|2|2|1"
+        )
+    }
+
+    @Fact
     func SynchronousAwaiterGetResult_PropagatesInferredNullableTaskPayload() {
         let source = `
 #nullable disable
