@@ -236,8 +236,8 @@ class RewriterClonePreservationAnalyzer : GSharpDiagnosticAnalyzer {
 
         private func RootOverride(method FunctionSymbol) FunctionSymbol? {
             var current = method.OverriddenMethod
-            while current?.OverriddenMethod != nil {
-                current = current!!.OverriddenMethod
+            while current?.OverriddenMethod is {} overridden {
+                current = overridden
             }
             return current
         }
