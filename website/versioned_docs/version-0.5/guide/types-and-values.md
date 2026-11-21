@@ -15,6 +15,93 @@ G# combines concise aggregate and collection syntax with CLR type identity. Use 
 
 If you type the C# spelling `null` in a value position and no symbol named `null` exists in scope, the binder reports `GS0273` ("`'null'` is not a literal in G#. Did you mean `'nil'`?") and recovers by treating the identifier as `nil`, so target-type contexts (`let x string? = null`, `Foo(null)` where `Foo` takes `T?`, `x == null`) continue to typecheck. The diagnostic is suppressed when `null` resolves to a real symbol (a function, local, or field named `null` is legal because `null` is not a keyword).
 
+## Native protocols (Next, ADR-0205)
+
+The bounded native protocol core is a development feature, not part of the
+published 0.5.212 SDK. `protocol` is contextual: ordinary identifiers with that
+name remain legal. A protocol currently contains only nongeneric, synchronous,
+by-value method signatures.
+
+```gsharp
+protocol Advance { func Next() int32; }
+struct Counter : Advance {
+    var Step int32
+    func Next() int32 {
+        Step += 1
+        return Step
+    }
+}
+var original = Counter{Step: 10}
+let p Advance = original
+let q = p
+original.Step = 30
+Console.WriteLine(q.Next()) // 11
+Console.WriteLine(p.Next()) // 12
+Console.WriteLine(original.Step) // 30
+```
+
+Owned class/struct colon claims are checked, not documentary. Exact accessible
+instance witnesses take precedence over exact ordinary by-value extensions.
+Retroactive conformance is also checked at a concrete conversion or probe.
+No nominal interface implementation is added to the original type.
+
+Concrete insertion evaluates once. A struct is shallow-copied once into mutable
+saved storage; a class retains the evaluated object even if its source variable
+is reassigned. Assignment, arguments, returns and successful capability views
+retain the **same entry**. Independent concrete insertion creates a different
+saved struct. Ordinary extension witnesses still receive parameter zero by
+value, so a scalar-incrementing extension can produce 11, 11 instead of 11, 12.
+
+`value is OtherProtocol view` and `value as OtherProtocol` use the same recorded
+decision; `as` returns `OtherProtocol?`. Known mismatch produces false/absence,
+but unknown or invalid evidence diagnoses or fails an explicit runtime boundary.
+Ordinary compatible concrete recovery uses the original payload: class recovery
+retains its object, while struct recovery copies the current saved state.
+Referenced fields still share normally; replacing a copied field stays local.
+An `is var copy` capture retains the validated entry too. Native-discriminator
+`switch` statements/expressions and compound total-capture/concrete-payload
+patterns currently require an explicit `is`/`as` intermediate view; unsupported
+forms diagnose instead of testing the entry's CLR type.
+Native inputs nested in property/list patterns likewise need an intermediate
+view. Recovery cannot hide native-bearing saved state behind an `object` or
+nominal target. Overload applicability uses the finite positive conformance
+records, not a guessed runtime shape.
+The insertion closure includes later-bound factory bodies, so declaration/binding
+order does not select an overload; imported calls use the same exact query.
+Trying a rejected overload does not add insertion evidence. Imported parameters
+retain their declared `P` versus `P?` presence requirements. Native compilations
+currently rebind instead of reusing cached global/body state.
+
+Required `P` storage must be initialized. `P?` permits outer absence, not a
+present nullable payload. This core rejects typed-nil insertion, open/generic
+payloads, enums, generic/rich/ref protocol slots, `managed[P]` projections,
+equality/hash/object/delegate/generic escapes and general foreign export.
+Public native contracts currently require accessible concrete payload types.
+Native-bearing auto-properties (including data-primary properties) and imported
+native constructors/base initializers are not yet admitted; use initialized
+ordinary fields and explicit checked methods. Equality/hash operations on
+aggregates containing native storage are blocked too.
+Nominal interfaces with static native fields remain nominal interfaces; their
+uninitialized fields have the same accessibility/storage checks as initialized fields.
+Bodyless nominal methods and accessors also enforce native signature restrictions
+before export; accessible supported optional contracts remain callable through
+implementation and reference assemblies.
+This includes equality/hash method groups and lifted operators. Safe casts and
+capturing patterns cannot erase native-bearing storage to `object`; ordinary
+noncapturing tests and outer nil checks remain available. Named/anonymous
+delegates and generic containers are checked transitively. Fixed-array slot
+positions diagnose until their reference contract preserves the length.
+Method-group and function-literal captures of native-bearing values also require
+a separately admitted delegate contract; ordinary checked calls remain available.
+Throwing a native-bearing exception also requires a separately admitted
+transport contract. A nested property/list native input needs an intermediate
+view even when its protocol is the same as the outer input's protocol.
+Existing nominal `interface`, `adapt`, concrete `as` restrictions and ordinary
+pattern/flow rules are unchanged.
+
+See the [native contract boundary](../ref/clr-interop.md#native-protocol-contract-boundary-next)
+before exposing native signatures across assemblies.
+
 ## Primitive values
 
 The built-in primitive names are explicit and CLR-backed: `bool`, signed and unsigned width-bearing integers, native integers, `float32`, `float64`, `decimal`, `char`, `string`, `object`, and `void`. `object` is the universal upper bound, so values can widen or box to it. Friendly numeric aliases (`int`, `uint`, `long`, `ulong`, `short`, `ushort`, `byte`, `sbyte`, `float`, `double`) are accepted everywhere a type name is accepted and resolve to the canonical width-bearing names at the binder; the canonical names remain the preferred spelling for documentation and public library APIs.

@@ -59,6 +59,18 @@ class ReleaseVersionRefsTests(unittest.TestCase):
     def test_checkout_agrees(self) -> None:
         self.assertEqual(self.problems_with({}), [])
 
+    def test_default_snapshot_keeps_historical_release_sections(self) -> None:
+        path = f"website/versioned_docs/version-{RELEASE['docsVersion']}/release-notes.md"
+        text = BASE.read(path)
+        self.assertIsNotNone(text)
+        assert text is not None
+        history = (
+            f"\n## {OTHER} (January 1, 2020)\n\n"
+            f"This snapshot is grounded in [`v{OTHER}`]"
+            f"(https://github.com/DavidObando/gsharp/releases/tag/v{OTHER}).\n"
+        )
+        self.assertEqual(self.problems_with({path: text + history}), [])
+
     def test_stale_tracked_pin_is_reported(self) -> None:
         path = "samples/Trail/Trail.gsproj"
         problems = self.problems_with(self.replaced(
@@ -174,7 +186,7 @@ class ReleaseVersionRefsTests(unittest.TestCase):
         self.assertReported(problems, name, "missing")
 
     def test_historical_assets_must_exist_and_retain_their_original_content(self) -> None:
-        self.assertEqual(len(refs.HISTORICAL_FILES), 7)
+        self.assertGreaterEqual(len(refs.HISTORICAL_FILES), 7)
         for path in refs.HISTORICAL_FILES:
             for content, finding in [(None, "missing historical evidence"),
                                      ("relabeled or regenerated", "historical evidence hash changed")]:

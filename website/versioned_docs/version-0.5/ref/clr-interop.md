@@ -41,6 +41,37 @@ dict["answer"] = 42
 
 Constructor overload resolution uses the same imported member machinery as method calls, including numeric conversion ranking and optional/default argument support where metadata supplies defaults.
 
+### Native CLR span aliases (Next)
+
+`span[T]` denotes `System.Span[T]`.
+`readonly span[T]` denotes `System.ReadOnlySpan[T]`.
+These contextual aliases use the target core library and preserve CLR type identity.
+They are not native slices, bytestrings, or new wrapper types.
+
+```gsharp
+let bytes = []byte{65, 0, 195, 169}
+let writable = span[byte](bytes)
+writable[0] = 66
+let view readonly span[byte] = writable
+Console.WriteLine(view.Length) // 4
+```
+
+Use existing CLR constructors and conversions.
+The aliases add no collection allocation syntax or implicit conversions.
+A visible user type or callable named `span` keeps ordinary lookup precedence.
+`$span` uses ordinary lookup.
+If a user type shadows `span`, use `System.ReadOnlySpan[T]` rather than `readonly span[T]`.
+Invalid native aliases report `GS0631`.
+
+CLR ref-safety rules still apply.
+Readonly element stores report `GS0226`.
+Ordinary heap fields, closure capture, and locals live across an `await` remain restricted.
+A local consumed before suspension is permitted.
+The subsequent native literal slice adds [`u8"..."`](./spec.md#utf-8-span-literals-next)
+and literal-only UTF-8 addition with the same CLR identity.
+It does not make spans heap-storable or safe across suspension.
+Later cs2gs adoption remains tracked by #5242 and #5218.
+
 ## Members and overloads
 
 Imported instance members use ordinary member syntax. Static members are accessed through the imported type. Properties and indexers bind as property/index expressions or assignments.
@@ -80,6 +111,85 @@ for kv in oddsAndEvens {
 ```
 
 The sample above relies on an imported extension method whose trailing optional comparer argument is omitted.
+
+## Native protocol contract boundary (Next)
+
+Native protocols are distinct from nominal interfaces and `adapt`. The admitted
+profile is metadata-aware G# to G# with finite, canonical conformance evidence.
+It does not admit general foreign export, runtime shape discovery, plugins or
+Go translation.
+
+The first backend represents `P` as a marked public CLR interface when `P` is
+public. Internal sealed typed entry classes implement the selected protocols
+and retain mutable typed saved storage. Successful views preserve that entry;
+ordinary concrete tests recover its payload rather than test the carrier.
+Dispatch is typed forwarding, not reflection, an argument array or universal
+invocation. The original concrete class/struct does not nominally implement `P`.
+
+Public native signatures and public typed `Create`, `Matches` and `Recover`
+support methods are real CLR ABI. Their generated support types, protocol and
+payload signature types must be accessible. The support names are compiler
+machinery, not a source packing API. Reference assemblies preserve their
+signatures and assembly evidence; import never requires usable bodies or the
+private entry layout.
+Internal protocols, private payloads and private-capability support members do
+not become public canonical records. Public native signatures cannot expose
+inaccessible contract types.
+
+`AssemblyMetadata("GSharp.NativeProtocols", ...)` contains schema
+`6b105e95-6860-496a-9acb-d81bc250a275/1`, paired with
+`GSharp.NativeProtocolFeature` and `CompilerFeatureRequired("GSharp.NativeProtocols.v1")`.
+The canonical JSON records exact assembly-qualified source/protocol identities,
+symbolic slot signatures including nullability/ref kinds, declaration revision,
+public exact selected targets, receiver convention, retaining-entry storage,
+typed support signatures, and finite positive/negative coverage. Metadata
+tokens are binary-local lookup details, never persistent identities.
+
+Imports validate required fields, schema, visibility/authority, signatures,
+coverage, support methods and canonical origins. Identical reexports retain the
+origin record. Conflicting origins and missing/stale/malformed/unsupported
+evidence diagnose `GS0629`; a later extension cannot rebind an old target.
+A new capability absent from an old producer's coverage is **unknown**, not a
+known negative. Keep the origin and required contract assemblies referenced.
+
+Reads and public entry parameters validate presence/evidence before native
+access or dispatch, including unused parameters. Required foreign null/default
+and unknown carrier implementations fail explicitly, rather than fabricating a
+payload or yielding a capability mismatch. Typed factories reject null class
+payloads; recovery checks entry identity before accessing saved storage.
+Compiler markers are cooperative diagnostics, **not CLR security or universal
+foreign-language enforcement** against arbitrary IL or reflection. Non-aware
+tools can see the public CLR contracts; that visibility does not admit their
+use as a general foreign API.
+Calls carrying native arguments or returns require a nongeneric, feature-marked
+method and validated assembly evidence. An assembly marker alone is not an
+admitted method contract.
+Imported conversion, unary and binary operators use this same member-level
+admission check, including lifted operators. Native-bearing exception transport
+is not admitted through either throw form.
+The same admission check applies to imported property/indexer accessors.
+Native-bearing field reads/writes also require a marked owning type and validated
+assembly evidence; ordinary CLR fields cannot become an unmarked native export.
+Native-bearing imported constructors and base initializers remain unproved and
+diagnose explicitly. Source native-bearing auto-properties, including
+synthesized data-primary properties, are rejected until their required
+initialization and hostile setter/getter boundaries are implemented.
+Public contract accessibility is checked recursively through containers and
+property signatures. Slot metadata uses canonical structural shapes with
+separate nullability flags, including same-assembly nullable types, tuples and
+arrays; reference imports do not rely on their source-time CLR placeholders.
+Fixed-length array slot positions are not admitted: the current CLR vector
+signature does not carry their length. Public conformance also requires an
+effectively public selected witness owner; internal-only conformance can use an
+internal owner. When an unrelated public capability cannot export that internal
+witness, that incidental capability remains unknown, not negative evidence.
+Nominal interfaces with native-bearing static fields carry a storage marker too.
+Annotated imported array elements retain native dependencies,
+and named/anonymous delegate and generic-container checks include saved native
+state rather than only direct protocol positions.
+Native-bearing method-group/function captures are gated too: an ordinary
+delegate's `Target` would erase that state to `object`. Checked direct calls do
+not require that unproved delegate boundary.
 
 ## Explicit interface implementations
 
@@ -141,12 +251,9 @@ conversions into a nil-accepting target; a non-nullable `Box` destination still
 requires a non-null result. The operand is evaluated once. A source-declared
 G# or imported CLR operator accepting `Token?` itself is an ordinary
 conversion, not this lift; it receives nil, controls its own result, and
-takes precedence over the lift of an operator accepting `Token`. Imported
-nullable-value operands are matched using their actual `Nullable<Token>`
-signature, not erased to `Token`. Their declared reference-result
-nullability remains part of the conversion contract. Other imported
-nullable-value signature gaps remain tracked in issue
-[#4737](https://github.com/DavidObando/gsharp/issues/4737).
+takes precedence over the lift of an operator accepting `Token`. Imported nullable-value operands and results are matched using their actual
+`Nullable<T>` signature, not erased to `T`. Their declared reference-result or
+value-result nullability remains part of the conversion contract.
 
 ```gsharp
 class Vec {
@@ -176,6 +283,8 @@ class Trace {
 ```
 
 Annotation names resolve either to the exact type name or to the conventional `Attribute` suffix form. Use-site targets include `field`, `param`, `return`, `type`, `method`, `property`, `event`, `module`, `assembly`, and `genericparam`. Arguments must be compile-time constants supported by CLR attribute metadata. `@Attribute` is declaration sugar for attribute classes and implies a `System.Attribute` base class.
+
+On a named delegate, annotations target the delegate type by default. Use `@return:` to annotate the return parameter of its CLR `Invoke` method. Parameter annotations remain on `Invoke` parameters. Attribute usage and constructor validation apply to each target. Delegate return `@MarshalAs` is rejected with `GS0360`: return marshalling metadata is not implemented.
 
 Compiler-synthesized attributes such as `CompilerGenerated`, `Extension`, `AsyncStateMachine`, `Nullable`, and `NullableContext` are reserved. `@DllImport` opts a function into P/Invoke (see [Unmanaged interop (P/Invoke)](#unmanaged-interop-pinvoke) below); the historical blanket-rejection at `GS0211` no longer fires.
 
@@ -546,7 +655,28 @@ The v1 supported `UnmanagedType` values are `LPStr`, `LPWStr`, `LPUTF8Str`, `BSt
 
 The annotation is a CLR *pseudo-custom* attribute: the binder validates the combination, the emitter writes a `FieldMarshal` table row (ECMA-335 II.23.4) plus `ParameterAttributes.HasFieldMarshal` on the Param row, and no `CustomAttribute` row is added. This matches C#'s `[MarshalAs]` shape exactly and round-trips through `ildasm` / ILSpy.
 
-**Interaction with `@LibraryImport`.** `@MarshalAs` on a non-string `@LibraryImport` parameter is honoured by writing the FieldMarshal row on the outer Param. `@MarshalAs` on a `@LibraryImport` *string* parameter is rejected with GS0360 — the function-wide `StringMarshalling:` knob is the canonical per-call lever for string encoding under the source-generator-shaped P/Invoke.
+**Interaction with `@LibraryImport`.** `@MarshalAs` on a non-string `@LibraryImport` parameter is honoured by writing FieldMarshal rows on both the outer wrapper and the inner P/Invoke parameters. `@MarshalAs` on a `@LibraryImport` *string* parameter is rejected with GS0360 — the function-wide `StringMarshalling:` knob is the canonical per-call lever for string encoding under the source-generator-shaped P/Invoke.
+
+### Return `@MarshalAs` overrides
+
+Use `@return:MarshalAs(...)` to override a P/Invoke return representation.
+For example, a native one-byte boolean return needs `U1`; an unannotated `bool` keeps the four-byte `BOOL` default.
+
+```gs
+@DllImport("native")
+@return:MarshalAs(UnmanagedType.U1)
+func IsReady() bool;
+```
+
+The compiler emits `HasFieldMarshal` and the descriptor on the return Param row, whose sequence is zero.
+For `@LibraryImport`, both the managed wrapper and the hidden P/Invoke carry the override.
+Non-string overrides use the inner P/Invoke's runtime marshaller.
+Other return attributes remain on the public method.
+
+Return overrides use the parameter compatibility rules and diagnostics GS0357–GS0360.
+`ByValArray` and `ByValTStr` return forms are rejected with GS0360 because inline representations require fields.
+`@LibraryImport` string returns also reject `@MarshalAs`; use the function-wide `StringMarshalling:` setting and its non-owning return policy.
+Delegate return `@MarshalAs` remains unsupported (GS0360).
 
 The diagnostics introduced by this feature are GS0357 (unsupported `UnmanagedType`), GS0358 (type mismatch), GS0359 (missing required knob), and GS0360 (rejected combination).
 

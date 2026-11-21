@@ -42,6 +42,7 @@ This matrix summarizes current feature support in the emitter, which every drive
 | Classes and primary constructors | Supported | Partially supported | The evaluator supported G# classes, with limited CLR base-initializer modeling. |
 | Explicit class `init` constructors | Supported | Supported | G# class constructors are parsed, bound, and evaluated. |
 | Interfaces | Supported | Supported for checking/upcasts | Default-interface methods, static-virtual interface members declared inside the interface's `shared { … }` block, `private` interface helper methods — instance helpers in the interface body, static helpers as `private func` inside the interface's `shared { … }` block — and the explicit-base interface call syntax `base[IFoo].M(...)` for DIM diamond disambiguation are supported. |
+| Native protocols (Next) | Bounded core | N/A | Contextual nongeneric method-only protocols, checked owned class/struct claims, exact typed witnesses, retaining-entry conversions/views and original concrete recovery. Finite metadata-aware G# implementation/ref contracts only; rich/generic/ref slots, enums, projections, typed nil, equality/object escapes and general foreign export remain blocked. See [types and values](../guide/types-and-values.md#native-protocols-next-adr-0205). |
 | Properties | Supported | Supported | Auto/computed and static/shared forms are represented. |
 | Events | Supported | Supported | G# and CLR event subscription paths exist. |
 | Static/shared members | Supported | Supported | Declared in a `shared { ... }` block. |
