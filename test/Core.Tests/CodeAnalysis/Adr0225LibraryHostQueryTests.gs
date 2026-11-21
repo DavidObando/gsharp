@@ -236,6 +236,8 @@ func F() {
 func F() int64 {
     let result int32 = {
         let text = "s"
+        if false {
+        }
         1
     }
     let g = func () int64 {
@@ -252,6 +254,8 @@ func F() int64 {
         let (_, model) = Model(source)
         // The block gives its target type to its last expression only.
         Assert.Null(model.GetExpectedType(source.IndexOf("\"s\"", StringComparison.Ordinal)))
+        Assert.Null(model.GetExpectedType(source.IndexOf("false", StringComparison.Ordinal)))
+        Assert.Equal(TypeSymbol.Int32, model.GetExpectedType(source.IndexOf("1\n    }", StringComparison.Ordinal)))
         // A rich object's method inside a literal owns its `return`.
         Assert.Equal(TypeSymbol.Bool, model.GetExpectedType(source.IndexOf("true", StringComparison.Ordinal)))
         Assert.Equal(TypeSymbol.Int64, model.GetExpectedType(source.IndexOf("2\n", StringComparison.Ordinal)))

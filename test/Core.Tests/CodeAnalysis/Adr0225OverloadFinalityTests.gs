@@ -577,6 +577,54 @@ func operator implicit (s string) Version {
         AssertFutureDependent(result, "GS0155", "later-declaration")
     }
 
+    @Fact
+    func ConstraintFailureOfACall_CanBeALaterOverload() {
+        const prefix = `package P
+
+func Pick[T class](v T) {
+}
+
+func Main() {
+    Pick[int32](1)
+`
+        const witness = `}
+
+func Pick[T](v int32) {
+}
+`
+        let result = BindNothing(prefix, []string{"}\n", witness})
+        AssertWitness(prefix + witness, "GS0152")
+        AssertFutureDependent(result, "GS0152", "later-declaration")
+    }
+
+    @Fact
+    func DiagnosticOfAnExpressionThatEndsAtTheCut_CanBeAPostfixContinuation() {
+        const prefix = "package P\n\nfunc Main() {\n    let n int32 = \"s\""
+        // A member access on the same or the next line continues the expression.
+        let result = BindNothing(prefix, []string{".Length\n}\n", "\n        .Length\n}\n"})
+        AssertWitness(prefix + ".Length\n}\n", "GS0155")
+        AssertFutureDependent(result, "GS0155", "rest-of-statement")
+        // With kept text, only a host text that continues the expression keeps the report open.
+        AssertFutureDependent(BindKeep(prefix + "/*CUT*/\n        .Length\n}\n"), "GS0155", "rest-of-statement")
+        let closed = BindKeep(prefix + "/*CUT*/\n    let m = 1\n}\n").Diagnostics.Single(
+            (d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155"
+        )
+        Assert.Equal(DiagnosticFinality.Final, closed.Finality)
+    }
+
+    @Fact
+    func MissingConversionToAnAnnotatedImportedType_IsFutureDependent() {
+        const prefix = `package P
+
+import System.Collections.Generic
+
+func Main() {
+    let xs List[string?] = "s"
+    let n = 1
+`
+        AssertFutureDependent(BindNothing(prefix, []string{"}\n"}), "GS0155", "later-declaration")
+    }
+
     shared {
         // Binds [`prefix`](paramref) as text that ends at the cut, with nothing after it, and checks that
         // each final diagnostic stays reported in every completion.

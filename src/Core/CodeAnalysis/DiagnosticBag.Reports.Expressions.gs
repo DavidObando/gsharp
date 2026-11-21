@@ -427,12 +427,13 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// @param typeParameterName The type-parameter name (e.g. `T`).
     /// @param typeArgument The supplied type argument.
     /// @param constraintDescription A human-readable description of the constraint (e.g. `comparable`).
+    /// @remarks ADR-0225 D6.5: a later overload without the constraint can remove the report.
     func ReportTypeArgumentDoesNotSatisfyConstraint(
         location TextLocation,
         typeParameterName string,
         typeArgument TypeSymbol,
         constraintDescription string
-    ) -> Report(
+    ) -> ReportCallResolution(
         location,
         DiagnosticDescriptors.TypeArgumentDoesNotSatisfyConstraint,
         typeArgument,

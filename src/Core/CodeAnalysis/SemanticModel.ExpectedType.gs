@@ -87,6 +87,12 @@ partial class SemanticModel {
                 (call.CloseParenthesisToken.IsMissing || position <= call.CloseParenthesisToken.Span.Start) {
                 return Usable(ArgumentType(call, position, cancellationToken))
             }
+            // A block expression gives its target type to its trailing expression only (the binder's
+            // BindBlockExpressionParts).
+            if current is BlockExpressionSyntax block &&
+                !(block.Expression is {} trailing && Contains(trailing.Span, position)) {
+                return nil
+            }
             // The body of a function literal or lambda starts another context; its header does not.
             if current is FunctionLiteralExpressionSyntax literal && Contains(literal.Body.Span, position) {
                 return nil

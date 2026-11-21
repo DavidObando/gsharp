@@ -306,10 +306,18 @@ internal shared class PrefixBindingContext {
     }
 
     private func IsSourceType(type TypeSymbol) bool {
-        let underlying = if type is NullableTypeSymbol nullable {
-            nullable.UnderlyingType
-        } else {
-            type
+        // The nullability carriers wrap the type that a conversion is declared for.
+        var underlying = type
+        for var depth = 0; depth < 8; depth++ {
+            if underlying is NullableTypeSymbol nullable {
+                underlying = nullable.UnderlyingType
+            } else if underlying is PlatformTypeSymbol platform {
+                underlying = platform.UnderlyingType
+            } else if underlying is NullabilityAnnotatedTypeSymbol annotated {
+                underlying = annotated.BaseType
+            } else {
+                break
+            }
         }
         return (underlying is StructSymbol structSymbol && structSymbol.Declaration != nil) ||
             underlying is ImportedTypeSymbol
