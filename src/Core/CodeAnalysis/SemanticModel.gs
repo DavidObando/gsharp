@@ -572,12 +572,10 @@ partial class SemanticModel {
                 while terminal is AccessorExpressionSyntax segment {
                     terminal = segment.RightPart
                 }
-                if terminal is CallExpressionSyntax{Callee: nil} call && object.ReferenceEquals(
-                    call.SyntaxTree,
-                    tree
-                ) &&
-                    !boundBySyntax.ContainsKey(call.Identifier) {
-                    boundBySyntax.Add(call.Identifier, memberCallee)
+                if terminal is CallExpressionSyntax{Callee: nil, Identifier: {} identifier} &&
+                    CalleeName(memberCallee) == identifier.ValueText &&
+                    object.ReferenceEquals(identifier.SyntaxTree, tree) && !boundBySyntax.ContainsKey(identifier) {
+                    boundBySyntax.Add(identifier, memberCallee)
                 }
             }
             // A variable declared at an identifier the symbol does not remember (an element of a
@@ -596,7 +594,8 @@ partial class SemanticModel {
 
         /// Gets the delegate a call invokes when its load carries the call's own anchor: the target
         /// of an indirect call, the receiver of a null-conditional invocation, or the receiver of a
-        /// delegate's `Invoke` called by the member's name.
+        /// delegate's `Invoke`. The caller answers the call's identifier with it only when the load
+        /// reads the member the identifier names.
         private func InheritedCalleeLoad(node BoundNode) BoundExpression? {
             let callee = switch node {
                 case indirect is BoundIndirectCallExpression: indirect.Target
@@ -611,18 +610,43 @@ partial class SemanticModel {
             }
         }
 
-        /// Gets whether [`invoke`](paramref) calls a delegate's `Invoke` through the name of the value
-        /// it invokes (`c.D(x)`), not through `Invoke` itself (`c.D.Invoke(x)`).
+        /// Gets whether [`invoke`](paramref) calls a delegate's `Invoke`.
         private func IsDelegateInvoke(invoke BoundImportedInstanceCallExpression) bool {
             let delegateType = invoke.Receiver.Type?.ClrType
-            if invoke.Method.Name != "Invoke" || delegateType == nil || !ClrTypeUtilities.IsDelegateType(delegateType) {
-                return false
+            return invoke.Method.Name == "Invoke" && delegateType != nil && ClrTypeUtilities.IsDelegateType(
+                delegateType
+            )
+        }
+
+        /// Gets the name of the member or variable a callee load reads, through conversions and
+        /// null assertions, or null for any other load.
+        private func CalleeName(load BoundExpression) string? {
+            var current BoundExpression? = load
+            for var depth = 0; depth < 8 && current != nil; depth++ {
+                switch current {
+                    case field is BoundFieldAccessExpression {
+                        return field.Field.Name
+                    }
+                    case property is BoundPropertyAccessExpression {
+                        return property.Property.Name
+                    }
+                    case variable is BoundVariableExpression {
+                        return variable.Variable.Name
+                    }
+                    case conversion is BoundConversionExpression {
+                        current = conversion.Expression
+                    }
+                    case assertion is BoundUnaryExpression when assertion
+                        .Op
+                        .Kind == BoundUnaryOperatorKind.NullAssertion {
+                        current = assertion.Operand
+                    }
+                    default {
+                        return nil
+                    }
+                }
             }
-            var terminal = invoke.Syntax
-            while terminal is AccessorExpressionSyntax segment {
-                terminal = segment.RightPart
-            }
-            return terminal is CallExpressionSyntax call && call.Identifier.ValueText != "Invoke"
+            return nil
         }
 
         private func RecordFailedCall(error BoundErrorExpression) {

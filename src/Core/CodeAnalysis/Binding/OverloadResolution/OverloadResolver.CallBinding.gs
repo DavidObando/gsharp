@@ -740,7 +740,7 @@ internal partial class OverloadResolver {
                 ) ??
                     bound
             }
-            binderCtx.CompleteCall(bound, syntax.Arguments)
+            binderCtx.CompleteCall(bound, syntax.Arguments, call: syntax)
             CallCandidateRecorder.Stamp(frame, bound)
             return bound
         } finally {

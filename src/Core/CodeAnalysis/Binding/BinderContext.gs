@@ -96,7 +96,7 @@ internal class BinderContext {
     private var expectedArguments HashSet[SyntaxNode]?
 
     /// Issue #6189: the callee of each call through a function value being bound, by the call's
-    /// syntax, built only when the call fails. (cref:CompleteCallSyntax) gives a call that failed its
+    /// syntax, built only when the call fails. (cref:CompleteCall) gives a call that failed its
     /// callee, and forgets it either way.
     private var callCallees Dictionary[CallExpressionSyntax, Func[BoundExpression?]]?
 
@@ -168,8 +168,7 @@ internal class BinderContext {
     /// @param syntax The expression the binder bound.
     /// @param bound Its bound node.
     internal func CompleteCallSyntax(syntax ExpressionSyntax, bound BoundExpression) {
-        let hasCallees = callCallees is {Count: > 0}
-        if !hasCallees && callArguments is not{Count: > 0} {
+        if callCallees is not{Count: > 0} && callArguments is not{Count: > 0} {
             return
         }
         var terminal ExpressionSyntax = syntax
@@ -177,10 +176,7 @@ internal class BinderContext {
             terminal = accessor.RightPart
         }
         if terminal is CallExpressionSyntax call {
-            if hasCallees {
-                CompleteCallee(call, bound)
-            }
-            CompleteCall(bound, call.Arguments)
+            CompleteCall(bound, call.Arguments, call: call)
         } else if terminal is BaseInterfaceCallExpressionSyntax baseCall {
             CompleteCall(bound, baseCall.Arguments)
         }
@@ -203,18 +199,24 @@ internal class BinderContext {
     }
 
     /// Finishes the bind of a call: when [`bound`](paramref) is the error of a call that did not
-    /// bind, it keeps the call's receiver (#6151) and the arguments the binder bound (#6150), for
-    /// the semantic model only. The arguments' records are forgotten either way.
+    /// bind, it keeps the call's receiver (#6151), the arguments the binder bound (#6150) and the
+    /// callee of a call through a function value (#6189), for the semantic model only. The records
+    /// are forgotten either way.
     /// @param bound The bound call.
     /// @param arguments The call's argument list.
     /// @param receiver The call's bound receiver, when any.
     /// @param receiverSyntax The receiver's syntax, when the receiver does not carry it.
+    /// @param call The call's syntax, whose callee (cref:RecordCallCallee) recorded, when any.
     internal func CompleteCall(
         bound BoundExpression,
         arguments SeparatedSyntaxList[ExpressionSyntax],
         receiver BoundExpression? = nil,
-        receiverSyntax SyntaxNode? = nil
+        receiverSyntax SyntaxNode? = nil,
+        call CallExpressionSyntax? = nil
     ) {
+        if call != nil && callCallees is {Count: > 0} {
+            CompleteCallee(call, bound)
+        }
         var failed ImmutableArray[BoundExpression].Builder? = nil
         let error = BoundErrorExpression.FindFailedCall(bound)
         if expectedArguments is {Count: > 0} expected {

@@ -70,6 +70,8 @@ open class Issue6189FunctionValueCalleeTests {
         "System.Func[int32, int32]",
         "GS0131"
     ) // a CLR delegate field
+    @InlineData("c.Inner.G(x, 2)", "c.Inner.G(x)", "G", "FieldSymbol", "(int32) -> int32", "GS0144") // a longer chain
+    @InlineData("G(x, a: 2)", "G(x)", "G", "FieldSymbol", "(int32) -> int32", "GS0144") // a named argument
     func FailedCallThroughAMemberFunctionValue_CalleeAnswersTheMember(
         failed string,
         bound string,
@@ -89,13 +91,65 @@ open class Issue6189FunctionValueCalleeTests {
         }
     }
 
+    @Theory
+    @InlineData("c.G(x, 2).ToString()") // the failed call is the receiver of a call
+    @InlineData("c.G(x, 2) + 1") // the failed call is an operand
+    @InlineData("c.Inner.G(x, 2).ToString()")
+    func FailedMemberCallThatIsNotTheEndOfItsExpression_CalleeAnswersTheMember(statement string) {
+        let (model, tree, compilation) = CreateModel(MemberTemplate.Replace("@@CALL", statement))
+        Assert.Equal("GS0144", Assert.Single(compilation.GetDiagnostics()).Id)
+        let callee = tree
+            .Root
+            .DescendantNodes()
+            .OfType[CallExpressionSyntax]()
+            .Single((c CallExpressionSyntax) -> c.Identifier.ValueText == "G")
+            .Identifier
+        Assert.Equal("G", Assert.IsType[FieldSymbol](model.GetSymbolInfo(callee).Symbol).Name)
+        Assert.Equal("(int32) -> int32", model.GetTypeInfo(callee).Type?.ToString())
+    }
+
+    @Theory
+    @InlineData("c.G.Invoke(x)", "Invoke", "", "") // `Invoke` of a function value
+    @InlineData("c.D.Invoke(x)", "Invoke", "Invoke", "") // `Invoke` of a CLR delegate
+    @InlineData("c.G(x).ToString()", "ToString", "ToString", "") // a call on the result
+    @InlineData("c.Inner.M2(x)", "M2", "M2", "") // a method at the end of a chain
+    func OtherIdentifiersOfACallThroughAMember_AnswerWhatTheyName(
+        statement string,
+        name string,
+        symbolName string,
+        type string
+    ) {
+        // Only the identifier that names the member answers the member's load.
+        let (model, tree, compilation) = CreateModel(
+            MemberTemplate.Replace("@@CALL", statement).Replace(
+                "    func M(c C) {",
+                "    func M2(v int32) int32 -> v\n    func M(c C) {"
+            )
+        )
+        Assert.Empty(compilation.GetDiagnostics())
+        let token = tree
+            .Root
+            .DescendantNodes()
+            .OfType[CallExpressionSyntax]()
+            .Single((c CallExpressionSyntax) -> c.Identifier.ValueText == name)
+            .Identifier
+        Assert.Equal(symbolName, model.GetSymbolInfo(token).Symbol?.Name ?? "")
+        Assert.Equal(type, model.GetTypeInfo(token).Type?.ToString() ?? "")
+    }
+
     @Fact
-    func ExplicitInvokeOfAMemberDelegate_InvokeAnswersInvoke() {
-        // `Invoke` names the delegate's method, not the member the delegate is read from.
-        let (model, tree, compilation) = CreateModel(MemberTemplate.Replace("@@CALL", "c.D.Invoke(x)"))
-        Assert.DoesNotContain(compilation.GetDiagnostics(), (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
-        let invoke = LastCall(tree).Identifier
-        Assert.Equal("Invoke", model.GetSymbolInfo(invoke).Symbol?.Name)
+    func FailedCallThroughAWriteOnlyProperty_ReportsTheReadOnce() {
+        // The callee's load reports that the property cannot be read; the load the semantic model
+        // keeps is built again, and its report is dropped.
+        let (model, tree, compilation) = CreateModel(MemberTemplate.Replace("@@CALL", "W(x, 2)"))
+        Assert.Equal(
+            []string{
+                "GS0127 Error 393..394 Variable 'W' is read-only and cannot be assigned to.",
+                "GS0144 Error 393..394 Function 'W' requires 1 arguments but was given 2."
+            },
+            compilation.GetDiagnostics().Select(Describe).ToArray()
+        )
+        Assert.Null(model.GetSymbolInfo(LastCall(tree).Identifier).Symbol)
     }
 
     @Fact
@@ -191,7 +245,7 @@ open class Issue6189FunctionValueCalleeTests {
     }
 
     shared {
-        private const MemberTemplate string = "package P\n\nimport System\n\nclass C {\n    var G (int32) -> int32 = (v int32) -> v\n    var N ((int32) -> int32)? = nil\n    var D Func[int32, int32] = (v int32) -> v\n    prop P (int32) -> int32 {\n        get { return (v int32) -> v }\n    }\n    func M(c C) {\n        let x = 1\n        let k = @@CALL\n    }\n}\n"
+        private const MemberTemplate string = "package P\n\nimport System\n\nclass C {\n    var G (int32) -> int32 = (v int32) -> v\n    var N ((int32) -> int32)? = nil\n    var D Func[int32, int32] = (v int32) -> v\n    prop P (int32) -> int32 {\n        get { return (v int32) -> v }\n    }\n    prop Inner C {\n        get { return this }\n    }\n    prop W (int32) -> int32 {\n        set { }\n    }\n    func M(c C) {\n        let x = 1\n        let k = @@CALL\n    }\n}\n"
 
         private func AssertCalleeAnswersAsInACallThatBinds(
             template string,
