@@ -59,6 +59,10 @@ open class Issue6187FailedOperatorOperandTests {
     @InlineData("arr[x] += c") // an element target
     @InlineData("t += c") // a local target
     @InlineData("c++") // an increment
+    @InlineData("let k = c++") // a postfix increment whose value is read
+    @InlineData("let k = c.Other++") // a postfix increment of a member
+    @InlineData("r[x, x] += c") // a rectangular array element
+    @InlineData("g[x, x] += c") // a two-index user indexer
     func ReferencesInACompoundAssignmentWithoutAnOperator_Answer(statement string) {
         let (model, tree, compilation) = CreateModel(statement)
         Assert.Contains(compilation.GetDiagnostics(), (d Diagnostic) -> d.Id == "GS0129")
@@ -66,7 +70,7 @@ open class Issue6187FailedOperatorOperandTests {
             .Root
             .DescendantNodes()
             .OfType[NameExpressionSyntax]()
-            .Where((n NameExpressionSyntax) -> n.IdentifierToken.Text is "c" or "arr" or "x")
+            .Where((n NameExpressionSyntax) -> n.IdentifierToken.Text is "c" or "arr" or "x" or "r" or "g")
             .ToArray()
         Assert.NotEmpty(references)
         for reference in references {
@@ -80,7 +84,11 @@ open class Issue6187FailedOperatorOperandTests {
     @Fact
     func LeftOperandCall_AnswersItsTypeAndFunction() {
         let (model, tree, _) = CreateModel("let k = Use(x) + Use(x, x)")
-        let left = tree.Root.DescendantNodes().OfType[CallExpressionSyntax]().First()
+        let left = tree
+            .Root
+            .DescendantNodes()
+            .OfType[CallExpressionSyntax]()
+            .First((call CallExpressionSyntax) -> call.Identifier.Text == "Use")
         Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(left).Type)
     }
 
@@ -110,7 +118,7 @@ open class Issue6187FailedOperatorOperandTests {
     shared {
         private func Source(
             statement string
-        ) string -> "package P\n\nclass C {\n    var N int32\n}\n\nfunc Use(v int32) int32 -> v\n\nfunc Opt(v int32) int32? -> v\n\nfunc F(c C, arr []int32) {\n    let x = 1\n    var t = 0\n    " +
+        ) string -> "package P\n\nclass C {\n    var N int32\n    var Other D = D()\n}\n\nclass D { }\n\nclass Grid {\n    prop this[a int32, b int32] int32 {\n        get { return 0 }\n        set { }\n    }\n}\n\nfunc Use(v int32) int32 -> v\n\nfunc Opt(v int32) int32? -> v\n\nfunc F(c C, arr []int32, r [,]int32, g Grid) {\n    let x = 1\n    var t = 0\n    " +
             statement +
             "\n}\n"
 

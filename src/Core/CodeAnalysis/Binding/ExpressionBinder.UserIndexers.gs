@@ -885,6 +885,8 @@ internal partial class ExpressionBinder {
         }
         let value = conversions.BindConversion(location, bindValue(elementType, ReadCurrent), elementType)
         if value is BoundErrorExpression {
+            // The receiver and the indices keep their answers in the semantic model (#6187).
+            KeepCapturedOperands(value, statements)
             return value
         }
         if hasNonReconstructableAddress && AsyncBoundTreeQueries.HasAwait(value) {
@@ -1239,6 +1241,8 @@ internal partial class ExpressionBinder {
                 byRef.PointeeType
             )
             if refValue is BoundErrorExpression {
+                // The receiver and the indices keep their answers in the semantic model (#6187).
+                KeepCapturedOperands(refValue, statements)
                 return refValue
             }
             if AsyncBoundTreeQueries.HasAwait(refValue) {
@@ -1272,6 +1276,8 @@ internal partial class ExpressionBinder {
         }
         let value = conversions.BindConversion(location, bindValue(elementType, ReadCurrent), elementType)
         if value is BoundErrorExpression {
+            // The receiver and the indices keep their answers in the semantic model (#6187).
+            KeepCapturedOperands(value, statements)
             return value
         }
         if hasNonReconstructableAddress && AsyncBoundTreeQueries.HasAwait(value) {

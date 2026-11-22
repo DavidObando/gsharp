@@ -2227,7 +2227,7 @@ internal partial class ExpressionBinder {
                 boundRhs.Type
             )
             // The target and the value keep their answers in the semantic model (#6187).
-            return BoundErrorExpression.WithFailedOperands(leftExpr, boundRhs)
+            return BoundErrorExpression.WithFailedOperands(previousDeclaration?.Initializer ?? leftExpr, boundRhs)
         }
         // Issue #3792: a preceding assignment may smart-cast a nullable
         // delegate read to its non-nullable underlying type. Compound
@@ -2416,7 +2416,7 @@ internal partial class ExpressionBinder {
                     boundRhs.Type
                 )
                 // The target and the value keep their answers in the semantic model (#6187).
-                result = BoundErrorExpression.WithFailedOperands(leftRead, boundRhs)
+                result = BoundErrorExpression.WithFailedOperands(previousDeclaration?.Initializer ?? leftRead, boundRhs)
                 return true
             }
             if staticField.IsReadOnly {
@@ -2515,7 +2515,7 @@ internal partial class ExpressionBinder {
                     boundRhs.Type
                 )
                 // The target and the value keep their answers in the semantic model (#6187).
-                result = BoundErrorExpression.WithFailedOperands(leftRead, boundRhs)
+                result = BoundErrorExpression.WithFailedOperands(previousDeclaration?.Initializer ?? leftRead, boundRhs)
                 return true
             }
             let converted = conversions.BindConversion(syntax.Value.Location, binary, prop.Type)
@@ -2585,7 +2585,7 @@ internal partial class ExpressionBinder {
                 boundRhs.Type
             )
             // The target and the value keep their answers in the semantic model (#6187).
-            result = BoundErrorExpression.WithFailedOperands(leftRead, boundRhs)
+            result = BoundErrorExpression.WithFailedOperands(previousDeclaration?.Initializer ?? leftRead, boundRhs)
             return true
         }
         if staticField.IsReadOnly || staticField.IsConst {
@@ -2745,7 +2745,7 @@ internal partial class ExpressionBinder {
                 boundRhs.Type
             )
             // The target and the value keep their answers in the semantic model (#6187).
-            return BoundErrorExpression.WithFailedOperands(leftRead, boundRhs)
+            return BoundErrorExpression.WithFailedOperands(previousDeclaration?.Initializer ?? leftRead, boundRhs)
         }
         let converted = conversions.BindConversion(syntax.Value.Location, binary, propertyType)
         EnforceInitOnlyAssignment(property, receiver, syntax.OperatorToken.Location)
@@ -3040,7 +3040,7 @@ internal partial class ExpressionBinder {
                     boundRhs.Type
                 )
                 // The target and the value keep their answers in the semantic model (#6187).
-                return BoundErrorExpression.WithFailedOperands(leftRead, boundRhs)
+                return BoundErrorExpression.WithFailedOperands(previousDeclaration?.Initializer ?? leftRead, boundRhs)
             }
             let converted = conversions.BindConversion(syntax.Value.Location, binary, field!!.Type)
             let assignment = BoundFieldAssignmentExpression.WithExpressionReceiver(
@@ -3123,7 +3123,7 @@ internal partial class ExpressionBinder {
                     boundRhs.Type
                 )
                 // The target and the value keep their answers in the semantic model (#6187).
-                return BoundErrorExpression.WithFailedOperands(leftRead, boundRhs)
+                return BoundErrorExpression.WithFailedOperands(previousDeclaration?.Initializer ?? leftRead, boundRhs)
             }
             let converted = conversions.BindConversion(syntax.Value.Location, binary, prop.Type)
             EnforceInitOnlyAssignment(prop, boundReceiver, syntax.OperatorToken.Location)
@@ -3303,7 +3303,7 @@ internal partial class ExpressionBinder {
                 boundRhs.Type
             )
             // The target and the value keep their answers in the semantic model (#6187).
-            return BoundErrorExpression.WithFailedOperands(leftRead, boundRhs)
+            return BoundErrorExpression.WithFailedOperands(previousDeclaration?.Initializer ?? leftRead, boundRhs)
         }
         let converted = conversions.BindConversion(syntax.Value.Location, binary, elementType)
         let assignment = BoundIndirectAssignmentExpression(
@@ -3469,7 +3469,7 @@ internal partial class ExpressionBinder {
                 boundRhs.Type
             )
             // The target and the value keep their answers in the semantic model (#6187).
-            return BoundErrorExpression.WithFailedOperands(leftRead, boundRhs)
+            return BoundErrorExpression.WithFailedOperands(previousDeclaration?.Initializer ?? leftRead, boundRhs)
         }
         let converted = conversions.BindConversion(syntax.Value.Location, binary, targetSymbol)
         let assignment = BoundClrPropertyAssignmentExpression(
@@ -3560,7 +3560,7 @@ internal partial class ExpressionBinder {
                 boundRhs.Type
             )
             // The target and the value keep their answers in the semantic model (#6187).
-            return BoundErrorExpression.WithFailedOperands(leftRead, boundRhs)
+            return BoundErrorExpression.WithFailedOperands(previousDeclaration?.Initializer ?? leftRead, boundRhs)
         }
         let converted = conversions.BindConversion(syntax.Value.Location, binary, targetSymbol)
         let assignment = BoundClrPropertyAssignmentExpression(
@@ -3647,7 +3647,7 @@ internal partial class ExpressionBinder {
                 boundRhs.Type
             )
             // The target and the value keep their answers in the semantic model (#6187).
-            return BoundErrorExpression.WithFailedOperands(leftRead, boundRhs)
+            return BoundErrorExpression.WithFailedOperands(previousDeclaration?.Initializer ?? leftRead, boundRhs)
         }
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
         if previousDeclaration != nil {
@@ -3911,7 +3911,7 @@ internal partial class ExpressionBinder {
                 rhsBound.Type
             )
             // The target and the value keep their answers in the semantic model (#6187).
-            return BoundErrorExpression.WithFailedOperands(indirectRead, rhsBound)
+            return BoundErrorExpression.WithFailedOperands(pointer, rhsBound)
         }
         if combined.Type != pointeeType && combined.Type != TypeSymbol.Error {
             let converted = Conversion.Classify(combined.Type, pointeeType)
@@ -5643,9 +5643,10 @@ internal partial class ExpressionBinder {
                             elementType,
                             rhs.Type
                         )
-                        // The target and the value keep their answers in the semantic model (#6187).
+                        // The receiver and the value keep their answers in the semantic model
+                        // (#6187). The indexer binder keeps the indices.
                         let failedCompound = BoundErrorExpression(syntax)
-                        failedCompound.KeepOperands(current, rhs)
+                        failedCompound.KeepOperands(target, rhs)
                         return failedCompound
                     }
                     return combined
@@ -5731,9 +5732,11 @@ internal partial class ExpressionBinder {
                 rectangular.ElementType,
                 rhs.Type
             )
-            // The target and the value keep their answers in the semantic model (#6187).
+            // The target and the value keep their answers in the semantic model (#6187). The
+            // receiver and the indices are in the temporaries' initializers.
             let failedCompound = BoundErrorExpression(syntax)
-            failedCompound.KeepOperands(read, rhs)
+            failedCompound.KeepOperands(previousDeclaration?.Initializer ?? read, rhs)
+            KeepCapturedOperands(failedCompound, statements)
             return failedCompound
         }
         let converted = conversions.BindConversion(syntax.Value.Location, combined, rectangular.ElementType)
@@ -5901,6 +5904,22 @@ internal partial class ExpressionBinder {
         let captured = BoundVariableExpression(nil, variable)
         read = captured
         return captured
+    }
+
+    /// Keeps the initializers of the temporaries in [`statements`](paramref) on a failed
+    /// assignment, for the semantic model only (#6187). The binder saves the receiver and the
+    /// indices of an element target in these temporaries.
+    /// @param failed The bound result of the assignment.
+    /// @param statements The statements that declare the temporaries.
+    private func KeepCapturedOperands(failed BoundExpression, statements ImmutableArray[BoundStatement].Builder) {
+        if failed is not BoundErrorExpression error {
+            return
+        }
+        for statement in statements {
+            if statement is BoundVariableDeclaration{Initializer: {} captured} {
+                error.KeepOperands(captured)
+            }
+        }
     }
 
     private func CaptureSavedStorageReceiver(
