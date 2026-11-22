@@ -48,6 +48,9 @@ partial class CSharpToGSharpTranslator {
             if this.TryTranslateAnalyzerSnippet(expression, out var snippet) {
                 return snippet
             }
+            if this.TryWrapTopLevelStandaloneHandlerConsumer(expression!!, out var wrappedStandalone) {
+                return wrappedStandalone
+            }
             switch expression {
                 case literal is LiteralExpressionSyntax {
                     return this.TranslateLiteral(literal)

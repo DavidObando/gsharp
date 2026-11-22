@@ -25,7 +25,7 @@ partial class CSharpToGSharpTranslator {
     private partial class DeclarationVisitor : CSharpSyntaxVisitor[GMember] {
         private func TranslateInvocation(invocation InvocationExpressionSyntax) GExpression? {
             let needsFunctionSeam = this.RequiresFunctionArgumentSpillSeam(invocation)
-            let needsHandlerOutSeam = this.CallNeedsHandlerCoordinationForSyntax(invocation)
+            let needsHandlerOutSeam = this.CallRequiresHandlerBlockForSyntax(invocation)
             if needsFunctionSeam || needsHandlerOutSeam {
                 this.PredeclareBlockCallOutVariables(invocation.ArgumentList)
             }
@@ -11996,6 +11996,18 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             return switch this.context.SemanticModel.GetOperation(callSyntax) {
+                case invocationOp is IInvocationOperation: this.CallNeedsHandlerCoordination(invocationOp.Arguments)
+                case creationOp is IObjectCreationOperation: this.CallNeedsHandlerCoordination(creationOp.Arguments)
+                case propertyOp is IPropertyReferenceOperation: this.CallNeedsHandlerCoordination(propertyOp.Arguments)
+                default: false
+            }
+        }
+
+        private func CallRequiresHandlerBlockForSyntax(callSyntax Microsoft.CodeAnalysis.SyntaxNode?) bool {
+            if callSyntax == nil {
+                return false
+            }
+            return switch this.context.SemanticModel.GetOperation(callSyntax) {
                 case invocationOp is IInvocationOperation: this.CallRequiresHandlerBlock(
                     callSyntax,
                     invocationOp.Arguments
@@ -12027,9 +12039,21 @@ partial class CSharpToGSharpTranslator {
                     BaseObjectCreationExpressionSyntax or
                     ElementAccessExpressionSyntax or
                     ElementBindingExpressionSyntax {
-                    if this.CallNeedsHandlerCoordinationForSyntax(candidate) {
+                    if this.CallRequiresHandlerBlockForSyntax(candidate) {
                         return true
                     }
+                }
+            }
+            return false
+        }
+
+        private func CallContainsInterpolatedStringHandler(operationArguments ImmutableArray[IArgumentOperation]) bool {
+            if operationArguments.IsDefaultOrEmpty {
+                return false
+            }
+            for argument in operationArguments {
+                if ContainsHandlerCreationOperation(argument.Value) {
+                    return true
                 }
             }
             return false
@@ -12080,32 +12104,217 @@ partial class CSharpToGSharpTranslator {
             this.context.Compilation.GetEntryPoint(default(CancellationToken))
         )
 
-        private func ContainsRefLikeHandlerInTopLevelNode(node Microsoft.CodeAnalysis.SyntaxNode?) bool {
+        private func ContainsDirectStandaloneRefLikeHandler(
+            node Microsoft.CodeAnalysis.SyntaxNode?,
+            allowRefLikeRoot bool = false
+        ) bool {
             if node == nil {
                 return false
             }
-            for candidate in node.DescendantNodesAndSelf(
-                descendIntoChildren: (child Microsoft.CodeAnalysis.SyntaxNode) -> !(
-                    child is AnonymousFunctionExpressionSyntax || child is LocalFunctionStatementSyntax
-                )
-            ) {
-                if candidate is Microsoft
+            if !allowRefLikeRoot {
+                if node is Microsoft
                     .CodeAnalysis
                     .CSharp
                     .Syntax
-                    .InterpolatedStringExpressionSyntax ||
-                    candidate is CastExpressionSyntax ||
-                    (
-                    candidate is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax binary && binary.IsKind(
-                        Microsoft.CodeAnalysis.CSharp.SyntaxKind.AddExpression
-                    )
-                ) {
-                    if this.TryGetInterpolatedStringHandlerCreation(candidate, out var handlerOp) &&
-                        handlerOp!!
-                        .Type
-                        ?.IsRefLikeType == true {
+                    .ParenthesizedExpressionSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .AssignmentExpressionSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .AwaitExpressionSyntax or
+                    IsPatternExpressionSyntax or
+                    AnonymousFunctionExpressionSyntax or
+                    MemberBindingExpressionSyntax or
+                    ElementBindingExpressionSyntax {
+                    return false
+                }
+                if node is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .MemberAccessExpressionSyntax member &&
+                    member.Parent is InvocationExpressionSyntax parentInv &&
+                    object.ReferenceEquals(parentInv.Expression, member) {
+                    return false
+                }
+                if node is ElementAccessExpressionSyntax && this.IsElementAssignmentTarget(node) {
+                    return false
+                }
+                if this.CallRequiresHandlerBlockForSyntax(node) {
+                    return false
+                }
+                if node is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ExpressionSyntax rootExpr &&
+                    this
+                    .context
+                    .GetTypeInfo(rootExpr)
+                    .Type
+                    ?.IsRefLikeType == true {
+                    return false
+                }
+            }
+            let HasDirectHandler = func (candidate Microsoft.CodeAnalysis.SyntaxNode) bool {
+                for child in candidate.ChildNodes() {
+                    if child is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .InterpolatedStringExpressionSyntax ||
+                        child is CastExpressionSyntax ||
+                        (
+                        child is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax binary && binary.IsKind(
+                            Microsoft.CodeAnalysis.CSharp.SyntaxKind.AddExpression
+                        )
+                    ) {
+                        if this.TryGetInterpolatedStringHandlerCreation(child, out var handlerOp) &&
+                            handlerOp!!
+                            .Type
+                            ?.IsRefLikeType == true {
+                            return true
+                        }
+                    }
+                }
+                return false
+            }
+            let CanDescend = func (child Microsoft.CodeAnalysis.SyntaxNode) bool {
+                if child is AnonymousFunctionExpressionSyntax or
+                    LocalFunctionStatementSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .AwaitExpressionSyntax or
+                    IsPatternExpressionSyntax {
+                    return false
+                }
+                if this.CallRequiresHandlerBlockForSyntax(child) {
+                    return false
+                }
+                if child is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ExpressionSyntax expr &&
+                    expr is not Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ParenthesizedExpressionSyntax {
+                    if expr is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .MemberAccessExpressionSyntax member &&
+                        member.Parent is InvocationExpressionSyntax inv &&
+                        object.ReferenceEquals(inv.Expression, member) {
                         return true
                     }
+                    let childType = this.context.GetTypeInfo(expr).Type
+                    if childType != nil && !childType.IsRefLikeType {
+                        return false
+                    }
+                }
+                return true
+            }
+            let work = Queue[Microsoft.CodeAnalysis.SyntaxNode]()
+            work.Enqueue(node)
+            while work.Count > 0 {
+                let current = work.Dequeue()
+                if HasDirectHandler(current) {
+                    return true
+                }
+                for child in current.ChildNodes() {
+                    if CanDescend(child) {
+                        work.Enqueue(child)
+                    }
+                }
+            }
+            return false
+        }
+
+        private func TryWrapTopLevelStandaloneHandlerConsumer(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            out result GExpression?
+        ) bool {
+            result = nil
+            if !this.IsTopLevelEntryPointCall(expression) ||
+                this
+                .state
+                .ActiveCallSiteHandlerCaptures != nil ||
+                !this.ContainsDirectStandaloneRefLikeHandler(expression) {
+                return false
+            }
+            this.PredeclareTopLevelFrameOutVariables(expression)
+            let frameStmts = List[GStatement]()
+            let replacements = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
+            let outerSpillPrologue = this.state.PendingSpillPrologue
+            let prevFrame = this.state.InTopLevelLambdaFrame
+            this.state.PendingSpillPrologue = frameStmts
+            this.state.InTopLevelLambdaFrame = true
+            let embedded = this.HoistAssignmentsInOrder(expression, includeSelf: true, frameStmts, replacements)
+            try {
+                let innerExpr = this.TranslateExpression(expression)
+                let returnsVoid = this.context.GetTypeInfo(expression).Type?.SpecialType == SpecialType.System_Void
+                if returnsVoid {
+                    frameStmts.Add(ExpressionStatement(innerExpr, isVoid: true))
+                } else {
+                    frameStmts.Add(ReturnStatement(innerExpr))
+                }
+                result = InvocationExpression(
+                    ParenthesizedExpression(
+                        LambdaExpression(Array.Empty[Parameter](), blockBody: BlockStatement(frameStmts))
+                    ),
+                    Array.Empty[GExpression]()
+                )
+            } finally {
+                this.ReleaseHoistedAssignments(embedded, replacements)
+                this.state.InTopLevelLambdaFrame = prevFrame
+                this.state.PendingSpillPrologue = outerSpillPrologue
+            }
+            return true
+        }
+
+        private func IsInCoordinatedHandlerCallOrHole(
+            node Microsoft.CodeAnalysis.SyntaxNode,
+            root Microsoft.CodeAnalysis.SyntaxNode?
+        ) bool {
+            if this.IsInInterpolatedStringHandlerHole(node, root) {
+                return true
+            }
+            for var current Microsoft
+                .CodeAnalysis
+                .SyntaxNode? = node.Parent;
+                current != nil &&
+                (root == nil || root.Span.Contains(current.Span));
+                current = current!!
+                .Parent {
+                if current is InvocationExpressionSyntax or
+                    BaseObjectCreationExpressionSyntax or
+                    ElementAccessExpressionSyntax or
+                    ElementBindingExpressionSyntax {
+                    if this.CallRequiresHandlerBlockForSyntax(current) {
+                        return true
+                    }
+                }
+                if current is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .AssignmentExpressionSyntax assign &&
+                    Unparenthesize(assign.Left) is ElementAccessExpressionSyntax leftElem &&
+                    this.CallRequiresHandlerBlockForSyntax(leftElem) {
+                    return true
+                }
+                if current == root {
+                    break
                 }
             }
             return false
@@ -12291,8 +12500,27 @@ partial class CSharpToGSharpTranslator {
         private func CallRequiresHandlerBlock(
             callSyntax Microsoft.CodeAnalysis.SyntaxNode,
             operationArguments ImmutableArray[IArgumentOperation]
-        ) bool -> this.CallNeedsHandlerCoordination(operationArguments) ||
-            (this.IsTopLevelEntryPointCall(callSyntax) && this.CallContainsRefLikeHandler(operationArguments))
+        ) bool -> this.CallNeedsHandlerCoordination(operationArguments) || this.CallContainsInterpolatedStringHandler(
+            operationArguments
+        )
+
+        private func CallRequiresDefensiveCopyOnReadOnlyReceiver(
+            callSyntax Microsoft.CodeAnalysis.SyntaxNode,
+            recvType ITypeSymbol?
+        ) bool {
+            if recvType == nil || !recvType.IsValueType || recvType.IsReadOnly {
+                return false
+            }
+            return switch this.context.SemanticModel.GetOperation(callSyntax) {
+                case inv is IInvocationOperation: !inv.TargetMethod.IsReadOnly
+                case propOp is IPropertyReferenceOperation: if this.IsElementAssignmentTarget(callSyntax) {
+                    propOp.Property.SetMethod?.IsReadOnly != true
+                } else {
+                    propOp.Property.GetMethod?.IsReadOnly != true
+                }
+                default: false
+            }
+        }
 
         private func TryGetCoordinatedInvocationCall(
             invocation InvocationExpressionSyntax,
@@ -12538,6 +12766,9 @@ partial class CSharpToGSharpTranslator {
                         if recvType?.IsValueType == true && this.CanCaptureValueTypeAsRefAlias(
                             receiverSyntax,
                             out var isReadOnlyRecv
+                        ) &&
+                            !(
+                            isReadOnlyRecv && this.CallRequiresDefensiveCopyOnReadOnlyReceiver(callSyntax, recvType)
                         ) {
                             prologue.Add(
                                 LocalDeclarationStatement(

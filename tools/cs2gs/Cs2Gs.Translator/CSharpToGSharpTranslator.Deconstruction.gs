@@ -3262,27 +3262,6 @@ partial class CSharpToGSharpTranslator {
         /// Translates a condition while redirecting any spill or embedded
         /// deconstruction-assignment statements into [`prologue`](paramref).
         private func TranslateConditionWithHoist(expression ExpressionSyntax, prologue List[GStatement]) GExpression? {
-            if this.IsTopLevelEntryPointCall(expression) && this.ContainsRefLikeHandlerInTopLevelNode(expression) {
-                this.PredeclareTopLevelFrameOutVariables(expression)
-                let frameStmts = List[GStatement]()
-                let outerSpillPrologue List[GStatement]? = this.state.PendingSpillPrologue
-                let prevFrame = this.state.InTopLevelLambdaFrame
-                this.state.PendingSpillPrologue = frameStmts
-                this.state.InTopLevelLambdaFrame = true
-                try {
-                    let condExpr = this.TranslateConditionWithHoistCore(expression, frameStmts)
-                    frameStmts.Add(ReturnStatement(condExpr))
-                } finally {
-                    this.state.InTopLevelLambdaFrame = prevFrame
-                    this.state.PendingSpillPrologue = outerSpillPrologue
-                }
-                return InvocationExpression(
-                    ParenthesizedExpression(
-                        LambdaExpression(Array.Empty[Parameter](), blockBody: BlockStatement(frameStmts))
-                    ),
-                    Array.Empty[GExpression]()
-                )
-            }
             // Any spill hoisted while translating `expression` (issue #1731) is
             // redirected into `prologue` — the SAME preceding-statement list an
             // embedded deconstruction assignment uses — rather than the enclosing
@@ -3667,7 +3646,7 @@ partial class CSharpToGSharpTranslator {
             let captured = this.CaptureDeconstructionStorageTargets(leftTuple, statements)
             this.LowerTuplePattern(
                 leftTuple,
-                this.TranslateDeconstructionRhs(right, () -> this.TranslateExpression(right)),
+                this.TranslateExpression(right),
                 forceRealTemps: false,
                 statements,
                 captured,
@@ -3772,17 +3751,12 @@ partial class CSharpToGSharpTranslator {
                     rightTuple
                         .Arguments
                         .Select(
-                        (argument ArgumentSyntax) -> this.TranslateDeconstructionRhs(
-                            argument.Expression,
-                            () -> this.TranslateValueWithNullForgiveness(argument.Expression)
-                        )!!
+                        (argument ArgumentSyntax) -> this.TranslateValueWithNullForgiveness(argument.Expression)!!
                     )
                         .ToList()
                 )
             } else {
-                cast[IReadOnlyList[GExpression]](
-                    []GExpression{this.TranslateDeconstructionRhs(right, () -> this.TranslateExpression(right))!!}
-                )
+                cast[IReadOnlyList[GExpression]]([]GExpression{this.TranslateExpression(right)!!})
             }
             result = []GStatement{MultiAssignmentStatement(targets, values, targetBindings)}
             return true
@@ -4462,7 +4436,7 @@ partial class CSharpToGSharpTranslator {
                     let conversions = List[GStatement]()
                     this.LowerDeconstructionDeclaration(
                         designation,
-                        this.TranslateDeconstructionRhs(right, () -> this.TranslateExpression(right))!!,
+                        this.TranslateExpression(right)!!,
                         preserveValue: false,
                         statements,
                         this.GetDeconstructionInfo(right),

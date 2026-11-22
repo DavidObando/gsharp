@@ -144,58 +144,6 @@ partial class CSharpToGSharpTranslator {
                 var initializer GExpression?
                 if declarator.Initializer == nil {
                     initializer = nil
-                } else if this.IsTopLevelEntryPointCall(declarator) && this.ContainsRefLikeHandlerInTopLevelNode(
-                    declarator.Initializer!!.Value
-                ) &&
-                    (
-                    this
-                        .context
-                        .GetTypeInfo(declarator.Initializer!!.Value)
-                        .ConvertedType ??
-                        this
-                        .context
-                        .GetTypeInfo(declarator.Initializer!!.Value)
-                        .Type
-                ) is {} initType &&
-                    !initType.IsRefLikeType &&
-                    initType.SpecialType != SpecialType
-                    .System_Void {
-                    this.PredeclareTopLevelFrameOutVariables(declarator.Initializer!!.Value)
-                    let frameStmts = List[GStatement]()
-                    let replacements = List[ExpressionSyntax]()
-                    let outerSpillPrologue = this.state.PendingSpillPrologue
-                    let prevFrame = this.state.InTopLevelLambdaFrame
-                    this.state.PendingSpillPrologue = frameStmts
-                    this.state.InTopLevelLambdaFrame = true
-                    let initializerEmbedded = this.HoistAssignmentsInOrder(
-                        declarator.Initializer!!.Value,
-                        includeSelf: true,
-                        frameStmts,
-                        replacements
-                    )
-                    try {
-                        let innerInit = this.CoerceCovariantArrayConversion(
-                            declarator.Initializer!!.Value,
-                            this.CoercePointerConversion(
-                                declarator.Initializer!!.Value,
-                                this.CoerceConstantToUnsigned(
-                                    declarator.Initializer!!.Value,
-                                    this.TranslateExpression(declarator.Initializer!!.Value)
-                                )
-                            )
-                        )
-                        frameStmts.Add(ReturnStatement(innerInit))
-                        initializer = InvocationExpression(
-                            ParenthesizedExpression(
-                                LambdaExpression(Array.Empty[Parameter](), blockBody: BlockStatement(frameStmts))
-                            ),
-                            Array.Empty[GExpression]()
-                        )
-                    } finally {
-                        this.ReleaseHoistedAssignments(initializerEmbedded, replacements)
-                        this.state.InTopLevelLambdaFrame = prevFrame
-                        this.state.PendingSpillPrologue = outerSpillPrologue
-                    }
                 } else {
                     // Value-position deconstruction assignments still need a
                     // statement seam; ordinary assignments remain inline.
@@ -6952,7 +6900,7 @@ partial class CSharpToGSharpTranslator {
                             invocation
                         )
                     ) ||
-                        this.CallNeedsHandlerCoordinationForSyntax(parent)
+                        this.CallRequiresHandlerBlockForSyntax(parent)
                 ) {
                     return true
                 }
@@ -8018,6 +7966,23 @@ partial class CSharpToGSharpTranslator {
                         .GetTypeInfo(expression)
                         .Type
                         ?.SpecialType == SpecialType.System_Void
+                    if expression != nil && this.IsTopLevelEntryPointCall(expression) &&
+                        this
+                        .ContainsDirectStandaloneRefLikeHandler(expression, allowRefLikeRoot: true) {
+                        this.PredeclareTopLevelFrameOutVariables(expression)
+                        let frameStmts = List[GStatement]()
+                        let outerSpillPrologue = this.state.PendingSpillPrologue
+                        let prevFrame = this.state.InTopLevelLambdaFrame
+                        this.state.PendingSpillPrologue = frameStmts
+                        this.state.InTopLevelLambdaFrame = true
+                        try {
+                            frameStmts.Add(ExpressionStatement(this.TranslateExpression(expression), isVoid: isVoid))
+                        } finally {
+                            this.state.InTopLevelLambdaFrame = prevFrame
+                            this.state.PendingSpillPrologue = outerSpillPrologue
+                        }
+                        return this.WrapBlockStatementsInTopLevelLambda(frameStmts)
+                    }
                     return ExpressionStatement(this.TranslateExpression(expression), isVoid: isVoid)
                 }
             }
@@ -8386,35 +8351,6 @@ partial class CSharpToGSharpTranslator {
         /// Translates an expression-statement that may expand into several G#
         /// statements: tuple declaration/deconstruction forms may expand, while
         /// ordinary chained assignments remain native nested expressions.
-        private func TranslateDeconstructionRhs(right ExpressionSyntax, translateRhs() -> GExpression?) GExpression? {
-            if this.IsTopLevelEntryPointCall(right) && this.ContainsRefLikeHandlerInTopLevelNode(right) &&
-                (this.context.GetTypeInfo(right).ConvertedType ?? this.context.GetTypeInfo(right).Type) is {} rhsType &&
-                !rhsType.IsRefLikeType &&
-                rhsType.SpecialType != SpecialType
-                .System_Void {
-                this.PredeclareTopLevelFrameOutVariables(right)
-                let frameStmts = List[GStatement]()
-                let outerSpillPrologue = this.state.PendingSpillPrologue
-                let prevFrame = this.state.InTopLevelLambdaFrame
-                this.state.PendingSpillPrologue = frameStmts
-                this.state.InTopLevelLambdaFrame = true
-                try {
-                    let rhsExpr = translateRhs()
-                    frameStmts.Add(ReturnStatement(rhsExpr))
-                } finally {
-                    this.state.InTopLevelLambdaFrame = prevFrame
-                    this.state.PendingSpillPrologue = outerSpillPrologue
-                }
-                return InvocationExpression(
-                    ParenthesizedExpression(
-                        LambdaExpression(Array.Empty[Parameter](), blockBody: BlockStatement(frameStmts))
-                    ),
-                    Array.Empty[GExpression]()
-                )
-            }
-            return translateRhs()
-        }
-
         private func TranslateExpressionStatements(expression ExpressionSyntax?, hoistPostfix bool = true) IEnumerable[
             GStatement
         ]? {
@@ -8462,10 +8398,7 @@ partial class CSharpToGSharpTranslator {
                             LocalDeclarationStatement(
                                 BindingKind.Let,
                                 "_",
-                                initializer: this.TranslateDeconstructionRhs(
-                                    assignment.Right,
-                                    () -> this.TranslateExpression(assignment.Right)
-                                )
+                                initializer: this.TranslateExpression(assignment.Right)
                             )
                         }
                     )
@@ -8482,14 +8415,11 @@ partial class CSharpToGSharpTranslator {
                             TupleDeconstructionStatement(
                                 binding,
                                 names,
-                                this.TranslateDeconstructionRhs(
+                                this.RewriteRecordDeconstruction(
+                                    this.TranslateExpression(assignment.Right),
+                                    this.context.SemanticModel.GetDeconstructionInfo(assignment).Method,
                                     assignment.Right,
-                                    () -> this.RewriteRecordDeconstruction(
-                                        this.TranslateExpression(assignment.Right),
-                                        this.context.SemanticModel.GetDeconstructionInfo(assignment).Method,
-                                        assignment.Right,
-                                        assignment.Right
-                                    )
+                                    assignment.Right
                                 )
                             )
                         )
@@ -8535,23 +8465,6 @@ partial class CSharpToGSharpTranslator {
             if expression is AssignmentExpressionSyntax outerAssignment &&
                 AssignmentChainRequiresStatementLowering(outerAssignment) {
                 return this.FlattenChainedAssignment(outerAssignment, preserveValue: false)
-            }
-            if expression != nil && this.IsTopLevelEntryPointCall(expression) &&
-                this
-                .ContainsRefLikeHandlerInTopLevelNode(expression) {
-                this.PredeclareTopLevelFrameOutVariables(expression)
-                let prevFrame = this.state.InTopLevelLambdaFrame
-                this.state.InTopLevelLambdaFrame = true
-                var framed List[GStatement]
-                try {
-                    framed = this.TranslateExpressionStatements(expression, hoistPostfix)!!.ToList()
-                } finally {
-                    this.state.InTopLevelLambdaFrame = prevFrame
-                }
-                if framed.Count == 0 {
-                    return framed
-                }
-                return []GStatement{this.WrapBlockStatementsInTopLevelLambda(framed)}
             }
             return this.WithHoistedAssignments(
                 expression,
@@ -8660,7 +8573,7 @@ partial class CSharpToGSharpTranslator {
             // in true left-to-right order regardless of aliasing.
             let hoistable = embedded.Where(
                 (node PostfixUnaryExpressionSyntax) -> {
-                    if this.IsInInterpolatedStringHandlerHole(node, expression) ||
+                    if this.IsInCoordinatedHandlerCallOrHole(node, expression) ||
                         this.IsCoordinatedElementAccessOperand(node.Operand) {
                         return false
                     }

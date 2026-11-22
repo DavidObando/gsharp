@@ -699,9 +699,24 @@ public sealed class ConvertibleInt {
     }
 }
 
+public class PlainBaseCtor {
+    public readonly string BaseSeen;
+    public PlainBaseCtor(SpanLiteralHandler h) { BaseSeen = h.ToString(); }
+}
+
+public sealed class PlainDerivedCtor : PlainBaseCtor {
+    public PlainDerivedCtor(int v) : base($"{v}") { }
+}
+
+public struct DefCopyCell {
+    public int Value;
+    public int Log(int seed, [InterpolatedStringHandlerArgument("seed")] SpanLiteralHandler h) => Value + h.ToString().Length;
+}
+
 public sealed class NullFlowTarget {
-    public static int AfterCalls, RhsCalls, ParamsAfterCalls;
+    public static int AfterCalls, RhsCalls, ParamsAfterCalls, PlainHoleCalls;
     public void Log(int seed, [InterpolatedStringHandlerArgument("seed")] SpanLiteralHandler handler, int after) { }
+    public void PlainLog(SpanLiteralHandler handler) { }
     public void LogParams(int seed, [InterpolatedStringHandlerArgument("seed")] SpanLiteralHandler handler, params int[] rest) { }
     public string this[bool upper, [InterpolatedStringHandlerArgument("upper")] SpanLiteralHandler handler] {
         get => "";
@@ -782,6 +797,17 @@ public static class Demo {
     private delegate string RefHandlerSink(int n, ref ValueHandlerForDelegate handler);
     private static int ungatedCounter;
     private static int nextPairCalls;
+    private static DefCopyCell globalDefCell;
+    private static int postIncSeedCounter;
+    private static string postIncObserved = "";
+
+    private static int ChangeGlobalCell() { globalDefCell.Value = 999; return 42; }
+    private static string ReadPostIncSeed(int seed) { postIncObserved = seed + ":" + postIncSeedCounter; return postIncObserved; }
+    private static void StmtPostIncSeed(int seed, [InterpolatedStringHandlerArgument("seed")] SpanLiteralHandler h) {
+        postIncObserved = seed + ":" + postIncSeedCounter + ":" + h.ToString();
+    }
+    private static int ProbeDefensiveCopy(in DefCopyCell c) => c.Log(1, $"{ChangeGlobalCell()}");
+    private static int PlainHole() { NullFlowTarget.PlainHoleCalls++; return 5; }
 
     private static int ReadInContainer(in OuterContainer container) {
         container.Cell.Mutate($"{1}");
@@ -829,8 +855,16 @@ public static class Demo {
         var outExistingRes = AcceptOut(out existingOut, $"{1}");
 
         var spanLit = AcceptSpanLiteral($"lit-{9}");
+        var baseCtorSeen = new PlainDerivedCtor(55).BaseSeen;
         ungatedCounter = 4;
         var ungatedRes = AcceptUngatedCounter($"{ungatedCounter++}");
+
+        globalDefCell.Value = 100;
+        var defCopyRes = ProbeDefensiveCopy(in globalDefCell);
+
+        postIncSeedCounter = 7;
+        StmtPostIncSeed(postIncSeedCounter++, $"{postIncSeedCounter}");
+        var postIncArgRes = postIncObserved;
 
         PrivateTarget? maybeBoxed = new PrivateTarget();
         var condExtRes = maybeBoxed?.TouchExt(out var condOut, $"{1}");
@@ -861,6 +895,12 @@ public static class Demo {
         int incNextCalls = incHolder.NextCalls;
 
         NullFlowTarget? target = null;
+        string nullPlain = "no";
+        try {
+            target!.PlainLog($"{PlainHole()}");
+        } catch (NullReferenceException) {
+            nullPlain = "pl:" + NullFlowTarget.PlainHoleCalls;
+        }
         string nullCall = "no";
         try {
             target!.Log(1, $"{2}", After());
@@ -898,25 +938,27 @@ public static class Demo {
             nullConvExpr = "ce:" + ConvertibleInt.Conversions;
         }
 
-        return roCount + "|" + roLocalCount + "|" + promotedRefRes + "|" + container.Cell.Count + "|" + sameBox + "|" +
-            outVarRes + "|" + outExistingRes + "|" + spanLit + "|" + ungatedRes + "|" +
+        return roCount + "|" + roLocalCount + "|" + defCopyRes + "|" + postIncArgRes + "|" + promotedRefRes + "|" + container.Cell.Count + "|" + sameBox + "|" +
+            outVarRes + "|" + outExistingRes + "|" + spanLit + "|" + baseCtorSeen + "|" + ungatedRes + "|" +
             condExtRes + "|" + namedDelegateRes + "|" +
             afterFalseGated + "," + afterTrueGated + "|" + pairAfterFalse + "," + pairAfterTrue + "|" +
             afterStmtPostInc + "," + valPostInc + "," + valPreInc + "," + valPostDec + "," + incNextCalls + "|" +
-            nullCall + "|" + nullParams + "|" + nullAssignStmt + "|" + nullAssignExpr + "|" + nullConvStmt + "|" + nullConvExpr;
+            nullPlain + "|" + nullCall + "|" + nullParams + "|" + nullAssignStmt + "|" + nullAssignExpr + "|" + nullConvStmt + "|" + nullConvExpr;
     }
 }
-`, strictIl: true, expectedOutput: "5|8|init->after:init:1|5|True|99:42|99:42|lit-9|4:5|53|3:7|10,12|0,2:20:21|12,12,14,13,5|c:1|p:2|s:1|e:2|cs:1|ce:2")
+`, strictIl: true, expectedOutput: "5|8|102|7:8:8|init->after:init:1|5|True|99:42|99:42|lit-9|55|4:5|53|3:7|10,12|0,2:20:21|12,12,14,13,5|pl:1|c:1|p:2|s:1|e:2|cs:1|ce:2")
     }
 
     @Fact
     func TopLevelStatementsAndMain_AndUnsupportedDiagnostics_BehaveAsDocumented() {
         // 1. Top-level statements (Program.cs) with ref struct handlers, standalone expression,
-        //    coordinated indexer assignment/increment, out-var across frame, and deconstruction.
+        //    coordinated indexer assignment/increment, out-var across frame, deconstruction,
+        //    pattern variables in conditions, and top-level await.
         let topLevelSource = `
 using System;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Threading.Tasks;
 
 Accept($"top={1}");
 var sb = new StringBuilder();
@@ -940,9 +982,21 @@ if (TryTop($"c={9}", out var outM)) {
 (var da, var db) = PairTop($"p={10}");
 Console.Write($",{da},{db}");
 
+if (GetNullableInt($"g={11}") is int patN) {
+    Console.Write($",{patN}");
+}
+bool condFlag = true;
+if (condFlag && GetNullableInt($"h={12}") is int patM) {
+    Console.Write($",{patM}");
+}
+var awaitedVal = await GetAsyncTop($"w={13}");
+Console.Write($",{awaitedVal}");
+
 static void Accept(TopHandler h) => Console.Write(h.ToString());
 static bool TryTop(TopHandler h, out int len) { len = h.ToString().Length; return true; }
 static (string, int) PairTop(TopHandler h) => (h.ToString(), h.ToString().Length);
+static int? GetNullableInt(TopHandler h) => h.ToString().Length;
+static Task<int> GetAsyncTop(TopHandler h) => Task.FromResult(h.ToString().Length);
 
 public sealed class TopHolder {
     public int LastValue;
@@ -970,7 +1024,7 @@ public ref struct TopHandler {
         let topCtx = TranslationContext(topProject.Compilation, topDoc.SemanticModel, topDoc.FilePath)
         let topPrinted = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(topDoc, topCtx))
         Assert.DoesNotContain(topCtx.Diagnostics, (d TranslationDiagnostic) -> d.Severity != TranslationSeverity.Info)
-        Assert.Equal("top=1,sb=2,expr=3,loc=4,30,37,True,3,3,p=10,4", CompileAndRunTopLevel(topPrinted))
+        Assert.Equal("top=1,sb=2,expr=3,loc=4,30,37,True,3,3,p=10,4,4,4,4", CompileAndRunTopLevel(topPrinted))
 
         // 2. Explicit Main hoisted to top level with:
         //    - ref struct handler
@@ -1164,8 +1218,12 @@ public ref struct TopRefLocal {
             UseShellExecute = false
         }
         using let process = Process.Start(psi)!!
-        let output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd()
-        process.WaitForExit()
-        return (process.ExitCode, output)
+        let stdout = process.StandardOutput.ReadToEndAsync()
+        let stderr = process.StandardError.ReadToEndAsync()
+        if !process.WaitForExit(TimeSpan.FromMinutes(5)) {
+            process.Kill(entireProcessTree: true)
+            Assert.Fail("dotnet " + arguments + " did not exit within 5 minutes.")
+        }
+        return (process.ExitCode, stdout.GetAwaiter().GetResult() + stderr.GetAwaiter().GetResult())
     }
 }
