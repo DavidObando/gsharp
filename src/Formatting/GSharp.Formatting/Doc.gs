@@ -211,12 +211,15 @@ internal abstract class Doc {
         private func Fits(remaining int32, first RenderItem, rest Stack[RenderItem]) bool {
             var remaining = remaining
             let pending = Stack[RenderItem]()
-            let remainingItems = rest.ToArray()
-            for var i = remainingItems.Length - 1; i >= 0; i-- {
-                pending.Push(remainingItems[i])
-            }
+            var remainingItems = rest.GetEnumerator()
             pending.Push(first)
-            while remaining >= 0 && pending.Count > 0 {
+            while remaining >= 0 {
+                if pending.Count == 0 {
+                    if !remainingItems.MoveNext() {
+                        return true
+                    }
+                    pending.Push(remainingItems.Current)
+                }
                 let item = pending.Pop()
                 switch item.Document {
                     case text is TextDoc {
@@ -257,7 +260,7 @@ internal abstract class Doc {
                     }
                 }
             }
-            return remaining >= 0
+            return false
         }
     }
 }

@@ -153,6 +153,23 @@ Compute(` + "$arguments" + `)
     }
 
     @Fact
+    func Render_KeepsIndependentOperandFitAllocationsBounded() {
+        const operandCount = 512
+        let document = Doc.Concat(
+            Enumerable.Range(0, operandCount).Select(
+                (index int32) -> Doc.Concat(Doc.Group(Doc.Text("value")), Doc.HardLine)
+            )
+        )
+        let expected = string.Concat(Enumerable.Repeat("value\n", operandCount))
+        Assert.Equal(expected, Doc.Render(document, MaxLineWidth))
+        let before = GC.GetAllocatedBytesForCurrentThread()
+        let rendered = Doc.Render(document, MaxLineWidth)
+        let allocated = GC.GetAllocatedBytesForCurrentThread() - before
+        Assert.Equal(expected, rendered)
+        Assert.InRange(allocated, int64(0), int64(operandCount * 1024))
+    }
+
+    @Fact
     func Format_BreaksAPatternDisjunction() {
         // G# spells pattern `or`/`and` as contextual identifiers, not operator
         // tokens, so this arm had no break point of any kind and stayed long no
