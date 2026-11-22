@@ -200,7 +200,7 @@ internal shared class BodyLocalDelta {
             return BodyLocalResult(speculative.FallbackReason)
         }
         // The speculative pass must be the compilation's pass: the declared body reports what it reported.
-        if !SameOccurrences(speculative.OldDiagnostics, recorded) {
+        if !SameOccurrences(speculative.OldDiagnostics, recorded, cancellationToken) {
             return BodyLocalResult("the speculative bind of the declared body differs from the compilation's bind")
         }
         let newBound = speculative.NewBody!!
@@ -356,7 +356,7 @@ internal shared class BodyLocalDelta {
         if before == nil || before.Diagnostics.Any(IsAnalyzerHostDiagnostic) {
             return "an analyzer failed on the declared body"
         }
-        if !SameOccurrences(before.Diagnostics, recorded.ToImmutable()) {
+        if !SameOccurrences(before.Diagnostics, recorded.ToImmutable(), cancellationToken) {
             return "the analyzers report on the speculative bind of the declared body other than on the compilation's"
         }
         // A diagnostic of the new body can sit at the member's declaration in the old text, so the
@@ -421,45 +421,57 @@ internal shared class BodyLocalDelta {
         )
     }
 
-    // Each diagnostic of one array matches one occurrence of the other: same object, or same location
-    // text, span, ID, severity and message.
-    private func SameOccurrences(left ImmutableArray[Diagnostic], right ImmutableArray[Diagnostic]) bool {
+    // Each diagnostic of one array matches one occurrence of the other: same location text (by
+    // identity), span, ID, severity and message. The arrays are compared as multisets of those keys, so
+    // a duplicate counts once for each occurrence.
+    internal func SameOccurrences(
+        left ImmutableArray[Diagnostic],
+        right ImmutableArray[Diagnostic],
+        cancellationToken CancellationToken
+    ) bool {
         if left.Length != right.Length {
             return false
         }
-        let used = [right.Length]bool
-        for d in left {
-            var found = false
-            for var i = 0; i < right.Length; i++ {
-                let other = right[i]
-                if !used[i] && object.ReferenceEquals(d.Location.Text, other.Location.Text) &&
-                    d
-                    .Location
-                    .Span
-                    .Start == other
-                    .Location
-                    .Span
-                    .Start &&
-                    d
-                    .Location
-                    .Span
-                    .Length == other
-                    .Location
-                    .Span
-                    .Length &&
-                    d.Id == other.Id &&
-                    d.Severity == other.Severity &&
-                    d.Message == other.Message {
-                    used[i] = true
-                    found = true
-                    break
-                }
+        let texts = Dictionary[SourceText, int32](ReferenceEqualityComparer.Instance)
+        let counts = Dictionary[(int32, int32, int32, string, DiagnosticSeverity, string), int32]()
+        for var i = 0; i < left.Length; i++ {
+            if (i & 1023) == 0 {
+                cancellationToken.ThrowIfCancellationRequested()
             }
-            if !found {
+            let key = OccurrenceKey(left[i], texts)
+            let _ = counts.TryGetValue(key, out var n)
+            counts[key] = n + 1
+        }
+        for var i = 0; i < right.Length; i++ {
+            if (i & 1023) == 0 {
+                cancellationToken.ThrowIfCancellationRequested()
+            }
+            let key = OccurrenceKey(right[i], texts)
+            if !counts.TryGetValue(key, out var n) || n == 0 {
                 return false
             }
+            counts[key] = n - 1
         }
         return true
+    }
+
+    // The location text by identity (-1 for none), the span, the ID, the severity and the message.
+    private func OccurrenceKey(d Diagnostic, texts Dictionary[SourceText, int32])(
+        int32,
+        int32,
+        int32,
+        string,
+        DiagnosticSeverity,
+        string
+    ) {
+        var text = -1
+        if d.Location.Text is {} source {
+            if !texts.TryGetValue(source, out text) {
+                text = texts.Count
+                texts[source] = text
+            }
+        }
+        return (text, d.Location.Span.Start, d.Location.Span.Length, d.Id, d.Severity, d.Message)
     }
 
     private func NamesAny(body SyntaxNode, names HashSet[string]) bool {

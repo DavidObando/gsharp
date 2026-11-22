@@ -533,6 +533,50 @@ open class Adr0227BodyLocalDeltaTests {
     }
 
     @Fact
+    func SameOccurrences_ComparesManyDuplicatesAsAMultiset() {
+        // Every bound node of a large body can report at one place; the comparison must stay linear.
+        let text = SourceText.From("package P\n", "a.gs")
+        let other = SourceText.From("package P\n", "a.gs")
+        let at = TextLocation(text, TextSpan(0, 7))
+        let one = Diagnostic.Create(NodeRule, at, "Call")
+        let left = ImmutableArray.CreateBuilder[Diagnostic]()
+        let right = ImmutableArray.CreateBuilder[Diagnostic]()
+        for var i = 0; i < 4096; i++ {
+            left.Add(one)
+            right.Add(Diagnostic.Create(NodeRule, at, "Call"))
+        }
+        left.Add(Diagnostic.Create(NodeRule, TextLocation(text, TextSpan(8, 1)), "Literal"))
+        right.Insert(0, Diagnostic.Create(NodeRule, TextLocation(text, TextSpan(8, 1)), "Literal"))
+        let none = default(CancellationToken)
+        Assert.True(BodyLocalDelta.SameOccurrences(left.ToImmutable(), right.ToImmutable(), none))
+        // One occurrence more of one key and one fewer of another: same length, different counts.
+        let fewer = right.ToImmutable().SetItem(0, one)
+        Assert.False(BodyLocalDelta.SameOccurrences(left.ToImmutable(), fewer, none))
+        Assert.False(BodyLocalDelta.SameOccurrences(fewer, left.ToImmutable(), none))
+        // A different length, and the same span in another text (texts compare by identity).
+        Assert.False(BodyLocalDelta.SameOccurrences(left.ToImmutable(), right.ToImmutable().RemoveAt(1), none))
+        let elsewhere = right.ToImmutable().SetItem(
+            1,
+            Diagnostic.Create(NodeRule, TextLocation(other, TextSpan(0, 7)), "Call")
+        )
+        Assert.False(BodyLocalDelta.SameOccurrences(left.ToImmutable(), elsewhere, none))
+        // A diagnostic without a location matches one without a location.
+        let bare = ImmutableArray.Create(Diagnostic.Create(NodeRule, default(TextLocation), "x"))
+        Assert.True(
+            BodyLocalDelta.SameOccurrences(
+                bare,
+                ImmutableArray.Create(Diagnostic.Create(NodeRule, default(TextLocation), "x")),
+                none
+            )
+        )
+        using let cancelled = CancellationTokenSource()
+        cancelled.Cancel()
+        Assert.Throws[OperationCanceledException](
+            () -> BodyLocalDelta.SameOccurrences(left.ToImmutable(), right.ToImmutable(), cancelled.Token)
+        )
+    }
+
+    @Fact
     func BodyLocalAnalyzersWithATimeBudget_FallBack() {
         // The budget covers the whole run; a run on the edited body alone would start a clock of its own.
         const source = "package P\n\nfunc F() int32 {\n    return 1\n}\n"
