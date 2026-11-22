@@ -321,6 +321,31 @@ run().GetAwaiter().GetResult()
 `, "func-nested-reseat-before-read-safe", executable: true)
         IlVerifier.Verify(nestedReseatBeforeReadSafeAssembly)
         Assert.Equal("1\n", fixture.Run(nestedReseatBeforeReadSafeAssembly))
+
+        let switchGuardOverwriteSafeAssembly = fixture.Compile(`import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+var c = Counter{Value: 10}
+let n = 1
+await Task.Delay(1)
+let r = switch n {
+    case 1 when {
+        c = Counter{Value: 42}
+        true
+    }: c.Value
+    default: {
+        c = Counter{Value: 1}
+        c.Value
+    }
+}
+Console.WriteLine(r)
+`, "top-level-switch-guard-overwrite-safe", executable: true)
+        IlVerifier.Verify(switchGuardOverwriteSafeAssembly)
+        Assert.Equal("42\n", fixture.Run(switchGuardOverwriteSafeAssembly))
     }
 
     shared {

@@ -259,6 +259,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         ) {
             Reads = HashSet[VariableSymbol]()
             PatternKills = HashSet[VariableSymbol]()
+            InternalUnsafeVariables = HashSet[VariableSymbol]()
             this.interesting = interesting
             this.pointsTo = RefStructAsyncLivenessAnalyzer.ClonePointsTo(aliasDependencies)
             this.definitelyOverwritten = if overwrittenAtEntry != nil {
@@ -273,6 +274,10 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         }
 
         prop PatternKills HashSet[VariableSymbol] {
+            get;
+        }
+
+        prop InternalUnsafeVariables HashSet[VariableSymbol] {
             get;
         }
 
@@ -350,6 +355,8 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             falseCollector.VisitExpression(whenFalse)
             Reads.UnionWith(trueCollector.Reads)
             Reads.UnionWith(falseCollector.Reads)
+            InternalUnsafeVariables.UnionWith(trueCollector.InternalUnsafeVariables)
+            InternalUnsafeVariables.UnionWith(falseCollector.InternalUnsafeVariables)
             if trueCollector.ContainsAwait || falseCollector.ContainsAwait {
                 ContainsAwait = true
             }
@@ -385,6 +392,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             let branchCollector = ReadAndAwaitCollector(interesting, pointsTo, definitelyOverwritten)
             branchCollector.VisitExpression(node.WhenNotNull)
             Reads.UnionWith(branchCollector.Reads)
+            InternalUnsafeVariables.UnionWith(branchCollector.InternalUnsafeVariables)
             if branchCollector.ContainsAwait {
                 ContainsAwait = true
             }
@@ -402,6 +410,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 let rightCollector = ReadAndAwaitCollector(interesting, pointsTo, definitelyOverwritten)
                 rightCollector.VisitExpression(node.Right)
                 Reads.UnionWith(rightCollector.Reads)
+                InternalUnsafeVariables.UnionWith(rightCollector.InternalUnsafeVariables)
                 if rightCollector.ContainsAwait {
                     ContainsAwait = true
                 }
@@ -411,133 +420,712 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             base.VisitBinaryExpression(node)
         }
 
+        private func AnalyzeCompoundOverwrites(
+            statement BoundStatement,
+            entryPointsTo Dictionary[VariableSymbol, HashSet[VariableSymbol]]?,
+            entryOverwritten HashSet[VariableSymbol],
+            collectEffects bool,
+            outGotoOverwrites Dictionary[BoundLabel, HashSet[VariableSymbol]]?
+        )(OutOverwritten HashSet[VariableSymbol], HasNormalExit bool) {
+            switch statement {
+                case switchStmt is BoundPatternSwitchStatement {
+                    let postDiscriminant = RefStructAsyncLivenessAnalyzer.ClonePointsTo(entryPointsTo)
+                    let discrCollector = ReadAndAwaitCollector(interesting, postDiscriminant, entryOverwritten)
+                    discrCollector.VisitExpression(switchStmt.Discriminant)
+                    if collectEffects {
+                        Reads.UnionWith(discrCollector.Reads)
+                        InternalUnsafeVariables.UnionWith(discrCollector.InternalUnsafeVariables)
+                        if discrCollector.ContainsAwait {
+                            ContainsAwait = true
+                        }
+                    }
+                    let summary = RefStructAsyncLivenessAnalyzer.ComputeSwitchPointsToSummary(
+                        switchStmt,
+                        discrCollector.pointsTo,
+                        interesting
+                    )
+                    let armCount = switchStmt.Arms.Length
+                    let armBaseOverwritten = [armCount]HashSet[VariableSymbol]
+                    var fallthroughOverwritten = HashSet[VariableSymbol](discrCollector.definitelyOverwritten)
+                    var hasUnconditionalDefault = false
+                    for var i = 0; i < armCount; i++ {
+                        let arm = switchStmt.Arms[i]
+                        if arm.IsDefault {
+                            continue
+                        }
+                        let armOver = HashSet[VariableSymbol](fallthroughOverwritten)
+                        if arm.Pattern != nil {
+                            let patCollector = ReadAndAwaitCollector(interesting, summary.ArmHeaderStates[i], armOver)
+                            patCollector.VisitPattern(arm.Pattern)
+                            if collectEffects {
+                                Reads.UnionWith(patCollector.Reads)
+                                InternalUnsafeVariables.UnionWith(patCollector.InternalUnsafeVariables)
+                                if patCollector.ContainsAwait {
+                                    ContainsAwait = true
+                                }
+                            }
+                            armOver.UnionWith(patCollector.definitelyOverwritten)
+                        }
+                        if arm.Guard != nil {
+                            let guardCollector = ReadAndAwaitCollector(
+                                interesting,
+                                summary.ArmGuardEntryStates[i],
+                                armOver
+                            )
+                            guardCollector.VisitExpression(arm.Guard)
+                            if collectEffects {
+                                Reads.UnionWith(guardCollector.Reads)
+                                InternalUnsafeVariables.UnionWith(guardCollector.InternalUnsafeVariables)
+                                if guardCollector.ContainsAwait {
+                                    ContainsAwait = true
+                                }
+                            }
+                            armOver.UnionWith(guardCollector.definitelyOverwritten)
+                            fallthroughOverwritten.IntersectWith(armOver)
+                        }
+                        armBaseOverwritten[i] = armOver
+                    }
+                    for var i = 0; i < armCount; i++ {
+                        let arm = switchStmt.Arms[i]
+                        if !arm.IsDefault {
+                            continue
+                        }
+                        let armOver = HashSet[VariableSymbol](fallthroughOverwritten)
+                        if arm.Pattern != nil {
+                            let patCollector = ReadAndAwaitCollector(interesting, summary.ArmHeaderStates[i], armOver)
+                            patCollector.VisitPattern(arm.Pattern)
+                            if collectEffects {
+                                Reads.UnionWith(patCollector.Reads)
+                                InternalUnsafeVariables.UnionWith(patCollector.InternalUnsafeVariables)
+                                if patCollector.ContainsAwait {
+                                    ContainsAwait = true
+                                }
+                            }
+                            armOver.UnionWith(patCollector.definitelyOverwritten)
+                        }
+                        if arm.Guard != nil {
+                            let guardCollector = ReadAndAwaitCollector(
+                                interesting,
+                                summary.ArmGuardEntryStates[i],
+                                armOver
+                            )
+                            guardCollector.VisitExpression(arm.Guard)
+                            if collectEffects {
+                                Reads.UnionWith(guardCollector.Reads)
+                                InternalUnsafeVariables.UnionWith(guardCollector.InternalUnsafeVariables)
+                                if guardCollector.ContainsAwait {
+                                    ContainsAwait = true
+                                }
+                            }
+                            armOver.UnionWith(guardCollector.definitelyOverwritten)
+                            fallthroughOverwritten.IntersectWith(armOver)
+                        } else if arm.Pattern == nil {
+                            hasUnconditionalDefault = true
+                        }
+                        armBaseOverwritten[i] = armOver
+                    }
+                    let labelToArm = Dictionary[BoundLabel, int]()
+                    for var i = 0; i < armCount; i++ {
+                        let lc = LabelCollector()
+                        lc.Visit(switchStmt.Arms[i].Body)
+                        for lbl in lc.Labels {
+                            labelToArm[lbl] = i
+                        }
+                    }
+                    let pendingArmLabelOver = Dictionary[BoundLabel, HashSet[VariableSymbol]]()
+                    var switchChanged = true
+                    var switchSafety = 0
+                    var normalExitInitialized = false
+                    let normalExitOver = HashSet[VariableSymbol]()
+                    let outgoingGotos = Dictionary[BoundLabel, HashSet[VariableSymbol]]()
+                    while switchChanged && switchSafety++ < 1000 {
+                        switchChanged = false
+                        normalExitInitialized = false
+                        normalExitOver.Clear()
+                        outgoingGotos.Clear()
+                        for var i = 0; i < armCount; i++ {
+                            let armGotos = Dictionary[BoundLabel, HashSet[VariableSymbol]]()
+                            let (armOutOver, armNormal) = AnalyzeBlockStatementPrefix(
+                                RefStructAsyncLivenessAnalyzer.EnsureBlock(switchStmt.Arms[i].Body),
+                                summary.ArmEntryStates[i],
+                                armBaseOverwritten[i],
+                                collectEffects: false,
+                                summary.ArmLabelEntries,
+                                pendingArmLabelOver,
+                                armGotos
+                            )
+                            if armNormal {
+                                if !normalExitInitialized {
+                                    normalExitOver.UnionWith(armOutOver)
+                                    normalExitInitialized = true
+                                } else {
+                                    normalExitOver.IntersectWith(armOutOver)
+                                }
+                            }
+                            for entry in armGotos {
+                                if labelToArm.ContainsKey(entry.Key) {
+                                    if !pendingArmLabelOver.TryGetValue(entry.Key, out var existing) {
+                                        pendingArmLabelOver[entry.Key] = HashSet[VariableSymbol](entry.Value)
+                                        switchChanged = true
+                                    } else {
+                                        let prevCount = existing.Count
+                                        existing.IntersectWith(entry.Value)
+                                        if existing.Count != prevCount {
+                                            switchChanged = true
+                                        }
+                                    }
+                                } else if !outgoingGotos.TryGetValue(entry.Key, out var outSet) {
+                                    outgoingGotos[entry.Key] = HashSet[VariableSymbol](entry.Value)
+                                } else {
+                                    outSet.IntersectWith(entry.Value)
+                                }
+                            }
+                        }
+                    }
+                    if collectEffects {
+                        for var i = 0; i < armCount; i++ {
+                            AnalyzeBlockStatementPrefix(
+                                RefStructAsyncLivenessAnalyzer.EnsureBlock(switchStmt.Arms[i].Body),
+                                summary.ArmEntryStates[i],
+                                armBaseOverwritten[i],
+                                collectEffects: true,
+                                summary.ArmLabelEntries,
+                                pendingArmLabelOver,
+                                outGotoOverwrites: nil
+                            )
+                        }
+                    }
+                    if outGotoOverwrites != nil {
+                        for entry in outgoingGotos {
+                            if !outGotoOverwrites.TryGetValue(entry.Key, out var sink) {
+                                outGotoOverwrites[entry.Key] = HashSet[VariableSymbol](entry.Value)
+                            } else {
+                                sink.IntersectWith(entry.Value)
+                            }
+                        }
+                    }
+                    if !hasUnconditionalDefault {
+                        if !normalExitInitialized {
+                            normalExitOver.UnionWith(fallthroughOverwritten)
+                            normalExitInitialized = true
+                        } else {
+                            normalExitOver.IntersectWith(fallthroughOverwritten)
+                        }
+                    }
+                    return (normalExitOver, normalExitInitialized)
+                }
+                case tryStmt is BoundTryStatement {
+                    let trySummary = RefStructAsyncLivenessAnalyzer.ComputeTryPointsToSummary(
+                        tryStmt,
+                        entryPointsTo,
+                        interesting
+                    )
+                    let tryGotos = Dictionary[BoundLabel, HashSet[VariableSymbol]]()
+                    let (tryOutOver, tryNormal) = AnalyzeBlockStatementPrefix(
+                        RefStructAsyncLivenessAnalyzer.EnsureBlock(tryStmt.TryBlock),
+                        entryPointsTo,
+                        entryOverwritten,
+                        collectEffects,
+                        entryLabelPointsTo: nil,
+                        entryLabelOverwritten: nil,
+                        tryGotos
+                    )
+                    var afterInitialized = false
+                    let afterOver = HashSet[VariableSymbol]()
+                    if tryNormal {
+                        afterOver.UnionWith(tryOutOver)
+                        afterInitialized = true
+                    }
+                    let catchDispatchOver = HashSet[VariableSymbol](entryOverwritten)
+                    let outgoingGotos = Dictionary[BoundLabel, HashSet[VariableSymbol]](tryGotos)
+                    for clause in tryStmt.CatchClauses {
+                        var filterPts Dictionary[VariableSymbol, HashSet[VariableSymbol]]? = nil
+                        trySummary.FilterEntryPointsTo.TryGetValue(clause, out filterPts)
+                        let clauseOver = HashSet[VariableSymbol](catchDispatchOver)
+                        if clause.Filter is {} filter {
+                            let filterCollector = ReadAndAwaitCollector(interesting, filterPts, clauseOver)
+                            filterCollector.VisitExpression(filter)
+                            if collectEffects {
+                                Reads.UnionWith(filterCollector.Reads)
+                                InternalUnsafeVariables.UnionWith(filterCollector.InternalUnsafeVariables)
+                                if filterCollector.ContainsAwait {
+                                    ContainsAwait = true
+                                }
+                            }
+                        }
+                        var catchPts Dictionary[VariableSymbol, HashSet[VariableSymbol]]? = nil
+                        trySummary.CatchEntryPointsTo.TryGetValue(clause, out catchPts)
+                        let catchGotos = Dictionary[BoundLabel, HashSet[VariableSymbol]]()
+                        let (catchOutOver, catchNormal) = AnalyzeBlockStatementPrefix(
+                            RefStructAsyncLivenessAnalyzer.EnsureBlock(clause.Body),
+                            catchPts,
+                            clauseOver,
+                            collectEffects,
+                            entryLabelPointsTo: nil,
+                            entryLabelOverwritten: nil,
+                            catchGotos
+                        )
+                        if !clause.ExitsThroughFinally && catchNormal {
+                            if !afterInitialized {
+                                afterOver.UnionWith(catchOutOver)
+                                afterInitialized = true
+                            } else {
+                                afterOver.IntersectWith(catchOutOver)
+                            }
+                        }
+                        for entry in catchGotos {
+                            if !outgoingGotos.TryGetValue(entry.Key, out var sink) {
+                                outgoingGotos[entry.Key] = HashSet[VariableSymbol](entry.Value)
+                            } else {
+                                sink.IntersectWith(entry.Value)
+                            }
+                        }
+                    }
+                    if tryStmt.FinallyBlock is {} finallyBlock {
+                        let finallyBlockStmt = RefStructAsyncLivenessAnalyzer.EnsureBlock(finallyBlock)
+                        let finallyInOver = if afterInitialized {
+                            afterOver
+                        } else {
+                            HashSet[VariableSymbol](entryOverwritten)
+                        }
+                        let (finallyOutOver, finallyNormal) = AnalyzeBlockStatementPrefix(
+                            finallyBlockStmt,
+                            trySummary.FinallyIn,
+                            HashSet[VariableSymbol](entryOverwritten),
+                            collectEffects,
+                            entryLabelPointsTo: nil,
+                            entryLabelOverwritten: nil,
+                            outGotoOverwrites
+                        )
+                        let _ = finallyOutOver
+                        if afterInitialized {
+                            let (normFinOver, normFinNormal) = AnalyzeBlockStatementPrefix(
+                                finallyBlockStmt,
+                                trySummary.AfterTry,
+                                finallyInOver,
+                                collectEffects: false,
+                                entryLabelPointsTo: nil,
+                                entryLabelOverwritten: nil,
+                                outGotoOverwrites: nil
+                            )
+                            afterOver.Clear()
+                            if normFinNormal {
+                                afterOver.UnionWith(normFinOver)
+                            } else {
+                                afterInitialized = false
+                            }
+                        } else if !finallyNormal {
+                            afterInitialized = false
+                        }
+                    }
+                    if outGotoOverwrites != nil {
+                        for entry in outgoingGotos {
+                            if !outGotoOverwrites.TryGetValue(entry.Key, out var sink) {
+                                outGotoOverwrites[entry.Key] = HashSet[VariableSymbol](entry.Value)
+                            } else {
+                                sink.IntersectWith(entry.Value)
+                            }
+                        }
+                    }
+                    return (afterOver, afterInitialized)
+                }
+                case fixedStmt is BoundFixedStatement {
+                    let srcCollector = ReadAndAwaitCollector(interesting, entryPointsTo, entryOverwritten)
+                    srcCollector.VisitExpression(fixedStmt.PinnedSource)
+                    if collectEffects {
+                        Reads.UnionWith(srcCollector.Reads)
+                        InternalUnsafeVariables.UnionWith(srcCollector.InternalUnsafeVariables)
+                        if srcCollector.ContainsAwait {
+                            ContainsAwait = true
+                        }
+                    }
+                    return AnalyzeBlockStatementPrefix(
+                        RefStructAsyncLivenessAnalyzer.EnsureBlock(fixedStmt.Body),
+                        srcCollector.pointsTo,
+                        srcCollector.definitelyOverwritten,
+                        collectEffects,
+                        entryLabelPointsTo: nil,
+                        entryLabelOverwritten: nil,
+                        outGotoOverwrites
+                    )
+                }
+                default {
+                    return (HashSet[VariableSymbol](entryOverwritten), true)
+                }
+            }
+        }
+
+        private func AnalyzeBlockStatementPrefix(
+            blockStmt BoundBlockStatement,
+            entryPointsTo Dictionary[VariableSymbol, HashSet[VariableSymbol]]?,
+            entryOverwritten HashSet[VariableSymbol],
+            collectEffects bool,
+            entryLabelPointsTo IReadOnlyDictionary[
+                BoundLabel,
+                Dictionary[VariableSymbol, HashSet[VariableSymbol]]
+            ]? = nil,
+            entryLabelOverwritten IReadOnlyDictionary[BoundLabel, HashSet[VariableSymbol]]? = nil,
+            outGotoOverwrites Dictionary[BoundLabel, HashSet[VariableSymbol]]? = nil
+        )(OutOverwritten HashSet[VariableSymbol], HasNormalExit bool) {
+            let flattened = Lowerer.Flatten(blockStmt)
+            if !ControlFlowGraph.CanCreate(flattened) {
+                if collectEffects {
+                    let fallback = ReadAndAwaitCollector(interesting, entryPointsTo, entryOverwritten)
+                    fallback.VisitStatement(blockStmt)
+                    Reads.UnionWith(fallback.Reads)
+                    InternalUnsafeVariables.UnionWith(fallback.InternalUnsafeVariables)
+                    if fallback.ContainsAwait {
+                        ContainsAwait = true
+                    }
+                    return (fallback.definitelyOverwritten, true)
+                }
+                return (HashSet[VariableSymbol](entryOverwritten), true)
+            }
+            let prefixGraph = ControlFlowGraph.CreateWithCompoundGotoReachability(flattened)
+            let (stmtPointsTo, compoundEntryPointsTo, _, _, _, _) = RefStructAsyncLivenessAnalyzer.ComputeGraphPointsTo(
+                prefixGraph,
+                entryPointsTo,
+                interesting,
+                entryLabelPointsTo
+            )
+            let mustOverwritten = Dictionary[ControlFlowGraph.BasicBlock, HashSet[VariableSymbol]]()
+            let blockCanTransfer = Dictionary[ControlFlowGraph.BasicBlock, bool]()
+            let labelToBlock = Dictionary[BoundLabel, ControlFlowGraph.BasicBlock]()
+            let pendingOverwrittenForBlock = Dictionary[ControlFlowGraph.BasicBlock, HashSet[VariableSymbol]]()
+            let reachable = HashSet[ControlFlowGraph.BasicBlock]()
+            for b in prefixGraph.Blocks {
+                mustOverwritten[b] = HashSet[VariableSymbol]()
+                blockCanTransfer[b] = true
+                for stmt in b.Statements {
+                    if stmt is BoundLabelStatement ls {
+                        labelToBlock[ls.Label] = b
+                    }
+                }
+            }
+            if entryLabelOverwritten != nil {
+                for entry in entryLabelOverwritten {
+                    if labelToBlock.TryGetValue(entry.Key, out var targetBlock) {
+                        if !pendingOverwrittenForBlock.TryGetValue(targetBlock, out var sink) {
+                            pendingOverwrittenForBlock[targetBlock] = HashSet[VariableSymbol](entry.Value)
+                        } else {
+                            sink.IntersectWith(entry.Value)
+                        }
+                    }
+                }
+            }
+            mustOverwritten[prefixGraph.Start] = HashSet[VariableSymbol](entryOverwritten)
+            blockCanTransfer[prefixGraph.Start] = true
+            reachable.Add(prefixGraph.Start)
+            let compoundGotos = Dictionary[BoundLabel, HashSet[VariableSymbol]]()
+            var changed = true
+            var safety = 0
+            while changed && safety++ < 10000 {
+                changed = false
+                for block in prefixGraph.Blocks {
+                    if block.IsStart || block.IsEnd {
+                        continue
+                    }
+                    var anyPred = false
+                    var curOverwritten = HashSet[VariableSymbol]()
+                    for branch in block.Incoming {
+                        if reachable.Contains(branch.From) && blockCanTransfer[branch.From] {
+                            if !anyPred {
+                                curOverwritten = HashSet[VariableSymbol](mustOverwritten[branch.From])
+                                anyPred = true
+                            } else {
+                                curOverwritten.IntersectWith(mustOverwritten[branch.From])
+                            }
+                        }
+                    }
+                    if pendingOverwrittenForBlock.TryGetValue(block, out var gotoOver) {
+                        if !anyPred {
+                            curOverwritten = HashSet[VariableSymbol](gotoOver)
+                            anyPred = true
+                        } else {
+                            curOverwritten.IntersectWith(gotoOver)
+                        }
+                    }
+                    if !anyPred {
+                        continue
+                    }
+                    if reachable.Add(block) {
+                        changed = true
+                    }
+                    var canTransfer = true
+                    for stmt in block.Statements {
+                        if stmt is BoundTryStatement or BoundFixedStatement or BoundPatternSwitchStatement {
+                            var compEntry Dictionary[VariableSymbol, HashSet[VariableSymbol]]? = nil
+                            if compoundEntryPointsTo != nil {
+                                compoundEntryPointsTo.TryGetValue(stmt, out compEntry)
+                            }
+                            let localGotos = Dictionary[BoundLabel, HashSet[VariableSymbol]]()
+                            let (compOut, compNormal) = AnalyzeCompoundOverwrites(
+                                stmt,
+                                compEntry,
+                                curOverwritten,
+                                collectEffects: false,
+                                localGotos
+                            )
+                            for entry in localGotos {
+                                if labelToBlock.TryGetValue(entry.Key, out var targetBlock) {
+                                    if !pendingOverwrittenForBlock.TryGetValue(targetBlock, out var sink) {
+                                        pendingOverwrittenForBlock[targetBlock] = HashSet[VariableSymbol](entry.Value)
+                                        changed = true
+                                    } else {
+                                        let prevCount = sink.Count
+                                        sink.IntersectWith(entry.Value)
+                                        if sink.Count != prevCount {
+                                            changed = true
+                                        }
+                                    }
+                                } else if !compoundGotos.TryGetValue(entry.Key, out var sink) {
+                                    compoundGotos[entry.Key] = HashSet[VariableSymbol](entry.Value)
+                                } else {
+                                    sink.IntersectWith(entry.Value)
+                                }
+                            }
+                            curOverwritten = compOut
+                            if !compNormal {
+                                canTransfer = false
+                                break
+                            }
+                            continue
+                        }
+                        var stmtAlias IReadOnlyDictionary[VariableSymbol, HashSet[VariableSymbol]]? = nil
+                        if stmtPointsTo != nil {
+                            stmtPointsTo.TryGetValue(stmt, out stmtAlias)
+                        }
+                        let stmtCollector = ReadAndAwaitCollector(interesting, stmtAlias, curOverwritten)
+                        switch stmt {
+                            case es is BoundExpressionStatement {
+                                stmtCollector.VisitExpression(es.Expression)
+                            }
+                            case vd is BoundVariableDeclaration {
+                                stmtCollector.VisitVariableDeclaration(vd)
+                            }
+                            case rs is BoundReturnStatement {
+                                if rs.Expression != nil {
+                                    stmtCollector.VisitExpression(rs.Expression)
+                                }
+                                canTransfer = false
+                            }
+                            case th is BoundThrowStatement {
+                                stmtCollector.VisitExpression(th.Expression)
+                                canTransfer = false
+                            }
+                            case BoundRethrowStatement {
+                                canTransfer = false
+                            }
+                            case cgs is BoundConditionalGotoStatement {
+                                stmtCollector.VisitExpression(cgs.Condition)
+                            }
+                            case ys is BoundYieldStatement {
+                                if ys.Expression != nil {
+                                    stmtCollector.VisitExpression(ys.Expression)
+                                }
+                            }
+                            case BoundLabelStatement, BoundGotoStatement { }
+                            default {
+                                stmtCollector.VisitStatement(stmt)
+                            }
+                        }
+                        curOverwritten = HashSet[VariableSymbol](stmtCollector.definitelyOverwritten)
+                        if !canTransfer || ControlFlowGraph.StatementDefinitelyReturns(stmt) ||
+                            ControlFlowGraph.HasNeverValue(stmt) {
+                            canTransfer = false
+                            break
+                        }
+                    }
+                    if blockCanTransfer[block] != canTransfer {
+                        blockCanTransfer[block] = canTransfer
+                        changed = true
+                    }
+                    if !RefStructAsyncLivenessAnalyzer.SetsEqual(curOverwritten, mustOverwritten[block]) {
+                        mustOverwritten[block] = curOverwritten
+                        changed = true
+                    }
+                }
+            }
+            if collectEffects {
+                for block in prefixGraph.Blocks {
+                    if block.IsStart || block.IsEnd || !reachable.Contains(block) {
+                        continue
+                    }
+                    var anyPred = false
+                    var curOverwritten = HashSet[VariableSymbol]()
+                    for branch in block.Incoming {
+                        if reachable.Contains(branch.From) && blockCanTransfer[branch.From] {
+                            if !anyPred {
+                                curOverwritten = HashSet[VariableSymbol](mustOverwritten[branch.From])
+                                anyPred = true
+                            } else {
+                                curOverwritten.IntersectWith(mustOverwritten[branch.From])
+                            }
+                        }
+                    }
+                    if pendingOverwrittenForBlock.TryGetValue(block, out var gotoOver) {
+                        if !anyPred {
+                            curOverwritten = HashSet[VariableSymbol](gotoOver)
+                            anyPred = true
+                        } else {
+                            curOverwritten.IntersectWith(gotoOver)
+                        }
+                    }
+                    if !anyPred {
+                        continue
+                    }
+                    for stmt in block.Statements {
+                        if stmt is BoundTryStatement or BoundFixedStatement or BoundPatternSwitchStatement {
+                            var compEntry Dictionary[VariableSymbol, HashSet[VariableSymbol]]? = nil
+                            if compoundEntryPointsTo != nil {
+                                compoundEntryPointsTo.TryGetValue(stmt, out compEntry)
+                            }
+                            let (compOut, compNormal) = AnalyzeCompoundOverwrites(
+                                stmt,
+                                compEntry,
+                                curOverwritten,
+                                collectEffects: true,
+                                outGotoOverwrites: nil
+                            )
+                            curOverwritten = compOut
+                            if !compNormal {
+                                break
+                            }
+                            continue
+                        }
+                        var stmtAlias IReadOnlyDictionary[VariableSymbol, HashSet[VariableSymbol]]? = nil
+                        if stmtPointsTo != nil {
+                            stmtPointsTo.TryGetValue(stmt, out stmtAlias)
+                        }
+                        let stmtCollector = ReadAndAwaitCollector(interesting, stmtAlias, curOverwritten)
+                        switch stmt {
+                            case es is BoundExpressionStatement {
+                                stmtCollector.VisitExpression(es.Expression)
+                            }
+                            case vd is BoundVariableDeclaration {
+                                stmtCollector.VisitVariableDeclaration(vd)
+                            }
+                            case rs is BoundReturnStatement {
+                                if rs.Expression != nil {
+                                    stmtCollector.VisitExpression(rs.Expression)
+                                }
+                            }
+                            case th is BoundThrowStatement {
+                                stmtCollector.VisitExpression(th.Expression)
+                            }
+                            case cgs is BoundConditionalGotoStatement {
+                                stmtCollector.VisitExpression(cgs.Condition)
+                            }
+                            case ys is BoundYieldStatement {
+                                if ys.Expression != nil {
+                                    stmtCollector.VisitExpression(ys.Expression)
+                                }
+                            }
+                            case BoundLabelStatement, BoundGotoStatement, BoundRethrowStatement { }
+                            default {
+                                stmtCollector.VisitStatement(stmt)
+                            }
+                        }
+                        Reads.UnionWith(stmtCollector.Reads)
+                        InternalUnsafeVariables.UnionWith(stmtCollector.InternalUnsafeVariables)
+                        if stmtCollector.ContainsAwait {
+                            ContainsAwait = true
+                        }
+                        curOverwritten = HashSet[VariableSymbol](stmtCollector.definitelyOverwritten)
+                        if stmt is BoundReturnStatement or
+                            BoundThrowStatement or
+                            BoundRethrowStatement ||
+                            ControlFlowGraph.StatementDefinitelyReturns(stmt) || ControlFlowGraph.HasNeverValue(stmt) {
+                            break
+                        }
+                    }
+                }
+            }
+            if outGotoOverwrites != nil {
+                for entry in compoundGotos {
+                    if !outGotoOverwrites.TryGetValue(entry.Key, out var sink) {
+                        outGotoOverwrites[entry.Key] = HashSet[VariableSymbol](entry.Value)
+                    } else {
+                        sink.IntersectWith(entry.Value)
+                    }
+                }
+            }
+            var exitInitialized = false
+            let exitOverwritten = HashSet[VariableSymbol]()
+            let lastCodeBlock ControlFlowGraph.BasicBlock? = if prefixGraph.Blocks.Count >= 2 {
+                prefixGraph.Blocks[prefixGraph.Blocks.Count - 2]
+            } else {
+                default(ControlFlowGraph.BasicBlock?)
+            }
+            for branch in prefixGraph.End.Incoming {
+                let from = branch.From
+                if !reachable.Contains(from) || !blockCanTransfer[from] {
+                    continue
+                }
+                let lastStmt = if from.Statements.Count > 0 {
+                    from.Statements[from.Statements.Count - 1]
+                } else {
+                    default(BoundStatement?)
+                }
+                if lastStmt is BoundGotoStatement gs {
+                    if outGotoOverwrites != nil {
+                        if !outGotoOverwrites.TryGetValue(gs.Label, out var sink) {
+                            outGotoOverwrites[gs.Label] = HashSet[VariableSymbol](mustOverwritten[from])
+                        } else {
+                            sink.IntersectWith(mustOverwritten[from])
+                        }
+                    }
+                    continue
+                }
+                if !from.IsStart {
+                    if !object.ReferenceEquals(from, lastCodeBlock) {
+                        continue
+                    }
+                    if lastStmt is BoundReturnStatement or BoundThrowStatement or BoundRethrowStatement {
+                        continue
+                    }
+                    if lastStmt != nil &&
+                        (
+                        ControlFlowGraph.StatementDefinitelyReturns(lastStmt) || ControlFlowGraph.HasNeverValue(
+                            lastStmt
+                        )
+                    ) {
+                        continue
+                    }
+                }
+                if !exitInitialized {
+                    exitOverwritten.UnionWith(mustOverwritten[from])
+                    exitInitialized = true
+                } else {
+                    exitOverwritten.IntersectWith(mustOverwritten[from])
+                }
+            }
+            return (exitOverwritten, exitInitialized)
+        }
+
         protected override func VisitBlockExpression(node BoundBlockExpression) {
             if !node.Statements.IsDefaultOrEmpty {
-                let flattened = Lowerer.Flatten(BoundBlockStatement(nil, node.Statements))
+                let blockStmt = BoundBlockStatement(nil, node.Statements)
+                let flattened = Lowerer.Flatten(blockStmt)
                 if ControlFlowGraph.CanCreate(flattened) {
-                    let prefixGraph = ControlFlowGraph.CreateWithCompoundGotoReachability(flattened)
-                    let (
-                        stmtPointsTo,
-                        _,
-                        prefixExit,
-                        _,
-                        prefixHasNormalExit,
-                        _
-                    ) = RefStructAsyncLivenessAnalyzer.ComputeGraphPointsTo(prefixGraph, pointsTo, interesting)
-                    let mustOverwritten = Dictionary[ControlFlowGraph.BasicBlock, HashSet[VariableSymbol]]()
-                    for b in prefixGraph.Blocks {
-                        mustOverwritten[b] = HashSet[VariableSymbol]()
-                    }
-                    mustOverwritten[prefixGraph.Start] = HashSet[VariableSymbol](definitelyOverwritten)
-                    let reachable = HashSet[ControlFlowGraph.BasicBlock]()
-                    reachable.Add(prefixGraph.Start)
-                    for block in prefixGraph.Blocks {
-                        if block.IsStart || block.IsEnd {
-                            continue
-                        }
-                        var anyPred = false
-                        var curOverwritten = HashSet[VariableSymbol]()
-                        for branch in block.Incoming {
-                            if reachable.Contains(branch.From) {
-                                if !anyPred {
-                                    curOverwritten = HashSet[VariableSymbol](mustOverwritten[branch.From])
-                                    anyPred = true
-                                } else {
-                                    curOverwritten.IntersectWith(mustOverwritten[branch.From])
-                                }
-                            }
-                        }
-                        if !anyPred {
-                            continue
-                        }
-                        reachable.Add(block)
-                        for stmt in block.Statements {
-                            var stmtAlias IReadOnlyDictionary[VariableSymbol, HashSet[VariableSymbol]]? = nil
-                            if stmtPointsTo != nil {
-                                stmtPointsTo.TryGetValue(stmt, out stmtAlias)
-                            }
-                            let stmtCollector = ReadAndAwaitCollector(interesting, stmtAlias, curOverwritten)
-                            switch stmt {
-                                case es is BoundExpressionStatement {
-                                    stmtCollector.VisitExpression(es.Expression)
-                                }
-                                case vd is BoundVariableDeclaration {
-                                    stmtCollector.VisitVariableDeclaration(vd)
-                                }
-                                case rs is BoundReturnStatement {
-                                    if rs.Expression != nil {
-                                        stmtCollector.VisitExpression(rs.Expression)
-                                    }
-                                }
-                                case th is BoundThrowStatement {
-                                    stmtCollector.VisitExpression(th.Expression)
-                                }
-                                case cgs is BoundConditionalGotoStatement {
-                                    stmtCollector.VisitExpression(cgs.Condition)
-                                }
-                                case ys is BoundYieldStatement {
-                                    if ys.Expression != nil {
-                                        stmtCollector.VisitExpression(ys.Expression)
-                                    }
-                                }
-                                case BoundLabelStatement, BoundGotoStatement, BoundRethrowStatement { }
-                                default {
-                                    stmtCollector.VisitStatement(stmt)
-                                    curOverwritten.Clear()
-                                }
-                            }
-                            Reads.UnionWith(stmtCollector.Reads)
-                            if stmtCollector.ContainsAwait {
-                                ContainsAwait = true
-                            }
-                            curOverwritten.UnionWith(stmtCollector.definitelyOverwritten)
-                        }
-                        mustOverwritten[block] = curOverwritten
-                    }
-                    var exitInitialized = false
-                    let exitOverwritten = HashSet[VariableSymbol]()
-                    let lastCodeBlock ControlFlowGraph.BasicBlock? = if prefixGraph.Blocks.Count >= 2 {
-                        prefixGraph.Blocks[prefixGraph.Blocks.Count - 2]
-                    } else {
-                        default(ControlFlowGraph.BasicBlock?)
-                    }
-                    for branch in prefixGraph.End.Incoming {
-                        let from = branch.From
-                        if !reachable.Contains(from) {
-                            continue
-                        }
-                        if !from.IsStart {
-                            if !object.ReferenceEquals(from, lastCodeBlock) {
-                                continue
-                            }
-                            let lastStmt = if from.Statements.Count > 0 {
-                                from.Statements[from.Statements.Count - 1]
-                            } else {
-                                default(BoundStatement?)
-                            }
-                            if lastStmt is BoundReturnStatement or
-                                BoundThrowStatement or
-                                BoundRethrowStatement or
-                                BoundGotoStatement {
-                                continue
-                            }
-                            if lastStmt != nil &&
-                                (
-                                ControlFlowGraph.StatementDefinitelyReturns(lastStmt) || ControlFlowGraph.HasNeverValue(
-                                    lastStmt
-                                )
-                            ) {
-                                continue
-                            }
-                        }
-                        if !exitInitialized {
-                            exitOverwritten.UnionWith(mustOverwritten[from])
-                            exitInitialized = true
-                        } else {
-                            exitOverwritten.IntersectWith(mustOverwritten[from])
-                        }
-                    }
-                    if exitInitialized {
+                    let preEntryPointsTo = RefStructAsyncLivenessAnalyzer.ClonePointsTo(pointsTo)
+                    let (_, _, prefixExit, _, prefixHasNormalExit, _) = RefStructAsyncLivenessAnalyzer
+                        .ComputeGraphPointsTo(
+                        ControlFlowGraph.CreateWithCompoundGotoReachability(flattened),
+                        pointsTo,
+                        interesting
+                    )
+                    let prevAwait = ContainsAwait
+                    ContainsAwait = false
+                    let (exitOverwritten, hasNormalOverwritten) = AnalyzeBlockStatementPrefix(
+                        blockStmt,
+                        pointsTo,
+                        definitelyOverwritten,
+                        collectEffects: true
+                    )
+                    let prefixHasAwait = ContainsAwait
+                    ContainsAwait = prevAwait || prefixHasAwait
+                    if hasNormalOverwritten {
                         for v in exitOverwritten {
                             if definitelyOverwritten.Add(v) && !Reads.Contains(v) {
                                 PatternKills.Add(v)
@@ -546,11 +1134,49 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     }
                     pointsTo.Clear()
                     if !prefixHasNormalExit {
+                        if prefixHasAwait {
+                            let innerReport = ReportingContext(nil)
+                            RefStructAsyncLivenessAnalyzer.AnalyzeRegion(
+                                blockStmt,
+                                HashSet[VariableSymbol](),
+                                HashSet[VariableSymbol](),
+                                interesting,
+                                innerReport,
+                                preEntryPointsTo
+                            )
+                            InternalUnsafeVariables.UnionWith(innerReport.Crossing)
+                        }
                         return
                     }
                     RefStructAsyncLivenessAnalyzer.UnionPointsToInto(pointsTo, prefixExit)
-                } else {
-                    base.VisitBlockExpression(node)
+                    let exprCollector = ReadAndAwaitCollector(interesting, pointsTo, definitelyOverwritten)
+                    exprCollector.VisitExpression(node.Expression)
+                    Reads.UnionWith(exprCollector.Reads)
+                    InternalUnsafeVariables.UnionWith(exprCollector.InternalUnsafeVariables)
+                    if exprCollector.ContainsAwait {
+                        ContainsAwait = true
+                    }
+                    for v in exprCollector.definitelyOverwritten {
+                        if definitelyOverwritten.Add(v) && !Reads.Contains(v) {
+                            PatternKills.Add(v)
+                        }
+                    }
+                    pointsTo.Clear()
+                    RefStructAsyncLivenessAnalyzer.UnionPointsToInto(pointsTo, exprCollector.pointsTo)
+                    if prefixHasAwait {
+                        let rawExprCollector = ReadAndAwaitCollector(interesting, pointsTo)
+                        rawExprCollector.VisitExpression(node.Expression)
+                        let innerReport = ReportingContext(nil)
+                        RefStructAsyncLivenessAnalyzer.AnalyzeRegion(
+                            blockStmt,
+                            rawExprCollector.Reads,
+                            HashSet[VariableSymbol](),
+                            interesting,
+                            innerReport,
+                            preEntryPointsTo
+                        )
+                        InternalUnsafeVariables.UnionWith(innerReport.Crossing)
+                    }
                     return
                 }
             }
@@ -582,115 +1208,105 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             discrCollector.VisitExpression(node.Discriminant)
             Reads.UnionWith(discrCollector.Reads)
             PatternKills.UnionWith(discrCollector.PatternKills)
+            InternalUnsafeVariables.UnionWith(discrCollector.InternalUnsafeVariables)
             if discrCollector.ContainsAwait {
                 ContainsAwait = true
             }
             var fallthroughState = RefStructAsyncLivenessAnalyzer.ClonePointsTo(discrCollector.pointsTo)
+            var fallthroughOverwritten = HashSet[VariableSymbol](discrCollector.definitelyOverwritten)
             let armCount = node.Arms.Length
-            let armPatternStates = [armCount]Dictionary[VariableSymbol, HashSet[VariableSymbol]]
-            let armMatchedStates = [armCount]Dictionary[VariableSymbol, HashSet[VariableSymbol]]
             let armBindingsList = [armCount]HashSet[VariableSymbol]
+            let armPatternCollectors = [armCount]ReadAndAwaitCollector?
+            let armGuardCollectors = [armCount]ReadAndAwaitCollector?
+            let armResultEntryStates = [armCount]Dictionary[VariableSymbol, HashSet[VariableSymbol]]
+            let armResultEntryOverwritten = [armCount]HashSet[VariableSymbol]
             let switchPatternBindings = HashSet[VariableSymbol]()
-            for var i = 0; i < armCount; i++ {
-                let arm = node.Arms[i]
-                if arm.IsDefault {
-                    continue
-                }
-                let armBindings = HashSet[VariableSymbol]()
-                RefStructAsyncLivenessAnalyzer.CollectPatternBindings(arm.Pattern, interesting, armBindings)
-                armBindingsList[i] = armBindings
-                switchPatternBindings.UnionWith(armBindings)
-                armPatternStates[i] = RefStructAsyncLivenessAnalyzer.ClonePointsTo(fallthroughState)
-                var guardIn = armPatternStates[i]
-                if arm.Pattern != nil {
-                    let (matched, unmatched) = RefStructAsyncLivenessAnalyzer.ApplyPatternPointsTo(
-                        arm.Pattern,
-                        armPatternStates[i],
-                        interesting
+            var hasUnconditionalDefault = false
+            for var pass = 0; pass < 2; pass++ {
+                for var i = 0; i < armCount; i++ {
+                    let arm = node.Arms[i]
+                    if (pass == 0 && arm.IsDefault) || (pass == 1 && !arm.IsDefault) {
+                        continue
+                    }
+                    let armBindings = HashSet[VariableSymbol]()
+                    RefStructAsyncLivenessAnalyzer.CollectPatternBindings(arm.Pattern, interesting, armBindings)
+                    armBindingsList[i] = armBindings
+                    switchPatternBindings.UnionWith(armBindings)
+                    let patternCollector = ReadAndAwaitCollector(interesting, fallthroughState, fallthroughOverwritten)
+                    if arm.Pattern != nil {
+                        patternCollector.VisitPattern(arm.Pattern)
+                    }
+                    armPatternCollectors[i] = patternCollector
+                    var guardEntryState = RefStructAsyncLivenessAnalyzer.ClonePointsTo(fallthroughState)
+                    if arm.Pattern != nil {
+                        let (matched, unmatched) = RefStructAsyncLivenessAnalyzer.ApplyPatternPointsTo(
+                            arm.Pattern,
+                            fallthroughState,
+                            interesting
+                        )
+                        guardEntryState = matched
+                        fallthroughState = unmatched
+                    }
+                    let guardCollector = ReadAndAwaitCollector(
+                        interesting,
+                        guardEntryState,
+                        patternCollector.definitelyOverwritten
                     )
-                    guardIn = matched
-                    fallthroughState = unmatched
+                    if arm.Guard != nil {
+                        guardCollector.VisitExpression(arm.Guard)
+                        RefStructAsyncLivenessAnalyzer.UnionPointsToInto(fallthroughState, guardCollector.pointsTo)
+                    } else if arm.IsDefault && arm.Pattern == nil {
+                        hasUnconditionalDefault = true
+                    }
+                    armGuardCollectors[i] = guardCollector
+                    armResultEntryStates[i] = guardCollector.pointsTo
+                    armResultEntryOverwritten[i] = guardCollector.definitelyOverwritten
                 }
-                armMatchedStates[i] = RefStructAsyncLivenessAnalyzer.ClonePointsTo(guardIn)
-                if arm.Guard != nil {
-                    let updater = PointsToExpressionUpdater(guardIn, interesting)
-                    updater.VisitExpression(arm.Guard)
-                    RefStructAsyncLivenessAnalyzer.UnionPointsToInto(fallthroughState, guardIn)
-                }
-                armMatchedStates[i] = guardIn
-            }
-            for var i = 0; i < armCount; i++ {
-                let arm = node.Arms[i]
-                if !arm.IsDefault {
-                    continue
-                }
-                let armBindings = HashSet[VariableSymbol]()
-                RefStructAsyncLivenessAnalyzer.CollectPatternBindings(arm.Pattern, interesting, armBindings)
-                armBindingsList[i] = armBindings
-                switchPatternBindings.UnionWith(armBindings)
-                armPatternStates[i] = RefStructAsyncLivenessAnalyzer.ClonePointsTo(fallthroughState)
-                var guardIn = armPatternStates[i]
-                if arm.Pattern != nil {
-                    let (matched, unmatched) = RefStructAsyncLivenessAnalyzer.ApplyPatternPointsTo(
-                        arm.Pattern,
-                        armPatternStates[i],
-                        interesting
-                    )
-                    guardIn = matched
-                    fallthroughState = unmatched
-                }
-                armMatchedStates[i] = RefStructAsyncLivenessAnalyzer.ClonePointsTo(guardIn)
-                if arm.Guard != nil {
-                    let updater = PointsToExpressionUpdater(guardIn, interesting)
-                    updater.VisitExpression(arm.Guard)
-                    RefStructAsyncLivenessAnalyzer.UnionPointsToInto(fallthroughState, guardIn)
-                }
-                armMatchedStates[i] = guardIn
             }
             let selectedExits = Dictionary[VariableSymbol, HashSet[VariableSymbol]]()
-            var hasUnconditionalDefault = false
             var commonKillsInitialized = false
             let commonArmKills = HashSet[VariableSymbol]()
             for var i = 0; i < armCount; i++ {
                 let arm = node.Arms[i]
-                if arm.IsDefault && arm.Guard == nil {
-                    hasUnconditionalDefault = true
-                }
                 let armBindings = armBindingsList[i]
-                let patternCollector = ReadAndAwaitCollector(
-                    interesting,
-                    armPatternStates[i],
-                    discrCollector.definitelyOverwritten
-                )
-                if arm.Pattern != nil {
-                    patternCollector.VisitPattern(arm.Pattern)
-                }
-                var guardEntryState = armPatternStates[i]
-                if arm.Pattern != nil {
-                    let (matched, _) = RefStructAsyncLivenessAnalyzer.ApplyPatternPointsTo(
-                        arm.Pattern,
-                        armPatternStates[i],
-                        interesting
-                    )
-                    guardEntryState = matched
-                }
-                let guardCollector = ReadAndAwaitCollector(
-                    interesting,
-                    guardEntryState,
-                    discrCollector.definitelyOverwritten
-                )
-                if arm.Guard != nil {
-                    guardCollector.VisitExpression(arm.Guard)
-                }
+                let patternCollector = armPatternCollectors[i]!!
+                let guardCollector = armGuardCollectors[i]!!
                 let resultCollector = ReadAndAwaitCollector(
                     interesting,
-                    armMatchedStates[i],
-                    discrCollector.definitelyOverwritten
+                    armResultEntryStates[i],
+                    armResultEntryOverwritten[i]
                 )
                 resultCollector.VisitExpression(arm.Result)
                 RefStructAsyncLivenessAnalyzer.UnionPointsToInto(selectedExits, resultCollector.pointsTo)
+                InternalUnsafeVariables.UnionWith(patternCollector.InternalUnsafeVariables)
+                InternalUnsafeVariables.UnionWith(guardCollector.InternalUnsafeVariables)
+                InternalUnsafeVariables.UnionWith(resultCollector.InternalUnsafeVariables)
                 if patternCollector.ContainsAwait || guardCollector.ContainsAwait || resultCollector.ContainsAwait {
                     ContainsAwait = true
+                }
+                if guardCollector.ContainsAwait {
+                    let rawGuard = ReadAndAwaitCollector(interesting, armResultEntryStates[i])
+                    if arm.Guard != nil {
+                        rawGuard.VisitExpression(arm.Guard)
+                    }
+                    for v in rawGuard.Reads {
+                        if !armBindings.Contains(v) && !discrCollector.definitelyOverwritten.Contains(v) &&
+                            patternCollector
+                            .definitelyOverwritten
+                            .Contains(v) {
+                            InternalUnsafeVariables.Add(v)
+                        }
+                    }
+                }
+                if resultCollector.ContainsAwait {
+                    let rawResult = ReadAndAwaitCollector(interesting, armResultEntryStates[i])
+                    rawResult.VisitExpression(arm.Result)
+                    for v in rawResult.Reads {
+                        if !armBindings.Contains(v) && !discrCollector.definitelyOverwritten.Contains(v) &&
+                            armResultEntryOverwritten[i].Contains(v) {
+                            InternalUnsafeVariables.Add(v)
+                        }
+                    }
                 }
                 for v in patternCollector.Reads {
                     if !armBindings.Contains(v) || patternCollector.ContainsAwait {
@@ -711,22 +1327,12 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     }
                 }
                 let armKills = HashSet[VariableSymbol]()
-                for killed in patternCollector.PatternKills {
-                    if !discrCollector.Reads.Contains(killed) {
-                        armKills.Add(killed)
-                    }
-                }
-                for killed in guardCollector.PatternKills {
-                    if !discrCollector.Reads.Contains(killed) && !patternCollector.Reads.Contains(killed) {
-                        armKills.Add(killed)
-                    }
-                }
-                for killed in resultCollector.PatternKills {
-                    if !discrCollector.Reads.Contains(killed) && !patternCollector.Reads.Contains(killed) &&
-                        !guardCollector
+                for v in resultCollector.definitelyOverwritten {
+                    if !discrCollector.definitelyOverwritten.Contains(v) && !discrCollector.Reads.Contains(v) &&
+                        !patternCollector
                         .Reads
-                        .Contains(killed) {
-                        armKills.Add(killed)
+                        .Contains(v) && !guardCollector.Reads.Contains(v) && !resultCollector.Reads.Contains(v) {
+                        armKills.Add(v)
                     }
                 }
                 if !commonKillsInitialized {
@@ -1350,6 +1956,14 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             }
             base.VisitBinaryExpression(node)
         }
+    }
+
+    private func EnsureBlock(
+        statement BoundStatement
+    ) BoundBlockStatement -> if statement is BoundBlockStatement block {
+        block
+    } else {
+        BoundBlockStatement(nil, ImmutableArray.Create[BoundStatement](statement))
     }
 
     private func ApplyPatternPointsTo(
@@ -2578,6 +3192,15 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     if collector.ContainsAwait {
                         ReportIfUnsafe(live, killTarget, diagnostics, statement, "await", collector.PatternKills)
                     }
+                    if collector.InternalUnsafeVariables.Count > 0 {
+                        ReportIfUnsafe(
+                            collector.InternalUnsafeVariables,
+                            excludedSelfKill: nil,
+                            diagnostics,
+                            statement,
+                            "await"
+                        )
+                    }
                     if killTarget != nil {
                         live.Remove(killTarget)
                     }
@@ -2995,6 +3618,15 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         live.UnionWith(collector.Reads)
         if collector.ContainsAwait {
             ReportIfUnsafe(live, killTarget, diagnostics, owningStatement, "await", collector.PatternKills)
+        }
+        if collector.InternalUnsafeVariables.Count > 0 {
+            ReportIfUnsafe(
+                collector.InternalUnsafeVariables,
+                excludedSelfKill: nil,
+                diagnostics,
+                owningStatement,
+                "await"
+            )
         }
         if killTarget != nil {
             live.Remove(killTarget)

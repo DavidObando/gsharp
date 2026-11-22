@@ -939,6 +939,104 @@ run().GetAwaiter().GetResult()
 `)
         Assert.Empty(nestedReseatBeforeReadSafe.Diagnostics)
         Assert.Equal("1\n", nestedReseatBeforeReadSafe.Output)
+
+        let blockExprBackwardGotoUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+let view readonly span[byte] = u8"hello"
+await Task.Delay(1)
+let ignored = {
+    goto setup
+use:
+    Console.WriteLine(view.Length)
+    goto done
+setup:
+    goto use
+done:
+    Console.WriteLine(0)
+    0
+}
+`)
+        Assert.Contains(blockExprBackwardGotoUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(blockExprBackwardGotoUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let blockExprNestedSwitchUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+var c = Counter{Value: 10}
+let flag = Environment.GetCommandLineArgs().Length == 999
+await Task.Delay(1)
+let ignored = {
+    switch flag {
+        case true {
+            c = Counter{Value: 1}
+        }
+        default {
+            Console.WriteLine(c.Value)
+        }
+    }
+    0
+}
+`)
+        Assert.Contains(blockExprNestedSwitchUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(blockExprNestedSwitchUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let switchGuardOverwriteSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+var c = Counter{Value: 10}
+let n = 1
+await Task.Delay(1)
+let r = switch n {
+    case 1 when {
+        c = Counter{Value: 42}
+        true
+    }: c.Value
+    default: {
+        c = Counter{Value: 1}
+        c.Value
+    }
+}
+Console.WriteLine(r)
+`)
+        Assert.Empty(switchGuardOverwriteSafe.Diagnostics)
+        Assert.Equal("42\n", switchGuardOverwriteSafe.Output)
+
+        let switchGuardOverwriteInnerAwaitUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+var c = Counter{Value: 10}
+let n = 1
+let r = switch n {
+    case 1 when {
+        c = Counter{Value: 42}
+        true
+    }: {
+        await Task.Delay(1)
+        c.Value
+    }
+    default: 0
+}
+Console.WriteLine(r)
+`)
+        Assert.Contains(switchGuardOverwriteInnerAwaitUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(switchGuardOverwriteInnerAwaitUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
     }
 
     @Fact
