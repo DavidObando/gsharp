@@ -265,6 +265,38 @@ run().GetAwaiter().GetResult()
 `, "func-try-reseat-finally-safe", executable: true)
         IlVerifier.Verify(tryReseatFinallySafeAssembly)
         Assert.Equal("1\n", fixture.Run(tryReseatFinallySafeAssembly))
+
+        let heapOwnersSafeAssembly = fixture.Compile(`import System
+import System.Runtime.CompilerServices
+import System.Threading.Tasks
+
+class Box {
+    var Value int32
+}
+
+ref struct Holder {
+    var Values[]int32
+    var Box Box
+    var ClrBox StrongBox[int32]
+}
+
+async func run() Task {
+    var h = Holder{
+        Values: []int32{11, 22},
+        Box: Box{Value: 33},
+        ClrBox: StrongBox[int32](44)
+    }
+    var pArr = &h.Values[0]
+    var pBox = &h.Box.Value
+    var pClr = &h.ClrBox.Value
+    await Task.Delay(1)
+    Console.WriteLine("${*pArr},${*pBox},${*pClr}")
+}
+
+run().GetAwaiter().GetResult()
+`, "func-heap-owner-ref-struct-safe", executable: true)
+        IlVerifier.Verify(heapOwnersSafeAssembly)
+        Assert.Equal("11,33,44\n", fixture.Run(heapOwnersSafeAssembly))
     }
 
     shared {

@@ -630,6 +630,166 @@ run().GetAwaiter().GetResult()
 `)
         Assert.Empty(tryReseatFinallySafe.Diagnostics)
         Assert.Equal("1\n", tryReseatFinallySafe.Output)
+
+        let heapArrayElementSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Holder {
+    var Values[]int32
+}
+
+async func run() Task {
+    var h = Holder{Values: []int32{11, 22}}
+    var p = &h.Values[0]
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Empty(heapArrayElementSafe.Diagnostics)
+        Assert.Equal("11\n", heapArrayElementSafe.Output)
+
+        let heapSourceClassFieldSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+class Box {
+    var Value int32
+}
+
+ref struct Holder {
+    var Box Box
+}
+
+async func run() Task {
+    var h = Holder{Box: Box{Value: 33}}
+    var p = &h.Box.Value
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Empty(heapSourceClassFieldSafe.Diagnostics)
+        Assert.Equal("33\n", heapSourceClassFieldSafe.Output)
+
+        let heapImportedClassFieldSafe = EmittedOracle.Evaluate(`
+import System
+import System.Runtime.CompilerServices
+import System.Threading.Tasks
+
+ref struct Holder {
+    var ClrBox StrongBox[int32]
+}
+
+async func run() Task {
+    var h = Holder{ClrBox: StrongBox[int32](44)}
+    var p = &h.ClrBox.Value
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Empty(heapImportedClassFieldSafe.Diagnostics)
+        Assert.Equal("44\n", heapImportedClassFieldSafe.Output)
+
+        let defaultBeforeGuardedCaseStmtUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(n int32) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    switch n {
+        default { }
+        case 1 when {
+            p = &c.Value
+            false
+        } {
+            p = &x
+        }
+    }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run(1).GetAwaiter().GetResult()
+`)
+        Assert.Contains(defaultBeforeGuardedCaseStmtUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(defaultBeforeGuardedCaseStmtUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let defaultBeforeGuardedCaseExprUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(n int32) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    let r = switch n {
+        default: 0
+        case 1 when {
+            p = &c.Value
+            false
+        }: { p = &x; 1 }
+    }
+    await Task.Delay(1)
+    Console.WriteLine(*p + r)
+}
+
+run(1).GetAwaiter().GetResult()
+`)
+        Assert.Contains(defaultBeforeGuardedCaseExprUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(defaultBeforeGuardedCaseExprUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let topLevelFallthroughAcrossAwaitUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+let view readonly span[byte] = u8"hello"
+switch Environment.GetCommandLineArgs().Length {
+    case 0 {
+        await Task.Delay(1)
+        fallthrough
+    }
+    default {
+        Console.WriteLine(view.Length)
+    }
+}
+`)
+        Assert.Contains(topLevelFallthroughAcrossAwaitUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(topLevelFallthroughAcrossAwaitUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let topLevelEscapingGotoAcrossAwaitUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+let view readonly span[byte] = u8"hello"
+switch Environment.GetCommandLineArgs().Length {
+    case 0 {
+        await Task.Delay(1)
+        goto useView
+    }
+    default { }
+}
+return
+useView:
+Console.WriteLine(view.Length)
+`)
+        Assert.Contains(topLevelEscapingGotoAcrossAwaitUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(topLevelEscapingGotoAcrossAwaitUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
     }
 
     @Fact

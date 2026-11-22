@@ -265,6 +265,13 @@ class ControlFlowGraph {
         private let branches List[BasicBlockBranch] = List[BasicBlockBranch]()
         private let start BasicBlock = BasicBlock(isStart: true)
         private let end BasicBlock = BasicBlock(isStart: false)
+        private let preserveCompoundGotoTargets bool
+
+        init() { }
+
+        internal init(preserveCompoundGotoTargets bool) {
+            this.preserveCompoundGotoTargets = preserveCompoundGotoTargets
+        }
 
         /// Builds a control flow graph from the provided list of basic blocks.
         /// @param blocks The list of basic blocks.
@@ -381,6 +388,23 @@ class ControlFlowGraph {
                         queue.Enqueue(branch.To)
                     }
                 }
+                if preserveCompoundGotoTargets {
+                    for stmt in block.Statements {
+                        for targetLabel in CollectNestedGotoTargets(stmt) {
+                            if blockFromLabel.TryGetValue(targetLabel, out var targetBlock) && reachable.Add(
+                                targetBlock
+                            ) {
+                                queue.Enqueue(targetBlock)
+                            }
+                        }
+                        if stmt is BoundReturnStatement or
+                            BoundThrowStatement or
+                            BoundRethrowStatement ||
+                            ControlFlowGraph.StatementDefinitelyReturns(stmt) || ControlFlowGraph.HasNeverValue(stmt) {
+                            break
+                        }
+                    }
+                }
             }
             let removed = blocks.Where((block BasicBlock) -> !reachable.Contains(block)).ToHashSet()
             if removed.Count == 0 {
@@ -433,6 +457,36 @@ class ControlFlowGraph {
                 throw InvalidOperationException("The Boolean negation operator must be available.")
             }
             return BoundUnaryExpression(nil, op, condition)
+        }
+
+        private class NestedGotoCollector : BoundTreeWalker {
+            prop Targets List[BoundLabel] {
+                get;
+            }
+
+            init() {
+                Targets = List[BoundLabel]()
+            }
+
+            override func VisitStatement(node BoundStatement?) {
+                if node is BoundGotoStatement gs {
+                    Targets.Add(gs.Label)
+                    return
+                }
+                if node is BoundConditionalGotoStatement cgs {
+                    Targets.Add(cgs.Label)
+                }
+                base.VisitStatement(node)
+            }
+        }
+
+        private func CollectNestedGotoTargets(statement BoundStatement) List[BoundLabel] {
+            if statement is BoundTryStatement or BoundPatternSwitchStatement or BoundFixedStatement {
+                let collector = NestedGotoCollector()
+                collector.VisitStatement(statement)
+                return collector.Targets
+            }
+            return List[BoundLabel]()
         }
 
         shared {
@@ -561,7 +615,17 @@ class ControlFlowGraph {
         /// Creates a control flow graph from the provided bound block statement.
         /// @param body The bound block statement.
         /// @returns The control flow graph.
-        func Create(body BoundBlockStatement) ControlFlowGraph -> Create(body, treatThrowsAsTerminators: false)
+        func Create(body BoundBlockStatement) ControlFlowGraph -> Create(
+            body,
+            treatThrowsAsTerminators: false,
+            preserveCompoundGotoTargets: false
+        )
+
+        internal func CreateWithCompoundGotoReachability(body BoundBlockStatement) ControlFlowGraph -> Create(
+            body,
+            treatThrowsAsTerminators: false,
+            preserveCompoundGotoTargets: true
+        )
 
         /// Reports whether all paths in a bound block statement return or not.
         /// @param body The bound block statement.
@@ -672,10 +736,14 @@ class ControlFlowGraph {
             }
         }
 
-        private func Create(body BoundBlockStatement, treatThrowsAsTerminators bool) ControlFlowGraph {
+        private func Create(
+            body BoundBlockStatement,
+            treatThrowsAsTerminators bool,
+            preserveCompoundGotoTargets bool = false
+        ) ControlFlowGraph {
             let basicBlockBuilder = BasicBlockBuilder(treatThrowsAsTerminators)
             let blocks = basicBlockBuilder.Build(body)
-            let graphBuilder = GraphBuilder()
+            let graphBuilder = GraphBuilder(preserveCompoundGotoTargets)
             return graphBuilder.Build(blocks)
         }
 
