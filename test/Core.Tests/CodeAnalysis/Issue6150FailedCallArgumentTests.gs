@@ -226,6 +226,31 @@ open class Issue6150FailedCallArgumentTests {
         }
     }
 
+    @Theory
+    @InlineData("let b = Box(x, 2) { N = x }") // object initializer
+    @InlineData("let l = List[int32](x, \"s\") { x }") // collection initializer
+    func FailedConstructorCallWithAnInitializer_ArgumentsAnswer(statement string) {
+        let (model, tree, compilation) = CreateModel(
+            "package P\n\nimport System.Collections.Generic\n\nclass Box {\n    var N int32\n    init(v int32) { }\n}\n\nfunc F() {\n    let x = 1\n    " +
+                statement +
+                "\n}\n"
+        )
+        Assert.Contains(compilation.GetDiagnostics(), (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+        let argument = Names(tree, "x").First()
+        Assert.Equal("x", Assert.IsAssignableFrom[VariableSymbol](model.GetSymbolInfo(argument).Symbol).Name)
+        Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(argument).Type)
+    }
+
+    @Fact
+    func FailedConstructorCallWithAnObjectInitializer_MemberValueAnswers() {
+        let (model, tree, _) = CreateModel(
+            "package P\n\nclass Box {\n    var N int32\n    init(v int32) { }\n}\n\nfunc F(k int32) {\n    let b = Box(1, 2) { N = k }\n}\n"
+        )
+        let k = Assert.Single(Names(tree, "k"))
+        Assert.Equal("k", Assert.IsType[ParameterSymbol](model.GetSymbolInfo(k).Symbol).Name)
+        Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(k).Type)
+    }
+
     @Fact
     func Diagnostics_AreUnchangedByTheIndex() {
         let source = "package P\n\nfunc Use(v int32) int32 -> v\n\nfunc F() {\n    let x = 1\n    let k = Use(x, 2)\n}\n"

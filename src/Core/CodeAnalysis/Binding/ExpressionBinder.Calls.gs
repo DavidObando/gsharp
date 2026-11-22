@@ -272,10 +272,15 @@ internal partial class ExpressionBinder {
     ) BoundExpression {
         if target.Type == TypeSymbol.Error || target.Type == nil {
             let _ = ReportUnresolvedTargetlessValues(target)
+            let values = ImmutableArray.CreateBuilder[BoundExpression](syntax.Initializers.Count)
             for init in syntax.Initializers {
-                let _ = BindExpression(init.Value)
+                values.Add(BindExpression(init.Value))
             }
-            return BoundErrorExpression(nil)
+            // The failed constructor call keeps its records, and the member values theirs, for the
+            // semantic model (#6150).
+            let error = BoundErrorExpression.WithFailedOperands(target)
+            error.FailedArguments = values.ToImmutable()
+            return error
         }
         let resultType = target.Type
         let tempName = "$$objinit" + Interlocked.Increment(&binderCtx.SyntheticLocalCounter).ToString(
@@ -361,7 +366,8 @@ internal partial class ExpressionBinder {
         if target.Type == TypeSymbol.Error || target.Type == nil {
             let _ = ReportUnresolvedTargetlessValues(target)
             BindCollectionElementsForDiagnostics(syntax)
-            return BoundErrorExpression(nil)
+            // The failed constructor call keeps its records for the semantic model (#6150).
+            return BoundErrorExpression.WithFailedOperands(target)
         }
         if target is BoundStructLiteralExpression{StructType: {IsClass: false}} literal &&
             !literal.CallsDataConstructor &&

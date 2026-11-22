@@ -70,7 +70,8 @@ class BoundErrorExpression : BoundExpression {
         set;
     }
 
-    /// Gets or sets the bound arguments of a call that did not bind, so the semantic model still
+    /// Gets or sets the bound arguments of a call that did not bind (and the member values of an
+    /// object initializer on a constructor call that did not bind), so the semantic model still
     /// answers their symbols and types (#6150). An argument the binder never bound (a function
     /// literal waiting for a target type) is absent. The arguments are not children of this node:
     /// walkers and rewriters do not visit them.
