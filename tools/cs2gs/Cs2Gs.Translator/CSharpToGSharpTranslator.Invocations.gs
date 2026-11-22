@@ -13771,18 +13771,18 @@ partial class CSharpToGSharpTranslator {
                     return UnaryExpression("&", IdentifierExpression(validName!!))
                 }
                 if placeholder.PlaceholderKind == InterpolatedStringArgumentPlaceholderKind.CallsiteReceiver {
-                    if captures?.ReceiverExpr == nil {
+                    let recvExpr = captures?.ReceiverExpr
+                    if captures == nil || recvExpr == nil {
                         this.context.ReportUnsupported(
                             handlerOp.Syntax,
                             "interpolated-string-handler receiver placeholder could not be resolved at this call site (issue #5965)."
                         )
                         return LiteralExpression.Null()
                     }
-                    let recvExpr = captures!!.ReceiverExpr!!
                     return this.AdaptCapturedValueForConstructorParameter(
                         recvExpr,
-                        captures?.ReceiverType,
-                        captures?.ReceiverSyntax,
+                        captures.ReceiverType,
+                        captures.ReceiverSyntax,
                         ctorArg.Parameter,
                         handlerOp.Syntax.GetLocation(),
                         isDeferredReceiver: true
