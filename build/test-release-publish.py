@@ -343,6 +343,11 @@ class VerifyNugetTests(unittest.TestCase):
         self.assertEqual(self.verify().returncode, 0)
 
         snupkg = self.nupkgs / "Gsharp.Repl.0.5.212.snupkg"
+        snupkg.write_bytes(b"y")
+        bad_hash = self.verify()
+        self.assertEqual(bad_hash.returncode, 1)
+        self.assertIn("artifact-manifest.sha256: checksum mismatch for Gsharp.Repl.0.5.212.snupkg", bad_hash.stderr)
+
         snupkg.write_bytes(b"corrupted-symbol")
         failed = self.verify()
         self.assertEqual(failed.returncode, 1)
