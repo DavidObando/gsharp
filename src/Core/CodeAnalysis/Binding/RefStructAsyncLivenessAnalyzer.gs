@@ -675,10 +675,16 @@ internal shared class RefStructAsyncLivenessAnalyzer {
     private class PointsToExpressionUpdater : BoundTreeWalker {
         private let state Dictionary[VariableSymbol, HashSet[VariableSymbol]]
         private let interesting HashSet[VariableSymbol]
+        private let exceptionalUnion Dictionary[VariableSymbol, HashSet[VariableSymbol]]?
 
-        init(state Dictionary[VariableSymbol, HashSet[VariableSymbol]], interesting HashSet[VariableSymbol]) {
+        init(
+            state Dictionary[VariableSymbol, HashSet[VariableSymbol]],
+            interesting HashSet[VariableSymbol],
+            exceptionalUnion Dictionary[VariableSymbol, HashSet[VariableSymbol]]? = nil
+        ) {
             this.state = state
             this.interesting = interesting
+            this.exceptionalUnion = exceptionalUnion
         }
 
         protected override func VisitVariableDeclaration(node BoundVariableDeclaration) {
@@ -687,7 +693,13 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 if node.Variable.Type is ByRefTypeSymbol || RefStructAsyncLivenessAnalyzer.IsNativeRefAlias(
                     node.Variable
                 ) {
-                    RefStructAsyncLivenessAnalyzer.UpdatePointsTo(node.Variable, initializer, state, interesting)
+                    RefStructAsyncLivenessAnalyzer.UpdatePointsTo(
+                        node.Variable,
+                        initializer,
+                        state,
+                        interesting,
+                        exceptionalUnion
+                    )
                 }
                 return
             }
@@ -697,16 +709,22 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         protected override func VisitAssignmentExpression(node BoundAssignmentExpression) {
             VisitExpression(node.Expression)
             if node.Variable.Type is ByRefTypeSymbol {
-                RefStructAsyncLivenessAnalyzer.UpdatePointsTo(node.Variable, node.Expression, state, interesting)
+                RefStructAsyncLivenessAnalyzer.UpdatePointsTo(
+                    node.Variable,
+                    node.Expression,
+                    state,
+                    interesting,
+                    exceptionalUnion
+                )
             }
         }
 
         protected override func VisitConditionalExpression(node BoundConditionalExpression) {
             VisitExpression(node.Condition)
             let whenTrueState = RefStructAsyncLivenessAnalyzer.ClonePointsTo(state)
-            PointsToExpressionUpdater(whenTrueState, interesting).VisitExpression(node.WhenTrue)
+            PointsToExpressionUpdater(whenTrueState, interesting, exceptionalUnion).VisitExpression(node.WhenTrue)
             let whenFalseState = RefStructAsyncLivenessAnalyzer.ClonePointsTo(state)
-            PointsToExpressionUpdater(whenFalseState, interesting).VisitExpression(node.WhenFalse)
+            PointsToExpressionUpdater(whenFalseState, interesting, exceptionalUnion).VisitExpression(node.WhenFalse)
             state.Clear()
             RefStructAsyncLivenessAnalyzer.UnionPointsToInto(state, whenTrueState)
             RefStructAsyncLivenessAnalyzer.UnionPointsToInto(state, whenFalseState)
@@ -714,17 +732,27 @@ internal shared class RefStructAsyncLivenessAnalyzer {
 
         protected override func VisitSwitchExpression(node BoundSwitchExpression) {
             VisitExpression(node.Discriminant)
-            let joined = Dictionary[VariableSymbol, HashSet[VariableSymbol]]()
+            let fallthroughState = RefStructAsyncLivenessAnalyzer.ClonePointsTo(state)
+            let selectedExits = Dictionary[VariableSymbol, HashSet[VariableSymbol]]()
+            var hasUnconditionalDefault = false
             for arm in node.Arms {
-                let armState = RefStructAsyncLivenessAnalyzer.ClonePointsTo(state)
+                let armState = RefStructAsyncLivenessAnalyzer.ClonePointsTo(fallthroughState)
                 if arm.Guard != nil {
-                    PointsToExpressionUpdater(armState, interesting).VisitExpression(arm.Guard)
+                    PointsToExpressionUpdater(armState, interesting, exceptionalUnion).VisitExpression(arm.Guard)
+                    // Pattern match + guard evaluation can fail and continue to later arms.
+                    RefStructAsyncLivenessAnalyzer.UnionPointsToInto(fallthroughState, armState)
                 }
-                PointsToExpressionUpdater(armState, interesting).VisitExpression(arm.Result)
-                RefStructAsyncLivenessAnalyzer.UnionPointsToInto(joined, armState)
+                if arm.IsDefault && arm.Guard == nil {
+                    hasUnconditionalDefault = true
+                }
+                PointsToExpressionUpdater(armState, interesting, exceptionalUnion).VisitExpression(arm.Result)
+                RefStructAsyncLivenessAnalyzer.UnionPointsToInto(selectedExits, armState)
+            }
+            if !hasUnconditionalDefault {
+                RefStructAsyncLivenessAnalyzer.UnionPointsToInto(selectedExits, fallthroughState)
             }
             state.Clear()
-            RefStructAsyncLivenessAnalyzer.UnionPointsToInto(state, joined)
+            RefStructAsyncLivenessAnalyzer.UnionPointsToInto(state, selectedExits)
         }
 
         protected override func VisitBinaryExpression(node BoundBinaryExpression) {
@@ -736,7 +764,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 .NullCoalesce {
                 VisitExpression(node.Left)
                 let rightState = RefStructAsyncLivenessAnalyzer.ClonePointsTo(state)
-                PointsToExpressionUpdater(rightState, interesting).VisitExpression(node.Right)
+                PointsToExpressionUpdater(rightState, interesting, exceptionalUnion).VisitExpression(node.Right)
                 RefStructAsyncLivenessAnalyzer.UnionPointsToInto(state, rightState)
                 return
             }
@@ -748,7 +776,8 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         target VariableSymbol,
         expression BoundExpression,
         state Dictionary[VariableSymbol, HashSet[VariableSymbol]],
-        interesting HashSet[VariableSymbol]
+        interesting HashSet[VariableSymbol],
+        exceptionalUnion Dictionary[VariableSymbol, HashSet[VariableSymbol]]? = nil
     ) {
         let collector = PointerTargetCollector()
         collector.Visit(expression)
@@ -766,6 +795,9 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             state[target] = resolved
         } else {
             state.Remove(target)
+        }
+        if exceptionalUnion != nil {
+            UnionPointsToInto(exceptionalUnion, state)
         }
     }
 
@@ -832,25 +864,70 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         return (exitState, exceptionalUnion)
     }
 
+    private class TryPointsToSummary {
+        init(
+            filterEntryPointsTo Dictionary[BoundCatchClause, Dictionary[VariableSymbol, HashSet[VariableSymbol]]],
+            catchEntryPointsTo Dictionary[BoundCatchClause, Dictionary[VariableSymbol, HashSet[VariableSymbol]]],
+            finallyIn Dictionary[VariableSymbol, HashSet[VariableSymbol]],
+            afterTry Dictionary[VariableSymbol, HashSet[VariableSymbol]],
+            combinedExceptional Dictionary[VariableSymbol, HashSet[VariableSymbol]]
+        ) {
+            FilterEntryPointsTo = filterEntryPointsTo
+            CatchEntryPointsTo = catchEntryPointsTo
+            FinallyIn = finallyIn
+            AfterTry = afterTry
+            CombinedExceptional = combinedExceptional
+        }
+
+        prop FilterEntryPointsTo Dictionary[BoundCatchClause, Dictionary[VariableSymbol, HashSet[VariableSymbol]]] {
+            get;
+        }
+        prop CatchEntryPointsTo Dictionary[BoundCatchClause, Dictionary[VariableSymbol, HashSet[VariableSymbol]]] {
+            get;
+        }
+        prop FinallyIn Dictionary[VariableSymbol, HashSet[VariableSymbol]] {
+            get;
+        }
+        prop AfterTry Dictionary[VariableSymbol, HashSet[VariableSymbol]] {
+            get;
+        }
+        prop CombinedExceptional Dictionary[VariableSymbol, HashSet[VariableSymbol]] {
+            get;
+        }
+    }
+
     private func ComputeTryPointsToSummary(
         tryStmt BoundTryStatement,
         entryPointsTo Dictionary[VariableSymbol, HashSet[VariableSymbol]]?,
         interesting HashSet[VariableSymbol]
-    )(
-        ExceptionalIn Dictionary[VariableSymbol, HashSet[VariableSymbol]],
-        FinallyIn Dictionary[VariableSymbol, HashSet[VariableSymbol]],
-        AfterTry Dictionary[VariableSymbol, HashSet[VariableSymbol]],
-        CombinedExceptional Dictionary[VariableSymbol, HashSet[VariableSymbol]]
-    ) {
+    ) TryPointsToSummary {
         let (tryExit, tryExceptional) = ComputeRegionPointsToSummary(tryStmt.TryBlock, entryPointsTo, interesting)
         let exceptionalIn = ClonePointsTo(entryPointsTo)
         UnionPointsToInto(exceptionalIn, tryExceptional)
         UnionPointsToInto(exceptionalIn, tryExit)
         let afterTry = ClonePointsTo(tryExit)
         let combinedExceptional = ClonePointsTo(exceptionalIn)
+        let filterEntryPointsTo = Dictionary[BoundCatchClause, Dictionary[VariableSymbol, HashSet[VariableSymbol]]](
+            ReferenceEqualityComparer.Instance
+        )
+        let catchEntryPointsTo = Dictionary[BoundCatchClause, Dictionary[VariableSymbol, HashSet[VariableSymbol]]](
+            ReferenceEqualityComparer.Instance
+        )
+        let handlerDispatchState = ClonePointsTo(exceptionalIn)
         for clause in tryStmt.CatchClauses {
-            let (catchExit, catchExceptional) = ComputeRegionPointsToSummary(clause.Body, exceptionalIn, interesting)
-            UnionPointsToInto(afterTry, catchExit)
+            filterEntryPointsTo[clause] = ClonePointsTo(handlerDispatchState)
+            let catchIn = ClonePointsTo(handlerDispatchState)
+            if clause.Filter is {} filter {
+                PointsToExpressionUpdater(catchIn, interesting, combinedExceptional).VisitExpression(filter)
+                UnionPointsToInto(combinedExceptional, catchIn)
+                // Filter evaluation can return false or throw, carrying mutations to later handlers and finally.
+                UnionPointsToInto(handlerDispatchState, catchIn)
+            }
+            catchEntryPointsTo[clause] = ClonePointsTo(catchIn)
+            let (catchExit, catchExceptional) = ComputeRegionPointsToSummary(clause.Body, catchIn, interesting)
+            if !clause.ExitsThroughFinally {
+                UnionPointsToInto(afterTry, catchExit)
+            }
             UnionPointsToInto(combinedExceptional, catchExceptional)
             UnionPointsToInto(combinedExceptional, catchExit)
         }
@@ -863,7 +940,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             UnionPointsToInto(combinedExceptional, finallyExceptional)
             UnionPointsToInto(combinedExceptional, finallyExit)
         }
-        return (exceptionalIn, finallyIn, finalState, combinedExceptional)
+        return TryPointsToSummary(filterEntryPointsTo, catchEntryPointsTo, finallyIn, finalState, combinedExceptional)
     }
 
     private func AdvancePointsToStatement(
@@ -874,45 +951,47 @@ internal shared class RefStructAsyncLivenessAnalyzer {
     ) {
         switch statement {
             case es is BoundExpressionStatement {
-                PointsToExpressionUpdater(state, interesting).VisitExpression(es.Expression)
+                PointsToExpressionUpdater(state, interesting, exceptionalUnion).VisitExpression(es.Expression)
             }
             case vd is BoundVariableDeclaration {
                 if vd.Initializer is {} initializer {
-                    PointsToExpressionUpdater(state, interesting).VisitExpression(initializer)
+                    PointsToExpressionUpdater(state, interesting, exceptionalUnion).VisitExpression(initializer)
                     if vd.Variable.Type is ByRefTypeSymbol || IsNativeRefAlias(vd.Variable) {
-                        UpdatePointsTo(vd.Variable, initializer, state, interesting)
+                        UpdatePointsTo(vd.Variable, initializer, state, interesting, exceptionalUnion)
                     }
                 }
             }
             case ys is BoundYieldStatement {
                 if ys.Expression != nil {
-                    PointsToExpressionUpdater(state, interesting).VisitExpression(ys.Expression)
+                    PointsToExpressionUpdater(state, interesting, exceptionalUnion).VisitExpression(ys.Expression)
                 }
             }
             case rs is BoundReturnStatement {
                 if rs.Expression != nil {
-                    PointsToExpressionUpdater(state, interesting).VisitExpression(rs.Expression)
+                    PointsToExpressionUpdater(state, interesting, exceptionalUnion).VisitExpression(rs.Expression)
                 }
             }
             case th is BoundThrowStatement {
-                PointsToExpressionUpdater(state, interesting).VisitExpression(th.Expression)
+                PointsToExpressionUpdater(state, interesting, exceptionalUnion).VisitExpression(th.Expression)
             }
             case cgs is BoundConditionalGotoStatement {
-                PointsToExpressionUpdater(state, interesting).VisitExpression(cgs.Condition)
+                PointsToExpressionUpdater(state, interesting, exceptionalUnion).VisitExpression(cgs.Condition)
             }
             case tryStmt is BoundTryStatement {
                 {
-                    let (_, _, finalState, combinedExceptional) = ComputeTryPointsToSummary(tryStmt, state, interesting)
+                    let summary = ComputeTryPointsToSummary(tryStmt, state, interesting)
                     if exceptionalUnion != nil {
-                        UnionPointsToInto(exceptionalUnion, combinedExceptional)
+                        UnionPointsToInto(exceptionalUnion, summary.CombinedExceptional)
                     }
                     state.Clear()
-                    UnionPointsToInto(state, finalState)
+                    UnionPointsToInto(state, summary.AfterTry)
                 }
             }
             case fixedStmt is BoundFixedStatement {
                 {
-                    PointsToExpressionUpdater(state, interesting).VisitExpression(fixedStmt.PinnedSource)
+                    PointsToExpressionUpdater(state, interesting, exceptionalUnion).VisitExpression(
+                        fixedStmt.PinnedSource
+                    )
                     let (bodyExit, bodyExceptional) = ComputeRegionPointsToSummary(fixedStmt.Body, state, interesting)
                     if exceptionalUnion != nil {
                         UnionPointsToInto(exceptionalUnion, bodyExceptional)
@@ -923,19 +1002,23 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             }
             case switchStmt is BoundPatternSwitchStatement {
                 {
-                    PointsToExpressionUpdater(state, interesting).VisitExpression(switchStmt.Discriminant)
+                    PointsToExpressionUpdater(state, interesting, exceptionalUnion).VisitExpression(
+                        switchStmt.Discriminant
+                    )
+                    let fallthroughState = ClonePointsTo(state)
                     let afterSwitch = Dictionary[VariableSymbol, HashSet[VariableSymbol]]()
-                    var hasDefault = false
+                    var hasUnconditionalDefault = false
                     for arm in switchStmt.Arms {
-                        if arm.IsDefault {
-                            hasDefault = true
-                        }
-                        let armIn = ClonePointsTo(state)
+                        let armIn = ClonePointsTo(fallthroughState)
                         if arm.Guard != nil {
-                            PointsToExpressionUpdater(armIn, interesting).VisitExpression(arm.Guard)
+                            PointsToExpressionUpdater(armIn, interesting, exceptionalUnion).VisitExpression(arm.Guard)
                             if exceptionalUnion != nil {
                                 UnionPointsToInto(exceptionalUnion, armIn)
                             }
+                            UnionPointsToInto(fallthroughState, armIn)
+                        }
+                        if arm.IsDefault && arm.Guard == nil {
+                            hasUnconditionalDefault = true
                         }
                         let (armExit, armExceptional) = ComputeRegionPointsToSummary(arm.Body, armIn, interesting)
                         if exceptionalUnion != nil {
@@ -943,8 +1026,8 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                         }
                         UnionPointsToInto(afterSwitch, armExit)
                     }
-                    if !hasDefault {
-                        UnionPointsToInto(afterSwitch, state)
+                    if !hasUnconditionalDefault {
+                        UnionPointsToInto(afterSwitch, fallthroughState)
                     }
                     state.Clear()
                     UnionPointsToInto(state, afterSwitch)
@@ -1038,10 +1121,38 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             }
         }
         let exitState = Dictionary[VariableSymbol, HashSet[VariableSymbol]]()
+        let lastCodeBlock ControlFlowGraph.BasicBlock? = if graph.Blocks.Count >= 2 {
+            graph.Blocks[graph.Blocks.Count - 2]
+        } else {
+            default(ControlFlowGraph.BasicBlock?)
+        }
         for branch in graph.End.Incoming {
-            if reachable.Contains(branch.From) {
-                UnionPointsToInto(exitState, outMap[branch.From])
+            let from = branch.From
+            if !reachable.Contains(from) {
+                continue
             }
+            if from.IsStart {
+                UnionPointsToInto(exitState, outMap[from])
+                continue
+            }
+            if !object.ReferenceEquals(from, lastCodeBlock) {
+                // Only the final block before End can fall through normally; earlier edges
+                // to End come from returns, throws, or escaping gotos.
+                continue
+            }
+            let lastStmt = if from.Statements.Count > 0 {
+                from.Statements[from.Statements.Count - 1]
+            } else {
+                default(BoundStatement?)
+            }
+            if lastStmt is BoundReturnStatement or BoundThrowStatement or BoundRethrowStatement or BoundGotoStatement {
+                continue
+            }
+            if lastStmt != nil &&
+                (ControlFlowGraph.StatementDefinitelyReturns(lastStmt) || ControlFlowGraph.HasNeverValue(lastStmt)) {
+                continue
+            }
+            UnionPointsToInto(exitState, outMap[from])
         }
         return (stmtPointsTo, compoundEntryPointsTo, exitState, exceptionalUnion)
     }
@@ -1276,16 +1387,9 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         let exceptionalEscapeLive = HashSet[VariableSymbol]()
         let hasPointsTo = entryPointsTo != nil ||
             GraphMayMutatePointers(ControlFlowGraph.Create(Lowerer.Flatten(tryStmt)))
-        var exceptionalPointsTo Dictionary[VariableSymbol, HashSet[VariableSymbol]]? = nil
-        var finallyPointsTo Dictionary[VariableSymbol, HashSet[VariableSymbol]]? = nil
+        var trySummary TryPointsToSummary? = nil
         if hasPointsTo {
-            let (computedExceptional, computedFinally, _, _) = ComputeTryPointsToSummary(
-                tryStmt,
-                entryPointsTo,
-                interesting
-            )
-            exceptionalPointsTo = computedExceptional
-            finallyPointsTo = computedFinally
+            trySummary = ComputeTryPointsToSummary(tryStmt, entryPointsTo, interesting)
         }
         var finallyLiveIn HashSet[VariableSymbol]? = nil
         if tryStmt.FinallyBlock != nil {
@@ -1295,7 +1399,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 HashSet[VariableSymbol](),
                 interesting,
                 diagnostics,
-                finallyPointsTo
+                trySummary?.FinallyIn
             )
             exceptionalEscapeLive.UnionWith(finallyLiveIn)
         }
@@ -1304,14 +1408,21 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         // try statement.
         let normalFallthrough = finallyLiveIn ?? afterTry
         for clause in tryStmt.CatchClauses {
+            var clauseEntry Dictionary[VariableSymbol, HashSet[VariableSymbol]]? = nil
+            trySummary?.CatchEntryPointsTo.TryGetValue(clause, out clauseEntry)
             let catchLiveIn = AnalyzeRegion(
                 clause.Body,
                 normalFallthrough,
                 HashSet[VariableSymbol](),
                 interesting,
                 diagnostics,
-                exceptionalPointsTo
+                clauseEntry
             )
+            if clause.Filter is {} filter {
+                var filterEntry Dictionary[VariableSymbol, HashSet[VariableSymbol]]? = nil
+                trySummary?.FilterEntryPointsTo.TryGetValue(clause, out filterEntry)
+                ApplyExpression(filter, catchLiveIn, interesting, diagnostics, tryStmt, filterEntry)
+            }
             if clause.Variable != nil {
                 catchLiveIn.Remove(clause.Variable)
             }
@@ -1375,19 +1486,32 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         let afterSwitch = HashSet[VariableSymbol](live)
         let union = HashSet[VariableSymbol]()
         let switchPatternBindings = HashSet[VariableSymbol]()
-        var hasDefault = false
+        var hasUnconditionalDefault = false
+        let fallthroughState = if entryPointsTo != nil {
+            ClonePointsTo(entryPointsTo)
+        } else {
+            default(Dictionary[VariableSymbol, HashSet[VariableSymbol]]?)
+        }
         for arm in switchStmt.Arms {
-            if arm.IsDefault {
-                hasDefault = true
+            if arm.IsDefault && arm.Guard == nil {
+                hasUnconditionalDefault = true
             }
-            let armEntry = if entryPointsTo != nil && arm.Guard != nil {
+            let armHeaderState = if fallthroughState != nil {
+                ClonePointsTo(fallthroughState)
+            } else {
+                default(Dictionary[VariableSymbol, HashSet[VariableSymbol]]?)
+            }
+            let armEntry = if armHeaderState != nil && arm.Guard != nil {
                 {
-                    let armState = ClonePointsTo(entryPointsTo)
+                    let armState = ClonePointsTo(armHeaderState)
                     PointsToExpressionUpdater(armState, interesting).VisitExpression(arm.Guard)
+                    if fallthroughState != nil {
+                        UnionPointsToInto(fallthroughState, armState)
+                    }
                     armState
                 }
             } else {
-                entryPointsTo
+                armHeaderState
             }
             let armLiveIn = AnalyzeRegion(
                 arm.Body,
@@ -1398,13 +1522,13 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 armEntry
             )
             if arm.Guard != nil {
-                ApplyExpression(arm.Guard, armLiveIn, interesting, diagnostics, switchStmt, entryPointsTo)
+                ApplyExpression(arm.Guard, armLiveIn, interesting, diagnostics, switchStmt, armHeaderState)
             }
             if arm.Pattern != nil {
                 let armBindings = HashSet[VariableSymbol]()
                 CollectPatternBindings(arm.Pattern, interesting, armBindings)
                 armLiveIn.ExceptWith(armBindings)
-                let patternCollector = ReadAndAwaitCollector(interesting, entryPointsTo)
+                let patternCollector = ReadAndAwaitCollector(interesting, armHeaderState)
                 patternCollector.VisitPattern(arm.Pattern)
                 for v in patternCollector.Reads {
                     if !armBindings.Contains(v) || patternCollector.ContainsAwait {
@@ -1420,7 +1544,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             }
             union.UnionWith(armLiveIn)
         }
-        if !hasDefault {
+        if !hasUnconditionalDefault {
             union.UnionWith(afterSwitch)
         }
         union.ExceptWith(switchPatternBindings)

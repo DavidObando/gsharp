@@ -214,6 +214,34 @@ run().GetAwaiter().GetResult()
 `, "func-array-index-ref-struct-safe", executable: true)
         IlVerifier.Verify(arrayIndexSafeAssembly)
         Assert.Equal("20\n", fixture.Run(arrayIndexSafeAssembly))
+
+        let switchReturningSafeAssembly = fixture.Compile(`import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(flag bool) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &c.Value
+    switch flag {
+        case true {
+            return
+        }
+        default {
+            p = &x
+        }
+    }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run(false).GetAwaiter().GetResult()
+`, "func-switch-returning-arm-safe", executable: true)
+        IlVerifier.Verify(switchReturningSafeAssembly)
+        Assert.Equal("1\n", fixture.Run(switchReturningSafeAssembly))
     }
 
     shared {

@@ -389,6 +389,146 @@ run().GetAwaiter().GetResult()
 `)
         Assert.Empty(arrayIndexByRefStructSafe.Diagnostics)
         Assert.Equal("20\n", arrayIndexByRefStructSafe.Output)
+
+        let switchStmtGuardUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(n int32) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    switch n {
+        case 1 when { p = &c.Value; false } {
+            p = &x
+        }
+        default { }
+    }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run(1).GetAwaiter().GetResult()
+`)
+        Assert.Contains(switchStmtGuardUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(switchStmtGuardUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let switchExprGuardUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(n int32) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    let v = switch n {
+        case 1 when { p = &c.Value; false }: { p = &x; 0 }
+        default: 0
+    }
+    await Task.Delay(1)
+    Console.WriteLine(*p + v)
+}
+
+run(1).GetAwaiter().GetResult()
+`)
+        Assert.Contains(switchExprGuardUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(switchExprGuardUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let catchFilterAliasUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+func mayThrow() { throw InvalidOperationException("boom") }
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    try {
+        mayThrow()
+    } catch when { p = &c.Value; true } { }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Contains(catchFilterAliasUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(catchFilterAliasUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let tryConditionalExprAliasUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+func mayThrow() { throw InvalidOperationException("boom") }
+
+async func run(flag bool) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    try {
+        let ignored = if flag {
+            p = &c.Value
+            mayThrow()
+            p = &x
+            0
+        } else {
+            0
+        }
+    } catch { }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run(true).GetAwaiter().GetResult()
+`)
+        Assert.Contains(tryConditionalExprAliasUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(tryConditionalExprAliasUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let switchReturningArmSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(flag bool) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &c.Value
+    switch flag {
+        case true {
+            return
+        }
+        default {
+            p = &x
+        }
+    }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run(false).GetAwaiter().GetResult()
+`)
+        Assert.Empty(switchReturningArmSafe.Diagnostics)
+        Assert.Equal("1\n", switchReturningArmSafe.Output)
     }
 
     @Fact
