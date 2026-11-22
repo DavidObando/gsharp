@@ -111,6 +111,10 @@ internal class BinderContext {
         if listed.Parent is not(CallExpressionSyntax or BaseInterfaceCallExpressionSyntax) {
             return
         }
+        // The callee of an indirect call (`(f)(x)`) is a child of the call too, but not an argument.
+        if listed.Parent is CallExpressionSyntax{Callee: {} callee} && object.ReferenceEquals(callee, listed) {
+            return
+        }
         let table = callArguments ?? Dictionary[SyntaxNode, BoundExpression](ReferenceEqualityComparer.Instance)
         callArguments = table
         table[argument] = bound
