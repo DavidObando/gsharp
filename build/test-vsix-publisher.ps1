@@ -5,16 +5,39 @@ $resolver = Join-Path $PSScriptRoot "get-vsix-publisher.ps1"
 $publisher = . $resolver -Destination $destination
 $directory = Split-Path $publisher
 
-[System.Reflection.Assembly]::LoadFrom((Join-Path $directory "lib\Microsoft.Identity.Client.dll")) | Out-Null
-$clientId = "00000000-0000-0000-0000-000000000001"
-$builder = [Microsoft.Identity.Client.PublicClientApplicationBuilder]::Create($clientId)
-$builder = $builder.WithAuthority("https://login.microsoftonline.com/common")
-$client = $builder.Build()
-if ($client.AppConfig.ClientId -ne $clientId) {
-    throw "The packaged MSAL client did not initialize."
+$configPath = Join-Path $directory "VsixPublisher.exe.config"
+$smoke = Join-Path $directory "GSharp.PublisherAuthSmoke.exe"
+$smokeConfig = "$smoke.config"
+try {
+    Add-Type -TypeDefinition @'
+using System;
+using Microsoft.Identity.Client;
+
+public static class PublisherAuthSmoke
+{
+    public static void Main()
+    {
+        const string clientId = "00000000-0000-0000-0000-000000000001";
+        var client = PublicClientApplicationBuilder.Create(clientId)
+            .WithAuthority("https://login.microsoftonline.com/common")
+            .Build();
+        if (client.AppConfig.ClientId != clientId)
+            throw new InvalidOperationException("The packaged MSAL client did not initialize.");
+    }
+}
+'@ -ReferencedAssemblies @(
+        (Join-Path $directory "lib\Microsoft.Identity.Client.dll"),
+        (Join-Path $directory "lib\Microsoft.IdentityModel.Abstractions.dll")
+    ) -OutputAssembly $smoke -OutputType ConsoleApplication
+    Copy-Item $configPath $smokeConfig
+    & $smoke
+    if ($LASTEXITCODE -ne 0) {
+        throw "The packaged MSAL smoke failed with exit code $LASTEXITCODE."
+    }
+} finally {
+    Remove-Item $smoke, $smokeConfig -Force -ErrorAction SilentlyContinue
 }
 
-$configPath = Join-Path $directory "VsixPublisher.exe.config"
 $original = [System.IO.File]::ReadAllText($configPath)
 try {
     [xml]$mutant = $original
