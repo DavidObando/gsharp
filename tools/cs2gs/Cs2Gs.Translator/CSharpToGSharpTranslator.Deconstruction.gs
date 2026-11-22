@@ -3255,6 +3255,26 @@ partial class CSharpToGSharpTranslator {
         /// Translates a condition while redirecting any spill or embedded
         /// deconstruction-assignment statements into [`prologue`](paramref).
         private func TranslateConditionWithHoist(expression ExpressionSyntax, prologue List[GStatement]) GExpression? {
+            if this.IsTopLevelEntryPointCall(expression) && this.ContainsRefLikeHandlerInTopLevelNode(expression) {
+                let frameStmts = List[GStatement]()
+                let outerSpillPrologue List[GStatement]? = this.state.PendingSpillPrologue
+                let prevFrame = this.state.InTopLevelLambdaFrame
+                this.state.PendingSpillPrologue = frameStmts
+                this.state.InTopLevelLambdaFrame = true
+                try {
+                    let condExpr = this.TranslateConditionWithHoistCore(expression, frameStmts)
+                    frameStmts.Add(ReturnStatement(condExpr))
+                } finally {
+                    this.state.InTopLevelLambdaFrame = prevFrame
+                    this.state.PendingSpillPrologue = outerSpillPrologue
+                }
+                return InvocationExpression(
+                    ParenthesizedExpression(
+                        LambdaExpression(Array.Empty[Parameter](), blockBody: BlockStatement(frameStmts))
+                    ),
+                    Array.Empty[GExpression]()
+                )
+            }
             // Any spill hoisted while translating `expression` (issue #1731) is
             // redirected into `prologue` — the SAME preceding-statement list an
             // embedded deconstruction assignment uses — rather than the enclosing

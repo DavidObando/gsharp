@@ -264,6 +264,8 @@ internal class DocumentTranslationState {
 
     prop ActiveCallSiteHandlerCaptures object?
 
+    prop InTopLevelLambdaFrame bool
+
     // Issue #4262 follow-up (item 2): C# reads of a field/property that an
     // early-return null guard earlier in the SAME block proves non-null,
     // rewritten to reference the local TranslateBlock/TranslateSwitchSectionBody

@@ -192,6 +192,14 @@ partial class CSharpToGSharpTranslator {
                     if prefix.IsKind(SyntaxKind.PreIncrementExpression) || prefix.IsKind(
                         SyntaxKind.PreDecrementExpression
                     ) {
+                        if this.TryTranslateCoordinatedElementIncDecExpression(
+                            prefix.Operand,
+                            prefix.OperatorToken.Text,
+                            isPrefix: true,
+                            out var coordinatedPre
+                        ) {
+                            return coordinatedPre
+                        }
                         // ADR-0126 defines compound assignments as value-producing,
                         // so this preserves both the mutation and prefix result.
                         return AssignmentExpression(
@@ -657,6 +665,14 @@ partial class CSharpToGSharpTranslator {
                     if this.state.SuppressedPostfix.Contains(postfixValue) {
                         return this.TranslateExpression(postfixValue.Operand)
                     }
+                    if this.TryTranslateCoordinatedElementIncDecExpression(
+                        postfixValue.Operand,
+                        postfixValue.OperatorToken.Text,
+                        isPrefix: false,
+                        out var coordinatedPost
+                    ) {
+                        return coordinatedPost
+                    }
                     // gsc issue #1027: G# now models inc/dec as value-producing
                     // expressions, so a postfix in a position with no statement seam
                     // (e.g. inside a short-circuit `&&` condition) emits the faithful
@@ -727,10 +743,27 @@ partial class CSharpToGSharpTranslator {
             while current.Parent is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax parenthesized {
                 current = parenthesized
             }
-            return current.Parent is AssignmentExpressionSyntax parentAssignment && object.ReferenceEquals(
+            if current.Parent is AssignmentExpressionSyntax parentAssignment && object.ReferenceEquals(
                 parentAssignment.Left,
                 current
-            )
+            ) {
+                return true
+            }
+            if current.Parent is PostfixUnaryExpressionSyntax postfix &&
+                (
+                postfix.IsKind(SyntaxKind.PostIncrementExpression) || postfix.IsKind(SyntaxKind.PostDecrementExpression)
+            ) &&
+                object.ReferenceEquals(postfix.Operand, current) {
+                return true
+            }
+            if current.Parent is PrefixUnaryExpressionSyntax prefix &&
+                (
+                prefix.IsKind(SyntaxKind.PreIncrementExpression) || prefix.IsKind(SyntaxKind.PreDecrementExpression)
+            ) &&
+                object.ReferenceEquals(prefix.Operand, current) {
+                return true
+            }
+            return false
         }
 
         private func TranslateElementAccessCore(elementAccess ElementAccessExpressionSyntax) GExpression {
@@ -5376,7 +5409,7 @@ partial class CSharpToGSharpTranslator {
                 .SemanticModel
                 .GetOperation(leftElement) is IPropertyReferenceOperation propOp &&
                 this
-                .CallNeedsHandlerCoordination(propOp.Arguments) {
+                .CallRequiresHandlerBlock(leftElement, propOp.Arguments) {
                 this.PredeclareBlockCallOutVariables(leftElement.ArgumentList)
                 return this.TranslateWithCoordinatedHandlers(
                     leftElement,
@@ -5388,20 +5421,7 @@ partial class CSharpToGSharpTranslator {
                         if assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) {
                             let rhsTemp = this.NewSpillName()
                             let rhsExpr = this.TranslateAssignmentValue(assignment)
-                            let rhsType GTypeReference? = if rhsExpr is LiteralExpression{Kind: LiteralKind.Null} ||
-                                rhsExpr is DefaultValueExpression ||
-                                rhsExpr is LambdaExpression {
-                                this.typeMapper.Map(
-                                    this.GetAssignmentTargetType(
-                                        leftElement,
-                                        this.context.GetSymbolInfo(leftElement).Symbol
-                                    ),
-                                    this.context,
-                                    assignment.Right.GetLocation()
-                                )
-                            } else {
-                                default(GTypeReference?)
-                            }
+                            let rhsType = this.GetCoordinatedElementAssignmentRhsType(leftElement, assignment, rhsExpr)
                             return cast[GExpression](
                                 BlockExpression(
                                     List[GStatement]{

@@ -657,16 +657,6 @@ public ref struct SpanLiteralHandler {
 }
 
 [InterpolatedStringHandler]
-public struct DynamicHoleHandler {
-    private readonly StringBuilder sb;
-    public DynamicHoleHandler(int literalLength, int formattedCount) {
-        sb = new StringBuilder();
-    }
-    public void AppendLiteral(string text) { sb.Append(text); }
-    public void AppendFormatted(object? value) { sb.Append(value); }
-    public override string ToString() => sb.ToString();
-}
-
 public struct InnerCell {
     public int Count;
     public void Mutate([InterpolatedStringHandlerArgument("")] StructCellHandler handler) {
@@ -695,17 +685,66 @@ public static class RefExtHelpers {
     }
 }
 
+public sealed class ConvertibleInt {
+    public static int Conversions;
+    private readonly int value;
+    public ConvertibleInt(int value) { this.value = value; }
+    public static implicit operator int(ConvertibleInt c) {
+        Conversions++;
+        return c.value;
+    }
+}
+
 public sealed class NullFlowTarget {
-    public static int AfterCalls, RhsCalls;
+    public static int AfterCalls, RhsCalls, ParamsAfterCalls;
     public void Log(int seed, [InterpolatedStringHandlerArgument("seed")] SpanLiteralHandler handler, int after) { }
+    public void LogParams(int seed, [InterpolatedStringHandlerArgument("seed")] SpanLiteralHandler handler, params int[] rest) { }
     public string this[bool upper, [InterpolatedStringHandlerArgument("upper")] SpanLiteralHandler handler] {
         get => "";
         set { }
+    }
+    public int this[int tag, [InterpolatedStringHandlerArgument("tag")] SpanLiteralHandler handler] {
+        get => 0;
+        set { }
+    }
+}
+
+public sealed class IncDecIndexerHolder {
+    public int NextCalls;
+    private int stored = 10;
+    public int Next() { NextCalls++; return 1; }
+    public int this[bool enabled, [InterpolatedStringHandlerArgument("enabled")] SpanLiteralHandler handler] {
+        get => stored + handler.ToString().Length;
+        set => stored = value - handler.ToString().Length;
+    }
+}
+
+[InterpolatedStringHandler]
+public struct ValueHandlerForDelegate {
+    public string Text;
+    public ValueHandlerForDelegate(int literalLength, int formattedCount) { Text = ""; }
+    public void AppendLiteral(string text) { Text += text; }
+    public void AppendFormatted(int value) { Text += value.ToString(); }
+}
+
+[InterpolatedStringHandler]
+public ref struct GatedIncHandler {
+    public bool Active;
+    public GatedIncHandler(int literalLength, int formattedCount, bool enabled, out bool valid) {
+        Active = enabled;
+        valid = enabled;
+    }
+    public bool AppendLiteral(string text) => Active;
+    public bool AppendFormatted(int value) {
+        Active = value > 0;
+        return Active;
     }
 }
 
 public static class Demo {
     public sealed class PrivateTarget { public int BaseValue = 10; }
+    private delegate string RefHandlerSink(int n, ref ValueHandlerForDelegate handler);
+
     private static int ReadInContainer(in OuterContainer container) {
         container.Cell.Mutate($"{1}");
         return container.Cell.Count;
@@ -720,11 +759,13 @@ public static class Demo {
         return x + ":" + handler.Seen;
     }
 
-    private static string AcceptDynamic(DynamicHoleHandler handler) => handler.ToString();
     private static string AcceptSpanLiteral(SpanLiteralHandler handler) => handler.ToString();
+    private static void AcceptGated(bool enabled, [InterpolatedStringHandlerArgument("enabled")] GatedIncHandler handler) { }
 
     private static int After() { NullFlowTarget.AfterCalls++; return 7; }
+    private static int ParamsAfter() { NullFlowTarget.ParamsAfterCalls++; return 11; }
     private static string TouchRhs() { NullFlowTarget.RhsCalls++; return "ok"; }
+    private static ConvertibleInt MakeConvertible() => new ConvertibleInt(42);
 
     public static string Run() {
         var container = new OuterContainer();
@@ -739,11 +780,26 @@ public static class Demo {
 
         var spanLit = AcceptSpanLiteral($"lit-{9}");
 
-        dynamic dynVal = 123;
-        var dynRes = AcceptDynamic($"d={dynVal}");
-
         PrivateTarget? maybeBoxed = new PrivateTarget();
         var condExtRes = maybeBoxed?.TouchExt(out var condOut, $"{1}");
+
+        RefHandlerSink sink = (int n, ref ValueHandlerForDelegate h) => n + ":" + h.Text;
+        var namedDelegateRes = sink(handler: $"{7}", n: 3);
+
+        int gatedIdx = 10;
+        AcceptGated(false, $"{gatedIdx++}");
+        int afterFalseGated = gatedIdx;
+        AcceptGated(true, $"{gatedIdx++}{gatedIdx++}");
+        int afterTrueGated = gatedIdx;
+
+        var incHolder = new IncDecIndexerHolder();
+        incHolder[true, $"{incHolder.Next()}"]++;
+        int afterStmtPostInc = incHolder[true, $"{0}"];
+        var valPostInc = incHolder[true, $"{incHolder.Next()}"]++;
+        var valPreInc = ++incHolder[true, $"{incHolder.Next()}"];
+        --incHolder[true, $"{incHolder.Next()}"];
+        var valPostDec = incHolder[true, $"{incHolder.Next()}"]--;
+        int incNextCalls = incHolder.NextCalls;
 
         NullFlowTarget? target = null;
         string nullCall = "no";
@@ -751,6 +807,12 @@ public static class Demo {
             target!.Log(1, $"{2}", After());
         } catch (NullReferenceException) {
             nullCall = "c:" + NullFlowTarget.AfterCalls;
+        }
+        string nullParams = "no";
+        try {
+            target!.LogParams(1, $"{2}", ParamsAfter(), ParamsAfter());
+        } catch (NullReferenceException) {
+            nullParams = "p:" + NullFlowTarget.ParamsAfterCalls;
         }
         string nullAssignStmt = "no";
         try {
@@ -764,18 +826,34 @@ public static class Demo {
         } catch (NullReferenceException) {
             nullAssignExpr = "e:" + NullFlowTarget.RhsCalls;
         }
+        string nullConvStmt = "no";
+        try {
+            target![1, $"{1}"] = MakeConvertible();
+        } catch (NullReferenceException) {
+            nullConvStmt = "cs:" + ConvertibleInt.Conversions;
+        }
+        string nullConvExpr = "no";
+        try {
+            var convVal = target![1, $"{1}"] = MakeConvertible();
+        } catch (NullReferenceException) {
+            nullConvExpr = "ce:" + ConvertibleInt.Conversions;
+        }
 
         return roCount + "|" + container.Cell.Count + "|" + sameBox + "|" +
-            outVarRes + "|" + outExistingRes + "|" + spanLit + "|" + dynRes + "|" +
-            condExtRes + "|" + nullCall + "|" + nullAssignStmt + "|" + nullAssignExpr;
+            outVarRes + "|" + outExistingRes + "|" + spanLit + "|" +
+            condExtRes + "|" + namedDelegateRes + "|" +
+            afterFalseGated + "," + afterTrueGated + "|" +
+            afterStmtPostInc + "," + valPostInc + "," + valPreInc + "," + valPostDec + "," + incNextCalls + "|" +
+            nullCall + "|" + nullParams + "|" + nullAssignStmt + "|" + nullAssignExpr + "|" + nullConvStmt + "|" + nullConvExpr;
     }
 }
-`, strictIl: true, expectedOutput: "5|5|True|99:42|99:42|lit-9|d=123|53|c:1|s:1|e:2")
+`, strictIl: true, expectedOutput: "5|5|True|99:42|99:42|lit-9|53|3:7|10,12|12,12,14,13,5|c:1|p:2|s:1|e:2|cs:1|ce:2")
     }
 
     @Fact
-    func TopLevelStatementsAndMain_AndUnsupportedCtorInitializerPlaceholder_BehaveAsDocumented() {
-        // 1. Top-level statements (Program.cs) with ref struct handler.
+    func TopLevelStatementsAndMain_AndUnsupportedDiagnostics_BehaveAsDocumented() {
+        // 1. Top-level statements (Program.cs) with ref struct handlers, standalone expression,
+        //    and coordinated indexer assignment / increment.
         let topLevelSource = `
 using System;
 using System.Runtime.CompilerServices;
@@ -785,8 +863,25 @@ Accept($"top={1}");
 var sb = new StringBuilder();
 sb.Append($",sb={2}");
 Console.Write(sb.ToString());
+Console.Write(((TopHandler)$",expr={3}").ToString());
+var standaloneLocal = ((TopHandler)$",loc={4}").ToString();
+Console.Write(standaloneLocal);
+
+var holder = new TopHolder();
+holder[true, $"a={5}"] = 20;
+var assignExpr = holder[true, $"b={6}"] = 30;
+holder[true, $"c={7}"]++;
+Console.Write($",{assignExpr},{holder.LastValue}");
 
 static void Accept(TopHandler h) => Console.Write(h.ToString());
+
+public sealed class TopHolder {
+    public int LastValue;
+    public int this[bool flag, TopHandler h] {
+        get => LastValue;
+        set => LastValue = value + h.ToString().Length;
+    }
+}
 
 [InterpolatedStringHandler]
 public ref struct TopHandler {
@@ -806,9 +901,13 @@ public ref struct TopHandler {
         let topCtx = TranslationContext(topProject.Compilation, topDoc.SemanticModel, topDoc.FilePath)
         let topPrinted = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(topDoc, topCtx))
         Assert.DoesNotContain(topCtx.Diagnostics, (d TranslationDiagnostic) -> d.Severity != TranslationSeverity.Info)
-        Assert.Equal("top=1,sb=2", CompileAndRunTopLevel(topPrinted))
+        Assert.Equal("top=1,sb=2,expr=3,loc=4,30,37", CompileAndRunTopLevel(topPrinted))
 
-        // 2. Explicit Main hoisted to top level with ref struct handler.
+        // 2. Explicit Main hoisted to top level with:
+        //    - ref struct handler
+        //    - static readonly struct field receiver forwarding (ordinary struct handler, IsReadOnlyRefAlias)
+        //    - standalone expression
+        //    - coordinated indexer assignment
         let mainSource = `
 using System;
 using System.Runtime.CompilerServices;
@@ -823,10 +922,39 @@ public ref struct MainHandler {
     public override string ToString() => sb.ToString();
 }
 
+[InterpolatedStringHandler]
+public struct MainReadOnlyReceiverHandler {
+    public readonly int Sum;
+    public MainReadOnlyReceiverHandler(int literalLength, int formattedCount, in MainCell cell) {
+        Sum = cell.Seed + literalLength + formattedCount;
+    }
+    public void AppendLiteral(string text) { }
+    public void AppendFormatted(int value) { }
+}
+
+public struct MainCell {
+    public int Seed;
+    public string Log([InterpolatedStringHandlerArgument("")] MainReadOnlyReceiverHandler h) => "ro=" + h.Sum;
+}
+
+public sealed class MainHolder {
+    public string Stored = "";
+    public string this[MainHandler h] {
+        get => Stored;
+        set => Stored = h.ToString() + "=" + value;
+    }
+}
+
 public static class Program {
+    private static readonly MainCell Cell = new MainCell { Seed = 10 };
     private static void Accept(MainHandler h) => Console.Write(h.ToString());
     public static void Main() {
         Accept($"main={7}");
+        Console.Write("|" + Cell.Log($"x={1}"));
+        Console.Write("|" + ((MainHandler)$"standalone={8}").ToString());
+        var mh = new MainHolder();
+        mh[$"k={9}"] = "v";
+        Console.Write("|" + mh.Stored);
     }
 }
 `
@@ -839,7 +967,7 @@ public static class Program {
         let mainCtx = TranslationContext(mainProject.Compilation, mainDoc.SemanticModel, mainDoc.FilePath)
         let mainPrinted = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(mainDoc, mainCtx))
         Assert.DoesNotContain(mainCtx.Diagnostics, (d TranslationDiagnostic) -> d.Severity != TranslationSeverity.Info)
-        Assert.Equal("main=7", CompileAndRunTopLevel(mainPrinted))
+        Assert.Equal("main=7|ro=13|standalone=8|k=9=v", CompileAndRunTopLevel(mainPrinted))
 
         // 3. Coordinated handler inside : this(...) ctor initializer reports located unsupported diagnostic.
         let ctorInitTree = CSharpSyntaxTree.ParseText(`
@@ -870,6 +998,66 @@ public sealed class CtorHolder {
             ctorCtx.Diagnostics,
             (d TranslationDiagnostic) -> d.Severity == TranslationSeverity.Unsupported && d.Message?.Contains(
                 "constructor initializer",
+                StringComparison.OrdinalIgnoreCase
+            ) == true
+        )
+
+        // 4. Dynamic append call reports located unsupported diagnostic rather than selecting wrong overload.
+        let dynTree = CSharpSyntaxTree.ParseText(`
+using System.Runtime.CompilerServices;
+[InterpolatedStringHandler]
+public ref struct DynamicOverloadHandler {
+    public DynamicOverloadHandler(int literalLength, int formattedCount) { }
+    public void AppendFormatted(int value) { }
+    public void AppendFormatted(object? value) { }
+}
+public static class DynDemo {
+    private static void Accept(DynamicOverloadHandler h) { }
+    public static void Probe(dynamic d) { Accept($"{d}"); }
+}
+`, path: "DynamicAppend.cs")
+        let dynComp = CSharpCompilation.Create(
+            "DynamicAppendTest",
+            []SyntaxTree{dynTree},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        let dynModel = dynComp.GetSemanticModel(dynTree)
+        let dynCtx = TranslationContext(dynComp, dynModel, dynTree.FilePath)
+        let _ = CSharpToGSharpTranslator().TranslateDocument(
+            LoadedDocument(dynTree.FilePath, dynTree, dynModel),
+            dynCtx
+        )
+        Assert.Contains(
+            dynCtx.Diagnostics,
+            (d TranslationDiagnostic) -> d.Severity == TranslationSeverity.Unsupported && d.Message?.Contains(
+                "dynamic",
+                StringComparison.OrdinalIgnoreCase
+            ) == true
+        )
+
+        // 5. Unframeable top-level ref-struct handler local reports located unsupported diagnostic.
+        let topLocalProject = CSharpProjectLoader.LoadInMemory([](string, source string){("Program.cs", `
+using System.Runtime.CompilerServices;
+var h = (TopRefLocal)$"{1}";
+[InterpolatedStringHandler]
+public ref struct TopRefLocal {
+    public TopRefLocal(int literalLength, int formattedCount) { }
+    public void AppendFormatted(int value) { }
+}
+`)}, outputKind: OutputKind.ConsoleApplication)
+        Assert.True(topLocalProject.BoundWithoutErrors)
+        let topLocalDoc = topLocalProject.Documents[0]
+        let topLocalCtx = TranslationContext(
+            topLocalProject.Compilation,
+            topLocalDoc.SemanticModel,
+            topLocalDoc.FilePath
+        )
+        let _ = CSharpToGSharpTranslator().TranslateDocument(topLocalDoc, topLocalCtx)
+        Assert.Contains(
+            topLocalCtx.Diagnostics,
+            (d TranslationDiagnostic) -> d.Severity == TranslationSeverity.Unsupported && d.Message?.Contains(
+                "top-level",
                 StringComparison.OrdinalIgnoreCase
             ) == true
         )

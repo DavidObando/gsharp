@@ -144,6 +144,57 @@ partial class CSharpToGSharpTranslator {
                 var initializer GExpression?
                 if declarator.Initializer == nil {
                     initializer = nil
+                } else if this.IsTopLevelEntryPointCall(declarator) && this.ContainsRefLikeHandlerInTopLevelNode(
+                    declarator.Initializer!!.Value
+                ) &&
+                    (
+                    this
+                        .context
+                        .GetTypeInfo(declarator.Initializer!!.Value)
+                        .ConvertedType ??
+                        this
+                        .context
+                        .GetTypeInfo(declarator.Initializer!!.Value)
+                        .Type
+                ) is {} initType &&
+                    !initType.IsRefLikeType &&
+                    initType.SpecialType != SpecialType
+                    .System_Void {
+                    let frameStmts = List[GStatement]()
+                    let replacements = List[ExpressionSyntax]()
+                    let outerSpillPrologue = this.state.PendingSpillPrologue
+                    let prevFrame = this.state.InTopLevelLambdaFrame
+                    this.state.PendingSpillPrologue = frameStmts
+                    this.state.InTopLevelLambdaFrame = true
+                    let initializerEmbedded = this.HoistAssignmentsInOrder(
+                        declarator.Initializer!!.Value,
+                        includeSelf: true,
+                        frameStmts,
+                        replacements
+                    )
+                    try {
+                        let innerInit = this.CoerceCovariantArrayConversion(
+                            declarator.Initializer!!.Value,
+                            this.CoercePointerConversion(
+                                declarator.Initializer!!.Value,
+                                this.CoerceConstantToUnsigned(
+                                    declarator.Initializer!!.Value,
+                                    this.TranslateExpression(declarator.Initializer!!.Value)
+                                )
+                            )
+                        )
+                        frameStmts.Add(ReturnStatement(innerInit))
+                        initializer = InvocationExpression(
+                            ParenthesizedExpression(
+                                LambdaExpression(Array.Empty[Parameter](), blockBody: BlockStatement(frameStmts))
+                            ),
+                            Array.Empty[GExpression]()
+                        )
+                    } finally {
+                        this.ReleaseHoistedAssignments(initializerEmbedded, replacements)
+                        this.state.InTopLevelLambdaFrame = prevFrame
+                        this.state.PendingSpillPrologue = outerSpillPrologue
+                    }
                 } else {
                     // Value-position deconstruction assignments still need a
                     // statement seam; ordinary assignments remain inline.
@@ -7847,7 +7898,7 @@ partial class CSharpToGSharpTranslator {
                         .SemanticModel
                         .GetOperation(leftElement) is IPropertyReferenceOperation propOp &&
                         this
-                        .CallNeedsHandlerCoordination(propOp.Arguments) {
+                        .CallRequiresHandlerBlock(leftElement, propOp.Arguments) {
                         this.PredeclareBlockCallOutVariables(leftElement.ArgumentList)
                         let statements = List[GStatement]()
                         let expr = this.BuildCoordinatedHandlerCall(
@@ -7861,22 +7912,11 @@ partial class CSharpToGSharpTranslator {
                                 if assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) {
                                     let rhsExpr = this.TranslateAssignmentValue(assignment)
                                     let rhsTemp = this.NewSpillName()
-                                    let rhsType GTypeReference? = if rhsExpr is LiteralExpression{
-                                        Kind: LiteralKind.Null
-                                    } ||
-                                        rhsExpr is DefaultValueExpression ||
-                                        rhsExpr is LambdaExpression {
-                                        this.typeMapper.Map(
-                                            this.GetAssignmentTargetType(
-                                                leftElement,
-                                                this.context.GetSymbolInfo(leftElement).Symbol
-                                            ),
-                                            this.context,
-                                            assignment.Right.GetLocation()
-                                        )
-                                    } else {
-                                        default(GTypeReference?)
-                                    }
+                                    let rhsType = this.GetCoordinatedElementAssignmentRhsType(
+                                        leftElement,
+                                        assignment,
+                                        rhsExpr
+                                    )
                                     statements.Add(
                                         LocalDeclarationStatement(BindingKind.Let, rhsTemp, rhsType, rhsExpr)
                                     )
@@ -7902,6 +7942,15 @@ partial class CSharpToGSharpTranslator {
                             }
                         )
                         let _ = expr
+                        if this.IsTopLevelEntryPointCall(leftElement) &&
+                            (
+                            statements.OfType[LocalDeclarationStatement]().Any(
+                                (s LocalDeclarationStatement) -> s.IsRefAlias || s.IsReadOnlyRefAlias
+                            ) ||
+                                this.CallContainsRefLikeHandler(propOp.Arguments)
+                        ) {
+                            return this.WrapBlockStatementsInTopLevelLambda(statements)
+                        }
                         return BlockStatement(statements)
                     }
                     return AssignmentStatement(
@@ -7914,6 +7963,13 @@ partial class CSharpToGSharpTranslator {
                 case postfix is PostfixUnaryExpressionSyntax when postfix.IsKind(SyntaxKind.PostIncrementExpression) ||
                     postfix
                     .IsKind(SyntaxKind.PostDecrementExpression) {
+                    if this.TryTranslateCoordinatedElementIncDecStatement(
+                        postfix.Operand,
+                        postfix.OperatorToken.Text,
+                        out var coordinatedPostfix
+                    ) {
+                        return coordinatedPostfix
+                    }
                     return IncrementDecrementStatement(
                         this.TranslateExpression(postfix.Operand),
                         postfix.OperatorToken.Text
@@ -7922,6 +7978,13 @@ partial class CSharpToGSharpTranslator {
                 case prefix is PrefixUnaryExpressionSyntax when prefix.IsKind(SyntaxKind.PreIncrementExpression) ||
                     prefix
                     .IsKind(SyntaxKind.PreDecrementExpression) {
+                    if this.TryTranslateCoordinatedElementIncDecStatement(
+                        prefix.Operand,
+                        prefix.OperatorToken.Text,
+                        out var coordinatedPrefix
+                    ) {
+                        return coordinatedPrefix
+                    }
                     // G# has no prefix ++/--; both forms are statements with the
                     // same effect, so emit the canonical postfix increment.
                     return IncrementDecrementStatement(
@@ -8325,6 +8388,22 @@ partial class CSharpToGSharpTranslator {
             if expression != nil && this.IsElidedInvocation(expression) {
                 return Array.Empty[GStatement]()
             }
+            if expression != nil && this.IsTopLevelEntryPointCall(expression) &&
+                this
+                .ContainsRefLikeHandlerInTopLevelNode(expression) {
+                let prevFrame = this.state.InTopLevelLambdaFrame
+                this.state.InTopLevelLambdaFrame = true
+                var framed List[GStatement]
+                try {
+                    framed = this.TranslateExpressionStatements(expression, hoistPostfix)!!.ToList()
+                } finally {
+                    this.state.InTopLevelLambdaFrame = prevFrame
+                }
+                if framed.Count == 0 {
+                    return framed
+                }
+                return []GStatement{this.WrapBlockStatementsInTopLevelLambda(framed)}
+            }
             if expression is AssignmentExpressionSyntax assignment && assignment.IsKind(
                 SyntaxKind.SimpleAssignmentExpression
             ) {
@@ -8541,6 +8620,10 @@ partial class CSharpToGSharpTranslator {
             // in true left-to-right order regardless of aliasing.
             let hoistable = embedded.Where(
                 (node PostfixUnaryExpressionSyntax) -> {
+                    if this.IsInGatedInterpolatedStringHandlerHole(node, expression) ||
+                        this.IsCoordinatedElementAccessOperand(node.Operand) {
+                        return false
+                    }
                     let target ISymbol? = this.context.GetSymbolInfo(node.Operand).Symbol
                     return target != nil && targetOccurrences[target] == 1
                 }
