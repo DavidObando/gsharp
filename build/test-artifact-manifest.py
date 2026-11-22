@@ -133,6 +133,13 @@ class ArtifactManifestTests(unittest.TestCase):
         self.assertNotEqual(verify_fail.returncode, 0)
         self.assertIn(f"Gsharp.NET.Sdk.Compiler.osx-x64.{VERSION}.nupkg", verify_fail.stderr)
 
+    def test_checked_in_gitignore_in_download_dir_does_not_fail_verification(self) -> None:
+        populate_r2r_dir(self.dir)
+        self.assertEqual(run_manifest("write", str(self.dir), "--require-r2r-packages").returncode, 0)
+        (self.dir / ".gitignore").write_text("*.nupkg\n", encoding="utf-8")
+        verified = run_manifest("verify", str(self.dir), "--require-r2r-packages")
+        self.assertEqual(verified.returncode, 0, verified.stderr)
+
     def test_generic_archive_manifest_catches_missing_tar(self) -> None:
         self.dir.mkdir()
         (self.dir / "out.tar").write_bytes(b"out-archive")

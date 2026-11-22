@@ -26,7 +26,7 @@ size_file() {
 list_dir_entries() {
     local dir="$1"
     (
-        shopt -s nullglob dotglob
+        shopt -s nullglob
         for entry in "$dir"/*; do
             name="${entry##*/}"
             if [[ "$name" == "$MANIFEST_NAME" ]]; then
