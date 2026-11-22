@@ -31,6 +31,8 @@ open class Issue6186TypeArgumentsOnNonGenericCallTests {
     @InlineData("let k = C.SO[Nope](x)", "GS0113 Nope|GS0148 [Nope]")
     @InlineData("let k = c.Ext[int32]()", "GS0148 [int32]")
     @InlineData("let k = c.EO[int32]()", "GS0148 [int32]")
+    @InlineData("let k = n.Invoke[int32](x)", "GS0148 [int32]") // the Invoke of a named delegate
+    @InlineData("let k = n.Invoke[Nope](x)", "GS0113 Nope|GS0159 Invoke[Nope](x)") // as for c.M[Nope](x)
     @InlineData("let k = Over[int32](x)", "GS0148 [int32]") // an overload set without a generic candidate
     @InlineData("let k = c.M[int32](x)", "GS0148 [int32]") // an instance method
     @InlineData("let k = C.S[int32](x)", "GS0148 [int32]") // a static method
@@ -91,7 +93,7 @@ open class Issue6186TypeArgumentsOnNonGenericCallTests {
 
     shared {
         private func Source(statement string) string -> Declarations +
-            "\nfunc F(c C, i I, b Box[int32], f (int32) -> int32, arr [](int32) -> int32) {\n    let x = 1\n    " +
+            "\nfunc F(c C, i I, b Box[int32], f (int32) -> int32, arr [](int32) -> int32, n Named) {\n    let x = 1\n    " +
             statement +
             "\n}\n"
 
@@ -148,6 +150,8 @@ class Box[T] {
 func (c C) Ext(x int32) int32 -> x
 func (c C) EO(x int32) int32 -> x
 func (c C) EO(x string) int32 -> 0
+
+delegate Named(x int32) int32;
 
 func Use(x int32) int32 -> x
 

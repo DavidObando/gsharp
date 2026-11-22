@@ -1843,6 +1843,16 @@ internal partial class ExpressionBinder {
         arguments ImmutableArray[BoundExpression],
         ce CallExpressionSyntax
     ) BoundExpression {
+        // A delegate's Invoke has no type parameters (#6186). The member-call binder has already
+        // bound the type arguments.
+        if ce.TypeArgumentList is {} unexpectedTypeArguments {
+            overloads.ReportTypeArgumentsOnNonGenericFunction(
+                unexpectedTypeArguments,
+                "Invoke",
+                typeArgumentsBound: true
+            )
+            return BoundErrorExpression(nil)
+        }
         if !overloads.TryBindNamedDelegateArguments(
             delegateSym.Name,
             delegateSym,
