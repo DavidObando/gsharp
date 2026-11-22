@@ -81,9 +81,10 @@ class BoundErrorExpression : BoundExpression {
     }
 
     /// Gets or sets the operands of an operator expression that did not bind, when the operands
-    /// are not errors themselves, so the semantic model still answers their symbols and types
-    /// (#6187). The operands are not children of this node: walkers and rewriters do not visit
-    /// them.
+    /// are not failed calls, so the semantic model still answers their symbols and types (#6187).
+    /// For a compound assignment, they include the target read and the receiver and index values
+    /// that the binder saved in temporaries. The operands are not children of this node: walkers
+    /// and rewriters do not visit them.
     internal prop FailedOperands ImmutableArray[BoundExpression] {
         get;
         set;
