@@ -115,7 +115,9 @@ class SelectionTests(unittest.TestCase):
              ["vscode-extension", "vsix", "visual-studio-extension"]),
             ("src/Repl/Program.gs", ["interpreter", "compiler"], ["tests"]),
             ("src/Sdk/Gsharp.NET.Sdk/BuildTask.gs", ["sdk", "core", "compiler", "cs2gs"],
-             ["build", "e2e", "desktop-msbuild-sdk-smoke", "vscode-extension"]),
+             ["build", "e2e", "desktop-msbuild-sdk-smoke", "r2r-compiler-smoke", "vscode-extension"]),
+            ("e2etests/r2r-compiler-e2e.sh", ["sdk", "core", "compiler", "cs2gs"],
+             ["build", "e2e", "desktop-msbuild-sdk-smoke", "r2r-compiler-smoke"]),
             ("tools/gsgen/Gsgen.Cli/Program.gs", ["generators", "compiler", "cs2gs"],
              ["build", "e2e"]),
             ("samples/Trail/README.md", ["compiler", "formatting", "language-server"],
@@ -685,6 +687,22 @@ class WorkflowTests(unittest.TestCase):
         harness_block = job((ROOT / ".github/workflows/build.yml").read_text(), "harness")
         self.assertIn("waikiki-hover-audit)", harness_block)
         self.assertIn("python3 build/test-waikiki-hover-audit.py", harness_block)
+
+    def test_artifact_handoffs_write_and_verify_manifests(self):
+        text = (ROOT / ".github/workflows/build.yml").read_text()
+        self.assertIn("python3 build/test-artifact-manifest.py", job(text, "select"))
+        self.assertIn("bash build/artifact-manifest.sh write out/bin/Release/nupkgs --require-r2r-packages",
+                      job(text, "build"))
+        self.assertIn('bash build/artifact-manifest.sh write "$RUNNER_TEMP/test-build-outputs"',
+                      job(text, "test-partition"))
+        self.assertIn('bash build/artifact-manifest.sh verify "$RUNNER_TEMP/test-build-outputs"', job(text, "tests"))
+        self.assertIn("bash build/artifact-manifest.sh verify ./nupkgs-smoke --require-r2r-packages",
+                      job(text, "r2r-compiler-smoke"))
+        self.assertIn("bash build/artifact-manifest.sh verify ./.nugs --require-r2r-packages",
+                      job(text, "desktop-msbuild-sdk-smoke"))
+        for name in ("publish-verify", "publish-github-release", "publish-nuget-compiler", "publish-nuget-sdk"):
+            self.assertIn("bash build/artifact-manifest.sh verify ./nupkgs --require-r2r-packages",
+                          job(text, name), name)
 
 
 class RulesTests(unittest.TestCase):

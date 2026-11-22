@@ -15,6 +15,7 @@ run is safe. The expected package list lives here, beside RIDS of check-rid-pack
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import json
 import os
@@ -56,6 +57,9 @@ PRERELEASE_IDENTIFIER = rf"(?:{NUMBER}|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)"
 TAG_PATTERN = re.compile(rf"v(?P<core>{CORE})(?:-(?P<pre>{PRERELEASE_IDENTIFIER}(?:\.{PRERELEASE_IDENTIFIER})*))?")
 PACKAGE_FILE = re.compile(r"^(?P<id>.+?)\.(?P<version>[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?)\.(?P<ext>nupkg|snupkg)$")
 BUILD_VERSION = re.compile(r"^(?P<core>[0-9]+\.[0-9]+\.[0-9]+)(?:-g[0-9a-f]+)?$")
+ARTIFACT_MANIFEST = "artifact-manifest.sha256"
+MANIFEST_ENTRY = re.compile(r"^(?P<sha>[0-9a-f]{64}) (?P<size>[0-9]+) (?P<name>[^/]+)$")
+MANIFEST_END = re.compile(r"^# end count=(?P<count>[0-9]+)$")
 
 
 def tag_kind(ref_name: str) -> str:
@@ -79,6 +83,8 @@ def list_packages(nupkgs: Path) -> tuple[dict[str, list[str]], dict[str, list[st
     symbols: dict[str, list[str]] = {}
     unknown = []
     for path in sorted(nupkgs.iterdir()):
+        if path.name == ARTIFACT_MANIFEST:
+            continue
         match = PACKAGE_FILE.match(path.name)
         if not match:
             unknown.append(path.name)
@@ -86,6 +92,58 @@ def list_packages(nupkgs: Path) -> tuple[dict[str, list[str]], dict[str, list[st
         target = primary if match.group("ext") == "nupkg" else symbols
         target.setdefault(match.group("id"), []).append(match.group("version"))
     return primary, symbols, unknown
+
+
+def check_artifact_manifest(nupkgs: Path) -> list[str]:
+    """Verify the handoff manifest when present so publish-verify catches incomplete downloads too."""
+    manifest = nupkgs / ARTIFACT_MANIFEST
+    try:
+        raw = manifest.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        return [f"{ARTIFACT_MANIFEST}: cannot read manifest: {error}"]
+    if not raw:
+        return [f"{ARTIFACT_MANIFEST}: manifest is empty"]
+    errors: list[str] = []
+    seen: set[str] = set()
+    ended = False
+    declared_count = 0
+    for line in raw.splitlines():
+        if ended:
+            errors.append(f"{ARTIFACT_MANIFEST}: unexpected trailing content after end marker")
+            break
+        end_match = MANIFEST_END.fullmatch(line)
+        if end_match:
+            declared_count = int(end_match.group("count"))
+            ended = True
+            continue
+        entry = MANIFEST_ENTRY.fullmatch(line)
+        if not entry:
+            errors.append(f"{ARTIFACT_MANIFEST}: malformed line {line!r}")
+            continue
+        name = entry.group("name")
+        if name in (".", "..", ARTIFACT_MANIFEST) or name in seen:
+            errors.append(f"{ARTIFACT_MANIFEST}: invalid or duplicate entry {name!r}")
+            continue
+        seen.add(name)
+        target = nupkgs / name
+        if not target.is_file():
+            errors.append(f"{ARTIFACT_MANIFEST}: missing file {name}")
+            continue
+        data = target.read_bytes()
+        expected_size = int(entry.group("size"))
+        if len(data) != expected_size:
+            errors.append(f"{ARTIFACT_MANIFEST}: size mismatch for {name}: expected {expected_size}, got {len(data)}")
+            continue
+        actual_sha = hashlib.sha256(data).hexdigest()
+        if actual_sha != entry.group("sha"):
+            errors.append(f"{ARTIFACT_MANIFEST}: checksum mismatch for {name}: expected {entry.group('sha')}, got {actual_sha}")
+    if not ended:
+        errors.append(f"{ARTIFACT_MANIFEST}: truncated manifest (missing end marker)")
+    elif len(seen) == 0 or len(seen) != declared_count:
+        errors.append(f"{ARTIFACT_MANIFEST}: entry count {len(seen)} does not match declared {declared_count}")
+    actual_files = {p.name for p in nupkgs.iterdir() if p.name != ARTIFACT_MANIFEST}
+    errors += [f"{ARTIFACT_MANIFEST}: unlisted file in {nupkgs}: {name}" for name in sorted(actual_files - seen)]
+    return errors
 
 
 def check_nuget_packages(nupkgs: Path) -> tuple[list[str], str | None]:
@@ -96,6 +154,8 @@ def check_nuget_packages(nupkgs: Path) -> tuple[list[str], str | None]:
     errors: list[str] = []
     if not nupkgs.is_dir():
         return [f"{nupkgs} is not a folder"], None
+    if (nupkgs / ARTIFACT_MANIFEST).exists():
+        errors += check_artifact_manifest(nupkgs)
     primary, symbols, unknown = list_packages(nupkgs)
     errors += [f"unexpected file in {nupkgs}: {name}" for name in unknown]
     want_primary = set(COMPILER_PACKAGES) | set(SDK_PACKAGES)
