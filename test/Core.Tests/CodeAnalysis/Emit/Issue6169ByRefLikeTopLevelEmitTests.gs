@@ -1890,6 +1890,158 @@ run().GetAwaiter().GetResult()
 `)
         Assert.Empty(declinedCatchAllFilterAddressReseatSafe.Diagnostics)
         Assert.Equal("1\n", declinedCatchAllFilterAddressReseatSafe.Output)
+
+        let receiverBeforeIndexAddressOrderComp = Compilation(SyntaxTree.Parse(SourceText.From(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var a = []int32{7, 8}
+    var p = &x
+    var q = &({
+        p = &c.Value
+        a
+    })[{
+        p = &x
+        0
+    }]
+    await Task.Delay(1)
+    Console.WriteLine("${*p},${*q}")
+}
+
+run().GetAwaiter().GetResult()
+`)))
+        Assert.Empty(receiverBeforeIndexAddressOrderComp.GetDiagnostics())
+
+        let receiverBeforeIndexAddressOrderSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var a = []int32{7, 8}
+    var p = &x
+    let elem = *(&({
+        p = &c.Value
+        a
+    })[{
+        p = &x
+        0
+    }])
+    await Task.Delay(1)
+    Console.WriteLine("${*p},${elem}")
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Empty(receiverBeforeIndexAddressOrderSafe.Diagnostics)
+        Assert.Equal("1,7\n", receiverBeforeIndexAddressOrderSafe.Output)
+
+        let throwingFilterAliasesPropagateUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+func mayThrow() {
+    throw InvalidOperationException()
+}
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    try {
+        throw InvalidOperationException()
+    } catch when ({
+        p = &c.Value
+        mayThrow()
+        p = &x
+        false
+    }) { } catch { }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Contains(throwingFilterAliasesPropagateUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(throwingFilterAliasesPropagateUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let switchGuardEscapingGotoUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(n int32) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    switch n {
+        case _ when ({
+            p = &c.Value
+            goto resume
+            true
+        }) { }
+        default { }
+    }
+    return
+resume:
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run(0).GetAwaiter().GetResult()
+`)
+        Assert.Contains(switchGuardEscapingGotoUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(switchGuardEscapingGotoUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let switchPatternEscapingGotoUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(n int32) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    switch n {
+        case > ({
+            p = &c.Value
+            goto resume
+            0
+        }) { }
+        default { }
+    }
+    return
+resume:
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run(0).GetAwaiter().GetResult()
+`)
+        Assert.Contains(switchPatternEscapingGotoUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(switchPatternEscapingGotoUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
     }
 
     @Fact

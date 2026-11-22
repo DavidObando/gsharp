@@ -581,6 +581,17 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     let armCount = switchStmt.Arms.Length
                     let armBaseOverwritten = [armCount]HashSet[VariableSymbol]
                     let armReachableFromHeader = [armCount]bool
+                    let headerGotos = Dictionary[BoundLabel, HashSet[VariableSymbol]]()
+                    let RecordHeaderGotos = (source Dictionary[BoundLabel, HashSet[VariableSymbol]]) -> {
+                        for entry in source {
+                            if !headerGotos.TryGetValue(entry.Key, out var sink) {
+                                headerGotos[entry.Key] = HashSet[VariableSymbol](entry.Value)
+                            } else {
+                                sink.IntersectWith(entry.Value)
+                            }
+                        }
+                    }
+                    RecordHeaderGotos(discrCollector.OutgoingGotoOverwrites)
                     var fallthroughOverwritten = HashSet[VariableSymbol](discrCollector.definitelyOverwritten)
                     var fallthroughReachable = true
                     var hasUnconditionalDefault = false
@@ -608,6 +619,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                                     escapingLabelLiveIn
                                 )
                                 patCollector.VisitPattern(arm.Pattern)
+                                RecordHeaderGotos(patCollector.OutgoingGotoOverwrites)
                                 if collectEffects {
                                     Reads.UnionWith(patCollector.Reads)
                                     InternalUnsafeVariables.UnionWith(patCollector.InternalUnsafeVariables)
@@ -635,6 +647,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                                     escapingLabelLiveIn
                                 )
                                 guardCollector.VisitExpression(arm.Guard)
+                                RecordHeaderGotos(guardCollector.OutgoingGotoOverwrites)
                                 if collectEffects {
                                     Reads.UnionWith(guardCollector.Reads)
                                     InternalUnsafeVariables.UnionWith(guardCollector.InternalUnsafeVariables)
@@ -674,6 +687,14 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                         allSwitchTargets.UnionWith(lc.GotoTargets)
                     }
                     let pendingArmLabelOver = Dictionary[BoundLabel, HashSet[VariableSymbol]]()
+                    let headerOutgoingGotos = Dictionary[BoundLabel, HashSet[VariableSymbol]]()
+                    for entry in headerGotos {
+                        if labelToArm.ContainsKey(entry.Key) {
+                            pendingArmLabelOver[entry.Key] = HashSet[VariableSymbol](entry.Value)
+                        } else {
+                            headerOutgoingGotos[entry.Key] = HashSet[VariableSymbol](entry.Value)
+                        }
+                    }
                     var switchChanged = true
                     var switchSafety = 0
                     var normalExitInitialized = false
@@ -695,6 +716,9 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                         normalExitInitialized = false
                         normalExitOver.Clear()
                         outgoingGotos.Clear()
+                        for entry in headerOutgoingGotos {
+                            outgoingGotos[entry.Key] = HashSet[VariableSymbol](entry.Value)
+                        }
                         for var i = 0; i < armCount; i++ {
                             if !ArmIsReachable(i) {
                                 continue
@@ -2707,24 +2731,28 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     return ResolveAddressedStorageTargets(tuple.Receiver)
                 }
                 case idx is BoundIndexExpression {
+                    let resolved = if idx.IsArrayBackedElementAccess {
+                        VisitExpression(idx.Target)
+                        HashSet[VariableSymbol]()
+                    } else {
+                        ResolveAddressedStorageTargets(idx.Target)
+                    }
                     for indexExpr in idx.Indices {
                         VisitExpression(indexExpr)
                     }
-                    if idx.IsArrayBackedElementAccess {
-                        VisitExpression(idx.Target)
-                        return HashSet[VariableSymbol]()
-                    }
-                    return ResolveAddressedStorageTargets(idx.Target)
+                    return resolved
                 }
                 case clrIdx is BoundClrIndexExpression {
+                    let resolved = if !RefCapabilities.IsRefReturningAccess(clrIdx) {
+                        VisitExpression(clrIdx.Target)
+                        HashSet[VariableSymbol]()
+                    } else {
+                        ResolveAddressedStorageTargets(clrIdx.Target)
+                    }
                     for arg in clrIdx.Arguments {
                         VisitExpression(arg)
                     }
-                    if !RefCapabilities.IsRefReturningAccess(clrIdx) {
-                        VisitExpression(clrIdx.Target)
-                        return HashSet[VariableSymbol]()
-                    }
-                    return ResolveAddressedStorageTargets(clrIdx.Target)
+                    return resolved
                 }
                 case cond is BoundConditionalExpression {
                     VisitExpression(cond.Condition)
@@ -3680,12 +3708,17 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             filterEntryPointsTo[clause] = ClonePointsTo(handlerDispatchState)
             let catchIn = ClonePointsTo(handlerDispatchState)
             if clause.Filter is {} filter {
-                PointsToExpressionUpdater(catchIn, interesting, combinedExceptional).VisitExpression(filter)
+                let filterExceptional = ClonePointsTo(handlerDispatchState)
+                PointsToExpressionUpdater(catchIn, interesting, filterExceptional, outgoingGotos).VisitExpression(
+                    filter
+                )
+                UnionPointsToInto(combinedExceptional, filterExceptional)
                 UnionPointsToInto(combinedExceptional, catchIn)
                 // Filter evaluation can return false or throw, carrying mutations to later handlers and finally.
                 if IsCatchAllExceptionType(clause.ExceptionType) && ExpressionCannotThrow(filter) {
                     handlerDispatchState = ClonePointsTo(catchIn)
                 } else {
+                    UnionPointsToInto(handlerDispatchState, filterExceptional)
                     UnionPointsToInto(handlerDispatchState, catchIn)
                 }
             }
@@ -3835,6 +3868,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         let outgoingGotos = Dictionary[BoundLabel, Dictionary[VariableSymbol, HashSet[VariableSymbol]]]()
         var fallthroughReachable = true
         var hasUnconditionalDefault = false
+        let headerGotos = Dictionary[BoundLabel, Dictionary[VariableSymbol, HashSet[VariableSymbol]]]()
         // Emission evaluates non-default patterns/guards first and dispatches
         // `default` only after all non-default arms fail.
         for var pass = 0; pass < 2; pass++ {
@@ -3860,7 +3894,8 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                         arm.Pattern,
                         armIn,
                         interesting,
-                        combinedExceptional
+                        combinedExceptional,
+                        headerGotos
                     )
                     patCanMatch = pcm
                     patCanFail = pcf
@@ -3883,7 +3918,9 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 }
                 armGuardEntryStates[i] = ClonePointsTo(armIn)
                 if arm.Guard != nil && patCanMatch {
-                    PointsToExpressionUpdater(armIn, interesting, combinedExceptional).VisitExpression(arm.Guard)
+                    PointsToExpressionUpdater(armIn, interesting, combinedExceptional, headerGotos).VisitExpression(
+                        arm.Guard
+                    )
                     UnionPointsToInto(combinedExceptional, armIn)
                     if patCanFail {
                         UnionPointsToInto(fallthroughState, armIn)
@@ -3898,6 +3935,23 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 }
                 armReachableFromHeader[i] = patCanMatch
                 armDispatchIn[i] = armIn
+            }
+        }
+        let headerOutgoingGotos = Dictionary[BoundLabel, Dictionary[VariableSymbol, HashSet[VariableSymbol]]]()
+        for entry in headerGotos {
+            if labelToArm.ContainsKey(entry.Key) {
+                if !pendingArmLabelEntries.TryGetValue(entry.Key, out var sink) {
+                    sink = Dictionary[VariableSymbol, HashSet[VariableSymbol]]()
+                    pendingArmLabelEntries[entry.Key] = sink
+                }
+                UnionPointsToInto(sink, entry.Value)
+            } else {
+                if !headerOutgoingGotos.TryGetValue(entry.Key, out var sink) {
+                    sink = Dictionary[VariableSymbol, HashSet[VariableSymbol]]()
+                    headerOutgoingGotos[entry.Key] = sink
+                }
+                UnionPointsToInto(sink, entry.Value)
+                UnionPointsToInto(combinedExceptional, entry.Value)
             }
         }
         // Walk arm bodies in source order until cross-arm label entries (fallthrough
@@ -3920,6 +3974,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             afterSwitch.Clear()
             hasNormalExit = false
             outgoingGotos.Clear()
+            UnionGotoMapInto(outgoingGotos, headerOutgoingGotos)
             for var i = 0; i < armCount; i++ {
                 let arm = switchStmt.Arms[i]
                 let armIn = ClonePointsTo(armDispatchIn[i])

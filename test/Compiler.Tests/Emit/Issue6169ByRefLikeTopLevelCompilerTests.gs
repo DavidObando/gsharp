@@ -509,14 +509,23 @@ async func checkThrowingAndFilterReseat(flag bool) Task {
         p2 = &c.Value
         x
     })
+    var a = []int32{7, 8}
+    var p3 = &x
+    let elem3 = *(&({
+        p3 = &c.Value
+        a
+    })[{
+        p3 = &x
+        0
+    }])
     await Task.Delay(1)
-    Console.WriteLine("${*p},${*q2}")
+    Console.WriteLine("${*p},${*q2},${*p3},${elem3}")
 }
 
 checkThrowingAndFilterReseat(false).GetAwaiter().GetResult()
 `, "top-level-throwing-alias-and-filter-reseat-safe", executable: true)
         IlVerifier.Verify(throwingAliasAndFilterReseatSafeAssembly)
-        Assert.Equal("1,1\n", fixture.Run(throwingAliasAndFilterReseatSafeAssembly))
+        Assert.Equal("1,1,1,7\n", fixture.Run(throwingAliasAndFilterReseatSafeAssembly))
     }
 
     shared {
