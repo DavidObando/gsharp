@@ -7862,12 +7862,47 @@ partial class CSharpToGSharpTranslator {
                             statements,
                             () -> {
                                 if assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) {
+                                    if propOp.Property.ReturnsByRef {
+                                        let slotTemp = this.NewHandlerTempName()
+                                        statements.Add(
+                                            LocalDeclarationStatement(
+                                                BindingKind.Var,
+                                                slotTemp,
+                                                type: nil,
+                                                this.TranslateAssignmentTarget(leftElement),
+                                                isRefAlias: true
+                                            )
+                                        )
+                                        let rhsExpr = this.TranslateWithPrologueAssignments(
+                                            assignment.Right,
+                                            statements,
+                                            () -> this.TranslateAssignmentValue(assignment)
+                                        )
+                                        let rhsTemp = this.NewHandlerTempName()
+                                        let rhsType = this.GetCoordinatedElementAssignmentRhsType(
+                                            leftElement,
+                                            assignment,
+                                            rhsExpr
+                                        )
+                                        statements.Add(
+                                            LocalDeclarationStatement(BindingKind.Let, rhsTemp, rhsType, rhsExpr)
+                                        )
+                                        statements.Add(
+                                            AssignmentStatement(
+                                                IdentifierExpression(slotTemp),
+                                                IdentifierExpression(rhsTemp),
+                                                assignment.OperatorToken.Text,
+                                                isVoid: isVoidAssignment
+                                            )
+                                        )
+                                        return LiteralExpression.Null()
+                                    }
                                     let rhsExpr = this.TranslateWithPrologueAssignments(
                                         assignment.Right,
                                         statements,
                                         () -> this.TranslateAssignmentValue(assignment)
                                     )
-                                    let rhsTemp = this.NewSpillName()
+                                    let rhsTemp = this.NewHandlerTempName()
                                     let rhsType = this.GetCoordinatedElementAssignmentRhsType(
                                         leftElement,
                                         assignment,

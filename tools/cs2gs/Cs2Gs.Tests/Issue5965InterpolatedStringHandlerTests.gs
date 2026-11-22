@@ -787,6 +787,38 @@ public struct GenericMutatorCell : ILogMutator {
     public void Log(SpanLiteralHandler h) { Total += h.ToString().Length; }
 }
 
+public sealed class ClassMutator : ILogMutator {
+    public string Tag;
+    public ClassMutator(string tag) { Tag = tag; }
+    public void Log(SpanLiteralHandler h) { Tag += ":" + h.ToString(); }
+}
+
+public struct ByValExtStruct {
+    public int X;
+    public int Probe() => this.ReadWithHole($"{Bump()}");
+    private int Bump() { X += 50; return 7; }
+}
+
+public static class ByValExtHelpers {
+    public static int ReadWithHole(this ByValExtStruct s, SpanLiteralHandler h) => s.X + h.ToString().Length;
+}
+
+[InterpolatedStringHandler]
+public ref struct InLongHandler {
+    public readonly long Seen;
+    public InLongHandler(int literalLength, int formattedCount, in long seed) { Seen = seed; }
+    public void AppendFormatted(int v) { }
+}
+
+[InterpolatedStringHandler]
+public ref struct ParamsAppendHandler {
+    private readonly StringBuilder sb;
+    public ParamsAppendHandler(int literalLength, int formattedCount) { sb = new StringBuilder(); }
+    public void AppendLiteral(params string[] pieces) { foreach (var p in pieces) sb.Append(p); }
+    public void AppendFormatted(params int[] values) { foreach (var v in values) sb.Append('#').Append(v); }
+    public override string ToString() => sb.ToString();
+}
+
 [InterpolatedStringHandler]
 public ref struct CallerInfoHandler {
     private readonly StringBuilder sb;
@@ -828,8 +860,21 @@ public static class Demo {
 
     private static int ChangeGlobalCell() { globalDefCell.Value = 999; return 42; }
     private static int ChangeRefIdxSlot() { globalRefIdxCell.Index = 1; return 9; }
+    private static int ChangeRefIdxSlotAndValue() { globalRefIdxCell.Index = 1; return 88; }
     private static void WriteRefIndexer(in RefIndexerCell c) { c[$"{ChangeRefIdxSlot()}"] = 77; }
+    private static int WriteRefIndexerRhsOrder(in RefIndexerCell c) {
+        c[$"{1}"] = ChangeRefIdxSlotAndValue();
+        globalRefIdxCell.Index = 0;
+        var res = c[$"{1}"] = ChangeRefIdxSlotAndValue();
+        return res;
+    }
     private static void ProbeGenericMutating<T>(ref T receiver) where T : ILogMutator { receiver.Log($"{123}"); }
+    private static int ReplaceClassReceiver<T>(ref T receiver, T replacement) { receiver = replacement; return 123; }
+    private static void ProbeGenericClassReplace<T>(ref T receiver, T replacement) where T : ILogMutator {
+        receiver.Log($"{ReplaceClassReceiver(ref receiver, replacement)}");
+    }
+    private static long AcceptInLong(int seed, [InterpolatedStringHandlerArgument("seed")] InLongHandler h) => h.Seen;
+    private static string AcceptParamsAppend(ParamsAppendHandler h) => h.ToString();
     private static string AcceptRefNonNull(ref string s, SpanLiteralHandler h) { s = s + ":" + h.ToString(); return s; }
     private static string AcceptCallerInfo(CallerInfoHandler h) => h.ToString();
     private static int IncHoleBeforeDeconstruct() { deconstructHoleCalls++; holeSawNextPair = nextPairCalls; return 5; }
@@ -926,6 +971,10 @@ public static class Demo {
         WriteRefIndexer(in globalRefIdxCell);
         var refIdxRes = globalRefIdxCell.Slots[0] + ":" + globalRefIdxCell.Slots[1];
 
+        globalRefIdxCell = new RefIndexerCell { Index = 0, Slots = new int[2] };
+        var refOrderExpr = WriteRefIndexerRhsOrder(in globalRefIdxCell);
+        var refIdxRhsOrderRes = globalRefIdxCell.Slots[0] + ":" + globalRefIdxCell.Slots[1] + ":" + refOrderExpr;
+
         var condLeft = new InnerCell { Count = 10 };
         var condRight = new InnerCell { Count = 20 };
         bool chooseLeft = true;
@@ -936,6 +985,19 @@ public static class Demo {
 
         var genCell = new GenericMutatorCell { Total = 5 };
         ProbeGenericMutating(ref genCell);
+
+        ILogMutator origMut = new ClassMutator("orig");
+        ILogMutator replMut = new ClassMutator("repl");
+        var origRef = origMut;
+        ProbeGenericClassReplace(ref origRef, replMut);
+        var genClassRes = ((ClassMutator)origMut).Tag + "|" + ((ClassMutator)origRef).Tag;
+
+        var byValExt = new ByValExtStruct { X = 10 };
+        var byValExtRes = byValExt.Probe() + ":" + byValExt.X;
+
+        var outerCastRes = ((IHasVal)(LibStructHandler)$"{3}").GetVal();
+        var inLongRes = AcceptInLong(99, $"{1}");
+        var paramsAppendRes = AcceptParamsAppend($"ab{1 + 2}cd");
 
         var callerInfoRes = AcceptCallerInfo($"{1 + 2}");
 
@@ -996,7 +1058,7 @@ public static class Demo {
             outVarRes + "|" + outExistingRes + "|" + spanLit + "|" + baseCtorSeen + "|" + ungatedRes + "|" +
             condExtRes + "|" + namedDelegateRes + "|" +
             afterFalseGated + "," + afterTrueGated + "|" + pairAfterFalse + "," + pairAfterTrue + "|" +
-            deconstructOrderRes + "|" + refNonNullRes + "|" + refIdxRes + "|" + refCondRes + "|" + genCell.Total + "|" + callerInfoRes + "|" +
+            deconstructOrderRes + "|" + refNonNullRes + "|" + refIdxRes + "|" + refIdxRhsOrderRes + "|" + refCondRes + "|" + genCell.Total + "|" + genClassRes + "|" + byValExtRes + "|" + outerCastRes + "|" + inLongRes + "|" + paramsAppendRes + "|" + callerInfoRes + "|" +
             afterStmtPostInc + "," + valPostInc + "," + valPreInc + "," + valPostDec + "," + incNextCalls + "|" +
             nullPlain + "|" + nullCall + "|" + nullParams + "|" + nullAssignStmt + "|" + nullAssignExpr + "|" + nullConvStmt + "|" + nullConvExpr;
     }
@@ -1011,12 +1073,24 @@ public ref struct LibRefIdxHandler {
     public void AppendFormatted(int value) { }
 }
 
+public interface IHasVal {
+    int GetVal();
+}
+
+[InterpolatedStringHandler]
+public struct LibStructHandler : IHasVal {
+    public int Seen;
+    public LibStructHandler(int literalLength, int formattedCount) { Seen = 0; }
+    public void AppendFormatted(int v) { Seen += v; }
+    public int GetVal() => Seen * 10 + 1;
+}
+
 public struct RefIndexerCell {
     public int Index;
     public int[] Slots;
     public readonly ref int this[LibRefIdxHandler h] => ref Slots[Index];
 }
-`, strictIl: true, expectedOutput: "5|8|102|7:8:8|init->after:init:1|5|True|99:42|99:42|lit-9|55|4:5|53|3:7|10,12|0,2:20:21|5:30:31:1:2|nf:8|0:77|21:41|8|1 + 2=3@True|12,12,14,13,5|pl:1|c:1|p:2|s:1|e:2|cs:1|ce:2")
+`, strictIl: true, expectedOutput: "5|8|102|7:8:8|init->after:init:1|5|True|99:42|99:42|lit-9|55|4:5|53|3:7|10,12|0,2:20:21|5:30:31:1:2|nf:8|0:77|88:0:88|21:41|8|orig:123|repl|11:60|31|99|ab#3cd|1 + 2=3@True|12,12,14,13,5|pl:1|c:1|p:2|s:1|e:2|cs:1|ce:2")
     }
 
     @Fact
@@ -1061,8 +1135,11 @@ if (condFlag && GetNullableInt($"h={12}") is int patM) {
 }
 var awaitedVal = await GetAsyncTop($"w={13}");
 Console.Write($",{awaitedVal}");
+var nestedStandaloneArg = UseTop($"u={14}", ((TopHandler)$"s={15}").ToString());
+Console.Write($",{nestedStandaloneArg}");
 
 static void Accept(TopHandler h) => Console.Write(h.ToString());
+static string UseTop(TopHandler h, string extra) => h.ToString() + ":" + extra;
 static bool TryTop(TopHandler h, out int len) { len = h.ToString().Length; return true; }
 static (string, int) PairTop(TopHandler h) => (h.ToString(), h.ToString().Length);
 static int? GetNullableInt(TopHandler h) => h.ToString().Length;
@@ -1094,7 +1171,7 @@ public ref struct TopHandler {
         let topCtx = TranslationContext(topProject.Compilation, topDoc.SemanticModel, topDoc.FilePath)
         let topPrinted = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(topDoc, topCtx))
         Assert.DoesNotContain(topCtx.Diagnostics, (d TranslationDiagnostic) -> d.Severity != TranslationSeverity.Info)
-        Assert.Equal("top=1,sb=2,expr=3,loc=4,30,37,True,3,3,p=10,4,4,4,4", CompileAndRunTopLevel(topPrinted))
+        Assert.Equal("top=1,sb=2,expr=3,loc=4,30,37,True,3,3,p=10,4,4,4,4,u=14:s=15", CompileAndRunTopLevel(topPrinted))
 
         // 2. Explicit Main hoisted to top level with:
         //    - ref struct handler

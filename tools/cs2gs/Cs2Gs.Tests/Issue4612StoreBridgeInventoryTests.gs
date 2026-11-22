@@ -219,7 +219,10 @@ open class Issue4612StoreBridgeInventoryTests {
                 3,
                 "two narrowed member receivers and a delayed pattern-binding read after successful conversion tests"
             ),
-            ["TranslateExpression"] = (1, "the ??= hoisted assignment target"),
+            ["TranslateExpression"] = (
+                2,
+                "the ??= hoisted assignment target and deferred coordinated-handler receiver dereference"
+            ),
             ["TranslateExtendedPropertyLink"] = (
                 2,
                 "cached and local intermediate receivers after extended-property pattern guards"
@@ -235,6 +238,7 @@ open class Issue4612StoreBridgeInventoryTests {
                 5,
                 "pattern bindings and member receivers narrowed by type or nil guards, including cached record receivers"
             ),
+            ["TranslateStaticExtensionReceiver"] = (1, "deferred coordinated-handler extension receiver dereference"),
             ["TranslateVoidConditionalAccessWithLocalAssignmentSeam"] = (1, "receiver of a ?. access"),
             ["TranslateYieldStatement"] = (1, "C# flow analysis proved the yielded value non-null"),
             ["TryBridgeTupleValue"] = (1, "nullable value-tuple unwrap before rebuilding elements"),

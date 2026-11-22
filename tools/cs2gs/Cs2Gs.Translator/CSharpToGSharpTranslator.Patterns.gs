@@ -5422,8 +5422,40 @@ partial class CSharpToGSharpTranslator {
                     nullableThisExtension: false,
                     () -> {
                         if assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) {
-                            let rhsTemp = this.NewSpillName()
                             let rhsPrologue = List[GStatement]()
+                            if propOp.Property.ReturnsByRef {
+                                let slotTemp = this.NewHandlerTempName()
+                                rhsPrologue.Add(
+                                    LocalDeclarationStatement(
+                                        BindingKind.Var,
+                                        slotTemp,
+                                        type: nil,
+                                        this.TranslateAssignmentTarget(leftElement),
+                                        isRefAlias: true
+                                    )
+                                )
+                                let rhsTemp = this.NewHandlerTempName()
+                                let rhsExpr = this.TranslateWithPrologueAssignments(
+                                    assignment.Right,
+                                    rhsPrologue,
+                                    () -> this.TranslateAssignmentValue(assignment)
+                                )
+                                let rhsType = this.GetCoordinatedElementAssignmentRhsType(
+                                    leftElement,
+                                    assignment,
+                                    rhsExpr
+                                )
+                                rhsPrologue.Add(LocalDeclarationStatement(BindingKind.Let, rhsTemp, rhsType, rhsExpr))
+                                rhsPrologue.Add(
+                                    AssignmentStatement(
+                                        IdentifierExpression(slotTemp),
+                                        IdentifierExpression(rhsTemp),
+                                        assignment.OperatorToken.Text
+                                    )
+                                )
+                                return cast[GExpression](BlockExpression(rhsPrologue, IdentifierExpression(rhsTemp)))
+                            }
+                            let rhsTemp = this.NewHandlerTempName()
                             let rhsExpr = this.TranslateWithPrologueAssignments(
                                 assignment.Right,
                                 rhsPrologue,

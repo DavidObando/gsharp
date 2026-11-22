@@ -4850,6 +4850,15 @@ partial class CSharpToGSharpTranslator {
             return candidate
         }
 
+        private func NewHandlerTempName() string {
+            var candidate string
+            do {
+                candidate = "__handler${this.state.SpillCounter}"
+                this.state.SpillCounter++
+            } while !this.TryClaimSynthesizedLocalName(candidate)
+            return candidate
+        }
+
         // Rebuilds an assignment TARGET (a link's left-hand side in a chained
         // assignment `a = TARGET = c`) so its receiver/index sub-expression is
         // evaluated exactly once even though the target is written to (and, for
