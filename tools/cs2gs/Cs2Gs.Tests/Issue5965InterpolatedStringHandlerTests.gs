@@ -647,6 +647,10 @@ public ref struct SpanLiteralHandler {
     public SpanLiteralHandler(int literalLength, int formattedCount, bool upper) {
         sb = new StringBuilder();
     }
+    public SpanLiteralHandler(int literalLength, int formattedCount, string? tag) {
+        sb = new StringBuilder();
+        sb.Append(tag ?? "nil").Append(':');
+    }
     public void AppendLiteral(ReadOnlySpan<char> text) {
         sb.Append(text);
     }
@@ -739,15 +743,57 @@ public ref struct GatedIncHandler {
         Active = value > 0;
         return Active;
     }
+    public bool AppendFormatted((int A, int B) pair) {
+        Active = pair.A > 0;
+        return Active;
+    }
 }
+
+#nullable disable
+[InterpolatedStringHandler]
+public ref struct PromotedRefArgHandler {
+    private readonly StringBuilder sb;
+    public PromotedRefArgHandler(int literalLength, int formattedCount, ref string tag) {
+        sb = new StringBuilder();
+        sb.Append(tag ?? "nil").Append(':');
+    }
+    public void AppendFormatted(int value) { sb.Append(value); }
+    public override string ToString() => sb.ToString();
+}
+
+public static class ObliviousPromotedRefHelper {
+    public static string Touch(ref string target, [InterpolatedStringHandlerArgument("target")] PromotedRefArgHandler h) {
+        string prev = target;
+        target = "after:" + h.ToString();
+        return (prev ?? "nil") + "->" + target;
+    }
+    public static string ProbePromoted() {
+        string s = null;
+        if (s != null) return "unreachable";
+        s = "init";
+        var res = Touch(ref s, $"{1}");
+        return res;
+    }
+}
+#nullable enable
 
 public static class Demo {
     public sealed class PrivateTarget { public int BaseValue = 10; }
     private delegate string RefHandlerSink(int n, ref ValueHandlerForDelegate handler);
+    private static int ungatedCounter;
+    private static int nextPairCalls;
 
     private static int ReadInContainer(in OuterContainer container) {
         container.Cell.Mutate($"{1}");
         return container.Cell.Count;
+    }
+
+    private static string ReadRefReadOnlyLocal() {
+        var cells = new InnerCell[1];
+        cells[0].Count = 8;
+        ref readonly InnerCell roCell = ref cells[0];
+        roCell.Mutate($"{1}");
+        return roCell.Count.ToString();
     }
 
     private static bool CheckBoxedSame(object first, [InterpolatedStringHandlerArgument("first")] BoxedForwardHandler second) {
@@ -760,7 +806,9 @@ public static class Demo {
     }
 
     private static string AcceptSpanLiteral(SpanLiteralHandler handler) => handler.ToString();
+    private static string AcceptUngatedCounter(SpanLiteralHandler handler) => handler.ToString() + ":" + ungatedCounter;
     private static void AcceptGated(bool enabled, [InterpolatedStringHandlerArgument("enabled")] GatedIncHandler handler) { }
+    private static (int, int) NextPair() { nextPairCalls++; return (nextPairCalls * 10, nextPairCalls * 10 + 1); }
 
     private static int After() { NullFlowTarget.AfterCalls++; return 7; }
     private static int ParamsAfter() { NullFlowTarget.ParamsAfterCalls++; return 11; }
@@ -771,6 +819,8 @@ public static class Demo {
         var container = new OuterContainer();
         container.Cell.Count = 5;
         var roCount = ReadInContainer(in container);
+        var roLocalCount = ReadRefReadOnlyLocal();
+        var promotedRefRes = ObliviousPromotedRefHelper.ProbePromoted();
 
         var sameBox = CheckBoxedSame((BoxableFirstHandler)$"{1}", $"{2}");
 
@@ -779,6 +829,8 @@ public static class Demo {
         var outExistingRes = AcceptOut(out existingOut, $"{1}");
 
         var spanLit = AcceptSpanLiteral($"lit-{9}");
+        ungatedCounter = 4;
+        var ungatedRes = AcceptUngatedCounter($"{ungatedCounter++}");
 
         PrivateTarget? maybeBoxed = new PrivateTarget();
         var condExtRes = maybeBoxed?.TouchExt(out var condOut, $"{1}");
@@ -791,6 +843,13 @@ public static class Demo {
         int afterFalseGated = gatedIdx;
         AcceptGated(true, $"{gatedIdx++}{gatedIdx++}");
         int afterTrueGated = gatedIdx;
+
+        int pa = 0, pb = 0;
+        AcceptGated(false, $"{((pa, pb) = NextPair())}");
+        int pairAfterFalse = nextPairCalls + pa + pb;
+        AcceptGated(true, $"{((pa, pb) = NextPair())}{((pa, pb) = NextPair())}");
+        AcceptGated(true, $"{0}{((pa, pb) = NextPair())}");
+        string pairAfterTrue = nextPairCalls + ":" + pa + ":" + pb;
 
         var incHolder = new IncDecIndexerHolder();
         incHolder[true, $"{incHolder.Next()}"]++;
@@ -839,21 +898,21 @@ public static class Demo {
             nullConvExpr = "ce:" + ConvertibleInt.Conversions;
         }
 
-        return roCount + "|" + container.Cell.Count + "|" + sameBox + "|" +
-            outVarRes + "|" + outExistingRes + "|" + spanLit + "|" +
+        return roCount + "|" + roLocalCount + "|" + promotedRefRes + "|" + container.Cell.Count + "|" + sameBox + "|" +
+            outVarRes + "|" + outExistingRes + "|" + spanLit + "|" + ungatedRes + "|" +
             condExtRes + "|" + namedDelegateRes + "|" +
-            afterFalseGated + "," + afterTrueGated + "|" +
+            afterFalseGated + "," + afterTrueGated + "|" + pairAfterFalse + "," + pairAfterTrue + "|" +
             afterStmtPostInc + "," + valPostInc + "," + valPreInc + "," + valPostDec + "," + incNextCalls + "|" +
             nullCall + "|" + nullParams + "|" + nullAssignStmt + "|" + nullAssignExpr + "|" + nullConvStmt + "|" + nullConvExpr;
     }
 }
-`, strictIl: true, expectedOutput: "5|5|True|99:42|99:42|lit-9|53|3:7|10,12|12,12,14,13,5|c:1|p:2|s:1|e:2|cs:1|ce:2")
+`, strictIl: true, expectedOutput: "5|8|init->after:init:1|5|True|99:42|99:42|lit-9|4:5|53|3:7|10,12|0,2:20:21|12,12,14,13,5|c:1|p:2|s:1|e:2|cs:1|ce:2")
     }
 
     @Fact
     func TopLevelStatementsAndMain_AndUnsupportedDiagnostics_BehaveAsDocumented() {
         // 1. Top-level statements (Program.cs) with ref struct handlers, standalone expression,
-        //    and coordinated indexer assignment / increment.
+        //    coordinated indexer assignment/increment, out-var across frame, and deconstruction.
         let topLevelSource = `
 using System;
 using System.Runtime.CompilerServices;
@@ -873,7 +932,17 @@ var assignExpr = holder[true, $"b={6}"] = 30;
 holder[true, $"c={7}"]++;
 Console.Write($",{assignExpr},{holder.LastValue}");
 
+var ok = TryTop($"o={8}", out var outN);
+Console.Write($",{ok},{outN}");
+if (TryTop($"c={9}", out var outM)) {
+    Console.Write($",{outM}");
+}
+(var da, var db) = PairTop($"p={10}");
+Console.Write($",{da},{db}");
+
 static void Accept(TopHandler h) => Console.Write(h.ToString());
+static bool TryTop(TopHandler h, out int len) { len = h.ToString().Length; return true; }
+static (string, int) PairTop(TopHandler h) => (h.ToString(), h.ToString().Length);
 
 public sealed class TopHolder {
     public int LastValue;
@@ -901,7 +970,7 @@ public ref struct TopHandler {
         let topCtx = TranslationContext(topProject.Compilation, topDoc.SemanticModel, topDoc.FilePath)
         let topPrinted = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(topDoc, topCtx))
         Assert.DoesNotContain(topCtx.Diagnostics, (d TranslationDiagnostic) -> d.Severity != TranslationSeverity.Info)
-        Assert.Equal("top=1,sb=2,expr=3,loc=4,30,37", CompileAndRunTopLevel(topPrinted))
+        Assert.Equal("top=1,sb=2,expr=3,loc=4,30,37,True,3,3,p=10,4", CompileAndRunTopLevel(topPrinted))
 
         // 2. Explicit Main hoisted to top level with:
         //    - ref struct handler

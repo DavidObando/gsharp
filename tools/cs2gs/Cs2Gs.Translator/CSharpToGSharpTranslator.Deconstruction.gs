@@ -3139,13 +3139,20 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
+        private func CollectHoistableAssignments(expression ExpressionSyntax?, includeSelf bool) List[
+            AssignmentExpressionSyntax
+        ] -> CollectEmbeddedAssignments(expression, includeSelf).Where(
+            (a AssignmentExpressionSyntax) -> !this.IsInInterpolatedStringHandlerHole(a, expression)
+        )
+            .ToList()
+
         private func HoistAssignmentsInOrder(
             expression ExpressionSyntax?,
             includeSelf bool,
             statements List[GStatement],
             replacements List[ExpressionSyntax]
         ) List[AssignmentExpressionSyntax] {
-            let embedded = this.CollectEmbeddedAssignments(expression, includeSelf)
+            let embedded = this.CollectHoistableAssignments(expression, includeSelf)
             for node in embedded {
                 this.HoistPrecedingEvaluationOperands(expression, node, statements, replacements)
                 statements.AddRange(this.FlattenChainedAssignment(node))
@@ -3166,7 +3173,7 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
-        private func RequiresLocalAssignmentSeam(expression ExpressionSyntax) bool -> this.CollectEmbeddedAssignments(
+        private func RequiresLocalAssignmentSeam(expression ExpressionSyntax) bool -> this.CollectHoistableAssignments(
             expression,
             includeSelf: true
         )
@@ -3256,6 +3263,7 @@ partial class CSharpToGSharpTranslator {
         /// deconstruction-assignment statements into [`prologue`](paramref).
         private func TranslateConditionWithHoist(expression ExpressionSyntax, prologue List[GStatement]) GExpression? {
             if this.IsTopLevelEntryPointCall(expression) && this.ContainsRefLikeHandlerInTopLevelNode(expression) {
+                this.PredeclareTopLevelFrameOutVariables(expression)
                 let frameStmts = List[GStatement]()
                 let outerSpillPrologue List[GStatement]? = this.state.PendingSpillPrologue
                 let prevFrame = this.state.InTopLevelLambdaFrame
@@ -3659,7 +3667,7 @@ partial class CSharpToGSharpTranslator {
             let captured = this.CaptureDeconstructionStorageTargets(leftTuple, statements)
             this.LowerTuplePattern(
                 leftTuple,
-                this.TranslateExpression(right),
+                this.TranslateDeconstructionRhs(right, () -> this.TranslateExpression(right)),
                 forceRealTemps: false,
                 statements,
                 captured,
@@ -3764,12 +3772,17 @@ partial class CSharpToGSharpTranslator {
                     rightTuple
                         .Arguments
                         .Select(
-                        (argument ArgumentSyntax) -> this.TranslateValueWithNullForgiveness(argument.Expression)!!
+                        (argument ArgumentSyntax) -> this.TranslateDeconstructionRhs(
+                            argument.Expression,
+                            () -> this.TranslateValueWithNullForgiveness(argument.Expression)
+                        )!!
                     )
                         .ToList()
                 )
             } else {
-                cast[IReadOnlyList[GExpression]]([]GExpression{this.TranslateExpression(right)!!})
+                cast[IReadOnlyList[GExpression]](
+                    []GExpression{this.TranslateDeconstructionRhs(right, () -> this.TranslateExpression(right))!!}
+                )
             }
             result = []GStatement{MultiAssignmentStatement(targets, values, targetBindings)}
             return true
@@ -4449,7 +4462,7 @@ partial class CSharpToGSharpTranslator {
                     let conversions = List[GStatement]()
                     this.LowerDeconstructionDeclaration(
                         designation,
-                        this.TranslateExpression(right)!!,
+                        this.TranslateDeconstructionRhs(right, () -> this.TranslateExpression(right))!!,
                         preserveValue: false,
                         statements,
                         this.GetDeconstructionInfo(right),

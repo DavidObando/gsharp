@@ -66,35 +66,55 @@ partial class CSharpToGSharpTranslator {
             return this.TranslateInvocationCore(invocation)
         }
 
+        private func PredeclareOutVariableArgument(argument ArgumentSyntax) {
+            if argument.Expression is DeclarationExpressionSyntax{
+                Designation: SingleVariableDesignationSyntax designation
+            } &&
+                !this
+                .state
+                .PredeclaredOutDesignations
+                .Contains(designation) &&
+                this
+                .context
+                .GetDeclaredSymbol(designation) is ILocalSymbol local {
+                let type = this.PromoteIfUsedAsNullable(
+                    this.typeMapper.Map(local.Type, this.context, argument.GetLocation()),
+                    local
+                )
+                this.InvalidateLocalPromotedValue(local)
+                if type != nil {
+                    this.state.EmittedLocalTypeClauses.Add(local)
+                }
+                this.state.EmittedLocalStorageAcceptsNil[local] = type != nil && type.IsNullable
+                this.RecordEmittedLocalNullability(local, type, nil, nil)
+                (this.state.FunctionArgumentOutDeclarations ?? this.state.PendingSpillPrologue)?.Add(
+                    LocalDeclarationStatement(BindingKind.Var, this.EmittedName(local, local.Name), type)
+                )
+                this.state.PredeclaredOutDesignations.Add(designation)
+            }
+        }
+
         private func PredeclareBlockCallOutVariables(argumentList BaseArgumentListSyntax?) {
             if argumentList == nil {
                 return
             }
             for argument in argumentList.Arguments {
-                if argument.Expression is DeclarationExpressionSyntax{
-                    Designation: SingleVariableDesignationSyntax designation
-                } &&
-                    !this
-                    .state
-                    .PredeclaredOutDesignations
-                    .Contains(designation) &&
-                    this
-                    .context
-                    .GetDeclaredSymbol(designation) is ILocalSymbol local {
-                    let type = this.PromoteIfUsedAsNullable(
-                        this.typeMapper.Map(local.Type, this.context, argument.GetLocation()),
-                        local
-                    )
-                    this.InvalidateLocalPromotedValue(local)
-                    if type != nil {
-                        this.state.EmittedLocalTypeClauses.Add(local)
-                    }
-                    this.state.EmittedLocalStorageAcceptsNil[local] = type != nil && type.IsNullable
-                    this.RecordEmittedLocalNullability(local, type, nil, nil)
-                    (this.state.FunctionArgumentOutDeclarations ?? this.state.PendingSpillPrologue)?.Add(
-                        LocalDeclarationStatement(BindingKind.Var, this.EmittedName(local, local.Name), type)
-                    )
-                    this.state.PredeclaredOutDesignations.Add(designation)
+                this.PredeclareOutVariableArgument(argument)
+            }
+        }
+
+        private func PredeclareTopLevelFrameOutVariables(node Microsoft.CodeAnalysis.SyntaxNode?) {
+            if node == nil {
+                return
+            }
+            for argument in node.DescendantNodesAndSelf(
+                descendIntoChildren: (child Microsoft.CodeAnalysis.SyntaxNode) -> !(
+                    child is AnonymousFunctionExpressionSyntax || child is LocalFunctionStatementSyntax
+                )
+            )
+                .OfType[ArgumentSyntax]() {
+                if argument.RefKindKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.OutKeyword) {
+                    this.PredeclareOutVariableArgument(argument)
                 }
             }
         }
@@ -12101,7 +12121,7 @@ partial class CSharpToGSharpTranslator {
             isVoid: true
         )
 
-        private func IsInGatedInterpolatedStringHandlerHole(
+        private func IsInInterpolatedStringHandlerHole(
             node Microsoft.CodeAnalysis.SyntaxNode,
             root Microsoft.CodeAnalysis.SyntaxNode?
         ) bool {
@@ -12115,9 +12135,8 @@ partial class CSharpToGSharpTranslator {
                 if current is InterpolationSyntax interp {
                     var handlerNode Microsoft.CodeAnalysis.SyntaxNode? = interp.Parent
                     while handlerNode != nil {
-                        if this.TryGetInterpolatedStringHandlerCreation(handlerNode, out var handlerOp) {
-                            return handlerOp!!.HandlerCreationHasSuccessParameter ||
-                                handlerOp!!.HandlerAppendCallsReturnBool
+                        if this.TryGetInterpolatedStringHandlerCreation(handlerNode, out _) {
+                            return true
                         }
                         if handlerNode.Parent is Microsoft
                             .CodeAnalysis
@@ -12330,10 +12349,16 @@ partial class CSharpToGSharpTranslator {
                 localRef
                 .Local
                 .RefKind == RefKind.In ||
+                localRef
+                .Local
+                .RefKind == RefKind.RefReadOnly ||
                 !this.IsSymbolReassigned(localRef.Local, this.state.CurrentBodyScope)
             case paramRef is IParameterReferenceOperation: paramRef
                 .Parameter
                 .RefKind == RefKind.In ||
+                paramRef
+                .Parameter
+                .RefKind == RefKind.RefReadOnly ||
                 paramRef
                 .Parameter
                 .RefKind == RefKind.RefReadOnlyParameter ||
@@ -12514,11 +12539,6 @@ partial class CSharpToGSharpTranslator {
                             receiverSyntax,
                             out var isReadOnlyRecv
                         ) {
-                            let mappedRecvType = this.typeMapper.Map(
-                                recvType,
-                                this.context,
-                                receiverSyntax.GetLocation()
-                            )
                             prologue.Add(
                                 LocalDeclarationStatement(
                                     if isReadOnlyRecv {
@@ -12527,7 +12547,7 @@ partial class CSharpToGSharpTranslator {
                                         BindingKind.Var
                                     },
                                     recvName,
-                                    mappedRecvType,
+                                    type: nil,
                                     WithoutNonNullAssertion(translatedRecv),
                                     isRefAlias: !isReadOnlyRecv,
                                     isReadOnlyRefAlias: isReadOnlyRecv
@@ -12636,16 +12656,11 @@ partial class CSharpToGSharpTranslator {
                                 let extName = this.NewSpillName()
                                 let extRefKind = argOp.Parameter?.RefKind ?? RefKind.None
                                 if extRefKind == RefKind.Ref {
-                                    let mappedExtType = this.typeMapper.Map(
-                                        argOp.Parameter!!.Type,
-                                        this.context,
-                                        extRecvExpr.GetLocation()
-                                    )
                                     prologue.Add(
                                         LocalDeclarationStatement(
                                             BindingKind.Var,
                                             extName,
-                                            mappedExtType,
+                                            type: nil,
                                             WithoutNonNullAssertion(translatedExtRecv),
                                             isRefAlias: true
                                         )
@@ -12667,16 +12682,11 @@ partial class CSharpToGSharpTranslator {
                                     SymbolEqualityComparer
                                     .IncludeNullability
                                     .Equals(argOp.Value.Type, argOp.Parameter!!.Type) {
-                                    let mappedExtType = this.typeMapper.Map(
-                                        argOp.Parameter!!.Type,
-                                        this.context,
-                                        extRecvExpr.GetLocation()
-                                    )
                                     prologue.Add(
                                         LocalDeclarationStatement(
                                             BindingKind.Let,
                                             extName,
-                                            mappedExtType,
+                                            type: nil,
                                             WithoutNonNullAssertion(translatedExtRecv),
                                             isRefAlias: true,
                                             isReadOnlyRefAlias: true
@@ -12893,13 +12903,12 @@ partial class CSharpToGSharpTranslator {
                                 this.IsTrueDiscard(discardOut)
                         ) {
                             let outTemp = this.NewSpillName()
-                            let outType = this.typeMapper.Map(param!!.Type, this.context, argSyntax.GetLocation())
                             let outTarget = WithoutNonNullAssertion(this.TranslateExpression(argSyntax.Expression))
                             prologue.Add(
                                 LocalDeclarationStatement(
                                     BindingKind.Var,
                                     outTemp,
-                                    outType,
+                                    type: nil,
                                     outTarget,
                                     isRefAlias: true
                                 )
@@ -12931,13 +12940,12 @@ partial class CSharpToGSharpTranslator {
                             )
                         } else {
                             let refTemp = this.NewSpillName()
-                            let refType = this.typeMapper.Map(param!!.Type, this.context, argSyntax.GetLocation())
                             let refTarget = WithoutNonNullAssertion(this.TranslateExpression(argSyntax.Expression))
                             prologue.Add(
                                 LocalDeclarationStatement(
                                     BindingKind.Var,
                                     refTemp,
-                                    refType,
+                                    type: nil,
                                     refTarget,
                                     isRefAlias: true
                                 )
@@ -12960,12 +12968,11 @@ partial class CSharpToGSharpTranslator {
                         let translatedInArg = this.TranslateArgumentValue(argSyntax)!!
                         if translatedInArg is OutArgumentExpression{Keyword: "in"} inOut {
                             let refTemp = this.NewSpillName()
-                            let refType = this.typeMapper.Map(param!!.Type, this.context, argSyntax.GetLocation())
                             prologue.Add(
                                 LocalDeclarationStatement(
                                     BindingKind.Let,
                                     refTemp,
-                                    refType,
+                                    type: nil,
                                     IdentifierExpression(inOut.Name),
                                     isRefAlias: true,
                                     isReadOnlyRefAlias: true
@@ -12984,12 +12991,11 @@ partial class CSharpToGSharpTranslator {
                             )
                         } else if translatedInArg is UnaryExpression{Operator: "in "} inAddr {
                             let refTemp = this.NewSpillName()
-                            let refType = this.typeMapper.Map(param!!.Type, this.context, argSyntax.GetLocation())
                             prologue.Add(
                                 LocalDeclarationStatement(
                                     BindingKind.Let,
                                     refTemp,
-                                    refType,
+                                    type: nil,
                                     inAddr.Operand,
                                     isRefAlias: true,
                                     isReadOnlyRefAlias: true
@@ -13010,12 +13016,11 @@ partial class CSharpToGSharpTranslator {
                             this.IsReadOnlyAddressableStorageOperation(argOp.Value) &&
                             translatedInArg is not NonNullAssertionExpression {
                             let refTemp = this.NewSpillName()
-                            let refType = this.typeMapper.Map(param!!.Type, this.context, argSyntax.GetLocation())
                             prologue.Add(
                                 LocalDeclarationStatement(
                                     BindingKind.Let,
                                     refTemp,
-                                    refType,
+                                    type: nil,
                                     translatedInArg,
                                     isRefAlias: true,
                                     isReadOnlyRefAlias: true
@@ -13518,7 +13523,9 @@ partial class CSharpToGSharpTranslator {
             appendCaptures.ReceiverType = appendCall.Instance?.Type
             let nestedPrologue = List[GStatement]()
             let previousCaptures = this.state.ActiveCallSiteHandlerCaptures
+            let outerSpillPrologue = this.state.PendingSpillPrologue
             this.state.ActiveCallSiteHandlerCaptures = appendCaptures
+            this.state.PendingSpillPrologue = nestedPrologue
             try {
                 for var i = startIndex; i <= lastExplicit; i++ {
                     let arg = appendCall.Arguments[i]
@@ -13539,11 +13546,33 @@ partial class CSharpToGSharpTranslator {
                             nestedPrologue
                         )
                         args.Add(this.AdaptHandlerValueForTargetParameter(nestedExpr, arg.Parameter))
+                    } else if appendOp.Kind != OperationKind.InterpolatedStringAppendLiteral &&
+                        arg.ArgumentKind != ArgumentKind.DefaultValue &&
+                        arg
+                        .Value
+                        .Syntax is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ExpressionSyntax holeSyntax {
+                        let replacements = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
+                        let embedded = this.HoistAssignmentsInOrder(
+                            holeSyntax,
+                            includeSelf: true,
+                            nestedPrologue,
+                            replacements
+                        )
+                        try {
+                            args.Add(this.TranslateHandlerAppendArgument(arg, appendOp)!!)
+                        } finally {
+                            this.ReleaseHoistedAssignments(embedded, replacements)
+                        }
                     } else {
                         args.Add(this.TranslateHandlerAppendArgument(arg, appendOp)!!)
                     }
                 }
             } finally {
+                this.state.PendingSpillPrologue = outerSpillPrologue
                 this.state.ActiveCallSiteHandlerCaptures = previousCaptures
             }
             var typeArguments IReadOnlyList[GTypeReference]? = nil
