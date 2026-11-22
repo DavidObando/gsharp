@@ -894,6 +894,35 @@ checkRound19SafeControls(false).GetAwaiter().GetResult()
 `, "top-level-round19-safe-controls", executable: true)
         IlVerifier.Verify(round19SafeControlsAssembly)
         Assert.Equal("1\n99\n", fixture.Run(round19SafeControlsAssembly))
+
+        let round20SafeControlsAssembly = fixture.Compile(`
+import System
+import System.Threading.Tasks
+
+struct Box {
+    var Value int32
+}
+
+ref struct Counter {
+    var Value int32
+}
+
+async func checkRound20SafeControls() Task {
+    var c = Counter{Value: 42}
+    var b = Box{Value: 0}
+    await Task.Delay(1)
+    try {
+        b.Value = 7
+    } catch {
+        Console.WriteLine(c.Value)
+    }
+    Console.WriteLine(b.Value)
+}
+
+checkRound20SafeControls().GetAwaiter().GetResult()
+`, "top-level-round20-safe-controls", executable: true)
+        IlVerifier.Verify(round20SafeControlsAssembly)
+        Assert.Equal("7\n", fixture.Run(round20SafeControlsAssembly))
     }
 
     shared {

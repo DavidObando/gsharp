@@ -4039,6 +4039,79 @@ run(false).GetAwaiter().GetResult()
 `)
         Assert.Empty(throwingGuardSwitchExprSkipsPointerMutationSafe.Diagnostics)
         Assert.Equal("1\n", throwingGuardSwitchExprSkipsPointerMutationSafe.Output)
+
+        let nativeRefAliasStructFieldWriteThrowsCatchReadsUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+struct Box {
+    var Value int32
+}
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    var ptr = default(*Box)
+    await Task.Delay(1)
+    var ref dst = *ptr
+    try {
+        dst.Value = 1
+    } catch {
+        Console.WriteLine(c.Value)
+    }
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Contains(
+            nativeRefAliasStructFieldWriteThrowsCatchReadsUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS0219"
+        )
+        Assert.DoesNotContain(
+            nativeRefAliasStructFieldWriteThrowsCatchReadsUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS9998"
+        )
+
+        let nativeRefAliasStructFieldWriteThrowsRetainsPointerAliasUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+struct Box {
+    var Value int32
+}
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    var ptr = default(*Box)
+    var ref dst = *ptr
+    try {
+        p = &c.Value
+        dst.Value = 1
+        p = &x
+    } catch { }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Contains(
+            nativeRefAliasStructFieldWriteThrowsRetainsPointerAliasUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS0219"
+        )
+        Assert.DoesNotContain(
+            nativeRefAliasStructFieldWriteThrowsRetainsPointerAliasUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS9998"
+        )
     }
 
     @Fact

@@ -4222,8 +4222,8 @@ internal shared class RefStructAsyncLivenessAnalyzer {
 
     private func AddressOperandCannotThrow(operand BoundExpression?) bool {
         switch operand {
-            case BoundVariableExpression{Variable: LocalVariableSymbol or ParameterSymbol} {
-                return true
+            case ve is BoundVariableExpression{Variable: LocalVariableSymbol or ParameterSymbol} {
+                return !IsIndirectRefAssignmentTarget(ve.Variable)
             }
             case field is BoundFieldAccessExpression {
                 return field.Receiver != nil &&
@@ -4296,6 +4296,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             case fieldAssign is BoundFieldAssignmentExpression {
                 return fieldAssign.Receiver != nil &&
                     !IsReferenceOwnerType(fieldAssign.Receiver.Type) &&
+                    !IsIndirectRefAssignmentTarget(fieldAssign.Receiver) &&
                     ExpressionCannotThrow(fieldAssign.Value)
             }
             case fieldAccess is BoundFieldAccessExpression {
