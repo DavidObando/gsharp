@@ -349,7 +349,7 @@ The by-ref surface is deliberately scoped to managed references for CLR interop.
 
 G# can consume CLR `ref struct` types — most importantly `System.Span[T]` and `System.ReadOnlySpan[T]` — as ordinary stack-only locals, parameters, and fields. This surface builds on the by-ref machinery above.
 
-A by-ref-like (`ref struct`) value carries `System.Runtime.CompilerServices.IsByRefLikeAttribute` and is stack-only: the CLR forbids any use that would let it reach the heap. G# enforces this with **`GS0219`** — boxing or converting it to a reference type, storing it in a non-`ref struct` field, capturing it in a closure, hoisting it into an `async`/iterator state machine, using it as a generic type argument, or declaring it as a top-level global are all rejected. Because of the last rule, span locals live inside functions.
+A by-ref-like (`ref struct`) value carries `System.Runtime.CompilerServices.IsByRefLikeAttribute` and is stack-only: the CLR forbids any use that would let it reach the heap. G# enforces this with **`GS0219`** — boxing or converting it to a reference type, storing it in a non-`ref struct` field, capturing it in a closure, hoisting it into an `async`/iterator state machine, using it as a generic type argument, or declaring it at top level in a library compilation are all rejected. In executable top-level statements, by-ref-like bindings live in entry-point local slots on `<Main>$` rather than `<Program>` static fields (ADR-0228), so top-level span bindings work directly, while referencing them from declared functions or lambdas reports `GS9004` and stack-only REPL bindings never persist across submissions.
 
 ### Span element access
 

@@ -230,7 +230,9 @@ class SubmissionImports {
                 .GlobalScope
                 .Variables
                 .FirstOrDefault(
-                (v VariableSymbol) -> v is GlobalVariableSymbol && string.Equals(v.Name, name, StringComparison.Ordinal)
+                (v VariableSymbol) -> v is GlobalVariableSymbol gv &&
+                    !gv.RequiresEntryPointLocalStorage &&
+                    string.Equals(v.Name, name, StringComparison.Ordinal)
             )
         }
 
