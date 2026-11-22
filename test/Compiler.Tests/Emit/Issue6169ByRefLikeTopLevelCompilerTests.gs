@@ -809,6 +809,45 @@ checkRound17SafeControls("x").GetAwaiter().GetResult()
 `, "top-level-round17-safe-controls", executable: true)
         IlVerifier.Verify(round17SafeControlsAssembly)
         Assert.Equal("2\n", fixture.Run(round17SafeControlsAssembly))
+
+        let round18SafeControlsAssembly = fixture.Compile(`
+import System
+import System.Threading.Tasks
+
+let view readonly span[byte] = u8"hello"
+
+try {
+    await Task.Delay(1)
+    let r = switch 0 {
+        case _ when throw InvalidOperationException(): view.Length
+        default: 0
+    }
+    Console.WriteLine(r)
+} catch {
+    Console.WriteLine("caught-expr")
+}
+
+try {
+    switch 0 {
+        case _ when throw InvalidOperationException() {
+            await Task.Delay(1)
+            Console.WriteLine(view.Length)
+        }
+        default { }
+    }
+} catch {
+    Console.WriteLine("caught-stmt")
+}
+
+try {
+    var n = 1
+} catch {
+    await Task.Delay(1)
+    Console.WriteLine(view.Length)
+}
+`, "top-level-round18-safe-controls", executable: true)
+        IlVerifier.Verify(round18SafeControlsAssembly)
+        Assert.Equal("caught-expr\ncaught-stmt\n", fixture.Run(round18SafeControlsAssembly))
     }
 
     shared {

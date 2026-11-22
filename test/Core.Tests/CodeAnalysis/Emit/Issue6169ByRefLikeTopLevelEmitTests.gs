@@ -3688,6 +3688,112 @@ run().GetAwaiter().GetResult()
 `)
         Assert.Empty(deepNestedTryFinallyCompletesLinearlySafe.Diagnostics)
         Assert.EndsWith("\n1\n", deepNestedTryFinallyCompletesLinearlySafe.Output)
+
+        let deepNestedInitializerTryFinallyCompletesLinearlySafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    Console.WriteLine(c.Value)
+    await Task.Delay(1)
+    let r = {
+        if true {
+            try { Console.WriteLine(0) } finally {
+                try { Console.WriteLine(0) } finally {
+                    try { Console.WriteLine(0) } finally {
+                        try { Console.WriteLine(0) } finally {
+                            try { Console.WriteLine(0) } finally {
+                                try { Console.WriteLine(0) } finally {
+                                    try { Console.WriteLine(0) } finally {
+                                        try { Console.WriteLine(0) } finally {
+                                            try { Console.WriteLine(0) } finally {
+                                                try { Console.WriteLine(0) } finally {
+                                                    try { Console.WriteLine(0) } finally {
+                                                        try { Console.WriteLine(0) } finally {
+                                                            try { Console.WriteLine(0) } finally {
+                                                                try { Console.WriteLine(0) } finally {
+                                                                    try { Console.WriteLine(0) } finally {
+                                                                        try { Console.WriteLine(0) } finally {
+                                                                            Console.WriteLine(1)
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        1
+    }
+    Console.WriteLine(r)
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Empty(deepNestedInitializerTryFinallyCompletesLinearlySafe.Diagnostics)
+        Assert.EndsWith("\n1\n1\n", deepNestedInitializerTryFinallyCompletesLinearlySafe.Output)
+
+        let throwingSwitchGuardSkipsUnreachableArmAwaitSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+let view readonly span[byte] = u8"hello"
+
+try {
+    await Task.Delay(1)
+    let r = switch 0 {
+        case _ when throw InvalidOperationException(): view.Length
+        default: 0
+    }
+    Console.WriteLine(r)
+} catch {
+    Console.WriteLine("caught-expr")
+}
+
+try {
+    switch 0 {
+        case _ when throw InvalidOperationException() {
+            await Task.Delay(1)
+            Console.WriteLine(view.Length)
+        }
+        default { }
+    }
+} catch {
+    Console.WriteLine("caught-stmt")
+}
+`)
+        Assert.Empty(throwingSwitchGuardSkipsUnreachableArmAwaitSafe.Diagnostics)
+        Assert.Equal("caught-expr\ncaught-stmt\n", throwingSwitchGuardSkipsUnreachableArmAwaitSafe.Output)
+
+        let unreachableCatchWithAwaitSkipsSpanSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+let view readonly span[byte] = u8"hello"
+try {
+    var n = 1
+} catch {
+    await Task.Delay(1)
+    Console.WriteLine(view.Length)
+}
+Console.WriteLine(1)
+`)
+        Assert.Empty(unreachableCatchWithAwaitSkipsSpanSafe.Diagnostics)
+        Assert.Equal("1\n", unreachableCatchWithAwaitSkipsSpanSafe.Output)
     }
 
     @Fact
