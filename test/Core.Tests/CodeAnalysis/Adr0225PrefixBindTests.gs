@@ -850,7 +850,7 @@ func Value(x int32) int32 {
     shared {
         // The statements that the mutation check inserts, the ID that the complete file reports, and the
         // finality when nothing follows the cut. A later declaration can declare the name, or a later type can
-        // hide the imported one.
+        // hide the imported one. A local function value has a fixed signature.
         private let Mutations[](Statement string, Id string, WithNothingAfterTheCut DiagnosticFinality) = [](
             string,
             string,
@@ -859,7 +859,13 @@ func Value(x int32) int32 {
             ("System.Console.NoSuchMember__(1)", "GS0159", DiagnosticFinality.FutureDependent),
             ("let noSuchProperty__ = System.Math.NoSuchProperty__", "GS0158", DiagnosticFinality.FutureDependent),
             ("System.Math.Abs()", "GS0159", DiagnosticFinality.FutureDependent),
-            ("noSuchFunction__(1)", "GS0130", DiagnosticFinality.FutureDependent)
+            ("noSuchFunction__(1)", "GS0130", DiagnosticFinality.FutureDependent),
+            // ADR-0225 D6.5: no later text changes the signature of a local function value.
+            (
+                "let local__ = func (a int32) int32 {\n    return a\n}\nlet localResult__ = local__()",
+                "GS0144",
+                DiagnosticFinality.Final
+            )
         }
 
         private func Bind(source string, remainder PrefixRemainder) PrefixBindResult -> BindWith(

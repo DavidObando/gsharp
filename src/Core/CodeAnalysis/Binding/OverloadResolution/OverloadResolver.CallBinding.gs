@@ -719,6 +719,16 @@ internal partial class OverloadResolver {
     /// @returns The bound call or conversion.
     func BindCallExpression(syntax CallExpressionSyntax, resolvedType TypeSymbol? = nil) BoundExpression {
         let frame = CallCandidateRecorder.Begin(syntax)
+        // ADR-0225 D6.5: the overload and argument reports of this call depend on its candidate set.
+        let callDiagnostics = Diagnostics
+        let callFramePushed = callDiagnostics.PushCallFrame(
+            syntax,
+            if resolvedType == nil {
+                PrefixCallKind.Name
+            } else {
+                PrefixCallKind.Member
+            }
+        )
         try {
             var bound = BindCallExpressionCore(syntax, resolvedType)
             if verifyCallArgumentsAfterConversions != nil {
@@ -733,6 +743,7 @@ internal partial class OverloadResolver {
             return bound
         } finally {
             CallCandidateRecorder.End(frame)
+            callDiagnostics.PopCallFrame(callFramePushed)
         }
     }
 
@@ -1688,15 +1699,30 @@ internal partial class OverloadResolver {
             }
         ) as FunctionTypeSymbol
         if variable != nil && fnType != nil {
-            if !TryBindFunctionTypeArguments(
-                variable.Name,
-                fnType,
+            // ADR-0225 D6.5: no later text changes the signature of a local or a parameter.
+            let fixedDiagnostics = Diagnostics
+            let fixedPushed = fixedDiagnostics.PushCallFrame(
                 syntax,
-                boundArguments.ToImmutable(),
-                variable.CallableParameterNames,
-                out var convertedArgs
-            ) {
-                return BoundErrorExpression(nil)
+                if variable is LocalVariableSymbol {
+                    PrefixCallKind.Fixed
+                } else {
+                    PrefixCallKind.Name
+                }
+            )
+            var convertedArgs = default(ImmutableArray[BoundExpression])
+            try {
+                if !TryBindFunctionTypeArguments(
+                    variable.Name,
+                    fnType,
+                    syntax,
+                    boundArguments.ToImmutable(),
+                    variable.CallableParameterNames,
+                    out convertedArgs
+                ) {
+                    return BoundErrorExpression(nil)
+                }
+            } finally {
+                fixedDiagnostics.PopCallFrame(fixedPushed)
             }
             return BuildIndirectDelegateCall(syntax, variable, fnType, convertedArgs, narrowedCallTargetType)
         }
@@ -1713,16 +1739,32 @@ internal partial class OverloadResolver {
             }
         ) as DelegateTypeSymbol
         if namedDelegateVar != nil && namedDelegateSym != nil {
-            if !TryBindNamedDelegateArguments(
-                namedDelegateVar.Name,
-                namedDelegateSym,
+            // ADR-0225 D6.5: no later text changes the signature of a local or a parameter.
+            let fixedDiagnostics = Diagnostics
+            let fixedPushed = fixedDiagnostics.PushCallFrame(
                 syntax,
-                boundArguments.ToImmutable(),
-                out var convertedNamedArgs,
-                out var namedRefKinds,
-                namedDelegateVar.CallableParameterNames
-            ) {
-                return BoundErrorExpression(nil)
+                if namedDelegateVar is LocalVariableSymbol {
+                    PrefixCallKind.Fixed
+                } else {
+                    PrefixCallKind.Name
+                }
+            )
+            var convertedNamedArgs = default(ImmutableArray[BoundExpression])
+            var namedRefKinds = default(ImmutableArray[RefKind])
+            try {
+                if !TryBindNamedDelegateArguments(
+                    namedDelegateVar.Name,
+                    namedDelegateSym,
+                    syntax,
+                    boundArguments.ToImmutable(),
+                    out convertedNamedArgs,
+                    out namedRefKinds,
+                    namedDelegateVar.CallableParameterNames
+                ) {
+                    return BoundErrorExpression(nil)
+                }
+            } finally {
+                fixedDiagnostics.PopCallFrame(fixedPushed)
             }
             return BuildIndirectDelegateCall(
                 syntax,

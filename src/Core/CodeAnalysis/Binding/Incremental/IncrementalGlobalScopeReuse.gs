@@ -668,6 +668,20 @@ internal shared class IncrementalGlobalScopeReuse {
                 }
             }
         }
+        // ADR-0225 D6.6: the open body of a prefix tree ends at the cut. The text that the bind removed
+        // after the cut belongs to the body, so that two cuts in one body give the same skeleton.
+        if tree.Prefix is {} prefixCut {
+            let removedEnd = if prefixCut.Remainder == PrefixRemainder.Nothing || !prefixCut.HasKeptText {
+                tree.Text.Length
+            } else {
+                prefixCut.KeptStart
+            }
+            for var i = 0; i < spans.Count; i++ {
+                if spans[i].End == prefixCut.Cut && removedEnd > prefixCut.Cut {
+                    spans[i] = TextSpan.FromBounds(spans[i].Start, removedEnd)
+                }
+            }
+        }
         spans.Sort((a TextSpan, b TextSpan) -> a.Start.CompareTo(b.Start))
         return spans
     }
