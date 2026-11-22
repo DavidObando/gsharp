@@ -599,6 +599,42 @@ try {
 `, "top-level-try-non-throwing-overwrite-safe", executable: true)
         IlVerifier.Verify(tryNonThrowingOverwriteControlsAssembly)
         Assert.Equal("20,30\n", fixture.Run(tryNonThrowingOverwriteControlsAssembly))
+
+        let blockTryOverwriteAndReseatBeforeThrowAssembly = fixture.Compile(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+var c = Counter{Value: 10}
+await Task.Delay(1)
+let ignored = {
+    try {
+        c = Counter{Value: 20}
+        throw InvalidOperationException()
+    } catch {
+        Console.Write("${c.Value},")
+    }
+    0
+}
+var x = 1
+async func checkReseatBeforeThrow() Task {
+    var c2 = Counter{Value: 42}
+    var y = 1
+    var p = &c2.Value
+    try {
+        p = &y
+        throw InvalidOperationException()
+    } catch { }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+checkReseatBeforeThrow().GetAwaiter().GetResult()
+`, "top-level-block-try-overwrite-and-reseat-before-throw-safe", executable: true)
+        IlVerifier.Verify(blockTryOverwriteAndReseatBeforeThrowAssembly)
+        Assert.Equal("20,1\n", fixture.Run(blockTryOverwriteAndReseatBeforeThrowAssembly))
     }
 
     shared {

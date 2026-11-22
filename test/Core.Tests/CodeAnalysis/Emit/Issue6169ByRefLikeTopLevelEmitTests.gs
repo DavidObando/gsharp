@@ -2625,6 +2625,85 @@ try {
 `)
         Assert.Empty(tryNonThrowingOverwriteBeforeTryAwaitSafe.Diagnostics)
         Assert.Equal("20\n", tryNonThrowingOverwriteBeforeTryAwaitSafe.Output)
+
+        let ctorBackedStructLiteralInitializerThrowsUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+func failInit() int32 {
+    throw InvalidOperationException()
+}
+
+ref struct Counter {
+    private var _tag int32 = 1
+    var Value int32 = failInit()
+}
+
+async func run() Task {
+    var c = Counter{Value: 10}
+    await Task.Delay(1)
+    try {
+        c = Counter{Value: 20}
+    } catch {
+        Console.WriteLine(c.Value)
+    }
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Contains(ctorBackedStructLiteralInitializerThrowsUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(
+            ctorBackedStructLiteralInitializerThrowsUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS9998"
+        )
+
+        let blockExprTryOverwriteBeforeThrowCatchSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+var c = Counter{Value: 10}
+await Task.Delay(1)
+let ignored = {
+    try {
+        c = Counter{Value: 20}
+        throw InvalidOperationException()
+    } catch {
+        Console.WriteLine(c.Value)
+    }
+    0
+}
+`)
+        Assert.Empty(blockExprTryOverwriteBeforeThrowCatchSafe.Diagnostics)
+        Assert.Equal("20\n", blockExprTryOverwriteBeforeThrowCatchSafe.Output)
+
+        let tryReseatAliasBeforeThrowCatchSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &c.Value
+    try {
+        p = &x
+        throw InvalidOperationException()
+    } catch { }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Empty(tryReseatAliasBeforeThrowCatchSafe.Diagnostics)
+        Assert.Equal("1\n", tryReseatAliasBeforeThrowCatchSafe.Output)
     }
 
     @Fact
