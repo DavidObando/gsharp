@@ -389,6 +389,43 @@ Console.WriteLine(r2)
 `, "top-level-switch-try-overwrite-paths-safe", executable: true)
         IlVerifier.Verify(switchOverwriteComplexPathsSafeAssembly)
         Assert.Equal("42,7\n99\n", fixture.Run(switchOverwriteComplexPathsSafeAssembly))
+
+        let standaloneSwitchAndTerminatingBranchSafeAssembly = fixture.Compile(`import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(flag bool) Task {
+    var c = Counter{Value: 10}
+    await Task.Delay(1)
+    let r = if flag {
+        return
+    } else {
+        c = Counter{Value: 42}
+        0
+    }
+    Console.WriteLine(c.Value + r)
+}
+
+run(false).GetAwaiter().GetResult()
+
+var topC = Counter{Value: 10}
+let n = 1
+await Task.Delay(1)
+switch n {
+    case _ when ({
+        topC = Counter{Value: 77}
+        false
+    }) { }
+    default {
+        Console.WriteLine(topC.Value)
+    }
+}
+`, "top-level-standalone-switch-and-terminating-branch-safe", executable: true)
+        IlVerifier.Verify(standaloneSwitchAndTerminatingBranchSafeAssembly)
+        Assert.Equal("42\n77\n", fixture.Run(standaloneSwitchAndTerminatingBranchSafeAssembly))
     }
 
     shared {

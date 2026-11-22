@@ -1208,6 +1208,177 @@ Console.WriteLine(r)
 `)
         Assert.Empty(switchPatternOverwriteReadBeforeAwaitGuardSafe.Diagnostics)
         Assert.Equal("1\n", switchPatternOverwriteReadBeforeAwaitGuardSafe.Output)
+
+        let negatedDiscardGuardSkippedUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+var c = Counter{Value: 10}
+let n = 1
+await Task.Delay(1)
+let r = switch n {
+    case not _ when ({
+        c = Counter{Value: 42}
+        true
+    }): 0
+    default: c.Value
+}
+Console.WriteLine(r)
+`)
+        Assert.Contains(negatedDiscardGuardSkippedUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(negatedDiscardGuardSkippedUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let doubleNegatedDiscardGuardSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+var c = Counter{Value: 10}
+let n = 1
+await Task.Delay(1)
+let r = switch n {
+    case not (not _) when ({
+        c = Counter{Value: 42}
+        false
+    }): 0
+    default: c.Value
+}
+Console.WriteLine(r)
+`)
+        Assert.Empty(doubleNegatedDiscardGuardSafe.Diagnostics)
+        Assert.Equal("42\n", doubleNegatedDiscardGuardSafe.Output)
+
+        let isPatternFailedTypeTestUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+class Box {
+    var Value int32
+}
+
+ref struct Counter {
+    var Value int32
+}
+
+var c = Counter{Value: 10}
+let value object = "not-a-box"
+await Task.Delay(1)
+let ok = value is Box{
+    Value: > ({
+        c = Counter{Value: 42}
+        0
+    })
+}
+Console.WriteLine("${ok},${c.Value}")
+`)
+        Assert.Contains(isPatternFailedTypeTestUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(isPatternFailedTypeTestUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let chainedAssignmentPointerAliasUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    var q = (p = &c.Value)
+    await Task.Delay(1)
+    Console.WriteLine(*q)
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Contains(chainedAssignmentPointerAliasUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(chainedAssignmentPointerAliasUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let terminatingConditionalBranchSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(flag bool) Task {
+    var c = Counter{Value: 10}
+    await Task.Delay(1)
+    let r = if flag {
+        return
+    } else {
+        c = Counter{Value: 42}
+        0
+    }
+    Console.WriteLine(c.Value + r)
+}
+
+run(false).GetAwaiter().GetResult()
+`)
+        Assert.Empty(terminatingConditionalBranchSafe.Diagnostics)
+        Assert.Equal("42\n", terminatingConditionalBranchSafe.Output)
+
+        let terminatingSwitchExprArmSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(flag bool) Task {
+    var c = Counter{Value: 10}
+    await Task.Delay(1)
+    let r = switch flag {
+        case true: {
+            return
+        }
+        default: {
+            c = Counter{Value: 42}
+            0
+        }
+    }
+    Console.WriteLine(c.Value + r)
+}
+
+run(false).GetAwaiter().GetResult()
+`)
+        Assert.Empty(terminatingSwitchExprArmSafe.Diagnostics)
+        Assert.Equal("42\n", terminatingSwitchExprArmSafe.Output)
+
+        let standaloneSwitchFailedGuardSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+var c = Counter{Value: 10}
+let n = 1
+await Task.Delay(1)
+switch n {
+    case _ when ({
+        c = Counter{Value: 42}
+        false
+    }) { }
+    default {
+        Console.WriteLine(c.Value)
+    }
+}
+`)
+        Assert.Empty(standaloneSwitchFailedGuardSafe.Diagnostics)
+        Assert.Equal("42\n", standaloneSwitchFailedGuardSafe.Output)
     }
 
     @Fact
