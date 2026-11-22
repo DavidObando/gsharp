@@ -569,7 +569,7 @@ partial class SemanticModel {
             // (#6189).
             if InheritedCalleeLoad(node) is {} memberCallee &&
                 CalleeName(memberCallee) is {} calleeName &&
-                OriginatingCall(node, calleeName) is {Identifier: {} identifier} &&
+                OriginatingCall(node, memberCallee, calleeName) is {Identifier: {} identifier} &&
                 object.ReferenceEquals(identifier.SyntaxTree, tree) && !boundBySyntax.ContainsKey(identifier) {
                 boundBySyntax.Add(identifier, memberCallee)
             }
@@ -594,7 +594,9 @@ partial class SemanticModel {
         private func InheritedCalleeLoad(node BoundNode) BoundExpression? {
             let callee = switch node {
                 case indirect is BoundIndirectCallExpression: indirect.Target
-                case conditional is BoundNullConditionalAccessExpression: conditional.Receiver
+                case conditional is BoundNullConditionalAccessExpression when InvokesCapture(
+                    conditional
+                ): conditional.Receiver
                 case invoke is BoundImportedInstanceCallExpression when IsDelegateInvoke(invoke): invoke.Receiver
                 default: default(BoundExpression?)
             }
@@ -605,26 +607,29 @@ partial class SemanticModel {
             }
         }
 
-        /// Gets the call of the accessor chain [`node`](paramref) is anchored in that invokes a member
-        /// named [`name`](paramref): the only one so named, or the one whose argument list holds the
-        /// invocation's arguments (`c.G(x).G()`). Null when neither decides.
-        private func OriginatingCall(node BoundNode, name string) CallExpressionSyntax? {
-            let candidates = List[CallExpressionSyntax]()
-            let pending = Stack[SyntaxNode]()
-            // The load inherits the anchor of whatever call it ends up in (`G()` in `c.G(x).G()`), so
-            // the whole chain is searched.
+        /// Gets the call of the accessor chain [`node`](paramref) is anchored in that invokes
+        /// [`load`](paramref), a member named [`name`](paramref): a call so named that directly
+        /// follows the load's receiver, and when several do, the one whose argument list holds the
+        /// invocation's arguments (`c.G(x).G()`). Null when none decides.
+        private func OriginatingCall(node BoundNode, load BoundExpression, name string) CallExpressionSyntax? {
+            // The load inherits the anchor of whatever call it ends up in (`G()` in `c.G(x).G()`),
+            // so the whole chain is searched.
             var chain = node.Syntax
             while chain?.Parent is AccessorExpressionSyntax parent {
                 chain = parent
             }
-            if chain != nil {
-                pending.Push(chain)
+            if chain == nil || ReceiverName(load) is not{} receiverName {
+                return nil
             }
-            while pending.TryPop(out var segment) {
-                if segment is AccessorExpressionSyntax accessor {
-                    pending.Push(accessor.LeftPart)
-                    pending.Push(accessor.RightPart)
-                } else if segment is CallExpressionSyntax{Callee: nil} call && call.Identifier.ValueText == name {
+            let segments = List[SyntaxNode]()
+            FlattenChain(chain, segments)
+            let candidates = List[CallExpressionSyntax]()
+            for var i = 1; i < segments.Count; i++ {
+                if segments[i] is CallExpressionSyntax{Callee: nil} call &&
+                    call
+                    .Identifier
+                    .ValueText == name &&
+                    SegmentName(segments[i - 1]) == receiverName {
                     candidates.Add(call)
                 }
             }
@@ -636,23 +641,67 @@ partial class SemanticModel {
                 for var depth = 0; depth < 4 && current != nil; depth++ {
                     if current.Syntax is {} syntax {
                         for candidate in candidates {
-                            if syntax
-                                .Span
-                                .Start >= candidate
-                                .OpenParenthesisToken
-                                .Span
-                                .End &&
-                                syntax
-                                .Span
-                                .End <= candidate
-                                .CloseParenthesisToken
-                                .Span
-                                .Start {
+                            let listStart = candidate.OpenParenthesisToken.Span.End
+                            let listEnd = candidate.CloseParenthesisToken.Span.Start
+                            if syntax.Span.Start >= listStart && syntax.Span.End <= listEnd {
                                 return candidate
                             }
                         }
                     }
                     current = (current as BoundConversionExpression)?.Expression
+                }
+            }
+            return nil
+        }
+
+        /// Lists the segments of an accessor chain in source order.
+        private func FlattenChain(syntax SyntaxNode, segments List[SyntaxNode]) {
+            if syntax is AccessorExpressionSyntax accessor {
+                FlattenChain(accessor.LeftPart, segments)
+                FlattenChain(accessor.RightPart, segments)
+            } else {
+                segments.Add(syntax)
+            }
+        }
+
+        /// Gets the name a chain segment reads: a name, or a call's name (whose result a member is
+        /// read from).
+        private func SegmentName(segment SyntaxNode) string? -> switch segment {
+            case name is NameExpressionSyntax: name.IdentifierToken.ValueText
+            default: default(string?)
+        }
+
+        /// Gets the name of the receiver a member load reads through, through conversions and null
+        /// assertions, or null when the receiver is not a named variable or member.
+        private func ReceiverName(load BoundExpression) string? {
+            var current BoundExpression? = load
+            for var depth = 0; depth < 8 && current != nil; depth++ {
+                switch current {
+                    case field is BoundFieldAccessExpression {
+                        return if field.Receiver is {} receiver {
+                            CalleeName(receiver)
+                        } else {
+                            default(string?)
+                        }
+                    }
+                    case property is BoundPropertyAccessExpression {
+                        return if property.Receiver is {} receiver {
+                            CalleeName(receiver)
+                        } else {
+                            default(string?)
+                        }
+                    }
+                    case conversion is BoundConversionExpression {
+                        current = conversion.Expression
+                    }
+                    case assertion is BoundUnaryExpression when assertion
+                        .Op
+                        .Kind == BoundUnaryOperatorKind.NullAssertion {
+                        current = assertion.Operand
+                    }
+                    default {
+                        return nil
+                    }
                 }
             }
             return nil
@@ -664,6 +713,21 @@ partial class SemanticModel {
             case call is BoundCallOperationExpression: call.Arguments
             case conditional is BoundNullConditionalAccessExpression: InvocationArguments(conditional.WhenNotNull)
             default: ImmutableArray[BoundExpression].Empty
+        }
+
+        /// Gets whether the non-null branch of [`conditional`](paramref) invokes the value it
+        /// captured (`c.G?(x)`), not a member of it (`c.G?.M(x)`).
+        private func InvokesCapture(conditional BoundNullConditionalAccessExpression) bool {
+            let target = switch conditional.WhenNotNull {
+                case indirect is BoundIndirectCallExpression: indirect.Target
+                case invoke is BoundImportedInstanceCallExpression when IsDelegateInvoke(invoke): invoke.Receiver
+                default: default(BoundExpression?)
+            }
+            var current = target
+            while current is BoundConversionExpression conversion {
+                current = conversion.Expression
+            }
+            return current is BoundVariableExpression read && object.ReferenceEquals(read.Variable, conditional.Capture)
         }
 
         /// Gets whether [`invoke`](paramref) calls a delegate's `Invoke`.

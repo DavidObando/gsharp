@@ -267,6 +267,29 @@ open class Issue6189FunctionValueCalleeTests {
         Assert.Null(model.GetTypeInfo(method).Type)
     }
 
+    @Theory
+    @InlineData("c.G.Invoke(x).M()", "M") // an explicit `Invoke`, then a method of the result
+    @InlineData("c.G.Invoke(x).G()", "G") // the same, where the method has the field's name
+    @InlineData("d.G?.G(x)", "G") // an ordinary `?.` access of a method with the field's name
+    @InlineData("d.G!!.G(x)", "G")
+    func MethodWithTheNameOfAFunctionValueInTheChain_AnswersTheMethod(statement string, method string) {
+        // Only a call that directly follows the load's receiver invokes the load.
+        let (model, tree, compilation) = CreateModel(
+            "package P\n\nclass R {\n    func G(v int32) int32 -> v\n    func G() int32 -> 0\n    func M() int32 -> 0\n}\n\nclass C {\n    var G (int32) -> R = (v int32) -> R()\n}\n\nclass D {\n    var G R? = nil\n}\n\nfunc F(c C, d D) {\n    let x = 1\n    let k = " +
+                statement +
+                "\n}\n"
+        )
+        Assert.DoesNotContain(compilation.GetDiagnostics(), (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+        let token = tree
+            .Root
+            .DescendantNodes()
+            .OfType[CallExpressionSyntax]()
+            .Single((c CallExpressionSyntax) -> c.Identifier.ValueText == method)
+            .Identifier
+        Assert.IsAssignableFrom[FunctionSymbol](model.GetSymbolInfo(token).Symbol)
+        Assert.Null(model.GetTypeInfo(token).Type)
+    }
+
     @Fact
     func CallOfANonCallableField_IdentifierAnswersAsBefore() {
         // The member is not invoked, so the call does not keep it as its callee.
