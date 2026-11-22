@@ -2455,6 +2455,176 @@ run(0).GetAwaiter().GetResult()
 `)
         Assert.Empty(switchGuardToArmInteriorLabelOverwrittenSafe.Diagnostics)
         Assert.Equal("1\n", switchGuardToArmInteriorLabelOverwrittenSafe.Output)
+
+        let faultedAwaitBeforeOverwriteCatchReadsUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func fail() Task {
+    await Task.Delay(1)
+    throw InvalidOperationException()
+}
+
+var c = Counter{Value: 10}
+try {
+    await fail()
+    c = Counter{Value: 20}
+} catch {
+    Console.WriteLine(c.Value)
+}
+`)
+        Assert.Contains(faultedAwaitBeforeOverwriteCatchReadsUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(
+            faultedAwaitBeforeOverwriteCatchReadsUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS9998"
+        )
+
+        let throwingRhsAwaitOverwriteCatchReadsUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func getVal() Task[int32] {
+    await Task.Delay(1)
+    throw InvalidOperationException()
+}
+
+var c = Counter{Value: 10}
+try {
+    c = Counter{Value: await getVal()}
+} catch {
+    Console.WriteLine(c.Value)
+}
+`)
+        Assert.Contains(throwingRhsAwaitOverwriteCatchReadsUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(throwingRhsAwaitOverwriteCatchReadsUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let throwingPostAwaitOverwriteCatchReadsUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+func makeCounter() Counter {
+    throw InvalidOperationException()
+}
+
+var c = Counter{Value: 10}
+try {
+    await Task.Delay(1)
+    c = makeCounter()
+} catch {
+    Console.WriteLine(c.Value)
+}
+`)
+        Assert.Contains(throwingPostAwaitOverwriteCatchReadsUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(
+            throwingPostAwaitOverwriteCatchReadsUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS9998"
+        )
+
+        let blockExprFaultedAwaitBeforeOverwriteCatchReadsUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func fail() Task {
+    await Task.Delay(1)
+    throw InvalidOperationException()
+}
+
+var c = Counter{Value: 10}
+try {
+    let _ = {
+        await fail()
+        c = Counter{Value: 20}
+        0
+    }
+} catch {
+    Console.WriteLine(c.Value)
+}
+`)
+        Assert.Contains(
+            blockExprFaultedAwaitBeforeOverwriteCatchReadsUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS0219"
+        )
+        Assert.DoesNotContain(
+            blockExprFaultedAwaitBeforeOverwriteCatchReadsUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS9998"
+        )
+
+        let tryAwaitCatchFallsThroughToReadUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+var c = Counter{Value: 10}
+try {
+    await Task.Delay(1)
+    c = Counter{Value: 20}
+} catch {
+    Console.WriteLine("err")
+}
+Console.WriteLine(c.Value)
+`)
+        Assert.Contains(tryAwaitCatchFallsThroughToReadUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(tryAwaitCatchFallsThroughToReadUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let tryAwaitAfterNonThrowingOverwriteCatchReturnsSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+var c = Counter{Value: 10}
+try {
+    await Task.Delay(1)
+    c = Counter{Value: 20}
+} catch {
+    Console.WriteLine("err")
+    return
+}
+Console.WriteLine(c.Value)
+`)
+        Assert.Empty(tryAwaitAfterNonThrowingOverwriteCatchReturnsSafe.Diagnostics)
+        Assert.Equal("20\n", tryAwaitAfterNonThrowingOverwriteCatchReturnsSafe.Output)
+
+        let tryNonThrowingOverwriteBeforeTryAwaitSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+var c = Counter{Value: 10}
+await Task.Delay(1)
+try {
+    c = Counter{Value: 20}
+    throw InvalidOperationException()
+} catch {
+    Console.WriteLine(c.Value)
+}
+`)
+        Assert.Empty(tryNonThrowingOverwriteBeforeTryAwaitSafe.Diagnostics)
+        Assert.Equal("20\n", tryNonThrowingOverwriteBeforeTryAwaitSafe.Output)
     }
 
     @Fact

@@ -572,6 +572,33 @@ checkEarlyReturnAndArmGoto(false, 0).GetAwaiter().GetResult()
 `, "top-level-early-return-and-arm-goto-safe", executable: true)
         IlVerifier.Verify(earlyReturnAndArmGotoSafeAssembly)
         Assert.Equal("10,20,9\n", fixture.Run(earlyReturnAndArmGotoSafeAssembly))
+
+        let tryNonThrowingOverwriteControlsAssembly = fixture.Compile(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+var c = Counter{Value: 10}
+try {
+    await Task.Delay(1)
+    c = Counter{Value: 20}
+} catch {
+    c = Counter{Value: 25}
+}
+Console.Write("${c.Value},")
+await Task.Delay(1)
+try {
+    c = Counter{Value: 30}
+    throw InvalidOperationException()
+} catch {
+    Console.WriteLine(c.Value)
+}
+`, "top-level-try-non-throwing-overwrite-safe", executable: true)
+        IlVerifier.Verify(tryNonThrowingOverwriteControlsAssembly)
+        Assert.Equal("20,30\n", fixture.Run(tryNonThrowingOverwriteControlsAssembly))
     }
 
     shared {
