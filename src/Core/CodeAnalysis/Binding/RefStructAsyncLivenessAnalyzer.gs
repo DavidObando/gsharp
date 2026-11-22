@@ -311,8 +311,9 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             }
         }
 
-        private func RecordOverwrite(variable VariableSymbol) {
-            if interesting.Contains(variable) && !RefStructAsyncLivenessAnalyzer.IsNativeRefAlias(variable) {
+        private func RecordOverwrite(variable VariableSymbol, allowNativeRefAlias bool = false) {
+            if interesting.Contains(variable) &&
+                (allowNativeRefAlias || !RefStructAsyncLivenessAnalyzer.IsNativeRefAlias(variable)) {
                 definitelyOverwritten.Add(variable)
                 if !Reads.Contains(variable) {
                     PatternKills.Add(variable)
@@ -338,7 +339,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 ) {
                     RefStructAsyncLivenessAnalyzer.UpdatePointsTo(node.Variable, initializer, pointsTo, interesting)
                 }
-                RecordOverwrite(node.Variable)
+                RecordOverwrite(node.Variable, allowNativeRefAlias: true)
                 return
             }
             base.VisitVariableDeclaration(node)
@@ -4125,13 +4126,22 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                         ReportIfUnsafe(live, killTarget, diagnostics, statement, "await", collector.PatternKills)
                     }
                     if collector.InternalUnsafeVariables.Count > 0 {
-                        ReportIfUnsafe(
-                            collector.InternalUnsafeVariables,
-                            excludedSelfKill: nil,
-                            diagnostics,
-                            statement,
-                            "await"
-                        )
+                        let remainingUnsafe = if collector.ContainsAwait {
+                            {
+                                let set = HashSet[VariableSymbol](collector.InternalUnsafeVariables)
+                                for v in live {
+                                    if !object.ReferenceEquals(v, killTarget) && !collector.PatternKills.Contains(v) {
+                                        set.Remove(v)
+                                    }
+                                }
+                                set
+                            }
+                        } else {
+                            collector.InternalUnsafeVariables
+                        }
+                        if remainingUnsafe.Count > 0 {
+                            ReportIfUnsafe(remainingUnsafe, excludedSelfKill: nil, diagnostics, statement, "await")
+                        }
                     }
                     if killTarget != nil {
                         live.Remove(killTarget)
@@ -4718,13 +4728,22 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             ReportIfUnsafe(live, killTarget, diagnostics, owningStatement, "await", collector.PatternKills)
         }
         if collector.InternalUnsafeVariables.Count > 0 {
-            ReportIfUnsafe(
-                collector.InternalUnsafeVariables,
-                excludedSelfKill: nil,
-                diagnostics,
-                owningStatement,
-                "await"
-            )
+            let remainingUnsafe = if collector.ContainsAwait {
+                {
+                    let set = HashSet[VariableSymbol](collector.InternalUnsafeVariables)
+                    for v in live {
+                        if !object.ReferenceEquals(v, killTarget) && !collector.PatternKills.Contains(v) {
+                            set.Remove(v)
+                        }
+                    }
+                    set
+                }
+            } else {
+                collector.InternalUnsafeVariables
+            }
+            if remainingUnsafe.Count > 0 {
+                ReportIfUnsafe(remainingUnsafe, excludedSelfKill: nil, diagnostics, owningStatement, "await")
+            }
         }
         if killTarget != nil {
             live.Remove(killTarget)
