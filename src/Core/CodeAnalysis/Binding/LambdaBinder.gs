@@ -289,6 +289,17 @@ internal class LambdaBinder {
         explicitName string? = nil,
         onSignatureBound((FunctionSymbol, FunctionTypeSymbol) -> void)? = nil
     ) BoundExpression {
+        let bound = BindFunctionLiteralExpressionCore(syntax, explicitName, onSignatureBound)
+        // A literal argument of a call that fails keeps its body for the semantic model (#6150).
+        binderCtx.RecordCallArgument(syntax, bound)
+        return bound
+    }
+
+    private func BindFunctionLiteralExpressionCore(
+        syntax FunctionLiteralExpressionSyntax,
+        explicitName string?,
+        onSignatureBound((FunctionSymbol, FunctionTypeSymbol) -> void)?
+    ) BoundExpression {
         let canCache = explicitName == nil && onSignatureBound == nil
         let key = RetriedFunctionLiteralKey(syntax, nil, false, false)
         if canCache && TryReuseRetriedFunctionLiteral(key, nil, nil, out var cached) {
@@ -1061,9 +1072,18 @@ internal class LambdaBinder {
         while checkedParent is ParenthesizedExpressionSyntax {
             checkedParent = checkedParent.Parent
         }
-        if checkedParent is CheckedExpressionSyntax checkedExpression {
-            using let scope_ = binderCtx.PushCheckedContext(checkedExpression.IsChecked)
-            return BindLambdaExpressionCore(
+        let bound = if checkedParent is CheckedExpressionSyntax checkedExpression {
+            BindCheckedLambdaExpression(
+                checkedExpression,
+                syntax,
+                targetFunctionType,
+                inferReturnTypeFromBody,
+                acceptsNaturalType,
+                discardedTargetDiagnostics,
+                isExpressionTreeTarget
+            )
+        } else {
+            BindLambdaExpressionCore(
                 syntax,
                 targetFunctionType,
                 inferReturnTypeFromBody,
@@ -1072,6 +1092,22 @@ internal class LambdaBinder {
                 isExpressionTreeTarget
             )
         }
+        // A literal argument of a call that fails keeps its body for the semantic model, whichever
+        // path bound it (#6150).
+        binderCtx.RecordCallArgument(syntax, bound)
+        return bound
+    }
+
+    private func BindCheckedLambdaExpression(
+        checkedExpression CheckedExpressionSyntax,
+        syntax LambdaExpressionSyntax,
+        targetFunctionType FunctionTypeSymbol?,
+        inferReturnTypeFromBody bool,
+        acceptsNaturalType((TypeSymbol) -> bool)?,
+        discardedTargetDiagnostics List[ImmutableArray[Diagnostic]]?,
+        isExpressionTreeTarget bool
+    ) BoundExpression {
+        using let scope_ = binderCtx.PushCheckedContext(checkedExpression.IsChecked)
         return BindLambdaExpressionCore(
             syntax,
             targetFunctionType,

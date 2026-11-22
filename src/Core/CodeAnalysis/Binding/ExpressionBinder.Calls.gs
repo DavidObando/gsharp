@@ -271,10 +271,15 @@ internal partial class ExpressionBinder {
     ) BoundExpression {
         if target.Type == TypeSymbol.Error || target.Type == nil {
             let _ = ReportUnresolvedTargetlessValues(target)
+            let values = ImmutableArray.CreateBuilder[BoundExpression](syntax.Initializers.Count)
             for init in syntax.Initializers {
-                let _ = BindExpression(init.Value)
+                values.Add(BindExpression(init.Value))
             }
-            return BoundErrorExpression(nil)
+            // The failed constructor call keeps its records, and the member values theirs, for the
+            // semantic model (#6150).
+            let error = BoundErrorExpression.WithFailedOperands(target)
+            error.FailedArguments = values.ToImmutable()
+            return error
         }
         let resultType = target.Type
         let tempName = "$$objinit" + Interlocked.Increment(&binderCtx.SyntheticLocalCounter).ToString(
@@ -346,8 +351,10 @@ internal partial class ExpressionBinder {
         // reaches general expression binding. Guard defensively.
         if syntax.Target == nil {
             Diagnostics.ReportTypeNotCollectionInitializable(syntax.OpenBraceToken.Location, TypeSymbol.Error)
-            BindCollectionElementsForDiagnostics(syntax)
-            return BoundErrorExpression(nil)
+            // The elements keep their records for the semantic model (#6150).
+            let error = BoundErrorExpression(nil)
+            error.FailedArguments = BindCollectionElementValues(syntax)
+            return error
         }
         return BindCollectionInitializerSuffix(syntax, BindExpression(syntax.Target))
     }
@@ -359,8 +366,12 @@ internal partial class ExpressionBinder {
         var target = target
         if target.Type == TypeSymbol.Error || target.Type == nil {
             let _ = ReportUnresolvedTargetlessValues(target)
-            BindCollectionElementsForDiagnostics(syntax)
-            return BoundErrorExpression(nil)
+            let elements = BindCollectionElementValues(syntax)
+            // The failed constructor call keeps its records, and the elements theirs, for the
+            // semantic model (#6150).
+            let error = BoundErrorExpression.WithFailedOperands(target)
+            error.FailedArguments = elements
+            return error
         }
         if target is BoundStructLiteralExpression{StructType: {IsClass: false}} literal &&
             !literal.CallsDataConstructor &&
@@ -961,29 +972,40 @@ internal partial class ExpressionBinder {
         syntax CollectionInitializerExpressionSyntax,
         skipMemberElements bool = false
     ) {
+        let _ = BindCollectionElementValues(syntax, skipMemberElements)
+    }
+
+    /// Binds the element values of a collection initializer that cannot be applied, for their
+    /// diagnostics, and returns them so an error can keep them for the semantic model (#6150).
+    private func BindCollectionElementValues(
+        syntax CollectionInitializerExpressionSyntax,
+        skipMemberElements bool = false
+    ) ImmutableArray[BoundExpression] {
+        let values = ImmutableArray.CreateBuilder[BoundExpression]()
         for element in syntax.Elements {
             switch element {
                 case member is MemberCollectionElementSyntax {
                     if !skipMemberElements {
-                        let _ = BindExpression(member.Initializer.Value)
+                        values.Add(BindExpression(member.Initializer.Value))
                     }
                 }
                 case ExpressionCollectionElementSyntax{Expression: SpreadElementExpressionSyntax spread} {
-                    let _ = BindExpression(spread.Expression)
+                    values.Add(BindExpression(spread.Expression))
                 }
                 case bare is ExpressionCollectionElementSyntax {
-                    let _ = BindExpression(bare.Expression)
+                    values.Add(BindExpression(bare.Expression))
                 }
                 case keyed is KeyedCollectionElementSyntax {
-                    let _ = BindExpression(keyed.Key)
-                    let _ = BindExpression(keyed.Value)
+                    values.Add(BindExpression(keyed.Key))
+                    values.Add(BindExpression(keyed.Value))
                 }
                 case indexed is IndexedCollectionElementSyntax {
-                    let _ = BindExpression(indexed.Key)
-                    let _ = BindExpression(indexed.Value)
+                    values.Add(BindExpression(indexed.Key))
+                    values.Add(BindExpression(indexed.Value))
                 }
             }
         }
+        return values.ToImmutable()
     }
 
     internal func TryBindIntrinsicCall(

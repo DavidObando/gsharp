@@ -600,6 +600,24 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func TranslateImplicitObjectCreation(creation ImplicitObjectCreationExpressionSyntax) GExpression? {
+            if this.context.SemanticModel.GetOperation(creation) is IObjectCreationOperation creationOp &&
+                this.CallRequiresHandlerBlock(creation, creationOp.Arguments) {
+                this.PredeclareBlockCallOutVariables(creation.ArgumentList)
+                return this.TranslateWithCoordinatedHandlers(
+                    creation,
+                    nil,
+                    creationOp.Arguments,
+                    isExtensionReceiverInArgs: false,
+                    nullableThisExtension: false,
+                    () -> this.TranslateImplicitObjectCreationUnwrapped(creation)!!
+                )
+            }
+            return this.TranslateImplicitObjectCreationUnwrapped(creation)
+        }
+
+        private func TranslateImplicitObjectCreationUnwrapped(
+            creation ImplicitObjectCreationExpressionSyntax
+        ) GExpression? {
             // A C# target-typed `new()` carries its concrete type only in the bound
             // model; emit the explicit constructed type (`List[T]()`) so the G#
             // construction names the type (ADR-0115 §B.7/§B.16).

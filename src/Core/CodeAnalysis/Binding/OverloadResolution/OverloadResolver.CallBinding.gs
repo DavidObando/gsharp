@@ -707,6 +707,7 @@ internal partial class OverloadResolver {
     /// @returns The bound call or conversion.
     func BindCallExpression(syntax CallExpressionSyntax, resolvedType TypeSymbol? = nil) BoundExpression {
         let frame = CallCandidateRecorder.Begin(syntax)
+        binderCtx.ExpectCallArguments(syntax.Arguments)
         // ADR-0225 D6.5: the overload and argument reports of this call depend on its candidate set.
         let callDiagnostics = Diagnostics
         let callFramePushed = callDiagnostics.PushCallFrame(
@@ -727,6 +728,7 @@ internal partial class OverloadResolver {
                 ) ??
                     bound
             }
+            binderCtx.CompleteCall(bound, syntax.Arguments)
             CallCandidateRecorder.Stamp(frame, bound)
             return bound
         } finally {

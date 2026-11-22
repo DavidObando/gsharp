@@ -5809,6 +5809,9 @@ partial class CSharpToGSharpTranslator {
         /// literal, retype the literal to the other operand's G# type; otherwise
         /// convert each C#-promoted operand to the common (promoted) type.
         private func TranslateBinaryExpression(binary BinaryExpressionSyntax) GExpression? {
+            if this.TryGetInterpolatedStringHandlerCreation(binary, out var handlerOp) {
+                return this.TranslateInterpolatedStringHandlerCreation(handlerOp!!)
+            }
             // ADR-0169 analyzer mode: the assignment-LHS conjunction idiom
             // rewrites to a write-node parent-kind check; standalone
             // comparisons against Roslyn members with no G# counterpart lower
@@ -6577,6 +6580,9 @@ partial class CSharpToGSharpTranslator {
 
         private func TranslateOutVarDesignation(single SingleVariableDesignationSyntax) GExpression {
             let name = this.EmittedName(single, single.Identifier)!!
+            if this.state.PredeclaredOutDesignations.Contains(single) {
+                return OutArgumentExpression("out", name)
+            }
             if this.context.GetDeclaredSymbol(single) is ILocalSymbol local &&
                 this.OutDeclarationRequiresNullablePredeclaration(single, local) {
                 let ctorInit = single.Ancestors().OfType[ConstructorInitializerSyntax]().FirstOrDefault()
@@ -6643,10 +6649,20 @@ partial class CSharpToGSharpTranslator {
             single SingleVariableDesignationSyntax,
             local ILocalSymbol
         ) bool {
+            if this.state.PredeclaredOutDesignations.Contains(single) {
+                return true
+            }
             if single.Parent is DeclarationExpressionSyntax{Parent: ArgumentSyntax argument} &&
                 argument.RefKindKeyword.IsKind(SyntaxKind.OutKeyword) {
-                if argument.Parent is ArgumentListSyntax{Parent: InvocationExpressionSyntax invocation} &&
-                    this.RequiresFunctionArgumentSpillSeam(invocation) {
+                if argument.Parent is BaseArgumentListSyntax{Parent: {} parent} &&
+                    (
+                    (
+                        parent is InvocationExpressionSyntax invocation && this.RequiresFunctionArgumentSpillSeam(
+                            invocation
+                        )
+                    ) ||
+                        this.CallRequiresHandlerBlockForSyntax(parent)
+                ) {
                     return true
                 }
                 return this.OutDeclarationRequiresNullablePredeclaration(single, local)
@@ -7506,6 +7522,7 @@ partial class CSharpToGSharpTranslator {
                 (
                 this.RequiresLocalAssignmentSeam(voidConditionalAccess.WhenNotNull) ||
                     this.ContainsFunctionArgumentSpillSeam(voidConditionalAccess.WhenNotNull) ||
+                    this.ContainsCallCoupledInterpolatedStringHandler(voidConditionalAccess.WhenNotNull) ||
                     this.ConditionalIndexNeedsRuntimeGuard(voidConditionalAccess)
             ) {
                 return this.TranslateVoidConditionalAccessWithLocalAssignmentSeam(voidConditionalAccess)
@@ -7542,6 +7559,105 @@ partial class CSharpToGSharpTranslator {
                         this.context.GetSymbolInfo(assignment.Left).Symbol is IEventSymbol
                     let isVoidAssignment = this.context.GetTypeInfo(assignment).Type?.SpecialType ==
                     SpecialType.System_Void || isEventSubscription
+                    if Unparenthesize(assignment.Left) is ElementAccessExpressionSyntax leftElement &&
+                        this.context.SemanticModel.GetOperation(leftElement) is IPropertyReferenceOperation propOp &&
+                        this.CallRequiresHandlerBlock(leftElement, propOp.Arguments) {
+                        this.PredeclareBlockCallOutVariables(leftElement.ArgumentList)
+                        let statements = List[GStatement]()
+                        let expr = this.BuildCoordinatedHandlerCall(
+                            leftElement,
+                            leftElement.Expression,
+                            propOp.Arguments,
+                            isExtensionReceiverInArgs: false,
+                            nullableThisExtension: false,
+                            statements,
+                            () -> {
+                                if assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) {
+                                    if propOp.Property.ReturnsByRef {
+                                        let slotTemp = this.NewHandlerTempName()
+                                        statements.Add(
+                                            LocalDeclarationStatement(
+                                                BindingKind.Var,
+                                                slotTemp,
+                                                type: nil,
+                                                this.TranslateAssignmentTarget(leftElement),
+                                                isRefAlias: true
+                                            )
+                                        )
+                                        let rhsExpr = this.TranslateWithPrologueAssignments(
+                                            assignment.Right,
+                                            statements,
+                                            () -> this.TranslateAssignmentValue(assignment)
+                                        )
+                                        let rhsTemp = this.NewHandlerTempName()
+                                        let rhsType = this.GetCoordinatedElementAssignmentRhsType(
+                                            leftElement,
+                                            assignment,
+                                            rhsExpr
+                                        )
+                                        statements.Add(
+                                            LocalDeclarationStatement(BindingKind.Let, rhsTemp, rhsType, rhsExpr)
+                                        )
+                                        statements.Add(
+                                            AssignmentStatement(
+                                                IdentifierExpression(slotTemp),
+                                                IdentifierExpression(rhsTemp),
+                                                assignment.OperatorToken.Text,
+                                                isVoid: isVoidAssignment
+                                            )
+                                        )
+                                        return LiteralExpression.Null()
+                                    }
+                                    let rhsExpr = this.TranslateWithPrologueAssignments(
+                                        assignment.Right,
+                                        statements,
+                                        () -> this.TranslateAssignmentValue(assignment)
+                                    )
+                                    let rhsTemp = this.NewHandlerTempName()
+                                    let rhsType = this.GetCoordinatedElementAssignmentRhsType(
+                                        leftElement,
+                                        assignment,
+                                        rhsExpr
+                                    )
+                                    statements.Add(
+                                        LocalDeclarationStatement(BindingKind.Let, rhsTemp, rhsType, rhsExpr)
+                                    )
+                                    statements.Add(
+                                        AssignmentStatement(
+                                            this.TranslateAssignmentTarget(leftElement),
+                                            IdentifierExpression(rhsTemp),
+                                            assignment.OperatorToken.Text,
+                                            isVoid: isVoidAssignment
+                                        )
+                                    )
+                                } else {
+                                    statements.Add(
+                                        AssignmentStatement(
+                                            this.TranslateAssignmentTarget(leftElement),
+                                            this.TranslateWithLocalAssignmentSeam(
+                                                assignment.Right,
+                                                () -> this.TranslateAssignmentValue(assignment)!!
+                                            ),
+                                            assignment.OperatorToken.Text,
+                                            isVoid: isVoidAssignment
+                                        )
+                                    )
+                                }
+                                return LiteralExpression.Null()
+                            }
+                        )
+                        let _ = expr
+                        if this.IsTopLevelEntryPointCall(leftElement) &&
+                            (
+                            statements.OfType[LocalDeclarationStatement]().Any(
+                                (s LocalDeclarationStatement) -> s.IsRefAlias || s.IsReadOnlyRefAlias
+                            ) ||
+                                this.CallContainsRefLikeHandler(propOp.Arguments)
+                        ) {
+                            return this.WrapBlockStatementsInTopLevelLambda(statements)
+                        }
+                        return BlockStatement(statements)
+                    }
                     return AssignmentStatement(
                         this.TranslateAssignmentTarget(assignment.Left),
                         this.TranslateAssignmentValue(assignment),
@@ -7551,6 +7667,13 @@ partial class CSharpToGSharpTranslator {
                 }
                 case postfix is PostfixUnaryExpressionSyntax when postfix.IsKind(SyntaxKind.PostIncrementExpression) ||
                     postfix.IsKind(SyntaxKind.PostDecrementExpression) {
+                    if this.TryTranslateCoordinatedElementIncDecStatement(
+                        postfix.Operand,
+                        postfix.OperatorToken.Text,
+                        out var coordinatedPostfix
+                    ) {
+                        return coordinatedPostfix
+                    }
                     return IncrementDecrementStatement(
                         this.TranslateExpression(postfix.Operand),
                         postfix.OperatorToken.Text
@@ -7558,6 +7681,13 @@ partial class CSharpToGSharpTranslator {
                 }
                 case prefix is PrefixUnaryExpressionSyntax when prefix.IsKind(SyntaxKind.PreIncrementExpression) ||
                     prefix.IsKind(SyntaxKind.PreDecrementExpression) {
+                    if this.TryTranslateCoordinatedElementIncDecStatement(
+                        prefix.Operand,
+                        prefix.OperatorToken.Text,
+                        out var coordinatedPrefix
+                    ) {
+                        return coordinatedPrefix
+                    }
                     // G# has no prefix ++/--; both forms are statements with the
                     // same effect, so emit the canonical postfix increment.
                     return IncrementDecrementStatement(
@@ -7583,6 +7713,22 @@ partial class CSharpToGSharpTranslator {
                 default {
                     let isVoid = expression != nil &&
                         this.context.GetTypeInfo(expression).Type?.SpecialType == SpecialType.System_Void
+                    if expression != nil && this.IsTopLevelEntryPointCall(expression) &&
+                        this.ContainsDirectStandaloneRefLikeHandler(expression, allowRefLikeRoot: true) {
+                        this.PredeclareTopLevelFrameOutVariables(expression)
+                        let frameStmts = List[GStatement]()
+                        let outerSpillPrologue = this.state.PendingSpillPrologue
+                        let prevFrame = this.state.InTopLevelLambdaFrame
+                        this.state.PendingSpillPrologue = frameStmts
+                        this.state.InTopLevelLambdaFrame = true
+                        try {
+                            frameStmts.Add(ExpressionStatement(this.TranslateExpression(expression), isVoid: isVoid))
+                        } finally {
+                            this.state.InTopLevelLambdaFrame = prevFrame
+                            this.state.PendingSpillPrologue = outerSpillPrologue
+                        }
+                        return this.WrapBlockStatementsInTopLevelLambda(frameStmts)
+                    }
                     return ExpressionStatement(this.TranslateExpression(expression), isVoid: isVoid)
                 }
             }
@@ -8141,6 +8287,10 @@ partial class CSharpToGSharpTranslator {
             // in true left-to-right order regardless of aliasing.
             let hoistable = embedded.Where(
                 (node PostfixUnaryExpressionSyntax) -> {
+                    if this.IsInCoordinatedHandlerCallOrHole(node, expression) ||
+                        this.IsCoordinatedElementAccessOperand(node.Operand) {
+                        return false
+                    }
                     let target ISymbol? = this.context.GetSymbolInfo(node.Operand).Symbol
                     return target != nil && targetOccurrences[target] == 1
                 }

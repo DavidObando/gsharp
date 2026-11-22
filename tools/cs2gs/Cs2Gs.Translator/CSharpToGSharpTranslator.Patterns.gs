@@ -24,6 +24,13 @@ partial class CSharpToGSharpTranslator {
             if this.state.HoistedExpressionValues.TryGetValue(expression!!, out var hoistedValue) {
                 return hoistedValue
             }
+            if this.state.HoistedHandlerReceivers.TryGetValue(expression!!, out var hoistedHandlerReceiver) {
+                return if hoistedHandlerReceiver.AssertNonNull {
+                    EnsureNonNullAssertion(hoistedHandlerReceiver.Expr)
+                } else {
+                    hoistedHandlerReceiver.Expr
+                }
+            }
             // Issue #4262 follow-up (item 2): this exact read was rewritten by
             // EmitGuardedFieldLocalCaptures to reference the synthesized local
             // that already captured the field/property non-null (see
@@ -40,6 +47,9 @@ partial class CSharpToGSharpTranslator {
             // neither operand compiles alone.
             if this.TryTranslateAnalyzerSnippet(expression, out var snippet) {
                 return snippet
+            }
+            if this.TryWrapTopLevelStandaloneHandlerConsumer(expression!!, out var wrappedStandalone) {
+                return wrappedStandalone
             }
             switch expression {
                 case literal is LiteralExpressionSyntax {
@@ -184,6 +194,14 @@ partial class CSharpToGSharpTranslator {
                     if prefix.IsKind(SyntaxKind.PreIncrementExpression) || prefix.IsKind(
                         SyntaxKind.PreDecrementExpression
                     ) {
+                        if this.TryTranslateCoordinatedElementIncDecExpression(
+                            prefix.Operand,
+                            prefix.OperatorToken.Text,
+                            isPrefix: true,
+                            out var coordinatedPre
+                        ) {
+                            return coordinatedPre
+                        }
                         // ADR-0126 defines compound assignments as value-producing,
                         // so this preserves both the mutation and prefix result.
                         return AssignmentExpression(
@@ -292,24 +310,20 @@ partial class CSharpToGSharpTranslator {
                     // Issue #4350: a multi-parameter user/CLR indexer
                     // (`slice[index, fromEnd]`) keeps EVERY argument, in source
                     // order; only the single-`int32` indexer shape is coerced.
-                    let indexedReceiver GExpression? = this.TranslateReceiverWithNullForgiveness(
-                        elementAccess.Expression
-                    )
-                    if elementAccess.ArgumentList.Arguments.Count > 1 {
-                        return IndexExpression(
-                            indexedReceiver,
-                            this.TranslateIndexArguments(elementAccess.ArgumentList)
-                        )
-                    }
-                    let index GExpression? = if elementAccess.ArgumentList.Arguments.Count > 0 {
-                        this.CoerceIndexToInt32(
+                    if !this.IsElementAssignmentTarget(elementAccess) &&
+                        this.context.SemanticModel.GetOperation(elementAccess) is IPropertyReferenceOperation propOp &&
+                        this.CallRequiresHandlerBlock(elementAccess, propOp.Arguments) {
+                        this.PredeclareBlockCallOutVariables(elementAccess.ArgumentList)
+                        return this.TranslateWithCoordinatedHandlers(
                             elementAccess,
-                            this.TranslateIndexArgumentWithNullForgiveness(elementAccess.ArgumentList.Arguments[0])
+                            elementAccess.Expression,
+                            propOp.Arguments,
+                            isExtensionReceiverInArgs: false,
+                            nullableThisExtension: false,
+                            () -> this.TranslateElementAccessCore(elementAccess)
                         )
-                    } else {
-                        cast[GExpression](IdentifierExpression("nil"))
                     }
-                    return IndexExpression(indexedReceiver, index)
+                    return this.TranslateElementAccessCore(elementAccess)
                 }
                 case simpleLambda is SimpleLambdaExpressionSyntax {
                     return this.TranslateLambda(simpleLambda)
@@ -369,6 +383,7 @@ partial class CSharpToGSharpTranslator {
                         )
                     }
                     if this.RequiresLocalAssignmentSeam(conditionalAccess.WhenNotNull) ||
+                        this.ContainsCallCoupledInterpolatedStringHandler(conditionalAccess.WhenNotNull) ||
                         (
                         this.context.GetTypeInfo(conditionalAccess).Type is ITypeParameterSymbol conditionalTp &&
                             !CSharpTypeMapper.HasProvenSourceNullableKind(conditionalTp)
@@ -487,30 +502,20 @@ partial class CSharpToGSharpTranslator {
                     )
                 }
                 case elementBinding is ElementBindingExpressionSyntax {
-                    let bindingReceiver = if this
-                        .state
-                        .ConditionalElementReceivers
-                        .TryGetValue(elementBinding, out var elementReceiver) {
-                        elementReceiver
-                    } else {
-                        this.state.ConditionalReceiverReplacement ?? ConditionalReceiverExpression()
-                    }
-                    if elementBinding.ArgumentList.Arguments.Count == 1 &&
-                        elementBinding.ArgumentList.Arguments[0].Expression is RangeExpressionSyntax conditionalRange {
-                        return this.TranslateRangeSlice(bindingReceiver, conditionalRange)
-                    }
-                    if elementBinding.ArgumentList.Arguments.Count > 1 {
-                        return IndexExpression(
-                            bindingReceiver,
-                            this.TranslateIndexArguments(elementBinding.ArgumentList)
+                    if !this.IsElementAssignmentTarget(elementBinding) &&
+                        this.context.SemanticModel.GetOperation(elementBinding) is IPropertyReferenceOperation propOp &&
+                        this.CallRequiresHandlerBlock(elementBinding, propOp.Arguments) {
+                        this.PredeclareBlockCallOutVariables(elementBinding.ArgumentList)
+                        return this.TranslateWithCoordinatedHandlers(
+                            elementBinding,
+                            nil,
+                            propOp.Arguments,
+                            isExtensionReceiverInArgs: false,
+                            nullableThisExtension: false,
+                            () -> this.TranslateElementBindingCore(elementBinding)
                         )
                     }
-                    let bindingIndex GExpression? = if elementBinding.ArgumentList.Arguments.Count > 0 {
-                        this.TranslateIndexArgumentWithNullForgiveness(elementBinding.ArgumentList.Arguments[0])
-                    } else {
-                        cast[GExpression](IdentifierExpression("nil"))
-                    }
-                    return IndexExpression(bindingReceiver, bindingIndex)
+                    return this.TranslateElementBindingCore(elementBinding)
                 }
                 case typeOf is TypeOfExpressionSyntax {
                     return TypeOfExpression(this.MapTypeOfOperand(typeOf.Type))
@@ -635,6 +640,14 @@ partial class CSharpToGSharpTranslator {
                     if this.state.SuppressedPostfix.Contains(postfixValue) {
                         return this.TranslateExpression(postfixValue.Operand)
                     }
+                    if this.TryTranslateCoordinatedElementIncDecExpression(
+                        postfixValue.Operand,
+                        postfixValue.OperatorToken.Text,
+                        isPrefix: false,
+                        out var coordinatedPost
+                    ) {
+                        return coordinatedPost
+                    }
                     // gsc issue #1027: G# now models inc/dec as value-producing
                     // expressions, so a postfix in a position with no statement seam
                     // (e.g. inside a short-circuit `&&` condition) emits the faithful
@@ -695,6 +708,74 @@ partial class CSharpToGSharpTranslator {
                 receiver,
                 requireRuntimeNonNullProof: true
             )
+        }
+
+        private func IsElementAssignmentTarget(node Microsoft.CodeAnalysis.SyntaxNode) bool {
+            var current = node
+            while current.Parent is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax parenthesized {
+                current = parenthesized
+            }
+            if current.Parent is AssignmentExpressionSyntax parentAssignment && object.ReferenceEquals(
+                parentAssignment.Left,
+                current
+            ) {
+                return true
+            }
+            if current.Parent is PostfixUnaryExpressionSyntax postfix &&
+                (
+                postfix.IsKind(SyntaxKind.PostIncrementExpression) || postfix.IsKind(SyntaxKind.PostDecrementExpression)
+            ) &&
+                object.ReferenceEquals(postfix.Operand, current) {
+                return true
+            }
+            if current.Parent is PrefixUnaryExpressionSyntax prefix &&
+                (
+                prefix.IsKind(SyntaxKind.PreIncrementExpression) || prefix.IsKind(SyntaxKind.PreDecrementExpression)
+            ) &&
+                object.ReferenceEquals(prefix.Operand, current) {
+                return true
+            }
+            return false
+        }
+
+        private func TranslateElementAccessCore(elementAccess ElementAccessExpressionSyntax) GExpression {
+            let indexedReceiver GExpression? = this.TranslateReceiverWithNullForgiveness(elementAccess.Expression)
+            if elementAccess.ArgumentList.Arguments.Count > 1 {
+                return IndexExpression(indexedReceiver, this.TranslateIndexArguments(elementAccess.ArgumentList))
+            }
+            let index GExpression? = if elementAccess.ArgumentList.Arguments.Count > 0 {
+                this.CoerceIndexToInt32(
+                    elementAccess,
+                    this.TranslateIndexArgumentWithNullForgiveness(elementAccess.ArgumentList.Arguments[0])
+                )
+            } else {
+                cast[GExpression](IdentifierExpression("nil"))
+            }
+            return IndexExpression(indexedReceiver, index)
+        }
+
+        private func TranslateElementBindingCore(elementBinding ElementBindingExpressionSyntax) GExpression {
+            let bindingReceiver = if this
+                .state
+                .ConditionalElementReceivers
+                .TryGetValue(elementBinding, out var elementReceiver) {
+                elementReceiver
+            } else {
+                this.state.ConditionalReceiverReplacement ?? ConditionalReceiverExpression()
+            }
+            if elementBinding.ArgumentList.Arguments.Count == 1 &&
+                elementBinding.ArgumentList.Arguments[0].Expression is RangeExpressionSyntax conditionalRange {
+                return this.TranslateRangeSlice(bindingReceiver, conditionalRange)
+            }
+            if elementBinding.ArgumentList.Arguments.Count > 1 {
+                return IndexExpression(bindingReceiver, this.TranslateIndexArguments(elementBinding.ArgumentList))
+            }
+            let bindingIndex GExpression? = if elementBinding.ArgumentList.Arguments.Count > 0 {
+                this.TranslateIndexArgumentWithNullForgiveness(elementBinding.ArgumentList.Arguments[0])
+            } else {
+                cast[GExpression](IdentifierExpression("nil"))
+            }
+            return IndexExpression(bindingReceiver, bindingIndex)
         }
 
         private func BuildConditionalReceiverGuard(receiver GExpression?, staticallyNonNull bool) GExpression {
@@ -5070,6 +5151,82 @@ partial class CSharpToGSharpTranslator {
                 assignment.Left is IdentifierNameSyntax{Identifier: {ValueText: "_"}} discardTarget &&
                 this.IsTrueDiscard(discardTarget) {
                 return this.TranslateExpression(assignment.Right)
+            }
+            if Unparenthesize(assignment.Left) is ElementAccessExpressionSyntax leftElement &&
+                this.context.SemanticModel.GetOperation(leftElement) is IPropertyReferenceOperation propOp &&
+                this.CallRequiresHandlerBlock(leftElement, propOp.Arguments) {
+                this.PredeclareBlockCallOutVariables(leftElement.ArgumentList)
+                return this.TranslateWithCoordinatedHandlers(
+                    leftElement,
+                    leftElement.Expression,
+                    propOp.Arguments,
+                    isExtensionReceiverInArgs: false,
+                    nullableThisExtension: false,
+                    () -> {
+                        if assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) {
+                            let rhsPrologue = List[GStatement]()
+                            if propOp.Property.ReturnsByRef {
+                                let slotTemp = this.NewHandlerTempName()
+                                rhsPrologue.Add(
+                                    LocalDeclarationStatement(
+                                        BindingKind.Var,
+                                        slotTemp,
+                                        type: nil,
+                                        this.TranslateAssignmentTarget(leftElement),
+                                        isRefAlias: true
+                                    )
+                                )
+                                let rhsTemp = this.NewHandlerTempName()
+                                let rhsExpr = this.TranslateWithPrologueAssignments(
+                                    assignment.Right,
+                                    rhsPrologue,
+                                    () -> this.TranslateAssignmentValue(assignment)
+                                )
+                                let rhsType = this.GetCoordinatedElementAssignmentRhsType(
+                                    leftElement,
+                                    assignment,
+                                    rhsExpr
+                                )
+                                rhsPrologue.Add(LocalDeclarationStatement(BindingKind.Let, rhsTemp, rhsType, rhsExpr))
+                                rhsPrologue.Add(
+                                    AssignmentStatement(
+                                        IdentifierExpression(slotTemp),
+                                        IdentifierExpression(rhsTemp),
+                                        assignment.OperatorToken.Text
+                                    )
+                                )
+                                return cast[GExpression](BlockExpression(rhsPrologue, IdentifierExpression(rhsTemp)))
+                            }
+                            let rhsTemp = this.NewHandlerTempName()
+                            let rhsExpr = this.TranslateWithPrologueAssignments(
+                                assignment.Right,
+                                rhsPrologue,
+                                () -> this.TranslateAssignmentValue(assignment)
+                            )
+                            let rhsType = this.GetCoordinatedElementAssignmentRhsType(leftElement, assignment, rhsExpr)
+                            rhsPrologue.Add(LocalDeclarationStatement(BindingKind.Let, rhsTemp, rhsType, rhsExpr))
+                            return cast[GExpression](
+                                BlockExpression(
+                                    rhsPrologue,
+                                    AssignmentExpression(
+                                        this.TranslateAssignmentTarget(leftElement),
+                                        IdentifierExpression(rhsTemp),
+                                        assignment.OperatorToken.Text
+                                    )
+                                )
+                            )
+                        }
+                        var exprResult GExpression? = AssignmentExpression(
+                            this.TranslateAssignmentTarget(leftElement),
+                            this.TranslateWithLocalAssignmentSeam(
+                                assignment.Right,
+                                () -> this.TranslateAssignmentValue(assignment)!!
+                            ),
+                            assignment.OperatorToken.Text
+                        )
+                        return exprResult!!
+                    }
+                )
             }
             var result GExpression? = AssignmentExpression(
                 this.TranslateAssignmentTarget(assignment.Left),

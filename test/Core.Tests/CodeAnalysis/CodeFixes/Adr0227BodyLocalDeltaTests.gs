@@ -6,6 +6,7 @@ package GSharp.Core.Tests.CodeAnalysis.CodeFixes
 
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Analyzers
+import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.CodeFixes
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
@@ -354,11 +355,12 @@ open class Adr0227BodyLocalDeltaTests {
     }
 
     @Fact
-    func EditInAMemberThatTakesASequence_WhereEnumerationHasAnEffect_FallsBack() {
+    func EditInAMemberThatTakesASequence_WhereEnumerationHasAnEffect_IsBodyLocal() {
         // Under the root `F`, which takes a sequence, `G`'s enumeration of a local sequence may run the
-        // deferred callback of `H`, which writes a `C?`. The bind asks for `G`'s own summary, which does
-        // not, so the full check keeps the narrowing of `a` across `G()`. The summary probe of the body-local
-        // check cached `G`'s summary as seen from `F` and gave a GS0158 that the full check does not report.
+        // deferred callback of `H`, which writes a `C?`. The bind asks for `G`'s summary under the root `G`,
+        // which takes none, so the full check keeps the narrowing of `a` across `G()`. The summary probe
+        // computes `G`'s summary under the root `F` too; the caches keep the two apart (issue #6162), so the
+        // body-local check reports no GS0158 either.
         const source = "package P\n\nimport System.Collections.Generic\nimport System.Linq\n\nclass C {\n    var Value int32 = 1\n}\n\nclass Box {\n    var Item C? = nil\n}\n\nfunc H(items IEnumerable[int32], box Box) IEnumerable[int32] -> items.Select((x int32) -> {\n    box.Item = nil\n    return x\n})\n\nfunc G() int32 {\n    let xs IEnumerable[int32] = List[int32]()\n    return xs.Count()\n}\n\nfunc F(items IEnumerable[int32], ref a C?) int32 {\n    let n = G()\n    if a == nil {\n        return n\n    }\n    return a.Value\n}\n"
         let tree = SyntaxTree.Parse(SourceText.From(source, "f0.gs"))
         let compilation = Compilation(SequenceResolver(), tree)
@@ -369,7 +371,7 @@ open class Adr0227BodyLocalDeltaTests {
             "    if a == nil {\n        return 0\n    }\n    let n = G()\n    return a.Value + n\n"
         )
         Assert.Empty(full.Added)
-        Assert.False(local.BodyLocal)
+        Assert.True(local.BodyLocal, local.BodyLocalFallbackReason)
         AssertSameDelta(full, local, "root-dependent callee summary")
     }
 
@@ -382,13 +384,17 @@ open class Adr0227BodyLocalDeltaTests {
         let (full, local) = BothOn(Compilation(SequenceResolver(), tree), tree, "return 1", "return xs.Count()")
         Assert.Contains(full.Added, (d Diagnostic) -> d.Id == "GS0158")
         Assert.False(local.BodyLocal)
+        // `G`'s summary under a root that takes a sequence changes.
+        Assert.Equal("the edit changes the call-effect summary of the member", local.BodyLocalFallbackReason)
         AssertSameDelta(full, local, "caller-dependent enumeration")
     }
 
     @Fact
-    func EditOfAnEarlierWrapperThatStopsCachingACalleeSummary_FallsBack() {
-        // Binding `Pre` asks for `K`'s summary, which caches `G`'s summary as seen from `K`; `Caller` then
-        // reads it. The edited `K` writes as much but no longer calls `G`.
+    func EditOfAnEarlierWrapperThatStopsCallingACallee_IsBodyLocal() {
+        // Binding `Pre` asks for `K`'s summary, which computes `G`'s summary under the root `K`, which takes
+        // a sequence. The edited `K` writes as much but no longer calls `G`. Before issue #6162 `Caller` read
+        // that summary from the cache and reported a GS0158 that the edit removed; it reads `G`'s summary
+        // under its own root now, which takes no sequence, so the narrowing of `b` holds before and after.
         const source = "package P\n\nimport System.Collections.Generic\nimport System.Linq\n\nclass C {\n    var Value int32 = 1\n}\n\nclass Box {\n    var Item C? = nil\n}\n\nfunc H(items IEnumerable[int32], box Box) IEnumerable[int32] -> items.Select((x int32) -> {\n    box.Item = nil\n    return x\n})\n\nfunc Pre(items IEnumerable[int32], ref a C?) int32 {\n    if a == nil {\n        return 0\n    }\n    let n = K(items)\n    return a.Value + n\n}\n\nfunc K(items IEnumerable[int32]) int32 {\n    return G()\n}\n\nfunc Caller(ref b C?) int32 {\n    if b == nil {\n        return 0\n    }\n    let n = G()\n    return b.Value + n\n}\n\nfunc G() int32 {\n    let xs IEnumerable[int32] = List[int32]()\n    return xs.Count()\n}\n"
         let tree = SyntaxTree.Parse(SourceText.From(source, "f0.gs"))
         let (full, local) = BothOn(
@@ -397,8 +403,8 @@ open class Adr0227BodyLocalDeltaTests {
             "    return G()\n",
             "    return items.Count()\n"
         )
-        Assert.Contains(full.Removed, (d Diagnostic) -> d.Id == "GS0158")
-        Assert.False(local.BodyLocal)
+        Assert.DoesNotContain(full.Removed, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.True(local.BodyLocal, local.BodyLocalFallbackReason)
         AssertSameDelta(full, local, "cached callee summary")
     }
 
@@ -455,19 +461,318 @@ open class Adr0227BodyLocalDeltaTests {
     }
 
     @Fact
-    func Analyzers_FallBack() {
+    func AnalyzerThatIsNotBodyLocal_FallsBack() {
         const source = "package P\n\nfunc F() int32 {\n    return 1\n}\n"
-        let tree = SyntaxTree.Parse(SourceText.From(source, "a.gs"))
+        for analyzers in[][]GSharpDiagnosticAnalyzer{
+            []GSharpDiagnosticAnalyzer{NoAnalyzer()},
+            []GSharpDiagnosticAnalyzer{NodeReporter(), NoAnalyzer()},
+            []GSharpDiagnosticAnalyzer{MislabeledAnalyzer()}
+        } {
+            let (full, local) = BothWith(ImmutableArray.Create(source), 0, "return 1", "return 2", analyzers)
+            Assert.False(local.BodyLocal)
+            Assert.Equal("an analyzer is not body-local in scope", local.BodyLocalFallbackReason)
+            AssertSameDelta(full, local, "compilation-wide analyzer")
+        }
+    }
+
+    @Fact
+    func BodyLocalAnalyzers_RunOnTheEditedBody_AndKeepTheOtherBodiesResults() {
+        const source = "package P\n\nfunc F() int32 {\n    return 1\n}\n\nfunc G() int32 {\n    let a = 2\n    return a\n}\n\n@SuppressDiagnostic(\"TA0001\")\nfunc H() int32 {\n    return 3\n}\n"
+        let (full, local) = BothWith(
+            ImmutableArray.Create(source),
+            0,
+            "    return 1\n",
+            "    let b = 1\n    return b + 1\n",
+            BodyLocalAnalyzers()
+        )
+        Assert.True(local.BodyLocal, local.BodyLocalFallbackReason)
+        Assert.Contains(local.Added, (d Diagnostic) -> d.Id == "TA0001")
+        Assert.Contains(local.Removed, (d Diagnostic) -> d.Id == "TA0002")
+        Assert.Contains(local.Persisting, (d Diagnostic) -> d.Id == "TA0001")
+        Assert.DoesNotContain(
+            local.Added,
+            (d Diagnostic) -> d.Id == "TA0001" && d.Location.Span.Start > source.IndexOf(
+                "@Suppress",
+                StringComparison.Ordinal
+            )
+        )
+        AssertSameDelta(full, local, "body-local analyzers")
+    }
+
+    @Fact
+    func EditOfASuppressedMember_KeepsTheAnalyzerDiagnosticAtItsNameSuppressed_BodyLocally() {
+        // The body reporter reports at the member's name, which the new-body run sees in the old text.
+        const source = "package P\n\nfunc F() int32 {\n    return 1\n}\n\n@SuppressDiagnostic(\"TA0002\")\nfunc H() int32 {\n    return 3\n}\n"
+        let (full, local) = BothWith(
+            ImmutableArray.Create(source),
+            0,
+            "    return 3\n",
+            "    let c = 3\n    return c\n",
+            BodyLocalAnalyzers()
+        )
+        Assert.True(local.BodyLocal, local.BodyLocalFallbackReason)
+        Assert.DoesNotContain(local.Added, (d Diagnostic) -> d.Id == "TA0002")
+        AssertSameDelta(full, local, "suppressed member")
+    }
+
+    @Fact
+    func AnalyzerThatReportsOneDiagnosticObjectFromEveryBody_IsBodyLocal() {
+        // Each report of the same object has the origin of its own dispatch.
+        const source = "package P\n\nfunc F() int32 {\n    return 1\n}\n\nfunc G() int32 {\n    return 2\n}\n"
+        for edited in[]string{"    return 1\n", "    return 2\n"} {
+            let (full, local) = BothWith(
+                ImmutableArray.Create(source),
+                0,
+                edited,
+                "    let d = 4\n    return d\n",
+                []GSharpDiagnosticAnalyzer{SharedReporter()}
+            )
+            Assert.True(local.BodyLocal, local.BodyLocalFallbackReason)
+            AssertSameDelta(full, local, "shared diagnostic object")
+        }
+    }
+
+    @Fact
+    func SameOccurrences_ComparesManyDuplicatesAsAMultiset() {
+        // Every bound node of a large body can report at one place; the comparison must stay linear.
+        let text = SourceText.From("package P\n", "a.gs")
+        let other = SourceText.From("package P\n", "a.gs")
+        let at = TextLocation(text, TextSpan(0, 7))
+        let one = Diagnostic.Create(NodeRule, at, "Call")
+        let left = ImmutableArray.CreateBuilder[Diagnostic]()
+        let right = ImmutableArray.CreateBuilder[Diagnostic]()
+        for var i = 0; i < 4096; i++ {
+            left.Add(one)
+            right.Add(Diagnostic.Create(NodeRule, at, "Call"))
+        }
+        left.Add(Diagnostic.Create(NodeRule, TextLocation(text, TextSpan(8, 1)), "Literal"))
+        right.Insert(0, Diagnostic.Create(NodeRule, TextLocation(text, TextSpan(8, 1)), "Literal"))
+        let none = default(CancellationToken)
+        Assert.True(BodyLocalDelta.SameOccurrences(left.ToImmutable(), right.ToImmutable(), none))
+        // One occurrence more of one key and one fewer of another: same length, different counts.
+        let fewer = right.ToImmutable().SetItem(0, one)
+        Assert.False(BodyLocalDelta.SameOccurrences(left.ToImmutable(), fewer, none))
+        Assert.False(BodyLocalDelta.SameOccurrences(fewer, left.ToImmutable(), none))
+        // A different length, and the same span in another text (texts compare by identity).
+        Assert.False(BodyLocalDelta.SameOccurrences(left.ToImmutable(), right.ToImmutable().RemoveAt(1), none))
+        let elsewhere = right.ToImmutable().SetItem(
+            1,
+            Diagnostic.Create(NodeRule, TextLocation(other, TextSpan(0, 7)), "Call")
+        )
+        Assert.False(BodyLocalDelta.SameOccurrences(left.ToImmutable(), elsewhere, none))
+        // A diagnostic without a location matches one without a location.
+        let bare = ImmutableArray.Create(Diagnostic.Create(NodeRule, default(TextLocation), "x"))
+        Assert.True(
+            BodyLocalDelta.SameOccurrences(
+                bare,
+                ImmutableArray.Create(Diagnostic.Create(NodeRule, default(TextLocation), "x")),
+                none
+            )
+        )
+        using let cancelled = CancellationTokenSource()
+        cancelled.Cancel()
+        Assert.Throws[OperationCanceledException](
+            () -> BodyLocalDelta.SameOccurrences(left.ToImmutable(), right.ToImmutable(), cancelled.Token)
+        )
+    }
+
+    @Fact
+    func BodyLocalAnalyzersWithATimeBudget_FallBack() {
+        // The budget covers the whole run; a run on the edited body alone would start a clock of its own.
+        const source = "package P\n\nfunc F() int32 {\n    return 1\n}\n"
+        let tree = SyntaxTree.Parse(SourceText.From(source, "f0.gs"))
         let compilation = Compilation(tree)
-        let options = DeltaOptions{Analyzers: ImmutableArray.Create[GSharpDiagnosticAnalyzer](NoAnalyzer())}
         let changes = Changes(tree, "return 1", "return 2")
-        let delta = CodeFixService(CodeFixRegistry()).ComputeDelta(
-            DeltaBaseline.Create(compilation, options),
+        let service = CodeFixService(CodeFixRegistry())
+        let set = Analyzers(BodyLocalAnalyzers())
+        let budget = AnalyzerOptions{TimeBudgetMilliseconds: 60000}
+        let full = service.ComputeDelta(
+            DeltaBaseline.Create(
+                compilation,
+                DeltaOptions{BodyLocalBind: false, Analyzers: set, AnalyzerOptions: budget}
+            ),
             changes,
             ImmutableArray[Diagnostic].Empty
         )
-        Assert.False(delta.BodyLocal)
-        Assert.Null(delta.BodyLocalFallbackReason)
+        let local = service.ComputeDelta(
+            DeltaBaseline.Create(compilation, DeltaOptions{Analyzers: set, AnalyzerOptions: budget}),
+            changes,
+            ImmutableArray[Diagnostic].Empty
+        )
+        Assert.False(local.BodyLocal)
+        Assert.Equal("the analyzers have a time budget, which covers the whole run", local.BodyLocalFallbackReason)
+        AssertSameDelta(full, local, "time budget")
+    }
+
+    @Fact
+    func BodyLocalAnalyzerThatThrowsOnTheNewBody_FallsBack() {
+        const source = "package P\n\nfunc F() int32 {\n    return 1\n}\n"
+        let (full, local) = BothWith(
+            ImmutableArray.Create(source),
+            0,
+            "    return 1\n",
+            "    let boom = 1\n    return boom\n",
+            []GSharpDiagnosticAnalyzer{NodeReporter(), ThrowingReporter()}
+        )
+        Assert.False(local.BodyLocal)
+        Assert.Equal("an analyzer failed on the new body", local.BodyLocalFallbackReason)
+        Assert.Contains(full.Added, (d Diagnostic) -> d.Id == "GS9300")
+        AssertSameDelta(full, local, "throwing analyzer")
+    }
+
+    @Fact
+    func FixCorpus_WithBodyLocalAnalyzers_BodyLocalDeltaEqualsTheFullDelta() {
+        var checks = 0
+        var local = 0
+        for source in FixCorpus {
+            let (c, l) = CompareFixes(ImmutableArray.Create(source), BodyLocalAnalyzers())
+            checks += c
+            local += l
+        }
+        for sources in WrappedCorpus {
+            let (c, l) = CompareFixes(sources.ToImmutableArray(), BodyLocalAnalyzers())
+            checks += c
+            local += l
+        }
+        Assert.True(checks > 50, "checks: ${checks}")
+        Assert.True(local > 20, "body-local checks: ${local} of ${checks}")
+    }
+
+    @Fact
+    func BodyEdits_WithBodyLocalAnalyzers_BodyLocalDeltaEqualsTheFullDelta() {
+        var local = 0
+        for source in FixCorpus {
+            local += CompareBodyEdits(ImmutableArray.Create(source), maxBodies: 8, BodyLocalAnalyzers())
+        }
+        for sources in WrappedCorpus {
+            local += CompareBodyEdits(sources.ToImmutableArray(), maxBodies: 8, BodyLocalAnalyzers())
+        }
+        for file in SampleFiles() {
+            local += CompareBodyEdits(ImmutableArray.Create(File.ReadAllText(file)), maxBodies: 3, BodyLocalAnalyzers())
+        }
+        Assert.True(local > 150, "body-local checks: ${local}")
+    }
+
+    private func BodyLocalAnalyzers()[]GSharpDiagnosticAnalyzer -> []GSharpDiagnosticAnalyzer{
+        NodeReporter(),
+        BodyReporter()
+    }
+
+    shared {
+        let NodeRule DiagnosticDescriptor = DiagnosticDescriptor(
+            "TA0001",
+            "Bound node",
+            "Bound node {0}.",
+            "Testing",
+            DiagnosticSeverity.Warning,
+            isEnabledByDefault: true
+        )
+
+        let BodyRule DiagnosticDescriptor = DiagnosticDescriptor(
+            "TA0002",
+            "Body",
+            "Body of {0} has {1} statements.",
+            "Testing",
+            DiagnosticSeverity.Info,
+            isEnabledByDefault: true
+        )
+    }
+
+    // Reports every bound node with syntax, by kind, from a member-body scope.
+    private class NodeReporter : GSharpDiagnosticAnalyzer {
+        override prop SupportedDiagnostics ImmutableArray[DiagnosticDescriptor] -> ImmutableArray.Create(
+            Adr0227BodyLocalDeltaTests.NodeRule
+        )
+
+        override func Initialize(context AnalysisContext) {
+            context.ConfigureScope(AnalyzerScope.MemberBody)
+            context.RegisterBoundNodeAction(
+                (ctx BoundNodeAnalysisContext) -> {
+                    if ctx.BoundNode.Syntax is {} syntax {
+                        ctx.ReportDiagnostic(
+                            Diagnostic.Create(Adr0227BodyLocalDeltaTests.NodeRule, syntax.Location, ctx.BoundNode.Kind)
+                        )
+                    }
+                },
+                Enum.GetValues[BoundNodeKind]()
+            )
+        }
+    }
+
+    // Reports the statement count of every body at the owner's name, outside the body.
+    private class BodyReporter : GSharpDiagnosticAnalyzer {
+        override prop SupportedDiagnostics ImmutableArray[DiagnosticDescriptor] -> ImmutableArray.Create(
+            Adr0227BodyLocalDeltaTests.BodyRule
+        )
+
+        override func Initialize(context AnalysisContext) {
+            context.ConfigureScope(AnalyzerScope.MemberBody)
+            context.RegisterBoundBodyAction(
+                (ctx BoundBodyAnalysisContext) -> {
+                    if ctx.OwningFunction?.Declaration is {} declaration && ctx.Bodies[0] is BoundBlockStatement block {
+                        ctx.ReportDiagnostic(
+                            Diagnostic.Create(
+                                Adr0227BodyLocalDeltaTests.BodyRule,
+                                declaration.Identifier.Location,
+                                declaration.Identifier.ValueText,
+                                block.Statements.Length
+                            )
+                        )
+                    }
+                }
+            )
+        }
+    }
+
+    // Reports one Diagnostic object, without a location, from every body.
+    private class SharedReporter : GSharpDiagnosticAnalyzer {
+        private let cached Diagnostic = Diagnostic.Create(
+            Adr0227BodyLocalDeltaTests.BodyRule,
+            default(TextLocation),
+            "all",
+            0
+        )
+
+        override prop SupportedDiagnostics ImmutableArray[DiagnosticDescriptor] -> ImmutableArray.Create(
+            Adr0227BodyLocalDeltaTests.BodyRule
+        )
+
+        override func Initialize(context AnalysisContext) {
+            context.ConfigureScope(AnalyzerScope.MemberBody)
+            context.RegisterBoundBodyAction((ctx BoundBodyAnalysisContext) -> ctx.ReportDiagnostic(cached))
+        }
+    }
+
+    // Declares the member-body scope but registers a symbol action, so it counts as compilation-wide.
+    private class MislabeledAnalyzer : GSharpDiagnosticAnalyzer {
+        override prop SupportedDiagnostics ImmutableArray[DiagnosticDescriptor] -> ImmutableArray[
+            DiagnosticDescriptor
+        ].Empty
+
+        override func Initialize(context AnalysisContext) {
+            context.ConfigureScope(AnalyzerScope.MemberBody)
+            context.RegisterSymbolAction((ctx SymbolAnalysisContext) -> { }, SymbolKind.Function)
+        }
+    }
+
+    // Throws on the declaration of `boom`.
+    private class ThrowingReporter : GSharpDiagnosticAnalyzer {
+        override prop SupportedDiagnostics ImmutableArray[DiagnosticDescriptor] -> ImmutableArray[
+            DiagnosticDescriptor
+        ].Empty
+
+        override func Initialize(context AnalysisContext) {
+            context.ConfigureScope(AnalyzerScope.MemberBody)
+            context.RegisterBoundNodeAction(
+                (ctx BoundNodeAnalysisContext) -> {
+                    if ctx.BoundNode.Syntax is {} syntax &&
+                        syntax.Location.Text?.ToString(syntax.Location.Span)?.Contains("boom") == true {
+                        throw InvalidOperationException("boom")
+                    }
+                },
+                BoundNodeKind.VariableDeclaration
+            )
+        }
     }
 
     @Fact
@@ -512,12 +817,16 @@ open class Adr0227BodyLocalDeltaTests {
     }
 
     // Computes the delta of every fix of every diagnostic both ways.
-    private func CompareFixes(sources ImmutableArray[string])(int32, int32) {
+    private func CompareFixes(sources ImmutableArray[string], analyzers([]GSharpDiagnosticAnalyzer)? = nil)(
+        int32,
+        int32
+    ) {
         let trees = Parse(sources)
         let compilation = Compilation(trees.ToArray())
         let service = CodeFixService(CodeFixRegistry.CreateDefault())
-        let full = DeltaBaseline.Create(compilation, DeltaOptions{BodyLocalBind: false})
-        let local = DeltaBaseline.Create(compilation, DeltaOptions{StopOnNewSyntaxError: true})
+        let set = Analyzers(analyzers)
+        let full = DeltaBaseline.Create(compilation, DeltaOptions{BodyLocalBind: false, Analyzers: set})
+        let local = DeltaBaseline.Create(compilation, DeltaOptions{StopOnNewSyntaxError: true, Analyzers: set})
         var checks = 0
         var bodyLocal = 0
         for diagnostic in compilation.GetDiagnostics() {
@@ -535,13 +844,21 @@ open class Adr0227BodyLocalDeltaTests {
     }
 
     // Edits the first bodies of the program four ways and computes each delta both ways.
-    private func CompareBodyEdits(sources ImmutableArray[string], maxBodies int32) int32 {
+    private func CompareBodyEdits(
+        sources ImmutableArray[string],
+        maxBodies int32,
+        analyzers([]GSharpDiagnosticAnalyzer)? = nil
+    ) int32 {
         let trees = Parse(sources)
         // A body cache, as in the language server, so the integrity check below covers a successor.
         let compilation = Compilation(trees.ToArray()){IncrementalBodyReuse = true}
         let service = CodeFixService(CodeFixRegistry())
-        let full = DeltaBaseline.Create(compilation, DeltaOptions{BodyLocalBind: false, StopOnNewSyntaxError: false})
-        let local = DeltaBaseline.Create(compilation, DeltaOptions{StopOnNewSyntaxError: false})
+        let set = Analyzers(analyzers)
+        let full = DeltaBaseline.Create(
+            compilation,
+            DeltaOptions{BodyLocalBind: false, StopOnNewSyntaxError: false, Analyzers: set}
+        )
+        let local = DeltaBaseline.Create(compilation, DeltaOptions{StopOnNewSyntaxError: false, Analyzers: set})
         var bodyLocal = 0
         for tree in trees {
             var bodies = 0
@@ -608,23 +925,49 @@ open class Adr0227BodyLocalDeltaTests {
         return BothOn(Compilation(trees.ToArray()), trees[treeIndex], oldText, newText)
     }
 
-    private func BothOn(compilation Compilation, tree SyntaxTree, oldText string, newText string)(
-        DiagnosticDelta,
-        DiagnosticDelta
-    ) {
+    private func BothWith(
+        sources ImmutableArray[string],
+        treeIndex int32,
+        oldText string,
+        newText string,
+        analyzers[]GSharpDiagnosticAnalyzer
+    )(DiagnosticDelta, DiagnosticDelta) {
+        let trees = Parse(sources)
+        return BothOn(Compilation(trees.ToArray()), trees[treeIndex], oldText, newText, analyzers)
+    }
+
+    private func BothOn(
+        compilation Compilation,
+        tree SyntaxTree,
+        oldText string,
+        newText string,
+        analyzers([]GSharpDiagnosticAnalyzer)? = nil
+    )(DiagnosticDelta, DiagnosticDelta) {
         let service = CodeFixService(CodeFixRegistry())
         let changes = Changes(tree, oldText, newText)
+        let set = Analyzers(analyzers)
         let full = service.ComputeDelta(
-            DeltaBaseline.Create(compilation, DeltaOptions{BodyLocalBind: false, StopOnNewSyntaxError: false}),
+            DeltaBaseline.Create(
+                compilation,
+                DeltaOptions{BodyLocalBind: false, StopOnNewSyntaxError: false, Analyzers: set}
+            ),
             changes,
             ImmutableArray[Diagnostic].Empty
         )
         let local = service.ComputeDelta(
-            DeltaBaseline.Create(compilation, DeltaOptions{StopOnNewSyntaxError: false}),
+            DeltaBaseline.Create(compilation, DeltaOptions{StopOnNewSyntaxError: false, Analyzers: set}),
             changes,
             ImmutableArray[Diagnostic].Empty
         )
         return (full, local)
+    }
+
+    private func Analyzers(analyzers([]GSharpDiagnosticAnalyzer)?) ImmutableArray[
+        GSharpDiagnosticAnalyzer
+    ] -> if analyzers == nil {
+        ImmutableArray[GSharpDiagnosticAnalyzer].Empty
+    } else {
+        analyzers.ToImmutableArray()
     }
 
     private func Changes(tree SyntaxTree, oldText string, newText string) FixChanges {

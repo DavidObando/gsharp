@@ -97,4 +97,9 @@ open class AnalysisContext {
     /// trees. Defaults to (cref:GeneratedCodeAnalysisFlags.None).
     /// @param flags The generated-code analysis mode.
     func ConfigureGeneratedCodeAnalysis(flags GeneratedCodeAnalysisFlags) -> registry.GeneratedCodeFlags[owner] = flags
+
+    /// Declares what this analyzer's diagnostics depend on (ADR-0227 D4, issue #6165). Defaults to
+    /// (cref:AnalyzerScope.Compilation).
+    /// @param analyzerScope The scope.
+    func ConfigureScope(analyzerScope AnalyzerScope) -> registry.Scopes[owner] = analyzerScope
 }

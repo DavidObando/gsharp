@@ -26,6 +26,7 @@ internal class AnalyzerRegistry {
         CompilationEndActions = List[AnalyzerActionEntry[CompilationAnalysisContext]]()
         CompilationActions = List[AnalyzerActionEntry[CompilationAnalysisContext]]()
         GeneratedCodeFlags = Dictionary[GSharpDiagnosticAnalyzer, GeneratedCodeAnalysisFlags]()
+        Scopes = Dictionary[GSharpDiagnosticAnalyzer, AnalyzerScope]()
     }
 
     prop SyntaxNodeActions Dictionary[SyntaxKind, List[AnalyzerActionEntry[SyntaxNodeAnalysisContext]]] {
@@ -66,6 +67,27 @@ internal class AnalyzerRegistry {
 
     prop GeneratedCodeFlags Dictionary[GSharpDiagnosticAnalyzer, GeneratedCodeAnalysisFlags] {
         get;
+    }
+
+    prop Scopes Dictionary[GSharpDiagnosticAnalyzer, AnalyzerScope] {
+        get;
+    }
+
+    // Issue #6165: every analyzer declared the member-body scope and registered only actions that the
+    // driver dispatches on a function body.
+    func IsBodyLocal(analyzers System.Collections.Immutable.ImmutableArray[GSharpDiagnosticAnalyzer]) bool {
+        for analyzer in analyzers {
+            if !Scopes.TryGetValue(analyzer, out var declared) || declared != AnalyzerScope.MemberBody {
+                return false
+            }
+        }
+        return SyntaxNodeActions.Count == 0 &&
+            SymbolActions.Count == 0 &&
+            SyntaxTreeActions.Count == 0 &&
+            SemanticModelActions.Count == 0 &&
+            CompilationStartActions.Count == 0 &&
+            CompilationEndActions.Count == 0 &&
+            CompilationActions.Count == 0
     }
 
     func AddKeyed[TKind, TContext](

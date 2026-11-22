@@ -486,6 +486,12 @@ partial class CSharpToGSharpTranslator {
         private func TranslateConstructorInitializerArguments(initializer ConstructorInitializerSyntax?) List[
             GExpression
         ] {
+            if this.CallNeedsHandlerCoordinationForSyntax(initializer) {
+                this.context.ReportUnsupported(
+                    initializer,
+                    "a constructor initializer with a coordinated interpolated-string-handler argument has no enclosing statement seam in G# (issue #5965)."
+                )
+            }
             let arguments = initializer!!.ArgumentList.Arguments
             if this.context.GetSymbolInfo(initializer).Symbol is not IMethodSymbol constructor ||
                 arguments.Count > constructor.Parameters.Length {
@@ -710,6 +716,12 @@ partial class CSharpToGSharpTranslator {
             }
             for baseTypeSyntax in node.BaseList!!.Types {
                 if baseTypeSyntax is PrimaryConstructorBaseTypeSyntax primaryBase {
+                    if this.CallNeedsHandlerCoordinationForSyntax(primaryBase) {
+                        this.context.ReportUnsupported(
+                            primaryBase,
+                            "a primary-constructor base initializer with a coordinated interpolated-string-handler argument has no enclosing statement seam in G# (issue #5965)."
+                        )
+                    }
                     return primaryBase.ArgumentList.Arguments.Select(this.TranslateArgument).ToList()
                 }
             }

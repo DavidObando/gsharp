@@ -24,43 +24,23 @@ import System.Threading
 partial class CSharpToGSharpTranslator {
     private partial class DeclarationVisitor : CSharpSyntaxVisitor[GMember] {
         private func TranslateInvocation(invocation InvocationExpressionSyntax) GExpression? {
-            if this.RequiresFunctionArgumentSpillSeam(invocation) {
-                for argument in invocation.ArgumentList.Arguments {
-                    if argument.Expression is DeclarationExpressionSyntax{
-                        Designation: SingleVariableDesignationSyntax designation
-                    } &&
-                        this.context.GetDeclaredSymbol(designation) is ILocalSymbol local {
-                        let type = this.PromoteIfUsedAsNullable(
-                            this.typeMapper.Map(local.Type, this.context, argument.GetLocation()),
-                            local
-                        )
-                        this.InvalidateLocalPromotedValue(local)
-                        if type != nil {
-                            this.state.EmittedLocalTypeClauses.Add(local)
-                        }
-                        this.state.EmittedLocalStorageAcceptsNil[local] = type != nil && type.IsNullable
-                        this.RecordEmittedLocalNullability(local, type, nil, nil)
-                        (this.state.FunctionArgumentOutDeclarations ?? this.state.PendingSpillPrologue)?.Add(
-                            LocalDeclarationStatement(BindingKind.Var, this.EmittedName(local, local.Name), type)
-                        )
-                    }
-                }
+            let needsFunctionSeam = this.RequiresFunctionArgumentSpillSeam(invocation)
+            let needsHandlerOutSeam = this.CallRequiresHandlerBlockForSyntax(invocation)
+            if needsFunctionSeam || needsHandlerOutSeam {
+                this.PredeclareBlockCallOutVariables(invocation.ArgumentList)
+            }
+            if needsFunctionSeam {
                 // Keep reordered operands at the call's evaluation point, not
                 // ahead of a sibling expression, loop condition or null guard.
                 let translated = this.TranslateWithLocalAssignmentSeam(
                     invocation,
-                    () -> this.TranslateInvocationCore(invocation, snapshotDelegateTarget: true)!!
+                    () -> this.TranslateInvocationWithHandlers(invocation, snapshotDelegateTarget: true)!!
                 )
-                if translated is BlockExpression block &&
-                    this.entryType != nil &&
-                    SymbolEqualityComparer.Default.Equals(
-                    this.context.SemanticModel.GetEnclosingSymbol(invocation.SpanStart),
-                    this.context.Compilation.GetEntryPoint(default(CancellationToken))
-                ) &&
+                if translated is BlockExpression block && this.IsTopLevelEntryPointCall(invocation) &&
                     block
                     .Statements
                     .OfType[LocalDeclarationStatement]()
-                    .Any((s LocalDeclarationStatement) -> s.IsRefAlias) {
+                    .Any((s LocalDeclarationStatement) -> s.IsRefAlias || s.IsReadOnlyRefAlias) {
                     // G# top-level locals are static fields, even in a block
                     // expression. A managed reference needs a stack frame.
                     let statements = block.Statements.ToList()
@@ -83,7 +63,78 @@ partial class CSharpToGSharpTranslator {
                 }
                 return translated
             }
-            return this.TranslateInvocationCore(invocation)
+            return this.TranslateInvocationWithHandlers(invocation)
+        }
+
+        private func PredeclareOutVariableArgument(argument ArgumentSyntax) {
+            if argument.Expression is DeclarationExpressionSyntax{
+                Designation: SingleVariableDesignationSyntax designation
+            } &&
+                !this.state.PredeclaredOutDesignations.Contains(designation) &&
+                this.context.GetDeclaredSymbol(designation) is ILocalSymbol local {
+                let type = this.PromoteIfUsedAsNullable(
+                    this.typeMapper.Map(local.Type, this.context, argument.GetLocation()),
+                    local
+                )
+                this.InvalidateLocalPromotedValue(local)
+                if type != nil {
+                    this.state.EmittedLocalTypeClauses.Add(local)
+                }
+                this.state.EmittedLocalStorageAcceptsNil[local] = type != nil && type.IsNullable
+                this.RecordEmittedLocalNullability(local, type, nil, nil)
+                (this.state.FunctionArgumentOutDeclarations ?? this.state.PendingSpillPrologue)?.Add(
+                    LocalDeclarationStatement(BindingKind.Var, this.EmittedName(local, local.Name), type)
+                )
+                this.state.PredeclaredOutDesignations.Add(designation)
+            }
+        }
+
+        private func PredeclareBlockCallOutVariables(argumentList BaseArgumentListSyntax?) {
+            if argumentList == nil {
+                return
+            }
+            for argument in argumentList.Arguments {
+                this.PredeclareOutVariableArgument(argument)
+            }
+        }
+
+        private func PredeclareTopLevelFrameOutVariables(node Microsoft.CodeAnalysis.SyntaxNode?) {
+            if node == nil {
+                return
+            }
+            for argument in node.DescendantNodesAndSelf(
+                descendIntoChildren: (child Microsoft.CodeAnalysis.SyntaxNode) -> !(
+                    child is AnonymousFunctionExpressionSyntax || child is LocalFunctionStatementSyntax
+                )
+            )
+                .OfType[ArgumentSyntax]() {
+                if argument.RefKindKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.OutKeyword) {
+                    this.PredeclareOutVariableArgument(argument)
+                }
+            }
+        }
+
+        private func TranslateInvocationWithHandlers(
+            invocation InvocationExpressionSyntax,
+            snapshotDelegateTarget bool = false
+        ) GExpression? {
+            if this.TryGetCoordinatedInvocationCall(
+                invocation,
+                out var coordinatedArguments,
+                out var coordinatedReceiver,
+                out var isExtensionReceiverInArgs,
+                out var nullableThisExtension
+            ) {
+                return this.TranslateWithCoordinatedHandlers(
+                    invocation,
+                    coordinatedReceiver,
+                    coordinatedArguments,
+                    isExtensionReceiverInArgs,
+                    nullableThisExtension,
+                    () -> this.TranslateInvocationCore(invocation, snapshotDelegateTarget)!!
+                )
+            }
+            return this.TranslateInvocationCore(invocation, snapshotDelegateTarget)
         }
 
         private func TranslateInvocationCore(
@@ -518,6 +569,13 @@ partial class CSharpToGSharpTranslator {
 
         private func TranslateStaticExtensionReceiver(receiverArgument IArgumentOperation?) GExpression? {
             let expression = (cast[ArgumentSyntax](receiverArgument!!.Syntax)).Expression
+            if this.state.HoistedHandlerReceivers.TryGetValue(expression, out var hoistedReceiver) {
+                return if hoistedReceiver.AssertNonNull {
+                    EnsureNonNullAssertion(hoistedReceiver.Expr)
+                } else {
+                    hoistedReceiver.Expr
+                }
+            }
             var translated GExpression? = this.TranslateExpression(expression)
             translated = this.ForgiveNullableReferenceValue(
                 expression,
@@ -799,10 +857,30 @@ partial class CSharpToGSharpTranslator {
                 callArgs.AddRange(this.TranslateCallArguments(invocation!!, invocation!!.ArgumentList.Arguments))
                 return InvocationExpression(MemberAccessExpression(ownerReceiver, name), callArgs, callTypeArgs)
             }
-            call = if hostLocalAssignmentSeam && this.RequiresLocalAssignmentSeam(conditionalAccess.WhenNotNull) {
-                this.TranslateWithLocalAssignmentSeam(conditionalAccess.WhenNotNull, TranslateCall)
+            if this.context.SemanticModel.GetOperation(invocation!!) is IInvocationOperation invocationOp &&
+                this.CallRequiresHandlerBlock(invocation!!, invocationOp.Arguments) {
+                this.PredeclareBlockCallOutVariables(invocation!!.ArgumentList)
+                let coordinated = () -> this.TranslateWithCoordinatedHandlers(
+                    invocation!!,
+                    nil,
+                    invocationOp.Arguments,
+                    isExtensionReceiverInArgs: true,
+                    nullableThisExtension: false,
+                    TranslateCall,
+                    overrideExtReceiver: helperReceiver,
+                    overrideExtReceiverType: invocationOp.Arguments[0].Value.Type
+                )
+                call = if hostLocalAssignmentSeam && this.RequiresLocalAssignmentSeam(conditionalAccess.WhenNotNull) {
+                    this.TranslateWithLocalAssignmentSeam(conditionalAccess.WhenNotNull, coordinated)
+                } else {
+                    coordinated()
+                }
             } else {
-                TranslateCall()
+                call = if hostLocalAssignmentSeam && this.RequiresLocalAssignmentSeam(conditionalAccess.WhenNotNull) {
+                    this.TranslateWithLocalAssignmentSeam(conditionalAccess.WhenNotNull, TranslateCall)
+                } else {
+                    TranslateCall()
+                }
             }
             $guard = BinaryExpression(receiver, "!=", LiteralExpression.Null())
         }
@@ -1049,6 +1127,19 @@ partial class CSharpToGSharpTranslator {
         ] -> arguments
             .Select((a ArgumentSyntax) -> this.TranslateArgument(a)!!).ToList()
 
+        private func IsCallerInfoParameter(parameter IParameterSymbol) bool -> parameter.GetAttributes().Any(
+            (attribute AttributeData) -> attribute
+                .AttributeClass
+                ?.ContainingNamespace
+                ?.ToDisplayString() == "System.Runtime.CompilerServices" &&
+                (
+                attribute.AttributeClass!!.Name is "CallerArgumentExpressionAttribute" or
+                    "CallerMemberNameAttribute" or
+                    "CallerFilePathAttribute" or
+                    "CallerLineNumberAttribute"
+            )
+        )
+
         private func TranslateArgumentsWithCallerInfo(
             callSyntax Microsoft.CodeAnalysis.SyntaxNode?,
             arguments Microsoft.CodeAnalysis.SeparatedSyntaxList[ArgumentSyntax],
@@ -1059,17 +1150,8 @@ partial class CSharpToGSharpTranslator {
                 return translated
             }
             for argument in operationArguments {
-                if argument.ArgumentKind == ArgumentKind.DefaultValue && argument.Parameter!!.GetAttributes().Any(
-                    (attribute AttributeData) -> attribute
-                        .AttributeClass
-                        ?.ContainingNamespace
-                        ?.ToDisplayString() == "System.Runtime.CompilerServices" &&
-                        (
-                        attribute.AttributeClass!!.Name is "CallerArgumentExpressionAttribute" or
-                            "CallerMemberNameAttribute" or
-                            "CallerFilePathAttribute" or
-                            "CallerLineNumberAttribute"
-                    )
+                if argument.ArgumentKind == ArgumentKind.DefaultValue && this.IsCallerInfoParameter(
+                    argument.Parameter!!
                 ) {
                     translated.Add(
                         NamedArgumentExpression(
@@ -1312,8 +1394,12 @@ partial class CSharpToGSharpTranslator {
             return result
         }
 
-        private func ResolveOperationArgumentSyntax(argument IArgumentOperation) ArgumentSyntax? {
-            for var current Microsoft.CodeAnalysis.SyntaxNode? = argument.Syntax; current != nil &&
+        private func ResolveOperationArgumentSyntax(
+            argument IArgumentOperation
+        ) ArgumentSyntax? -> ResolveOperationSyntaxToArgument(argument)
+
+        private func ResolveOperationSyntaxToArgument(operation IOperation) ArgumentSyntax? {
+            for var current Microsoft.CodeAnalysis.SyntaxNode? = operation.Syntax; current != nil &&
                 current is not BaseArgumentListSyntax; current = current!!.Parent {
                 if current is ArgumentSyntax argSyntax {
                     return argSyntax
@@ -1885,6 +1971,9 @@ partial class CSharpToGSharpTranslator {
                 // Issues #4422 and #6036: carry a dropped `!`, or a csc flow proof that
                 // gsc does not narrow, across as a statement-scoped suppression of GS0612.
                 this.state.PendingStatementSuppressions?.Add("GS0612")
+            }
+            if this.state.HoistedHandlerArguments.TryGetValue(argument, out var hoistedHandlerArgument) {
+                return hoistedHandlerArgument
             }
             if refKind == Microsoft.CodeAnalysis.CSharp.SyntaxKind.OutKeyword {
                 if argument.Expression is DeclarationExpressionSyntax declaration {
@@ -3014,6 +3103,24 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func TranslateObjectCreation(
+            creation Microsoft.CodeAnalysis.CSharp.Syntax.ObjectCreationExpressionSyntax
+        ) GExpression? {
+            if this.context.SemanticModel.GetOperation(creation) is IObjectCreationOperation creationOp &&
+                this.CallRequiresHandlerBlock(creation, creationOp.Arguments) {
+                this.PredeclareBlockCallOutVariables(creation.ArgumentList)
+                return this.TranslateWithCoordinatedHandlers(
+                    creation,
+                    nil,
+                    creationOp.Arguments,
+                    isExtensionReceiverInArgs: false,
+                    nullableThisExtension: false,
+                    () -> this.TranslateObjectCreationUnwrapped(creation)!!
+                )
+            }
+            return this.TranslateObjectCreationUnwrapped(creation)
+        }
+
+        private func TranslateObjectCreationUnwrapped(
             creation Microsoft.CodeAnalysis.CSharp.Syntax.ObjectCreationExpressionSyntax
         ) GExpression? {
             var typeSymbol ITypeSymbol? = this.context.GetTypeInfo(creation).Type
@@ -4459,6 +4566,9 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func TranslateCast(cast CastExpressionSyntax) GExpression {
+            if this.TryGetInterpolatedStringHandlerCreation(cast, out var handlerOp) {
+                return this.TranslateInterpolatedStringHandlerCreation(handlerOp!!)
+            }
             // C# explicit casts map to G# explicit conversions (ADR-0115 §B.17
             // and ADR-0167). Numeric/value conversions retain `T(expr)`.
             // Reference casts use constructor-independent `cast[T](expr)` so a
@@ -10736,7 +10846,2510 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
+        private class CallSiteCapturedArgument {
+            init(
+                expr GExpression,
+                parameter IParameterSymbol?,
+                sourceType ITypeSymbol?,
+                sourceSyntax Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+                isRefAlias bool,
+                isReadOnlyAlias bool
+            ) {
+                Expr = expr
+                Parameter = parameter
+                SourceType = sourceType
+                SourceSyntax = sourceSyntax
+                IsRefAlias = isRefAlias
+                IsReadOnlyAlias = isReadOnlyAlias
+            }
+
+            let Expr GExpression
+            let Parameter IParameterSymbol?
+            let SourceType ITypeSymbol?
+            let SourceSyntax Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+            let IsRefAlias bool
+            let IsReadOnlyAlias bool
+        }
+
+        private class CallSiteHandlerCaptureState {
+            init(isSourceCallee bool, callSyntax Microsoft.CodeAnalysis.SyntaxNode) {
+                IsSourceCallee = isSourceCallee
+                CallSyntax = callSyntax
+                Arguments = Dictionary[int32, CallSiteCapturedArgument]()
+            }
+
+            let IsSourceCallee bool
+            let CallSyntax Microsoft.CodeAnalysis.SyntaxNode
+            var ReceiverExpr GExpression?
+            var ReceiverType ITypeSymbol?
+            var ReceiverSyntax Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+            var ReceiverIsRefAlias bool
+            var ReceiverIsReadOnlyAlias bool
+            let Arguments Dictionary[int32, CallSiteCapturedArgument]
+        }
+
+        private func TryGetInterpolatedStringHandlerCreation(
+            node Microsoft.CodeAnalysis.SyntaxNode?,
+            out handlerOp IInterpolatedStringHandlerCreationOperation?
+        ) bool {
+            handlerOp = nil
+            if node == nil {
+                return false
+            }
+            let operation = this.context.SemanticModel.GetOperation(node)
+            if node is CastExpressionSyntax {
+                if operation is IInterpolatedStringHandlerCreationOperation direct {
+                    handlerOp = direct
+                    return true
+                }
+                if operation is IConversionOperation{Operand: IInterpolatedStringHandlerCreationOperation inner} conv &&
+                    conv.Type != nil &&
+                    inner.Type != nil &&
+                    SymbolEqualityComparer.Default.Equals(conv.Type, inner.Type) {
+                    handlerOp = inner
+                    return true
+                }
+                return false
+            }
+            if node is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax binary && binary.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.AddExpression
+            ) {
+                if operation is IInterpolatedStringHandlerCreationOperation direct {
+                    handlerOp = direct
+                    return true
+                }
+                if operation is IInterpolatedStringAdditionOperation addition &&
+                    addition.Parent is IInterpolatedStringHandlerCreationOperation parentHandler &&
+                    parentHandler.Syntax == node {
+                    handlerOp = parentHandler
+                    return true
+                }
+                return false
+            }
+            if node is Microsoft.CodeAnalysis.CSharp.Syntax.InterpolatedStringExpressionSyntax {
+                if operation is IInterpolatedStringHandlerCreationOperation direct && direct.Syntax == node {
+                    handlerOp = direct
+                    return true
+                }
+                if operation is IInterpolatedStringOperation interp &&
+                    interp.Parent is IInterpolatedStringHandlerCreationOperation parentHandler &&
+                    parentHandler.Syntax == node {
+                    handlerOp = parentHandler
+                    return true
+                }
+                return false
+            }
+            return false
+        }
+
+        private func TryGetDirectHandlerCreation(
+            operation IOperation?,
+            out handlerOp IInterpolatedStringHandlerCreationOperation?
+        ) bool {
+            var current = operation
+            while current is IConversionOperation conversion {
+                current = conversion.Operand
+            }
+            if current is IInterpolatedStringHandlerCreationOperation direct {
+                handlerOp = direct
+                return true
+            }
+            handlerOp = nil
+            return false
+        }
+
+        private func ContainsHandlerCreationOperation(operation IOperation?) bool {
+            if operation == nil {
+                return false
+            }
+            if operation is IInterpolatedStringHandlerCreationOperation {
+                return true
+            }
+            if operation is IInvocationOperation or
+                IObjectCreationOperation or
+                IPropertyReferenceOperation or
+                IAnonymousFunctionOperation or
+                ILocalFunctionOperation {
+                return false
+            }
+            for child in operation.ChildOperations {
+                if ContainsHandlerCreationOperation(child) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func HandlerCreationNeedsCoordination(
+            handlerOp IInterpolatedStringHandlerCreationOperation,
+            parameter IParameterSymbol?
+        ) bool {
+            if parameter != nil &&
+                (
+                parameter.RefKind == RefKind.Ref ||
+                    parameter.RefKind == RefKind.In ||
+                    parameter.RefKind == RefKind.RefReadOnlyParameter ||
+                    parameter.RefKind == RefKind.Out
+            ) {
+                return true
+            }
+            if handlerOp.HandlerCreation is not IObjectCreationOperation ctorOp {
+                return false
+            }
+            for ctorArg in ctorOp.Arguments {
+                var value = ctorArg.Value
+                while value is IConversionOperation conversion {
+                    value = conversion.Operand
+                }
+                if value is IInterpolatedStringHandlerArgumentPlaceholderOperation placeholder &&
+                    (
+                    placeholder.PlaceholderKind == InterpolatedStringArgumentPlaceholderKind.CallsiteReceiver ||
+                        placeholder.PlaceholderKind == InterpolatedStringArgumentPlaceholderKind.CallsiteArgument
+                ) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func ArgumentContainsCoordinatedHandler(argument IArgumentOperation) bool {
+            if argument.Value is IInterpolatedStringHandlerCreationOperation direct {
+                return HandlerCreationNeedsCoordination(direct, argument.Parameter)
+            }
+            if this.TryGetDirectHandlerCreation(argument.Value, out var unwrapped) {
+                return HandlerCreationNeedsCoordination(unwrapped!!, argument.Parameter)
+            }
+            return this.ContainsCoordinatedHandlerInSubtree(argument.Value, argument.Parameter)
+        }
+
+        private func ContainsCoordinatedHandlerInSubtree(operation IOperation?, parameter IParameterSymbol?) bool {
+            if operation == nil {
+                return false
+            }
+            if operation is IInterpolatedStringHandlerCreationOperation handlerOp {
+                return HandlerCreationNeedsCoordination(handlerOp, parameter)
+            }
+            if operation is IInvocationOperation or
+                IObjectCreationOperation or
+                IPropertyReferenceOperation or
+                IAnonymousFunctionOperation or
+                ILocalFunctionOperation {
+                return false
+            }
+            for child in operation.ChildOperations {
+                if this.ContainsCoordinatedHandlerInSubtree(child, parameter) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func CallNeedsHandlerCoordination(operationArguments ImmutableArray[IArgumentOperation]) bool {
+            if operationArguments.IsDefaultOrEmpty {
+                return false
+            }
+            for argument in operationArguments {
+                if this.ArgumentContainsCoordinatedHandler(argument) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func CallNeedsHandlerCoordinationForSyntax(callSyntax Microsoft.CodeAnalysis.SyntaxNode?) bool {
+            if callSyntax == nil {
+                return false
+            }
+            return switch this.context.SemanticModel.GetOperation(callSyntax) {
+                case invocationOp is IInvocationOperation: this.CallNeedsHandlerCoordination(invocationOp.Arguments)
+                case creationOp is IObjectCreationOperation: this.CallNeedsHandlerCoordination(creationOp.Arguments)
+                case propertyOp is IPropertyReferenceOperation: this.CallNeedsHandlerCoordination(propertyOp.Arguments)
+                default: false
+            }
+        }
+
+        private func CallRequiresHandlerBlockForSyntax(callSyntax Microsoft.CodeAnalysis.SyntaxNode?) bool {
+            if callSyntax == nil {
+                return false
+            }
+            return switch this.context.SemanticModel.GetOperation(callSyntax) {
+                case invocationOp is IInvocationOperation: this.CallRequiresHandlerBlock(
+                    callSyntax,
+                    invocationOp.Arguments
+                )
+                case creationOp is IObjectCreationOperation: this.CallRequiresHandlerBlock(
+                    callSyntax,
+                    creationOp.Arguments
+                )
+                case propertyOp is IPropertyReferenceOperation: this.CallRequiresHandlerBlock(
+                    callSyntax,
+                    propertyOp.Arguments
+                )
+                default: false
+            }
+        }
+
+        private func ContainsCallCoupledInterpolatedStringHandler(node Microsoft.CodeAnalysis.SyntaxNode?) bool {
+            if node == nil {
+                return false
+            }
+            for candidate in node.DescendantNodesAndSelf(
+                descendIntoChildren: (child Microsoft.CodeAnalysis.SyntaxNode) -> !(
+                    child is AnonymousFunctionExpressionSyntax ||
+                        child is LocalFunctionStatementSyntax ||
+                        child is ConditionalAccessExpressionSyntax
+                )
+            ) {
+                if candidate is InvocationExpressionSyntax or
+                    BaseObjectCreationExpressionSyntax or
+                    ElementAccessExpressionSyntax or
+                    ElementBindingExpressionSyntax {
+                    if this.CallRequiresHandlerBlockForSyntax(candidate) {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+
+        private func CallContainsInterpolatedStringHandler(operationArguments ImmutableArray[IArgumentOperation]) bool {
+            if operationArguments.IsDefaultOrEmpty {
+                return false
+            }
+            for argument in operationArguments {
+                if ContainsHandlerCreationOperation(argument.Value) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func CallContainsRefLikeHandler(operationArguments ImmutableArray[IArgumentOperation]) bool {
+            if operationArguments.IsDefaultOrEmpty {
+                return false
+            }
+            for argument in operationArguments {
+                if this.ContainsRefLikeHandlerInSubtree(argument.Value) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func ContainsRefLikeHandlerInSubtree(operation IOperation?) bool {
+            if operation == nil {
+                return false
+            }
+            if operation is IInterpolatedStringHandlerCreationOperation handlerOp {
+                return handlerOp.Type?.IsRefLikeType == true
+            }
+            if operation is IInvocationOperation or
+                IObjectCreationOperation or
+                IPropertyReferenceOperation or
+                IAnonymousFunctionOperation or
+                ILocalFunctionOperation {
+                return false
+            }
+            for child in operation.ChildOperations {
+                if this.ContainsRefLikeHandlerInSubtree(child) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func IsTopLevelEntryPointCall(node Microsoft.CodeAnalysis.SyntaxNode) bool -> !this
+            .state
+            .InTopLevelLambdaFrame &&
+            this.entryType != nil &&
+            SymbolEqualityComparer.Default.Equals(
+            this.context.SemanticModel.GetEnclosingSymbol(node.SpanStart),
+            this.context.Compilation.GetEntryPoint(default(CancellationToken))
+        )
+
+        private func ContainsDirectStandaloneRefLikeHandler(
+            node Microsoft.CodeAnalysis.SyntaxNode?,
+            allowRefLikeRoot bool = false
+        ) bool {
+            if node == nil {
+                return false
+            }
+            if !allowRefLikeRoot {
+                if node is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax or
+                    Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax or
+                    Microsoft.CodeAnalysis.CSharp.Syntax.AwaitExpressionSyntax or
+                    IsPatternExpressionSyntax or
+                    AnonymousFunctionExpressionSyntax or
+                    MemberBindingExpressionSyntax or
+                    ElementBindingExpressionSyntax {
+                    return false
+                }
+                if node is Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax member &&
+                    member.Parent is InvocationExpressionSyntax parentInv &&
+                    object.ReferenceEquals(parentInv.Expression, member) {
+                    return false
+                }
+                if node is ElementAccessExpressionSyntax && this.IsElementAssignmentTarget(node) {
+                    return false
+                }
+                if this.CallRequiresHandlerBlockForSyntax(node) {
+                    return false
+                }
+                if node is Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax rootExpr &&
+                    this.context.GetTypeInfo(rootExpr).Type?.IsRefLikeType == true {
+                    return false
+                }
+            }
+            let HasDirectHandler = func (candidate Microsoft.CodeAnalysis.SyntaxNode) bool {
+                for child in candidate.ChildNodes() {
+                    if child is Microsoft.CodeAnalysis.CSharp.Syntax.InterpolatedStringExpressionSyntax ||
+                        child is CastExpressionSyntax ||
+                        (
+                        child is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax binary && binary.IsKind(
+                            Microsoft.CodeAnalysis.CSharp.SyntaxKind.AddExpression
+                        )
+                    ) {
+                        if this.TryGetInterpolatedStringHandlerCreation(child, out var handlerOp) &&
+                            handlerOp!!.Type?.IsRefLikeType == true {
+                            return true
+                        }
+                    }
+                }
+                return false
+            }
+            let CanDescend = func (child Microsoft.CodeAnalysis.SyntaxNode) bool {
+                if child is AnonymousFunctionExpressionSyntax or
+                    LocalFunctionStatementSyntax or
+                    Microsoft.CodeAnalysis.CSharp.Syntax.AwaitExpressionSyntax or
+                    IsPatternExpressionSyntax {
+                    return false
+                }
+                if this.CallRequiresHandlerBlockForSyntax(child) {
+                    return false
+                }
+                if child is Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax expr &&
+                    expr is not Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax {
+                    if expr is Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax member &&
+                        member.Parent is InvocationExpressionSyntax inv &&
+                        object.ReferenceEquals(inv.Expression, member) {
+                        return true
+                    }
+                    let childType = this.context.GetTypeInfo(expr).Type
+                    if childType != nil && !childType.IsRefLikeType {
+                        return false
+                    }
+                }
+                return true
+            }
+            let work = Queue[Microsoft.CodeAnalysis.SyntaxNode]()
+            work.Enqueue(node)
+            while work.Count > 0 {
+                let current = work.Dequeue()
+                if HasDirectHandler(current) {
+                    return true
+                }
+                for child in current.ChildNodes() {
+                    if CanDescend(child) {
+                        work.Enqueue(child)
+                    }
+                }
+            }
+            return false
+        }
+
+        private func TryWrapTopLevelStandaloneHandlerConsumer(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            out result GExpression?
+        ) bool {
+            result = nil
+            if !this.IsTopLevelEntryPointCall(expression) || !this.ContainsDirectStandaloneRefLikeHandler(expression) {
+                return false
+            }
+            this.PredeclareTopLevelFrameOutVariables(expression)
+            let frameStmts = List[GStatement]()
+            let replacements = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
+            let outerSpillPrologue = this.state.PendingSpillPrologue
+            let prevFrame = this.state.InTopLevelLambdaFrame
+            let prevCaptures = this.state.ActiveCallSiteHandlerCaptures
+            this.state.PendingSpillPrologue = frameStmts
+            this.state.InTopLevelLambdaFrame = true
+            this.state.ActiveCallSiteHandlerCaptures = nil
+            let embedded = this.HoistAssignmentsInOrder(expression, includeSelf: true, frameStmts, replacements)
+            try {
+                let innerExpr = this.TranslateExpression(expression)
+                let returnsVoid = this.context.GetTypeInfo(expression).Type?.SpecialType == SpecialType.System_Void
+                if returnsVoid {
+                    frameStmts.Add(ExpressionStatement(innerExpr, isVoid: true))
+                } else {
+                    frameStmts.Add(ReturnStatement(innerExpr))
+                }
+                result = InvocationExpression(
+                    ParenthesizedExpression(
+                        LambdaExpression(Array.Empty[Parameter](), blockBody: BlockStatement(frameStmts))
+                    ),
+                    Array.Empty[GExpression]()
+                )
+            } finally {
+                this.ReleaseHoistedAssignments(embedded, replacements)
+                this.state.ActiveCallSiteHandlerCaptures = prevCaptures
+                this.state.InTopLevelLambdaFrame = prevFrame
+                this.state.PendingSpillPrologue = outerSpillPrologue
+            }
+            return true
+        }
+
+        private func IsInCoordinatedHandlerCallOrHole(
+            node Microsoft.CodeAnalysis.SyntaxNode,
+            root Microsoft.CodeAnalysis.SyntaxNode?
+        ) bool {
+            if this.IsInInterpolatedStringHandlerHole(node, root) {
+                return true
+            }
+            for var current Microsoft.CodeAnalysis.SyntaxNode? = node.Parent; current != nil &&
+                (root == nil || root.Span.Contains(current.Span)); current = current!!.Parent {
+                if current is InvocationExpressionSyntax or
+                    BaseObjectCreationExpressionSyntax or
+                    ElementAccessExpressionSyntax or
+                    ElementBindingExpressionSyntax {
+                    if this.CallRequiresHandlerBlockForSyntax(current) {
+                        return true
+                    }
+                }
+                if current is Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax assign &&
+                    Unparenthesize(assign.Left) is ElementAccessExpressionSyntax leftElem &&
+                    this.CallRequiresHandlerBlockForSyntax(leftElem) {
+                    return true
+                }
+                if current == root {
+                    break
+                }
+            }
+            return false
+        }
+
+        private func WrapBlockStatementsInTopLevelLambda(statements List[GStatement]) GStatement -> ExpressionStatement(
+            InvocationExpression(
+                ParenthesizedExpression(
+                    LambdaExpression(Array.Empty[Parameter](), blockBody: BlockStatement(statements))
+                ),
+                Array.Empty[GExpression]()
+            ),
+            isVoid: true
+        )
+
+        private func IsInInterpolatedStringHandlerHole(
+            node Microsoft.CodeAnalysis.SyntaxNode,
+            root Microsoft.CodeAnalysis.SyntaxNode?
+        ) bool {
+            for var current Microsoft.CodeAnalysis.SyntaxNode? = node; current != nil &&
+                current != root; current = current!!.Parent {
+                if current is InterpolationSyntax interp {
+                    var handlerNode Microsoft.CodeAnalysis.SyntaxNode? = interp.Parent
+                    while handlerNode != nil {
+                        if this.TryGetInterpolatedStringHandlerCreation(handlerNode, out _) {
+                            return true
+                        }
+                        if handlerNode.Parent is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax binary &&
+                            binary.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AddExpression) {
+                            handlerNode = binary
+                            continue
+                        }
+                        if handlerNode.Parent is CastExpressionSyntax or
+                            Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax {
+                            handlerNode = handlerNode.Parent
+                            continue
+                        }
+                        break
+                    }
+                }
+            }
+            return false
+        }
+
+        private func IsCoordinatedElementAccessOperand(
+            operand Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+        ) bool -> Unparenthesize(operand) is ElementAccessExpressionSyntax elementAccess &&
+            this.context.SemanticModel.GetOperation(elementAccess) is IPropertyReferenceOperation propOp &&
+            this.CallRequiresHandlerBlock(elementAccess, propOp.Arguments)
+
+        private func GetCoordinatedElementAssignmentRhsType(
+            leftElement ElementAccessExpressionSyntax,
+            assignment Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax,
+            rhsExpr GExpression?
+        ) GTypeReference? {
+            let targetSymbol = this.GetProjectedAssignmentTarget(
+                leftElement,
+                this.context.GetSymbolInfo(leftElement).Symbol
+            )
+            if this.TryGetEmittedNonNullGenericSlotType(
+                targetSymbol,
+                assignment.Right.GetLocation(),
+                out var nonNullSlotType
+            ) {
+                return nonNullSlotType
+            }
+            let targetType = this.GetAssignmentTargetType(leftElement, targetSymbol)
+            if targetType == nil {
+                return nil
+            }
+            var mapped = this.typeMapper.Map(targetType, this.context, assignment.Right.GetLocation())
+            if mapped != nil &&
+                !mapped.IsNullable &&
+                targetType.IsReferenceType &&
+                (
+                this.LocalStoreAcceptsNil(targetSymbol) ||
+                    (targetSymbol is IPropertySymbol indexer && this.ShouldPromoteToNullableReference(indexer)) ||
+                    (
+                    this.ElementStoreSlotAcceptsNil(leftElement) && !this.FlowsThroughUserDefinedConversion(
+                        assignment.Right
+                    )
+                ) ||
+                    this.IsNullablePromotedValue(assignment.Right) || IsNullOrSuppressedNull(assignment.Right)
+            ) {
+                mapped = MakeNullable(mapped)
+            }
+            return mapped
+        }
+
+        private func TryTranslateCoordinatedElementIncDecExpression(
+            operand Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            operatorText string,
+            isPrefix bool,
+            out result GExpression?
+        ) bool {
+            result = nil
+            if Unparenthesize(operand) is not ElementAccessExpressionSyntax leftElement ||
+                this.context.SemanticModel.GetOperation(leftElement) is not IPropertyReferenceOperation propOp ||
+                !this.CallRequiresHandlerBlock(leftElement, propOp.Arguments) {
+                return false
+            }
+            this.PredeclareBlockCallOutVariables(leftElement.ArgumentList)
+            result = this.TranslateWithCoordinatedHandlers(
+                leftElement,
+                leftElement.Expression,
+                propOp.Arguments,
+                isExtensionReceiverInArgs: false,
+                nullableThisExtension: false,
+                () -> cast[GExpression](
+                    IncrementDecrementExpression(
+                        this.TranslateElementAccessCore(leftElement),
+                        operatorText,
+                        isPrefix: isPrefix
+                    )
+                )
+            )
+            return true
+        }
+
+        private func TryTranslateCoordinatedElementIncDecStatement(
+            operand Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            operatorText string,
+            out result GStatement?
+        ) bool {
+            result = nil
+            if Unparenthesize(operand) is not ElementAccessExpressionSyntax leftElement ||
+                this.context.SemanticModel.GetOperation(leftElement) is not IPropertyReferenceOperation propOp ||
+                !this.CallRequiresHandlerBlock(leftElement, propOp.Arguments) {
+                return false
+            }
+            this.PredeclareBlockCallOutVariables(leftElement.ArgumentList)
+            let statements = List[GStatement]()
+            let _ = this.BuildCoordinatedHandlerCall(
+                leftElement,
+                leftElement.Expression,
+                propOp.Arguments,
+                isExtensionReceiverInArgs: false,
+                nullableThisExtension: false,
+                statements,
+                () -> {
+                    statements.Add(
+                        IncrementDecrementStatement(this.TranslateElementAccessCore(leftElement), operatorText)
+                    )
+                    return LiteralExpression.Null()
+                }
+            )
+            if this.IsTopLevelEntryPointCall(leftElement) &&
+                (
+                statements.OfType[LocalDeclarationStatement]().Any(
+                    (s LocalDeclarationStatement) -> s.IsRefAlias || s.IsReadOnlyRefAlias
+                ) ||
+                    this.CallContainsRefLikeHandler(propOp.Arguments)
+            ) {
+                result = this.WrapBlockStatementsInTopLevelLambda(statements)
+            } else {
+                result = BlockStatement(statements)
+            }
+            return true
+        }
+
+        private func CallRequiresHandlerBlock(
+            callSyntax Microsoft.CodeAnalysis.SyntaxNode,
+            operationArguments ImmutableArray[IArgumentOperation]
+        ) bool -> this.CallNeedsHandlerCoordination(operationArguments) || this.CallContainsInterpolatedStringHandler(
+            operationArguments
+        )
+
+        private func CallRequiresDefensiveCopyOnReadOnlyReceiver(
+            callSyntax Microsoft.CodeAnalysis.SyntaxNode,
+            recvType ITypeSymbol?
+        ) bool {
+            if recvType == nil || recvType.IsReferenceType || recvType.IsReadOnly {
+                return false
+            }
+            return switch this.context.SemanticModel.GetOperation(callSyntax) {
+                case inv is IInvocationOperation: !inv.TargetMethod.IsReadOnly
+                case propOp is IPropertyReferenceOperation: if this.IsElementAssignmentTarget(callSyntax) {
+                    if propOp.Property.ReturnsByRef || propOp.Property.ReturnsByRefReadonly {
+                        propOp.Property.GetMethod?.IsReadOnly != true
+                    } else if propOp.Property.SetMethod != nil {
+                        let isCompoundOrIncDec = callSyntax.Parent is Microsoft
+                            .CodeAnalysis
+                            .CSharp
+                            .Syntax
+                            .AssignmentExpressionSyntax assign &&
+                            !assign.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleAssignmentExpression) ||
+                            callSyntax.Parent is PostfixUnaryExpressionSyntax or
+                            PrefixUnaryExpressionSyntax
+                        !propOp.Property.SetMethod!!.IsReadOnly ||
+                            (isCompoundOrIncDec && propOp.Property.GetMethod?.IsReadOnly != true)
+                    } else {
+                        propOp.Property.GetMethod?.IsReadOnly != true
+                    }
+                } else {
+                    propOp.Property.GetMethod?.IsReadOnly != true
+                }
+                default: false
+            }
+        }
+
+        private func TryGetCoordinatedInvocationCall(
+            invocation InvocationExpressionSyntax,
+            out operationArguments ImmutableArray[IArgumentOperation],
+            out receiverSyntax Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            out isExtensionReceiverInArgs bool,
+            out nullableThisExtension bool
+        ) bool {
+            operationArguments = default(ImmutableArray[IArgumentOperation])
+            receiverSyntax = nil
+            isExtensionReceiverInArgs = false
+            nullableThisExtension = false
+            if this.context.SemanticModel.GetOperation(invocation) is not IInvocationOperation invocationOp ||
+                !this.CallRequiresHandlerBlock(invocation, invocationOp.Arguments) {
+                return false
+            }
+            operationArguments = invocationOp.Arguments
+            let targetMethod = invocationOp.TargetMethod
+            if targetMethod.IsExtensionMethod {
+                isExtensionReceiverInArgs = true
+                if invocation.Expression is MemberAccessExpressionSyntax extMember {
+                    nullableThisExtension = this.MemberBindsToNullableThisExtension(extMember)
+                }
+                return true
+            }
+            if targetMethod.MethodKind == MethodKind.DelegateInvoke {
+                if invocation.Expression is MemberAccessExpressionSyntax invokeMember &&
+                    invokeMember.Name.Identifier.ValueText == "Invoke" {
+                    receiverSyntax = invokeMember.Expression
+                } else if invocation.Expression is not MemberBindingExpressionSyntax {
+                    receiverSyntax = invocation.Expression
+                }
+                return true
+            }
+            if !targetMethod.IsStatic &&
+                targetMethod.MethodKind != MethodKind.LocalFunction &&
+                invocation.Expression is MemberAccessExpressionSyntax member {
+                receiverSyntax = member.Expression
+            }
+            return true
+        }
+
+        private func IsOperationReadOnlyStorage(op IOperation) bool -> switch op {
+            case localRef is ILocalReferenceOperation: localRef.Local.IsConst ||
+                localRef.Local.RefKind == RefKind.In ||
+                localRef.Local.RefKind == RefKind.RefReadOnly ||
+                !this.IsSymbolReassigned(localRef.Local, this.state.CurrentBodyScope)
+            case paramRef is IParameterReferenceOperation: paramRef.Parameter.RefKind == RefKind.In ||
+                paramRef.Parameter.RefKind == RefKind.RefReadOnly ||
+                paramRef.Parameter.RefKind == RefKind.RefReadOnlyParameter ||
+                !this.IsSymbolReassigned(paramRef.Parameter, this.state.CurrentBodyScope)
+            case fieldRef is IFieldReferenceOperation: fieldRef.Field.IsReadOnly ||
+                (
+                fieldRef.Instance != nil &&
+                    fieldRef.Instance!!.Type?.IsValueType == true &&
+                    this.IsOperationReadOnlyStorage(fieldRef.Instance!!)
+            )
+            case _ is IArrayElementReferenceOperation: false
+            case condOp is IConditionalOperation when condOp.IsRef: this.IsOperationReadOnlyStorage(condOp.WhenTrue) ||
+                (condOp.WhenFalse != nil && this.IsOperationReadOnlyStorage(condOp.WhenFalse!!))
+            case propRef is IPropertyReferenceOperation: propRef.Property.ReturnsByRefReadonly
+            case invRef is IInvocationOperation: invRef.TargetMethod.ReturnsByRefReadonly
+            default: true
+        }
+
+        private func CanCaptureValueTypeAsRefAlias(
+            syntax Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            out isReadOnly bool
+        ) bool {
+            isReadOnly = false
+            let op = this.context.SemanticModel.GetOperation(Unparenthesize(syntax) ?? syntax)
+            if op == nil {
+                return false
+            }
+            if this.IsReadOnlyAddressableStorageOperation(op) {
+                isReadOnly = this.IsOperationReadOnlyStorage(op)
+                return op is ILocalReferenceOperation or
+                    IParameterReferenceOperation or
+                    IFieldReferenceOperation or
+                    IArrayElementReferenceOperation ||
+                    (op is IConditionalOperation condOp && condOp.IsRef) ||
+                    (
+                    op is IPropertyReferenceOperation propOp &&
+                        (propOp.Property.ReturnsByRef || propOp.Property.ReturnsByRefReadonly)
+                ) ||
+                    (
+                    op is IInvocationOperation invOp &&
+                        (invOp.TargetMethod.ReturnsByRef || invOp.TargetMethod.ReturnsByRefReadonly)
+                )
+            }
+            return false
+        }
+
+        private func TryUnwrapPackedParamsElements(
+            operation IOperation?,
+            out elements ImmutableArray[IOperation]
+        ) bool {
+            var packedValue = operation
+            while packedValue is IConversionOperation packedConv {
+                packedValue = packedConv.Operand
+            }
+            switch packedValue {
+                case arrayOp is IArrayCreationOperation: {
+                    elements = arrayOp.Initializer?.ElementValues ?? ImmutableArray[IOperation].Empty
+                    return true
+                }
+                case collOp is ICollectionExpressionOperation: {
+                    elements = collOp.Elements
+                    return true
+                }
+                default: {
+                    elements = ImmutableArray[IOperation].Empty
+                    return false
+                }
+            }
+        }
+
+        private func TranslateWithPrologueAssignments(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            prologue List[GStatement],
+            translate() -> GExpression?
+        ) GExpression? {
+            let replacements = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
+            let embedded = this.HoistAssignmentsInOrder(expression, includeSelf: true, prologue, replacements)
+            try {
+                return translate()
+            } finally {
+                this.ReleaseHoistedAssignments(embedded, replacements)
+            }
+        }
+
+        private func GetCapturedArgumentTempType(
+            parameter IParameterSymbol?,
+            site Microsoft.CodeAnalysis.SyntaxNode
+        ) GTypeReference? {
+            if parameter == nil {
+                return nil
+            }
+            if parameter.IsParams {
+                let carrierType = this.typeMapper.Map(parameter.Type, this.context, site.GetLocation())
+                return this.PromoteIfUsedAsNullable(carrierType, parameter)
+            }
+            if this.TryGetEmittedNonNullGenericSlotType(parameter, site.GetLocation(), out var nonNullSlotType) {
+                return nonNullSlotType
+            }
+            var mapped GTypeReference? = this.MapParameter(parameter, site, includeDefault: false).Type
+            let exprSyntax = (site as ArgumentSyntax)?.Expression ??
+                (site as Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax)
+            if mapped != nil &&
+                !mapped.IsNullable &&
+                parameter.Type.IsReferenceType &&
+                !this.TargetWillRemainNonNullableReference(parameter.Type, parameter, exprSyntax) {
+                mapped = MakeNullable(mapped)
+            }
+            return mapped
+        }
+
+        private func TranslateWithCoordinatedHandlers(
+            callSyntax Microsoft.CodeAnalysis.SyntaxNode,
+            receiverSyntax Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            operationArguments ImmutableArray[IArgumentOperation],
+            isExtensionReceiverInArgs bool,
+            nullableThisExtension bool,
+            translateCall() -> GExpression,
+            overrideExtReceiver GExpression? = nil,
+            overrideExtReceiverType ITypeSymbol? = nil
+        ) GExpression {
+            let prologue = List[GStatement]()
+            let callExpr = this.BuildCoordinatedHandlerCall(
+                callSyntax,
+                receiverSyntax,
+                operationArguments,
+                isExtensionReceiverInArgs,
+                nullableThisExtension,
+                prologue,
+                translateCall,
+                overrideExtReceiver,
+                overrideExtReceiverType
+            )
+            if prologue.Count == 0 {
+                return callExpr
+            }
+            let block = BlockExpression(prologue, callExpr)
+            if this.IsTopLevelEntryPointCall(callSyntax) &&
+                (
+                prologue.OfType[LocalDeclarationStatement]().Any(
+                    (s LocalDeclarationStatement) -> s.IsRefAlias || s.IsReadOnlyRefAlias
+                ) ||
+                    this.CallContainsRefLikeHandler(operationArguments)
+            ) {
+                let statements = block.Statements.ToList()
+                let callOp = this.context.SemanticModel.GetOperation(callSyntax)
+                let (returnsByRef, returnsByRefReadonly, refReturnType) = switch callOp {
+                    case inv is IInvocationOperation: (
+                        inv.TargetMethod.ReturnsByRef,
+                        inv.TargetMethod.ReturnsByRefReadonly,
+                        inv.TargetMethod.ReturnType
+                    )
+                    case prop is IPropertyReferenceOperation when !this.IsElementAssignmentTarget(callSyntax): (
+                        prop.Property.ReturnsByRef,
+                        prop.Property.ReturnsByRefReadonly,
+                        prop.Property.Type
+                    )
+                    default: (false, false, default(ITypeSymbol?))
+                }
+                if returnsByRef || returnsByRefReadonly {
+                    this.context.ReportUnsupported(
+                        callSyntax,
+                        "top-level ref-returning coordinated handler call has no canonical G# wrapper lambda (issue #5965)."
+                    )
+                }
+                let returnsVoid = !returnsByRef &&
+                    callSyntax is Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax exprNode &&
+                    this.context.GetTypeInfo(exprNode).Type?.SpecialType == SpecialType.System_Void
+                if let value = block.Value {
+                    statements.Add(
+                        if returnsVoid {
+                            cast[GStatement](ExpressionStatement(value, isVoid: true))
+                        } else {
+                            cast[GStatement](ReturnStatement(value, isRef: returnsByRef))
+                        }
+                    )
+                }
+                let mappedRefReturnType = if returnsByRef && refReturnType != nil {
+                    this.typeMapper.Map(refReturnType, this.context, callSyntax.GetLocation())
+                } else {
+                    default(GTypeReference?)
+                }
+                return InvocationExpression(
+                    ParenthesizedExpression(
+                        LambdaExpression(
+                            Array.Empty[Parameter](),
+                            blockBody: BlockStatement(statements),
+                            returnType: mappedRefReturnType,
+                            isFunctionLiteral: returnsByRef,
+                            isRefReturn: returnsByRef
+                        )
+                    ),
+                    Array.Empty[GExpression]()
+                )
+            }
+            return block
+        }
+
+        private func BuildCoordinatedHandlerCall(
+            callSyntax Microsoft.CodeAnalysis.SyntaxNode,
+            receiverSyntax Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            operationArguments ImmutableArray[IArgumentOperation],
+            isExtensionReceiverInArgs bool,
+            nullableThisExtension bool,
+            prologue List[GStatement],
+            translateCall() -> GExpression,
+            overrideExtReceiver GExpression? = nil,
+            overrideExtReceiverType ITypeSymbol? = nil
+        ) GExpression {
+            let isSourceCallee = switch this.context.SemanticModel.GetOperation(callSyntax) {
+                case invOp is IInvocationOperation: !invOp.TargetMethod.DeclaringSyntaxReferences.IsDefaultOrEmpty
+                case ctorOp is IObjectCreationOperation: !(
+                    ctorOp.Constructor?.DeclaringSyntaxReferences.IsDefaultOrEmpty ?? true
+                )
+                case propOp is IPropertyReferenceOperation: !propOp.Property.DeclaringSyntaxReferences.IsDefaultOrEmpty
+                default: false
+            }
+            let captures = CallSiteHandlerCaptureState(isSourceCallee, callSyntax)
+            let addedArguments = List[ArgumentSyntax]()
+            let addedReceivers = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
+            let previousCaptures = this.state.ActiveCallSiteHandlerCaptures
+            let outerSpillPrologue = this.state.PendingSpillPrologue
+            this.state.PendingSpillPrologue = prologue
+            try {
+                // Capture call-site receiver once before evaluating arguments.
+                if receiverSyntax != nil {
+                    let receiverSymbol = this.context.GetSymbolInfo(receiverSyntax).Symbol
+                    if receiverSyntax is ThisExpressionSyntax || receiverSyntax is BaseExpressionSyntax {
+                        captures.ReceiverExpr = ThisExpression()
+                        captures.ReceiverType = this.context.GetTypeInfo(receiverSyntax).Type
+                        captures.ReceiverSyntax = receiverSyntax
+                    } else if receiverSymbol is not INamedTypeSymbol && receiverSymbol is not INamespaceSymbol {
+                        let recvType = this.context.GetTypeInfo(receiverSyntax).Type
+                        let rawTranslatedRecv = this.TranslateWithPrologueAssignments(
+                            receiverSyntax,
+                            prologue,
+                            () -> this.TranslateExpression(receiverSyntax)
+                        )!!
+                        let translatedRecv = WithoutNonNullAssertion(rawTranslatedRecv)!!
+                        let canSkipImmutableReceiverTemp = receiverSyntax is IdentifierNameSyntax &&
+                            receiverSymbol is ILocalSymbol or
+                            IParameterSymbol &&
+                            recvType?.IsReferenceType == true &&
+                            rawTranslatedRecv is IdentifierExpression &&
+                            !this.IsSymbolReassigned(receiverSymbol, this.state.CurrentBodyScope) &&
+                            !this.IsClosureAssignedVariable(receiverSymbol) && !this.ReceiverNeedsNullForgiveness(
+                            receiverSyntax,
+                            isDereferenceReceiver: true
+                        ) &&
+                            !this.YieldsValueNilableBeyondItsCSharpType(receiverSyntax)
+                        if canSkipImmutableReceiverTemp {
+                            captures.ReceiverExpr = translatedRecv
+                            captures.ReceiverType = recvType
+                            captures.ReceiverSyntax = receiverSyntax
+                        } else {
+                            let recvName = this.NewHandlerTempName()
+                            let canAliasReceiverStorage = recvType != nil &&
+                                !recvType.IsReferenceType &&
+                                !(
+                                rawTranslatedRecv is NonNullAssertionExpression &&
+                                    recvType.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated
+                            )
+                            if canAliasReceiverStorage && this.CanCaptureValueTypeAsRefAlias(
+                                receiverSyntax,
+                                out var isReadOnlyRecv
+                            ) &&
+                                !(
+                                isReadOnlyRecv && this.CallRequiresDefensiveCopyOnReadOnlyReceiver(callSyntax, recvType)
+                            ) {
+                                if recvType is ITypeParameterSymbol typeParam &&
+                                    !typeParam.HasValueTypeConstraint &&
+                                    !typeParam.IsReferenceType {
+                                    let aliasName = this.NewHandlerTempName()
+                                    prologue.Add(
+                                        LocalDeclarationStatement(
+                                            if isReadOnlyRecv {
+                                                BindingKind.Let
+                                            } else {
+                                                BindingKind.Var
+                                            },
+                                            aliasName,
+                                            type: nil,
+                                            WithoutNonNullAssertion(translatedRecv),
+                                            isRefAlias: !isReadOnlyRecv,
+                                            isReadOnlyRefAlias: isReadOnlyRecv
+                                        )
+                                    )
+                                    let mappedRecvType = this.typeMapper.Map(
+                                        recvType,
+                                        this.context,
+                                        receiverSyntax.GetLocation()
+                                    )
+                                    let isValName = this.NewHandlerTempName()
+                                    prologue.Add(
+                                        LocalDeclarationStatement(
+                                            BindingKind.Let,
+                                            isValName,
+                                            type: nil,
+                                            initializer: MemberAccessExpression(
+                                                TypeOfExpression(mappedRecvType),
+                                                "IsValueType"
+                                            )
+                                        )
+                                    )
+                                    let isValExpr = IdentifierExpression(isValName)
+                                    let aliasExpr = IdentifierExpression(aliasName)
+                                    let snapName = this.NewHandlerTempName()
+                                    prologue.Add(
+                                        LocalDeclarationStatement(
+                                            BindingKind.Var,
+                                            snapName,
+                                            type: nil,
+                                            initializer: IfExpression(
+                                                isValExpr,
+                                                DefaultValueExpression(mappedRecvType),
+                                                aliasExpr
+                                            )
+                                        )
+                                    )
+                                    let snapExpr = IdentifierExpression(snapName)
+                                    prologue.Add(
+                                        LocalDeclarationStatement(
+                                            if isReadOnlyRecv {
+                                                BindingKind.Let
+                                            } else {
+                                                BindingKind.Var
+                                            },
+                                            recvName,
+                                            type: nil,
+                                            IfExpression(isValExpr, aliasExpr, snapExpr),
+                                            isRefAlias: !isReadOnlyRecv,
+                                            isReadOnlyRefAlias: isReadOnlyRecv
+                                        )
+                                    )
+                                } else {
+                                    prologue.Add(
+                                        LocalDeclarationStatement(
+                                            if isReadOnlyRecv {
+                                                BindingKind.Let
+                                            } else {
+                                                BindingKind.Var
+                                            },
+                                            recvName,
+                                            type: nil,
+                                            WithoutNonNullAssertion(translatedRecv),
+                                            isRefAlias: !isReadOnlyRecv,
+                                            isReadOnlyRefAlias: isReadOnlyRecv
+                                        )
+                                    )
+                                }
+                                captures.ReceiverIsRefAlias = !isReadOnlyRecv
+                                captures.ReceiverIsReadOnlyAlias = isReadOnlyRecv
+                            } else if canAliasReceiverStorage {
+                                prologue.Add(
+                                    LocalDeclarationStatement(
+                                        BindingKind.Var,
+                                        recvName,
+                                        type: nil,
+                                        initializer: translatedRecv
+                                    )
+                                )
+                            } else {
+                                let recvTempType GTypeReference? = if IsNullOrSuppressedNull(receiverSyntax) &&
+                                    recvType != nil {
+                                    MakeNullable(
+                                        this.typeMapper.Map(recvType, this.context, receiverSyntax.GetLocation())
+                                    )
+                                } else {
+                                    default(GTypeReference?)
+                                }
+                                prologue.Add(
+                                    LocalDeclarationStatement(
+                                        BindingKind.Let,
+                                        recvName,
+                                        type: recvTempType,
+                                        initializer: translatedRecv
+                                    )
+                                )
+                            }
+                            let recvId = IdentifierExpression(recvName)
+                            this
+                                .state
+                                .HoistedHandlerReceivers[receiverSyntax] = (
+                                recvId,
+                                rawTranslatedRecv is NonNullAssertionExpression
+                            )
+                            addedReceivers.Add(receiverSyntax)
+                            captures.ReceiverExpr = recvId
+                            captures.ReceiverType = recvType
+                            captures.ReceiverSyntax = receiverSyntax
+                        }
+                    }
+                } else if this.state.ConditionalReceiverReplacement != nil &&
+                    (
+                    (
+                        callSyntax is InvocationExpressionSyntax invBind &&
+                            invBind.Expression is MemberBindingExpressionSyntax
+                    ) ||
+                        callSyntax is ElementBindingExpressionSyntax
+                ) {
+                    captures.ReceiverExpr = this.state.ConditionalReceiverReplacement
+                } else if callSyntax is InvocationExpressionSyntax inv &&
+                    (inv.Expression is IdentifierNameSyntax || inv.Expression is GenericNameSyntax) &&
+                    this.context.GetSymbolInfo(inv).Symbol is IMethodSymbol{IsStatic: false} {
+                    captures.ReceiverExpr = ThisExpression()
+                }
+                var lastCoordinatedIndex = -1
+                for var idx = 0; idx < operationArguments.Length; idx++ {
+                    if this.ArgumentContainsCoordinatedHandler(operationArguments[idx]) ||
+                        this.ContainsRefLikeHandlerInSubtree(operationArguments[idx].Value) ||
+                        ContainsHandlerCreationOperation(operationArguments[idx].Value) ||
+                        (
+                        operationArguments[idx]
+                            .Value
+                            .Syntax is Microsoft
+                            .CodeAnalysis
+                            .CSharp
+                            .Syntax
+                            .ExpressionSyntax argValExpr &&
+                            CollectEmbeddedAssignments(argValExpr, includeSelf: true).Count > 0
+                    ) {
+                        lastCoordinatedIndex = idx
+                    }
+                }
+                let hasDeferredCheckedReceiver = receiverSyntax != nil &&
+                    receiverSyntax is not ThisExpressionSyntax &&
+                    receiverSyntax is not BaseExpressionSyntax &&
+                    this.state.HoistedHandlerReceivers.ContainsKey(receiverSyntax)
+                let lastSpillIndex = if hasDeferredCheckedReceiver {
+                    operationArguments.Length - 1
+                } else {
+                    lastCoordinatedIndex
+                }
+                this.state.ActiveCallSiteHandlerCaptures = captures
+                for var i = 0; i <= lastSpillIndex; i++ {
+                    let argOp = operationArguments[i]
+                    if argOp.ArgumentKind == ArgumentKind.DefaultValue || IsEmptyParamsArgument(argOp) {
+                        continue
+                    }
+                    if i == 0 && isExtensionReceiverInArgs && overrideExtReceiver != nil {
+                        captures.Arguments[0] = CallSiteCapturedArgument(
+                            overrideExtReceiver,
+                            argOp.Parameter,
+                            overrideExtReceiverType ?? argOp.Value.Type,
+                            nil,
+                            isRefAlias: false,
+                            isReadOnlyAlias: false
+                        )
+                        continue
+                    }
+                    if i == 0 && isExtensionReceiverInArgs && argOp.Syntax is not ArgumentSyntax {
+                        // Reduced extension receiver: recv.M(args)
+                        if argOp.Syntax is Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax extRecvExpr {
+                            let extRecvType = this.context.GetTypeInfo(extRecvExpr).Type
+                            let extRefKind = argOp.Parameter?.RefKind ?? RefKind.None
+                            if extRecvExpr is ThisExpressionSyntax &&
+                                (extRefKind != RefKind.None || extRecvType?.IsReferenceType == true) {
+                                captures.Arguments[0] = CallSiteCapturedArgument(
+                                    ThisExpression(),
+                                    argOp.Parameter,
+                                    argOp.Value.Type,
+                                    extRecvExpr,
+                                    isRefAlias: false,
+                                    isReadOnlyAlias: false
+                                )
+                            } else {
+                                let translatedExtRecv = this.TranslateWithPrologueAssignments(
+                                    extRecvExpr,
+                                    prologue,
+                                    () -> this.TranslateExpression(extRecvExpr)
+                                )!!
+                                let extName = this.NewHandlerTempName()
+                                if extRefKind == RefKind.Ref {
+                                    prologue.Add(
+                                        LocalDeclarationStatement(
+                                            BindingKind.Var,
+                                            extName,
+                                            type: nil,
+                                            WithoutNonNullAssertion(translatedExtRecv),
+                                            isRefAlias: true
+                                        )
+                                    )
+                                    let extId = IdentifierExpression(extName)
+                                    this.state.HoistedHandlerReceivers[extRecvExpr] = (extId, false)
+                                    addedReceivers.Add(extRecvExpr)
+                                    captures.Arguments[0] = CallSiteCapturedArgument(
+                                        extId,
+                                        argOp.Parameter,
+                                        extRecvType,
+                                        extRecvExpr,
+                                        isRefAlias: true,
+                                        isReadOnlyAlias: false
+                                    )
+                                } else if (extRefKind == RefKind.In || extRefKind == RefKind.RefReadOnlyParameter) &&
+                                    this.IsReadOnlyAddressableStorageOperation(argOp.Value) &&
+                                    argOp.Parameter != nil &&
+                                    SymbolEqualityComparer.IncludeNullability.Equals(
+                                    argOp.Value.Type,
+                                    argOp.Parameter!!.Type
+                                ) {
+                                    prologue.Add(
+                                        LocalDeclarationStatement(
+                                            BindingKind.Let,
+                                            extName,
+                                            type: nil,
+                                            WithoutNonNullAssertion(translatedExtRecv),
+                                            isRefAlias: true,
+                                            isReadOnlyRefAlias: true
+                                        )
+                                    )
+                                    let extId = IdentifierExpression(extName)
+                                    this.state.HoistedHandlerReceivers[extRecvExpr] = (extId, false)
+                                    addedReceivers.Add(extRecvExpr)
+                                    captures.Arguments[0] = CallSiteCapturedArgument(
+                                        extId,
+                                        argOp.Parameter,
+                                        extRecvType,
+                                        extRecvExpr,
+                                        isRefAlias: true,
+                                        isReadOnlyAlias: true
+                                    )
+                                } else {
+                                    var tempType = if argOp.Parameter != nil {
+                                        this.GetCapturedArgumentTempType(argOp.Parameter, extRecvExpr)
+                                    } else {
+                                        default(GTypeReference?)
+                                    }
+                                    if !nullableThisExtension &&
+                                        tempType != nil &&
+                                        !tempType.IsNullable &&
+                                        (
+                                        IsNullOrSuppressedNull(extRecvExpr) ||
+                                            extRecvType?.NullableAnnotation == Microsoft
+                                            .CodeAnalysis
+                                            .NullableAnnotation
+                                            .Annotated ||
+                                            this.ReceiverIsNullableReferenceFieldOrProperty(extRecvExpr) ||
+                                            this.YieldsValueNilableBeyondItsCSharpType(extRecvExpr)
+                                    ) {
+                                        tempType = MakeNullable(tempType)
+                                    }
+                                    prologue.Add(
+                                        LocalDeclarationStatement(
+                                            BindingKind.Let,
+                                            extName,
+                                            tempType,
+                                            WithoutNonNullAssertion(translatedExtRecv)
+                                        )
+                                    )
+                                    let extId = IdentifierExpression(extName)
+                                    this
+                                        .state
+                                        .HoistedHandlerReceivers[extRecvExpr] = (
+                                        extId,
+                                        !nullableThisExtension && translatedExtRecv is NonNullAssertionExpression
+                                    )
+                                    addedReceivers.Add(extRecvExpr)
+                                    captures.Arguments[0] = CallSiteCapturedArgument(
+                                        extId,
+                                        argOp.Parameter,
+                                        extRecvType,
+                                        extRecvExpr,
+                                        isRefAlias: false,
+                                        isReadOnlyAlias: false
+                                    )
+                                }
+                            }
+                        } else if this.state.ConditionalReceiverReplacement != nil &&
+                            callSyntax is InvocationExpressionSyntax extBind &&
+                            extBind.Expression is MemberBindingExpressionSyntax {
+                            captures.Arguments[0] = CallSiteCapturedArgument(
+                                this.state.ConditionalReceiverReplacement!!,
+                                argOp.Parameter,
+                                argOp.Value.Type,
+                                nil,
+                                isRefAlias: false,
+                                isReadOnlyAlias: false
+                            )
+                        }
+                        continue
+                    }
+                    if argOp.Syntax is not ArgumentSyntax argSyntax {
+                        if (
+                            argOp.ArgumentKind == ArgumentKind.ParamArray ||
+                                argOp.ArgumentKind == ArgumentKind.ParamCollection
+                        ) &&
+                            this.TryUnwrapPackedParamsElements(argOp.Value, out var elements) {
+                            for elemOp in elements {
+                                let elemArgSyntax = ResolveOperationSyntaxToArgument(elemOp)
+                                if elemArgSyntax == nil {
+                                    continue
+                                }
+                                let translatedElem = this.TranslateWithPrologueAssignments(
+                                    elemArgSyntax.Expression,
+                                    prologue,
+                                    () -> this.TranslateArgumentValue(elemArgSyntax)
+                                )!!
+                                if elemOp.ConstantValue.HasValue &&
+                                    (translatedElem is LiteralExpression || translatedElem is TypeExpression) {
+                                    continue
+                                }
+                                var elemTempType GTypeReference? = nil
+                                if this.TryGetExpandedParamsElementTarget(
+                                    elemArgSyntax,
+                                    argOp.Parameter,
+                                    out var elemTargetType,
+                                    out _
+                                ) {
+                                    elemTempType = this.typeMapper.Map(
+                                        elemTargetType,
+                                        this.context,
+                                        elemArgSyntax.GetLocation()
+                                    )
+                                    if elemTempType != nil &&
+                                        !elemTempType.IsNullable &&
+                                        elemTargetType!!.IsReferenceType &&
+                                        (
+                                        IsNullOrSuppressedNull(elemArgSyntax.Expression) ||
+                                            this.ObliviousParamsElementIsPromoted(argOp.Parameter!!) ||
+                                            (
+                                            this.SinkInfersTypeFromValue(argOp.Parameter, elemArgSyntax.Expression) &&
+                                                this.EmittedExpandedParamsElementMayBeNull(elemArgSyntax.Expression)
+                                        ) ||
+                                            (
+                                            !this.FlowsThroughUserDefinedConversion(elemArgSyntax.Expression) &&
+                                                !this.TargetWillRemainNonNullableReference(
+                                                elemTargetType,
+                                                argOp.Parameter,
+                                                elemArgSyntax.Expression
+                                            )
+                                        )
+                                    ) {
+                                        elemTempType = MakeNullable(elemTempType)
+                                    }
+                                }
+                                let elemTemp = this.NewHandlerTempName()
+                                prologue.Add(
+                                    LocalDeclarationStatement(BindingKind.Let, elemTemp, elemTempType, translatedElem)
+                                )
+                                this.state.HoistedHandlerArguments[elemArgSyntax] = IdentifierExpression(elemTemp)
+                                addedArguments.Add(elemArgSyntax)
+                            }
+                        }
+                        continue
+                    }
+                    if argOp.Value is IInterpolatedStringHandlerCreationOperation directHandlerOp {
+                        let handlerExpr = this.EmitInterpolatedStringHandlerStatements(
+                            directHandlerOp,
+                            captures,
+                            prologue
+                        )
+                        let param = argOp.Parameter
+                        let adaptedHandler = this.AdaptHandlerValueForTargetParameter(handlerExpr, param)
+                        this.state.HoistedHandlerArguments[argSyntax] = adaptedHandler
+                        addedArguments.Add(argSyntax)
+                        captures.Arguments[i] = CallSiteCapturedArgument(
+                            handlerExpr,
+                            param,
+                            argOp.Value.Type ?? directHandlerOp.Type,
+                            argSyntax.Expression,
+                            isRefAlias: false,
+                            isReadOnlyAlias: false
+                        )
+                        continue
+                    }
+                    let param = argOp.Parameter
+                    let refKind = param?.RefKind ?? RefKind.None
+                    if argSyntax.Expression is DeclarationExpressionSyntax{
+                        Designation: SingleVariableDesignationSyntax single
+                    } {
+                        if this.state.PredeclaredOutDesignations.Contains(single) {
+                            let outName = this.EmittedName(single, single.Identifier)!!
+                            let outId = IdentifierExpression(outName)
+                            this.state.HoistedHandlerArguments[argSyntax] = OutArgumentExpression("out", outName)
+                            addedArguments.Add(argSyntax)
+                            captures.Arguments[i] = CallSiteCapturedArgument(
+                                outId,
+                                param,
+                                argOp.Value.Type,
+                                argSyntax.Expression,
+                                isRefAlias: true,
+                                isReadOnlyAlias: false
+                            )
+                        }
+                        continue
+                    }
+                    let _ = this.TranslateWithPrologueAssignments(
+                        argSyntax.Expression,
+                        prologue,
+                        () -> {
+                            if refKind == RefKind.Out {
+                                let unwrappedOut = Unparenthesize(argSyntax.Expression)
+                                if unwrappedOut is IdentifierNameSyntax &&
+                                    this.context.GetSymbolInfo(unwrappedOut).Symbol is ILocalSymbol or
+                                    IParameterSymbol &&
+                                    !(
+                                    unwrappedOut is IdentifierNameSyntax{Identifier: {ValueText: "_"}} discardCheck &&
+                                        this.IsTrueDiscard(discardCheck)
+                                ) {
+                                    captures.Arguments[i] = CallSiteCapturedArgument(
+                                        this.TranslateExpression(unwrappedOut)!!,
+                                        param,
+                                        argOp.Value.Type,
+                                        argSyntax.Expression,
+                                        isRefAlias: true,
+                                        isReadOnlyAlias: false
+                                    )
+                                } else if unwrappedOut is ThisExpressionSyntax {
+                                    captures.Arguments[i] = CallSiteCapturedArgument(
+                                        ThisExpression(),
+                                        param,
+                                        argOp.Value.Type,
+                                        argSyntax.Expression,
+                                        isRefAlias: true,
+                                        isReadOnlyAlias: false
+                                    )
+                                } else if !(
+                                    unwrappedOut is IdentifierNameSyntax{Identifier: {ValueText: "_"}} discardOut &&
+                                        this.IsTrueDiscard(discardOut)
+                                ) {
+                                    let outTemp = this.NewHandlerTempName()
+                                    let outTarget = WithoutNonNullAssertion(
+                                        this.TranslateExpression(argSyntax.Expression)
+                                    )
+                                    prologue.Add(
+                                        LocalDeclarationStatement(
+                                            BindingKind.Var,
+                                            outTemp,
+                                            type: nil,
+                                            outTarget,
+                                            isRefAlias: true
+                                        )
+                                    )
+                                    let idExpr = IdentifierExpression(outTemp)
+                                    this.state.HoistedHandlerArguments[argSyntax] = UnaryExpression("&", idExpr)
+                                    addedArguments.Add(argSyntax)
+                                    captures.Arguments[i] = CallSiteCapturedArgument(
+                                        idExpr,
+                                        param,
+                                        argOp.Value.Type,
+                                        argSyntax.Expression,
+                                        isRefAlias: true,
+                                        isReadOnlyAlias: false
+                                    )
+                                }
+                                return nil
+                            }
+                            if refKind == RefKind.Ref {
+                                let unwrappedRef = Unparenthesize(argSyntax.Expression)
+                                if unwrappedRef is ThisExpressionSyntax {
+                                    captures.Arguments[i] = CallSiteCapturedArgument(
+                                        ThisExpression(),
+                                        param,
+                                        argOp.Value.Type,
+                                        argSyntax.Expression,
+                                        isRefAlias: true,
+                                        isReadOnlyAlias: false
+                                    )
+                                } else {
+                                    let refTemp = this.NewHandlerTempName()
+                                    let refTarget = WithoutNonNullAssertion(
+                                        this.TranslateExpression(argSyntax.Expression)
+                                    )
+                                    prologue.Add(
+                                        LocalDeclarationStatement(
+                                            BindingKind.Var,
+                                            refTemp,
+                                            type: nil,
+                                            refTarget,
+                                            isRefAlias: true
+                                        )
+                                    )
+                                    let idExpr = IdentifierExpression(refTemp)
+                                    this.state.HoistedHandlerArguments[argSyntax] = UnaryExpression("&", idExpr)
+                                    addedArguments.Add(argSyntax)
+                                    captures.Arguments[i] = CallSiteCapturedArgument(
+                                        idExpr,
+                                        param,
+                                        argOp.Value.Type,
+                                        argSyntax.Expression,
+                                        isRefAlias: true,
+                                        isReadOnlyAlias: false
+                                    )
+                                }
+                                return nil
+                            }
+                            if refKind is RefKind.In or RefKind.RefReadOnlyParameter {
+                                let translatedInArg = this.TranslateArgumentValue(argSyntax)!!
+                                if translatedInArg is OutArgumentExpression{Keyword: "in" or "ref", Name: "this"} ||
+                                    translatedInArg is UnaryExpression{
+                                    Operator: "in " or "&",
+                                    Operand: ThisExpression
+                                } {
+                                    let adaptedThis GExpression = if param != nil &&
+                                        !param.ContainingSymbol.DeclaringSyntaxReferences.IsDefaultOrEmpty {
+                                        cast[GExpression](OutArgumentExpression("in", "this"))
+                                    } else {
+                                        ReadOnlyAddressOf(ThisExpression())
+                                    }
+                                    this.state.HoistedHandlerArguments[argSyntax] = adaptedThis
+                                    addedArguments.Add(argSyntax)
+                                    captures.Arguments[i] = CallSiteCapturedArgument(
+                                        ThisExpression(),
+                                        param,
+                                        argOp.Value.Type,
+                                        argSyntax.Expression,
+                                        isRefAlias: false,
+                                        isReadOnlyAlias: true
+                                    )
+                                } else if translatedInArg is OutArgumentExpression{Keyword: "in" or "ref"} inOut {
+                                    let refTemp = this.NewHandlerTempName()
+                                    prologue.Add(
+                                        LocalDeclarationStatement(
+                                            BindingKind.Let,
+                                            refTemp,
+                                            type: nil,
+                                            IdentifierExpression(inOut.Name),
+                                            isRefAlias: true,
+                                            isReadOnlyRefAlias: true
+                                        )
+                                    )
+                                    let idExpr = IdentifierExpression(refTemp)
+                                    this.state.HoistedHandlerArguments[argSyntax] = OutArgumentExpression("in", refTemp)
+                                    addedArguments.Add(argSyntax)
+                                    captures.Arguments[i] = CallSiteCapturedArgument(
+                                        idExpr,
+                                        param,
+                                        argOp.Value.Type,
+                                        argSyntax.Expression,
+                                        isRefAlias: true,
+                                        isReadOnlyAlias: true
+                                    )
+                                } else if translatedInArg is UnaryExpression{Operator: "in " or "&"} inAddr {
+                                    let refTemp = this.NewHandlerTempName()
+                                    prologue.Add(
+                                        LocalDeclarationStatement(
+                                            BindingKind.Let,
+                                            refTemp,
+                                            type: nil,
+                                            inAddr.Operand,
+                                            isRefAlias: true,
+                                            isReadOnlyRefAlias: true
+                                        )
+                                    )
+                                    let idExpr = IdentifierExpression(refTemp)
+                                    this.state.HoistedHandlerArguments[argSyntax] = UnaryExpression("in ", idExpr)
+                                    addedArguments.Add(argSyntax)
+                                    captures.Arguments[i] = CallSiteCapturedArgument(
+                                        idExpr,
+                                        param,
+                                        argOp.Value.Type,
+                                        argSyntax.Expression,
+                                        isRefAlias: true,
+                                        isReadOnlyAlias: true
+                                    )
+                                } else if argSyntax.RefKindKeyword.IsKind(
+                                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.None
+                                ) &&
+                                    this.IsReadOnlyAddressableStorageOperation(argOp.Value) &&
+                                    translatedInArg is not NonNullAssertionExpression {
+                                    let refTemp = this.NewHandlerTempName()
+                                    prologue.Add(
+                                        LocalDeclarationStatement(
+                                            BindingKind.Let,
+                                            refTemp,
+                                            type: nil,
+                                            translatedInArg,
+                                            isRefAlias: true,
+                                            isReadOnlyRefAlias: true
+                                        )
+                                    )
+                                    let idExpr = IdentifierExpression(refTemp)
+                                    this.state.HoistedHandlerArguments[argSyntax] = idExpr
+                                    addedArguments.Add(argSyntax)
+                                    captures.Arguments[i] = CallSiteCapturedArgument(
+                                        idExpr,
+                                        param,
+                                        argOp.Value.Type,
+                                        argSyntax.Expression,
+                                        isRefAlias: true,
+                                        isReadOnlyAlias: true
+                                    )
+                                } else {
+                                    let valTemp = this.NewHandlerTempName()
+                                    let tempType = this.GetCapturedArgumentTempType(param, argSyntax)
+                                    prologue.Add(
+                                        LocalDeclarationStatement(BindingKind.Let, valTemp, tempType, translatedInArg)
+                                    )
+                                    let idExpr = IdentifierExpression(valTemp)
+                                    let adaptedIn GExpression = if param != nil &&
+                                        !param.ContainingSymbol.DeclaringSyntaxReferences.IsDefaultOrEmpty {
+                                        cast[GExpression](OutArgumentExpression("in", valTemp))
+                                    } else {
+                                        idExpr
+                                    }
+                                    this.state.HoistedHandlerArguments[argSyntax] = adaptedIn
+                                    addedArguments.Add(argSyntax)
+                                    captures.Arguments[i] = CallSiteCapturedArgument(
+                                        idExpr,
+                                        param,
+                                        argOp.Value.Type,
+                                        argSyntax.Expression,
+                                        isRefAlias: false,
+                                        isReadOnlyAlias: false
+                                    )
+                                }
+                                return nil
+                            }
+                            let translatedArg = if i == 0 && isExtensionReceiverInArgs {
+                                this.TranslateStaticExtensionReceiver(argOp)!!
+                            } else {
+                                this.TranslateArgumentValue(argSyntax)!!
+                            }
+                            if argOp.Value.ConstantValue.HasValue &&
+                                (translatedArg is LiteralExpression || translatedArg is TypeExpression) {
+                                captures.Arguments[i] = CallSiteCapturedArgument(
+                                    translatedArg,
+                                    param,
+                                    argOp.Value.Type,
+                                    argSyntax.Expression,
+                                    isRefAlias: false,
+                                    isReadOnlyAlias: false
+                                )
+                                return nil
+                            }
+                            let argTemp = this.NewHandlerTempName()
+                            let argTempType = this.GetCapturedArgumentTempType(param, argSyntax)
+                            prologue.Add(
+                                LocalDeclarationStatement(BindingKind.Let, argTemp, argTempType, translatedArg)
+                            )
+                            let argId = IdentifierExpression(argTemp)
+                            this.state.HoistedHandlerArguments[argSyntax] = argId
+                            addedArguments.Add(argSyntax)
+                            if i == 0 && isExtensionReceiverInArgs {
+                                this.state.HoistedHandlerReceivers[argSyntax.Expression] = (argId, false)
+                                addedReceivers.Add(argSyntax.Expression)
+                            }
+                            captures.Arguments[i] = CallSiteCapturedArgument(
+                                argId,
+                                param,
+                                argOp.Value.Type,
+                                argSyntax.Expression,
+                                isRefAlias: false,
+                                isReadOnlyAlias: false
+                            )
+                            return nil
+                        }
+                    )
+                }
+                return translateCall()
+            } finally {
+                this.state.PendingSpillPrologue = outerSpillPrologue
+                this.state.ActiveCallSiteHandlerCaptures = previousCaptures
+                for arg in addedArguments {
+                    this.state.HoistedHandlerArguments.Remove(arg)
+                }
+                for recv in addedReceivers {
+                    this.state.HoistedHandlerReceivers.Remove(recv)
+                }
+            }
+        }
+
+        private func AdaptHandlerValueForTargetParameter(
+            handlerExpr GExpression,
+            parameter IParameterSymbol?
+        ) GExpression {
+            if parameter == nil {
+                return handlerExpr
+            }
+            if parameter.RefKind == RefKind.Ref || parameter.RefKind == RefKind.Out {
+                return UnaryExpression("&", handlerExpr)
+            }
+            if (parameter.RefKind == RefKind.In || parameter.RefKind == RefKind.RefReadOnlyParameter) &&
+                !parameter.ContainingSymbol.DeclaringSyntaxReferences.IsDefaultOrEmpty &&
+                handlerExpr is IdentifierExpression handlerId {
+                return OutArgumentExpression("in", handlerId.Name)
+            }
+            return handlerExpr
+        }
+
+        private func TranslateInterpolatedStringHandlerCreation(
+            handlerOp IInterpolatedStringHandlerCreationOperation
+        ) GExpression {
+            let handlerTypeSymbol = handlerOp.Type ?? (handlerOp.HandlerCreation as IObjectCreationOperation)?.Type
+            if this.IsTopLevelEntryPointCall(handlerOp.Syntax) && handlerTypeSymbol?.IsRefLikeType == true {
+                this.context.ReportUnsupported(
+                    handlerOp.Syntax,
+                    "standalone ref-struct interpolated-string handler cannot be declared in top-level scope (issue #5965)."
+                )
+            }
+            let statements = List[GStatement]()
+            var ownerCur IOperation? = handlerOp.Parent
+            while ownerCur is IConversionOperation or
+                IParenthesizedOperation or
+                IArrayInitializerOperation or
+                IArrayCreationOperation {
+                ownerCur = ownerCur?.Parent
+            }
+            let ownerCallSyntax = (ownerCur as IArgumentOperation)?.Parent?.Syntax
+            let activeCaptures = this.state.ActiveCallSiteHandlerCaptures as CallSiteHandlerCaptureState
+            let captures = if activeCaptures != nil && ownerCallSyntax == activeCaptures.CallSyntax {
+                activeCaptures
+            } else {
+                nil
+            }
+            let handlerExpr = this.EmitInterpolatedStringHandlerStatements(handlerOp, captures, statements)
+            return if statements.Count == 0 {
+                handlerExpr
+            } else {
+                cast[GExpression](BlockExpression(statements, handlerExpr))
+            }
+        }
+
+        private func EmitInterpolatedStringHandlerStatements(
+            handlerOp IInterpolatedStringHandlerCreationOperation,
+            captures CallSiteHandlerCaptureState?,
+            statements List[GStatement]
+        ) GExpression {
+            if handlerOp.HandlerCreation is not IObjectCreationOperation ctorOp {
+                if handlerOp.Syntax is Microsoft.CodeAnalysis.CSharp.Syntax.InterpolatedStringExpressionSyntax interp {
+                    return this.TranslateInterpolatedStringLiteralParts(interp)
+                }
+                return LiteralExpression.Null()
+            }
+            let location = handlerOp.Syntax.GetLocation()
+            let handlerTypeSymbol = handlerOp.Type ?? ctorOp.Type
+            let handlerType = this.typeMapper.Map(handlerTypeSymbol, this.context, location)
+            let hasSuccessParam = handlerOp.HandlerCreationHasSuccessParameter
+            var validName string? = nil
+            if hasSuccessParam {
+                validName = this.NewHandlerTempName()
+                statements.Add(
+                    LocalDeclarationStatement(
+                        BindingKind.Var,
+                        validName,
+                        type: nil,
+                        initializer: LiteralExpression.Bool(false)
+                    )
+                )
+            }
+            let ctorArgs = List[GExpression](ctorOp.Arguments.Length)
+            for ctorArg in ctorOp.Arguments {
+                ctorArgs.Add(this.TranslateHandlerConstructorArgument(ctorArg, handlerOp, captures, validName)!!)
+            }
+            let handlerName = this.NewHandlerTempName()
+            let constructExpr = BuildConstruction(handlerType, ctorArgs)
+            statements.Add(
+                LocalDeclarationStatement(BindingKind.Var, handlerName, type: nil, initializer: constructExpr)
+            )
+            let appendOps = List[IInterpolatedStringAppendOperation]()
+            CollectHandlerAppendOperations(handlerOp.Content, appendOps)
+            if appendOps.Count > 0 {
+                if !hasSuccessParam && !handlerOp.HandlerAppendCallsReturnBool {
+                    for appendOp in appendOps {
+                        let appendCallExpr = this.BuildHandlerAppendCall(handlerName, appendOp)
+                        let returnsVoid = appendOp.AppendCall is IInvocationOperation inv &&
+                            inv.TargetMethod.ReturnsVoid
+                        statements.Add(ExpressionStatement(appendCallExpr, isVoid: returnsVoid))
+                    }
+                } else if hasSuccessParam && !handlerOp.HandlerAppendCallsReturnBool {
+                    let bodyStatements = List[GStatement](appendOps.Count)
+                    for appendOp in appendOps {
+                        let appendCallExpr = this.BuildHandlerAppendCall(handlerName, appendOp)
+                        let returnsVoid = appendOp.AppendCall is IInvocationOperation inv &&
+                            inv.TargetMethod.ReturnsVoid
+                        bodyStatements.Add(ExpressionStatement(appendCallExpr, isVoid: returnsVoid))
+                    }
+                    statements.Add(IfStatement(IdentifierExpression(validName!!), BlockStatement(bodyStatements)))
+                } else {
+                    let contName = this.NewHandlerTempName()
+                    let seedExpr GExpression = if hasSuccessParam {
+                        cast[GExpression](IdentifierExpression(validName!!))
+                    } else {
+                        cast[GExpression](LiteralExpression.Bool(true))
+                    }
+                    statements.Add(
+                        LocalDeclarationStatement(BindingKind.Var, contName, type: nil, initializer: seedExpr)
+                    )
+                    for var idx = 0; idx < appendOps.Count; idx++ {
+                        let appendOp = appendOps[idx]
+                        let isLast = idx == appendOps.Count - 1
+                        let appendCallExpr = this.BuildHandlerAppendCall(handlerName, appendOp)
+                        let returnsBool = appendOp.AppendCall is IInvocationOperation inv &&
+                            inv.TargetMethod.ReturnType.SpecialType == SpecialType.System_Boolean
+                        let bodyStmt GStatement = if returnsBool && !isLast {
+                            cast[GStatement](
+                                AssignmentStatement(IdentifierExpression(contName), appendCallExpr, isVoid: true)
+                            )
+                        } else {
+                            cast[GStatement](ExpressionStatement(appendCallExpr, isVoid: !returnsBool))
+                        }
+                        statements.Add(
+                            IfStatement(IdentifierExpression(contName), BlockStatement(List[GStatement]{bodyStmt}))
+                        )
+                    }
+                }
+            }
+            return IdentifierExpression(handlerName)
+        }
+
+        private func CollectHandlerAppendOperations(
+            content IOperation?,
+            into List[IInterpolatedStringAppendOperation]
+        ) {
+            switch content {
+                case interp is IInterpolatedStringOperation {
+                    for part in interp.Parts {
+                        if part is IInterpolatedStringAppendOperation appendOp {
+                            into.Add(appendOp)
+                        }
+                    }
+                }
+                case addition is IInterpolatedStringAdditionOperation {
+                    CollectHandlerAppendOperations(addition.Left, into)
+                    CollectHandlerAppendOperations(addition.Right, into)
+                }
+            }
+        }
+
+        private func TranslateHandlerConstructorArgument(
+            ctorArg IArgumentOperation,
+            handlerOp IInterpolatedStringHandlerCreationOperation,
+            captures CallSiteHandlerCaptureState?,
+            validName string?
+        ) GExpression? {
+            var value = ctorArg.Value
+            while value is IConversionOperation conversion {
+                value = conversion.Operand
+            }
+            if value is IInterpolatedStringHandlerArgumentPlaceholderOperation placeholder {
+                if placeholder.PlaceholderKind == InterpolatedStringArgumentPlaceholderKind.TrailingValidityArgument {
+                    return UnaryExpression("&", IdentifierExpression(validName!!))
+                }
+                if placeholder.PlaceholderKind == InterpolatedStringArgumentPlaceholderKind.CallsiteReceiver {
+                    let recvExpr = captures?.ReceiverExpr
+                    if captures == nil || recvExpr == nil {
+                        this.context.ReportUnsupported(
+                            handlerOp.Syntax,
+                            "interpolated-string-handler receiver placeholder could not be resolved at this call site (issue #5965)."
+                        )
+                        return LiteralExpression.Null()
+                    }
+                    return this.AdaptCapturedValueForConstructorParameter(
+                        recvExpr,
+                        captures.ReceiverType,
+                        captures.ReceiverSyntax,
+                        ctorArg.Parameter,
+                        handlerOp.Syntax.GetLocation(),
+                        isDeferredReceiver: true
+                    )
+                }
+                if placeholder.PlaceholderKind == InterpolatedStringArgumentPlaceholderKind.CallsiteArgument {
+                    if captures != nil && captures.Arguments.TryGetValue(
+                        placeholder.ArgumentIndex,
+                        out var capturedArg
+                    ) {
+                        return this.AdaptCapturedValueForConstructorParameter(
+                            capturedArg.Expr,
+                            capturedArg.SourceType,
+                            capturedArg.SourceSyntax,
+                            ctorArg.Parameter,
+                            handlerOp.Syntax.GetLocation(),
+                            isDeferredReceiver: false
+                        )
+                    }
+                    // Fallback: check enclosing call operation for omitted DefaultValue argument.
+                    let callOp = this.FindEnclosingCallOperation(handlerOp)
+                    let callArgs = switch callOp {
+                        case inv is IInvocationOperation: inv.Arguments
+                        case obj is IObjectCreationOperation: obj.Arguments
+                        case prop is IPropertyReferenceOperation: prop.Arguments
+                        default: default(ImmutableArray[IArgumentOperation])
+                    }
+                    if !callArgs.IsDefaultOrEmpty &&
+                        placeholder.ArgumentIndex >= 0 &&
+                        placeholder.ArgumentIndex < callArgs.Length {
+                        let sourceArg = callArgs[placeholder.ArgumentIndex]
+                        if sourceArg.ArgumentKind == ArgumentKind.DefaultValue {
+                            let defaultExpr = this.TranslateOperationDefaultArgument(
+                                handlerOp.Syntax,
+                                sourceArg,
+                                "forwarded parameter",
+                                coerceToParameterType: true
+                            )
+                            return this.AdaptCapturedValueForConstructorParameter(
+                                defaultExpr!!,
+                                sourceArg.Parameter?.Type,
+                                nil,
+                                ctorArg.Parameter,
+                                handlerOp.Syntax.GetLocation(),
+                                isDeferredReceiver: false
+                            )
+                        }
+                    }
+                    this.context.ReportUnsupported(
+                        handlerOp.Syntax,
+                        "interpolated-string-handler argument placeholder could not be resolved at this call site (issue #5965)."
+                    )
+                    return LiteralExpression.Null()
+                }
+            }
+            if ctorArg.ArgumentKind == ArgumentKind.DefaultValue {
+                return this.TranslateOperationDefaultArgument(
+                    handlerOp.Syntax,
+                    ctorArg,
+                    "handler constructor parameter",
+                    coerceToParameterType: true
+                )
+            }
+            if ctorArg.Value.ConstantValue.HasValue {
+                return this.MapConstantValue(
+                    ctorArg.Value.ConstantValue.Value,
+                    ctorArg.Parameter?.Type ?? ctorArg.Value.Type,
+                    handlerOp.Syntax,
+                    "handler constructor argument"
+                )
+            }
+            if ctorArg.Value.Syntax is Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax exprSyntax {
+                return this.TranslateExpression(exprSyntax)
+            }
+            return LiteralExpression.Null()
+        }
+
+        private func IsInsideInstanceMember(node Microsoft.CodeAnalysis.SyntaxNode) bool {
+            let enclosing = this.context.SemanticModel.GetEnclosingSymbol(node.SpanStart)
+            return enclosing != nil && !enclosing.IsStatic
+        }
+
+        private func FindEnclosingCallOperation(handlerOp IInterpolatedStringHandlerCreationOperation) IOperation? {
+            var current = handlerOp.Parent
+            while current != nil {
+                if current is IInvocationOperation or IObjectCreationOperation or IPropertyReferenceOperation {
+                    return current
+                }
+                current = current.Parent
+            }
+            return nil
+        }
+
+        private func AdaptCapturedValueForConstructorParameter(
+            captured GExpression,
+            sourceType ITypeSymbol?,
+            sourceSyntax Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            parameter IParameterSymbol?,
+            location Location,
+            isDeferredReceiver bool
+        ) GExpression {
+            if parameter == nil {
+                return captured
+            }
+            let refKind = parameter.RefKind
+            if refKind == RefKind.Ref || refKind == RefKind.Out {
+                if captured is ThisExpression {
+                    return OutArgumentExpression(
+                        if refKind == RefKind.Out {
+                            "out"
+                        } else {
+                            "ref"
+                        },
+                        "this"
+                    )
+                }
+                return UnaryExpression("&", WithoutNonNullAssertion(captured))
+            }
+            if refKind is RefKind.In or RefKind.RefReadOnlyParameter {
+                if !parameter.ContainingSymbol.DeclaringSyntaxReferences.IsDefaultOrEmpty &&
+                    sourceType != nil &&
+                    SymbolEqualityComparer.IncludeNullability.Equals(sourceType, parameter.Type) {
+                    if captured is IdentifierExpression idExpr {
+                        return OutArgumentExpression("in", idExpr.Name)
+                    }
+                    if captured is ThisExpression {
+                        return ReadOnlyAddressOf(ThisExpression())
+                    }
+                }
+            }
+            var result = captured
+            if sourceType != nil &&
+                TryGetNumericKind(sourceType, out var srcNum) &&
+                TryGetNumericKind(parameter.Type, out var dstNum) &&
+                srcNum != dstNum {
+                result = this.CoerceOperandTo(result, parameter.Type, location)
+            }
+            let sourceMayBeNull = sourceType?.NullableAnnotation == Microsoft
+                .CodeAnalysis
+                .NullableAnnotation
+                .Annotated ||
+                (
+                sourceSyntax != nil &&
+                    (
+                    this.YieldsValueNilableBeyondItsCSharpType(sourceSyntax) || this.IsTranslatorWidenedDeclaration(
+                        this.context.GetSymbolInfo(sourceSyntax).Symbol
+                    ) ||
+                        (
+                        isDeferredReceiver &&
+                            (
+                            this.ReceiverNeedsNullForgiveness(sourceSyntax, isDereferenceReceiver: true) ||
+                                this.ReceiverIsNullableReferenceFieldOrProperty(sourceSyntax)
+                        )
+                    )
+                )
+            )
+            if parameter.Type.IsReferenceType &&
+                sourceMayBeNull &&
+                !TranslatedExpressionIsStaticallyNonNull(result) &&
+                this.TargetWillRemainNonNullableReference(parameter.Type, parameter, sourceSyntax) {
+                if isDeferredReceiver {
+                    let nonNullTarget = this.typeMapper.Map(
+                        parameter.Type.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated),
+                        this.context,
+                        location
+                    )
+                    result = ConversionExpression(nonNullTarget, result, isCheckedReferenceCast: true)
+                } else {
+                    result = this.ReportStoreBridge(sourceSyntax, result, EnsureNonNullAssertion(result), parameter)!!
+                }
+            }
+            return result
+        }
+
+        private func BuildHandlerAppendCall(
+            handlerName string,
+            appendOp IInterpolatedStringAppendOperation
+        ) GExpression {
+            let handlerId = IdentifierExpression(handlerName)
+            if appendOp.AppendCall is IDynamicInvocationOperation {
+                this.context.ReportUnsupported(
+                    appendOp.Syntax,
+                    "dynamic interpolated-string-handler append calls have no G# runtime binder equivalent (issue #5965)."
+                )
+                return handlerId
+            }
+            if appendOp.AppendCall is not IInvocationOperation appendCall {
+                this.context.ReportUnsupported(
+                    appendOp.Syntax,
+                    "interpolated-string-handler append call could not be lowered (issue #5965)."
+                )
+                return handlerId
+            }
+            let method = appendCall.TargetMethod
+            let isExtension = method.IsExtensionMethod
+            let args = List[GExpression]()
+            var target GExpression
+            if isExtension && this.TryGetStaticExtensionHelper(method, out _, out var helperName) {
+                args.Add(PassStaticExtensionHelperReceiver(handlerId, method)!!)
+                let ownerType = (method.ReducedFrom ?? method).ContainingType
+                target = MemberAccessExpression(
+                    this.StaticQualifierReceiver(ownerType, appendOp.Syntax.GetLocation()),
+                    helperName
+                )
+            } else {
+                target = MemberAccessExpression(handlerId, this.EmittedName(method, method.Name))
+            }
+            let startIndex = if isExtension {
+                1
+            } else {
+                0
+            }
+            var lastExplicit = startIndex - 1
+            for var idx = startIndex; idx < appendCall.Arguments.Length; idx++ {
+                if appendCall.Arguments[idx].ArgumentKind != ArgumentKind.DefaultValue {
+                    lastExplicit = idx
+                }
+            }
+            let appendCaptures = CallSiteHandlerCaptureState(
+                !method.DeclaringSyntaxReferences.IsDefaultOrEmpty,
+                appendCall.Syntax
+            )
+            appendCaptures.ReceiverExpr = handlerId
+            appendCaptures.ReceiverType = appendCall.Instance?.Type
+            let nestedPrologue = List[GStatement]()
+            let previousCaptures = this.state.ActiveCallSiteHandlerCaptures
+            let outerSpillPrologue = this.state.PendingSpillPrologue
+            this.state.ActiveCallSiteHandlerCaptures = appendCaptures
+            this.state.PendingSpillPrologue = nestedPrologue
+            try {
+                for var i = startIndex; i <= lastExplicit; i++ {
+                    let arg = appendCall.Arguments[i]
+                    if arg.ArgumentKind != ArgumentKind.DefaultValue && this.TryGetDirectHandlerCreation(
+                        arg.Value,
+                        out var nestedHandlerOp
+                    ) &&
+                        arg.Parameter != nil &&
+                        (
+                        arg.Parameter!!.RefKind == RefKind.Ref ||
+                            arg.Parameter!!.RefKind == RefKind.In ||
+                            arg.Parameter!!.RefKind == RefKind.RefReadOnlyParameter ||
+                            arg.Parameter!!.RefKind == RefKind.Out
+                    ) {
+                        let nestedExpr = this.EmitInterpolatedStringHandlerStatements(
+                            nestedHandlerOp!!,
+                            appendCaptures,
+                            nestedPrologue
+                        )
+                        args.Add(this.AdaptHandlerValueForTargetParameter(nestedExpr, arg.Parameter))
+                    } else if (
+                        arg.ArgumentKind == ArgumentKind.ParamArray || arg.ArgumentKind == ArgumentKind.ParamCollection
+                    ) &&
+                        arg.Syntax is not ArgumentSyntax {
+                        this.AppendPackedParamsHandlerArgument(arg, appendOp, method, nestedPrologue, args)
+                    } else if appendOp.Kind != OperationKind.InterpolatedStringAppendLiteral &&
+                        arg.ArgumentKind != ArgumentKind.DefaultValue &&
+                        arg.Value.Syntax is Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax holeSyntax {
+                        let replacements = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
+                        let embedded = this.HoistAssignmentsInOrder(
+                            holeSyntax,
+                            includeSelf: true,
+                            nestedPrologue,
+                            replacements
+                        )
+                        try {
+                            args.Add(this.TranslateHandlerAppendArgument(arg, appendOp)!!)
+                        } finally {
+                            this.ReleaseHoistedAssignments(embedded, replacements)
+                        }
+                    } else {
+                        args.Add(this.TranslateHandlerAppendArgument(arg, appendOp)!!)
+                    }
+                }
+                for var i = lastExplicit + 1; i < appendCall.Arguments.Length; i++ {
+                    let arg = appendCall.Arguments[i]
+                    if arg.ArgumentKind == ArgumentKind.DefaultValue &&
+                        arg.Parameter != nil &&
+                        this.IsCallerInfoParameter(arg.Parameter!!) {
+                        args.Add(
+                            NamedArgumentExpression(
+                                this.EmittedName(arg.Parameter, arg.Parameter!!.Name),
+                                this.TranslateOperationDefaultArgument(
+                                    appendOp.Syntax,
+                                    arg,
+                                    "caller information",
+                                    coerceToParameterType: false
+                                )
+                            )
+                        )
+                    }
+                }
+            } finally {
+                this.state.PendingSpillPrologue = outerSpillPrologue
+                this.state.ActiveCallSiteHandlerCaptures = previousCaptures
+            }
+            var typeArguments IReadOnlyList[GTypeReference]? = nil
+            if method.IsGenericMethod && !method.TypeArguments.IsDefaultOrEmpty && method.TypeArguments.All(
+                (t ITypeSymbol) -> t.TypeKind != TypeKind.Error
+            ) &&
+                (
+                HasErasureCollidingNonGenericSibling(method) || this.AppendCallNeedsExplicitTypeArguments(
+                    method,
+                    appendCall,
+                    startIndex
+                )
+            ) {
+                typeArguments = method
+                    .TypeArguments
+                    .Select((t ITypeSymbol) -> this.typeMapper.Map(t, this.context, appendOp.Syntax.GetLocation())!!)
+                    .ToList()
+            }
+            let callExpr = InvocationExpression(target, args, typeArguments)
+            return if nestedPrologue.Count == 0 {
+                callExpr
+            } else {
+                cast[GExpression](BlockExpression(nestedPrologue, callExpr))
+            }
+        }
+
+        private func AppendCallNeedsExplicitTypeArguments(
+            method IMethodSymbol,
+            appendCall IInvocationOperation,
+            startIndex int32
+        ) bool {
+            for var i = startIndex; i < appendCall.Arguments.Length; i++ {
+                let arg = appendCall.Arguments[i]
+                if arg.ArgumentKind == ArgumentKind.DefaultValue {
+                    continue
+                }
+                if arg.Value is IConversionOperation conv {
+                    if conv.Operand.ConstantValue.HasValue && conv.Operand.ConstantValue.Value == nil {
+                        return true
+                    }
+                    if conv.Operand.Type != nil && conv.Type != nil && !SymbolEqualityComparer.Default.Equals(
+                        conv.Operand.Type,
+                        conv.Type
+                    ) {
+                        return true
+                    }
+                } else if arg.Value.ConstantValue.HasValue && arg.Value.ConstantValue.Value == nil {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func AppendPackedParamsHandlerArgument(
+            arg IArgumentOperation,
+            appendOp IInterpolatedStringAppendOperation,
+            method IMethodSymbol,
+            nestedPrologue List[GStatement],
+            args List[GExpression]
+        ) {
+            if !this.TryUnwrapPackedParamsElements(arg.Value, out var packedElems) {
+                this.context.ReportUnsupported(
+                    appendOp.Syntax,
+                    "interpolated-string-handler packed params append argument could not be lowered (issue #5965)."
+                )
+                return
+            }
+            let paramType = arg.Parameter?.Type
+            let canExpandDirectly = paramType != nil &&
+                (
+                paramType is IArrayTypeSymbol ||
+                    (!method.DeclaringSyntaxReferences.IsDefaultOrEmpty && IsSupportedParamsCollectionType(paramType))
+            )
+            if appendOp.Kind == OperationKind.InterpolatedStringAppendLiteral {
+                if !canExpandDirectly && !(paramType != nil && IsSpanParamsCollectionType(paramType)) {
+                    this.context.ReportUnsupported(
+                        appendOp.Syntax,
+                        "interpolated-string-handler packed params AppendLiteral collection has no canonical G# lowering (issue #5965)."
+                    )
+                    return
+                }
+                for elemOp in packedElems {
+                    var literalValue = elemOp
+                    while literalValue is IConversionOperation literalConv {
+                        literalValue = literalConv.Operand
+                    }
+                    let text = literalValue.ConstantValue.Value as string ?? string.Empty
+                    args.Add(LiteralExpression.String(text))
+                }
+                return
+            }
+            if !canExpandDirectly {
+                this.context.ReportUnsupported(
+                    appendOp.Syntax,
+                    "interpolated-string-handler packed params AppendFormatted collection has no canonical G# lowering (issue #5965)."
+                )
+                return
+            }
+            let elemTargetType = switch paramType {
+                case arr is IArrayTypeSymbol: arr.ElementType
+                case INamedTypeSymbol{TypeArguments: {Length: 1}} coll: coll.TypeArguments[0]
+                default: default(ITypeSymbol?)
+            }
+            for elemOp in packedElems {
+                var unwrapped = elemOp
+                while unwrapped is IConversionOperation conv {
+                    unwrapped = conv.Operand
+                }
+                if unwrapped.Syntax is Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax elemSyntax {
+                    let translatedElem = this.TranslateWithPrologueAssignments(
+                        elemSyntax,
+                        nestedPrologue,
+                        () -> if arg.Parameter != nil && elemTargetType != nil {
+                            this.TranslateExpressionForTargetType(elemSyntax, elemOp, arg.Parameter!!, elemTargetType)
+                        } else {
+                            this.TranslateExpression(elemSyntax)
+                        }
+                    )
+                    args.Add(translatedElem!!)
+                } else if elemOp.ConstantValue.HasValue {
+                    args.Add(
+                        this.MapConstantValue(
+                            elemOp.ConstantValue.Value,
+                            elemTargetType ?? elemOp.Type,
+                            appendOp.Syntax,
+                            "AppendFormatted params argument"
+                        )!!
+                    )
+                } else {
+                    this.context.ReportUnsupported(
+                        appendOp.Syntax,
+                        "interpolated-string-handler packed params element has no G# expression form (issue #5965)."
+                    )
+                }
+            }
+        }
+
+        private func TranslateHandlerAppendArgument(
+            arg IArgumentOperation,
+            appendOp IInterpolatedStringAppendOperation
+        ) GExpression? {
+            if appendOp.Kind == OperationKind.InterpolatedStringAppendLiteral {
+                if arg.ArgumentKind == ArgumentKind.DefaultValue {
+                    return this.TranslateOperationDefaultArgument(
+                        appendOp.Syntax,
+                        arg,
+                        "AppendLiteral parameter",
+                        coerceToParameterType: true
+                    )
+                }
+                var literalValue = arg.Value
+                while literalValue is IConversionOperation literalConv {
+                    literalValue = literalConv.Operand
+                }
+                let text = literalValue.ConstantValue.Value as string ?? string.Empty
+                return LiteralExpression.String(text)
+            }
+            if arg.ArgumentKind == ArgumentKind.DefaultValue {
+                return this.TranslateOperationDefaultArgument(
+                    appendOp.Syntax,
+                    arg,
+                    "AppendFormatted parameter",
+                    coerceToParameterType: true
+                )
+            }
+            if arg.Value.Syntax is not Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax holeSyntax {
+                if arg.Value.ConstantValue.HasValue {
+                    return this.MapConstantValue(
+                        arg.Value.ConstantValue.Value,
+                        arg.Parameter?.Type ?? arg.Value.Type,
+                        appendOp.Syntax,
+                        "AppendFormatted argument"
+                    )
+                }
+                this.context.ReportUnsupported(
+                    appendOp.Syntax,
+                    "interpolated-string-handler append argument could not be lowered (issue #5965)."
+                )
+                return LiteralExpression.Null()
+            }
+            return this.TranslateExpressionForTargetParameter(holeSyntax, arg.Value, arg.Parameter)
+        }
+
+        private func TranslateExpressionForTargetParameter(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            operationValue IOperation,
+            targetParameter IParameterSymbol?
+        ) GExpression? {
+            if targetParameter == nil {
+                return this.TranslateExpression(expression)
+            }
+            return this.TranslateExpressionForTargetType(
+                expression,
+                operationValue,
+                targetParameter,
+                targetParameter.Type
+            )
+        }
+
+        private func TranslateExpressionForTargetType(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            operationValue IOperation,
+            targetParameter IParameterSymbol,
+            targetType ITypeSymbol
+        ) GExpression? {
+            if (targetParameter.RefKind == RefKind.In || targetParameter.RefKind == RefKind.RefReadOnlyParameter) &&
+                !targetParameter.ContainingSymbol.DeclaringSyntaxReferences.IsDefaultOrEmpty {
+                let translatedIn GExpression? = WithoutNonNullAssertion(this.TranslateExpression(expression))
+                if translatedIn is IdentifierExpression inId && this.IsReadOnlyAddressableStorageOperation(
+                    operationValue
+                ) &&
+                    SymbolEqualityComparer.IncludeNullability.Equals(operationValue.Type, targetType) {
+                    return OutArgumentExpression("in", inId.Name)
+                }
+            }
+            let targetIsPromotedSibling = !SymbolEqualityComparer.Default.Equals(
+                targetParameter.ContainingAssembly,
+                this.context.Compilation.Assembly
+            ) &&
+                targetParameter.ContainingAssembly?.Name is {} targetAsm &&
+                targetAsm != this.context.Compilation.AssemblyName &&
+                (this.context.RepositoryCompilations ?? this.context.SiblingCompilations)?.Any(
+                (comp CSharpCompilation) -> comp.AssemblyName == targetAsm
+            ) == true &&
+                this.ShouldPromoteToNullableReference(targetParameter)
+            let analyzerNullable = this.IsGSharpNullableAnalyzerExpression(expression)
+            let targetRequiresNonNull = (
+                this.TargetWillRemainNonNullableReference(targetType, targetParameter, expression) &&
+                    !targetIsPromotedSibling &&
+                    !this.IsObliviousImportedInferredTypeParameterTarget(targetParameter, expression)
+            ) ||
+                (
+                analyzerNullable && !targetIsPromotedSibling && this.AnalyzerBridgeTargetIsNonNull(
+                    targetType,
+                    targetParameter,
+                    expression
+                )
+            )
+            let hasUserDefinedConversion = this.GetUserDefinedConversionInputOperator(
+                expression,
+                targetType,
+                out _
+            ) != nil
+            var translated GExpression? = this.CoerceCovariantArrayConversion(
+                expression,
+                this.CoercePointerConversion(
+                    expression,
+                    this.CoerceExpressionToTargetNumeric(
+                        expression,
+                        operationValue,
+                        targetParameter,
+                        this.TranslateExpression(expression)
+                    )
+                )
+            )
+            if this.TryBridgeTupleValue(expression, translated, targetType, targetParameter, out var bridgedTuple) {
+                return bridgedTuple
+            }
+            if targetRequiresNonNull || hasUserDefinedConversion {
+                translated = if IsNullOrSuppressedNull(expression) &&
+                    targetType.IsReferenceType &&
+                    (
+                    targetParameter.ContainingAssembly?.Name == "Gsharp.Runtime.Values" ||
+                        ContainsTypeParameter(targetParameter.OriginalDefinition.Type)
+                ) {
+                    cast[GExpression](
+                        DefaultValueExpression(
+                            this.typeMapper.Map(
+                                targetType.WithNullableAnnotation(
+                                    Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated
+                                ),
+                                this.context,
+                                expression.GetLocation()
+                            )
+                        )
+                    )
+                } else {
+                    this.ForgiveNullableReferenceValue(
+                        expression,
+                        translated,
+                        targetType,
+                        targetParameter,
+                        includePromotedValue: true
+                    )
+                }
+            } else if this.TryGetEmittedNonNullGenericSlotType(
+                targetParameter,
+                expression.GetLocation(),
+                out var nonNullSlotType,
+                expression
+            ) {
+                if IsNullOrSuppressedNull(expression) {
+                    if translated is not DefaultValueExpression {
+                        translated = DefaultValueExpression(nonNullSlotType)
+                    }
+                } else if !this.SinkInfersTypeFromValue(targetParameter, expression) &&
+                    !this.GSharpExpressionIsStaticallyNonNull(expression, translated) {
+                    translated = ParenthesizedExpression(
+                        BinaryExpression(translated, "??", DefaultValueExpression(nonNullSlotType))
+                    )
+                }
+            }
+            return this.BridgeWidenedImplicitArrayConsumer(expression, translated, targetType, targetParameter)
+        }
+
+        private func CoerceExpressionToTargetNumeric(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            operationValue IOperation,
+            targetParameter IParameterSymbol,
+            translated GExpression?
+        ) GExpression? {
+            var sourceType = this.context.GetTypeInfo(expression).Type
+            var convertedType = operationValue.Type
+            if !TryGetNumericKind(sourceType, out var srcKind) ||
+                !TryGetNumericKind(convertedType, out var dstKind) ||
+                srcKind == dstKind {
+                return translated
+            }
+            let targetsConcrete = TryGetNumericKind(targetParameter.OriginalDefinition.Type, out _)
+            if targetsConcrete &&
+                (IsGSharpImplicitNumericWidening(srcKind, dstKind) || IsFoldableIntegerLiteral(expression)) {
+                return translated
+            }
+            if expression is Microsoft.CodeAnalysis.CSharp.Syntax.LiteralExpressionSyntax literal && literal.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.NumericLiteralExpression
+            ) {
+                if !targetsConcrete {
+                    return this.CoerceOperandTo(translated, convertedType, expression.GetLocation())
+                }
+                return this.CoerceConstantToUnsigned(expression, translated)
+            }
+            return this.CoerceOperandTo(translated, convertedType, expression.GetLocation())
+        }
+
         private func TranslateInterpolatedString(
+            interpolated Microsoft.CodeAnalysis.CSharp.Syntax.InterpolatedStringExpressionSyntax
+        ) GExpression {
+            if this.TryGetInterpolatedStringHandlerCreation(interpolated, out var handlerOp) {
+                return this.TranslateInterpolatedStringHandlerCreation(handlerOp!!)
+            }
+            return this.TranslateInterpolatedStringLiteralParts(interpolated)
+        }
+
+        private func TranslateInterpolatedStringLiteralParts(
             interpolated Microsoft.CodeAnalysis.CSharp.Syntax.InterpolatedStringExpressionSyntax
         ) GExpression {
             // Issue #2015: the number of leading `$` characters on the string-start

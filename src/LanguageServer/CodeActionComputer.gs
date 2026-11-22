@@ -252,6 +252,9 @@ shared class CodeActionComputer {
         gateOptions.SyntaxOnly = true
         let baseline = DeltaBaseline.Create(compilation, gateOptions, ct)
         var fullBaseline DeltaBaseline? = nil
+        var bindBaseline DeltaBaseline? = nil
+        // ADR-0227 D5 (issue #6164): a client that gets no tab stops gets placeholder text that binds.
+        let plainClient = !client.SupportsDocumentChanges || !client.SupportsSnippetEdits
         // First the fixes that survive the gate, their computation and the edit; then the actions,
         // so that the preferred fix is chosen among the fixes that the client gets.
         let survivors = List[Candidate]()
@@ -260,7 +263,15 @@ shared class CodeActionComputer {
             // A provider's deferred computation can throw. That fix is dropped; the others stay.
             var changes FixChanges? = nil
             try {
-                if !service.ComputeDelta(baseline, fix, ct).AddedSyntax.IsEmpty {
+                var candidate = fix.GetChanges(ct)
+                // The edit that the gate checks is the edit that the client gets.
+                if plainClient && candidate.Documents.Any((d DocumentChanges) -> !d.Placeholders.IsEmpty) {
+                    if bindBaseline == nil {
+                        bindBaseline = DeltaBaseline.Create(compilation, DeltaOptions(), ct)
+                    }
+                    candidate = PlainPlaceholders(service, bindBaseline, candidate, fix.Diagnostics, ct)
+                }
+                if !service.ComputeDelta(baseline, candidate, fix.Diagnostics, ct).AddedSyntax.IsEmpty {
                     continue
                 }
                 // ADR-0227 Q4: a data-defined fix must pass the full gate: it adds no diagnostic.
@@ -268,11 +279,14 @@ shared class CodeActionComputer {
                     if fullBaseline == nil {
                         fullBaseline = DeltaBaseline.Create(compilation, FullGateOptions(analyzers), ct)
                     }
-                    if !PassesFullGate(fullBaseline, service.ComputeDelta(fullBaseline, fix, ct)) {
+                    if !PassesFullGate(
+                        fullBaseline,
+                        service.ComputeDelta(fullBaseline, candidate, fix.Diagnostics, ct)
+                    ) {
                         continue
                     }
                 }
-                changes = fix.GetChanges(ct)
+                changes = candidate
             } catch (ex OperationCanceledException) when ct.IsCancellationRequested {
                 rethrow
             } catch (ex Exception) when !(ex is OutOfMemoryException) && !(ex is StackOverflowException) {
@@ -444,6 +458,96 @@ shared class CodeActionComputer {
             return PlainEdits(document)
         }
         return edits
+    }
+
+    // ADR-0227 D5 (issue #6164): the placeholder text for a client without snippet edits. The fix keeps
+    // its own text when the edit adds no error; otherwise every placeholder becomes a target-typed
+    // `default` with a `TODO` comment that names it, when that adds no error. When neither binds, the
+    // fix keeps its own text.
+    internal func PlainPlaceholders(
+        service CodeFixService,
+        baseline DeltaBaseline,
+        changes FixChanges,
+        targets ImmutableArray[CoreDiagnostic],
+        ct CancellationToken
+    ) FixChanges {
+        if AddsNoError(service, baseline, changes, targets, ct) {
+            return changes
+        }
+        let replaced FixChanges? = ReplacePlaceholders(changes, PlaceholderDefault)
+        if replaced != nil && AddsNoError(service, baseline, replaced, targets, ct) {
+            return replaced
+        }
+        return changes
+    }
+
+    private func AddsNoError(
+        service CodeFixService,
+        baseline DeltaBaseline,
+        changes FixChanges,
+        targets ImmutableArray[CoreDiagnostic],
+        ct CancellationToken
+    ) bool {
+        let delta = service.ComputeDelta(baseline, changes, targets, ct)
+        return !delta.ParseOnly && !delta.Added.Any((d CoreDiagnostic) -> d.IsError)
+    }
+
+    // A target-typed default, with the placeholder's text in a comment when it fits in one.
+    internal func PlaceholderDefault(text string) string {
+        if text.Length == 0 || text.Contains("*/") || text.Contains("/*") || text.Contains('\n') || text.Contains(
+            '\r'
+        ) {
+            return "default /* TODO */"
+        }
+        return "default /* TODO: ${text} */"
+    }
+
+    // Replaces the text of every placeholder; `null` when a placeholder is not inside the new text of one
+    // change. The placeholders of the result cover the replacements.
+    internal func ReplacePlaceholders(changes FixChanges, replace(string) -> string) FixChanges? {
+        let documents = ImmutableArray.CreateBuilder[DocumentChanges](changes.Documents.Length)
+        for document in changes.Documents {
+            let placeholders = document.Placeholders.OrderBy((p TextSpan) -> p.Start).ToList()
+            if placeholders.Count == 0 {
+                documents.Add(document)
+                continue
+            }
+            let newChanges = ImmutableArray.CreateBuilder[TextChange](document.Changes.Length)
+            let newPlaceholders = ImmutableArray.CreateBuilder[TextSpan](placeholders.Count)
+            var used = 0
+            // The offset of a change's new text in the changed text, before and after the replacement.
+            var delta = 0
+            var newDelta = 0
+            for change in document.Changes {
+                let start = change.Span.Start + delta
+                let end = start + change.NewText.Length
+                delta += change.NewText.Length - change.Span.Length
+                let text = System.Text.StringBuilder()
+                var position = 0
+                while used < placeholders.Count && placeholders[used].Start >= start && placeholders[used].End <= end {
+                    let placeholder = placeholders[used]
+                    let offset = placeholder.Start - start
+                    if offset < position {
+                        return nil
+                    }
+                    text.Append(change.NewText, position, offset - position)
+                    let value = replace(change.NewText.Substring(offset, placeholder.Length))
+                    newPlaceholders.Add(TextSpan(change.Span.Start + newDelta + text.Length, value.Length))
+                    text.Append(value)
+                    position = offset + placeholder.Length
+                    used++
+                }
+                text.Append(change.NewText, position, change.NewText.Length - position)
+                let newText = text.ToString()
+                newChanges.Add(TextChange(change.Span, newText))
+                newDelta += newText.Length - change.Span.Length
+            }
+            if used != placeholders.Count {
+                return nil
+            }
+            documents.Add(DocumentChanges(document.Tree, newChanges.ToImmutable(), newPlaceholders.ToImmutable()))
+        }
+        return FixChanges(documents.ToImmutable())
     }
 
     // LSP snippet syntax: a backslash escapes `$`, `}` and `\`.

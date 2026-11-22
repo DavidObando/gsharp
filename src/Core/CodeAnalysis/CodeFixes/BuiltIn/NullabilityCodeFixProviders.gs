@@ -15,8 +15,8 @@ import System.Collections.Immutable
 import System.Linq
 
 /// GS0158 on a member of a nullable receiver: `.` → `?.` (ADR-0099, moved to Core by ADR-0227 D7).
-/// @remarks The semantic model must give the receiver a nullable type. Where it has no answer (a
-/// function literal body, #6149; an argument of a failed call, #6150), the receiver must look nullable from the
+/// @remarks The semantic model must give the receiver a nullable type. Where it has no answer (an
+/// argument the binder never bound, such as a function literal argument of a failed call), the receiver must look nullable from the
 /// syntax: a `?.` chain, a `nil` literal, or a name whose declared type clause ends with `?`. The
 /// fix changes the result type, so it is
 /// (cref:Applicability.MaybeIncorrect).
@@ -51,8 +51,8 @@ internal class NullConditionalAccessCodeFixProvider : GSharpCodeFixProvider {
         if IsAssignmentTarget(accessor) {
             return
         }
-        // The receiver's type decides (#6127). The model has no answer inside a function literal
-        // (#6149) or in an argument of a call that fails too (#6150); there the syntax decides.
+        // The receiver's type decides (#6127, #6149, #6150). The model has no answer in an argument
+        // the binder never bound (a function literal argument of a failed call); there the syntax decides.
         let model = context.SemanticModel
         let receiverType = model.GetReceiverTypeInfo(accessor.LeftPart, context.CancellationToken).Type ??
             model.GetTypeInfo(accessor.LeftPart, context.CancellationToken).Type

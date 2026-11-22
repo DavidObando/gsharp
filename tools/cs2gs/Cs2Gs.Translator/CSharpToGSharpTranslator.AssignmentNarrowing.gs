@@ -860,8 +860,8 @@ partial class CSharpToGSharpTranslator {
             if node is InterpolatedStringExpressionSyntax interpolation {
                 var operation = this.context.SemanticModel.GetOperation(interpolation)
                 while operation != nil && operation.Syntax.Span.Contains(interpolation.Span) {
-                    if operation is IInterpolatedStringHandlerCreationOperation {
-                        // gsc treats every custom-handler hole as optional, including handlers without explicit gates.
+                    if operation is IInterpolatedStringHandlerCreationOperation handlerOp &&
+                        (handlerOp.HandlerCreationHasSuccessParameter || handlerOp.HandlerAppendCallsReturnBool) {
                         return this.GetGSharpOptionalOperandMutationProof(
                             nil,
                             interpolation,

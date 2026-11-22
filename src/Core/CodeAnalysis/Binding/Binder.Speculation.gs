@@ -23,10 +23,12 @@ internal class SpeculativeBodyBind {
     internal init(
         oldDiagnostics ImmutableArray[Diagnostic],
         newDiagnostics ImmutableArray[Diagnostic],
+        oldBody BoundBlockStatement,
         newBody BoundBlockStatement
     ) {
         OldDiagnostics = oldDiagnostics
         NewDiagnostics = newDiagnostics
+        OldBody = oldBody
         NewBody = newBody
     }
 
@@ -42,6 +44,11 @@ internal class SpeculativeBodyBind {
 
     /// Gets the diagnostics of the replacement body.
     prop NewDiagnostics ImmutableArray[Diagnostic] {
+        get;
+    }
+
+    /// Gets the lowered declared body, bound speculatively.
+    prop OldBody BoundBlockStatement? {
         get;
     }
 
@@ -104,9 +111,13 @@ partial class Binder {
             if newPass.FallbackReason != nil {
                 return SpeculativeBodyBind(newPass.FallbackReason)
             }
-            if !SameSummary(oldPass.Direct!!, newPass.Direct!!) ||
-                !SameSummary(oldPass.WithOverrides!!, newPass.WithOverrides!!) {
-                return SpeculativeBodyBind("the edit changes the call-effect summary of the member")
+            // A caller reads the member's summary as its own root sees it: whether that root takes a
+            // sequence decides whether deferred-enumeration effects count (issue #6162). Both answers
+            // must keep the summary.
+            for var i = 0; i < oldPass.Summaries.Length; i++ {
+                if !SameSummary(oldPass.Summaries[i], newPass.Summaries[i]) {
+                    return SpeculativeBodyBind("the edit changes the call-effect summary of the member")
+                }
             }
             // The narrowing of every caller reads the body for a proof that the member returns a non-nil
             // value. A value of a value type is never nil, so no caller asks.
@@ -147,7 +158,7 @@ partial class Binder {
                     }
                 }
             }
-            return SpeculativeBodyBind(oldPass.Diagnostics, newPass.Diagnostics, newPass.Body!!)
+            return SpeculativeBodyBind(oldPass.Diagnostics, newPass.Diagnostics, oldPass.Body!!, newPass.Body!!)
         }
 
         private func BindSpeculativePass(
@@ -192,32 +203,27 @@ partial class Binder {
                         return SpeculativePass("the body calls a deferred LINQ operator")
                     }
                 }
-                let direct = probe.statements.GetFunctionEffectSummaryForSpeculation(
-                    function,
-                    includeOverrides: false,
-                    out var directCycle
-                )
-                let withOverrides = Binder(parentScope, function).statements.GetFunctionEffectSummaryForSpeculation(
-                    function,
-                    includeOverrides: true,
-                    out var overridesCycle
-                )
-                if directCycle || overridesCycle {
-                    return SpeculativePass("the call-effect summary of the member has a cycle")
+                // The member's summary as a caller sees it, direct and with overrides, under a root that
+                // takes no sequence and under one that does (issue #6162). Each summary cache has a slot
+                // for each answer, so a summary does not depend on the traversals before it.
+                let summaries = ImmutableArray.CreateBuilder[CallEffectSummary](4)
+                for includeOverrides in[]bool{false, true} {
+                    for rootTakesSequence in[]bool{false, true} {
+                        let summary = Binder(parentScope, function).statements.GetFunctionEffectSummaryForSpeculation(
+                            function,
+                            includeOverrides,
+                            rootTakesSequence,
+                            out var cycle
+                        )
+                        if cycle {
+                            return SpeculativePass("the call-effect summary of the member has a cycle")
+                        }
+                        summaries.Add(summary)
+                    }
                 }
-                // A summary that depends on the root of its traversal (whether the root takes a sequence)
-                // is not the member's own: a caller that takes a sequence sees other effects, and the full
-                // pass caches the callees' summaries as its earlier roots saw them.
+                // The bind starts from empty summary caches, as the bind of a body pass does.
                 let services = parentScope.GetBindingServices()
-                if services.EnumerationEffectsDependOnRoot {
-                    return SpeculativePass("a call-effect summary of the member depends on the caller")
-                }
-                // The traversal from this member caches the summaries of its callees as seen from it (a
-                // callee's enumeration of a sequence can run a deferred callback only when the root takes a
-                // sequence). The bind asks for each callee's summary as its own root, so it starts without
-                // them.
-                services.CachedCallEffectSummaries = nil
-                services.CachedCallEffectSummariesWithOverrides = nil
+                services.ClearCallEffectSummaries()
                 let allPathsReturnLocation = if function.Type != TypeSymbol.Void {
                     declaration.Identifier.Location
                 } else {
@@ -232,9 +238,6 @@ partial class Binder {
                     allPathsReturnLocation,
                     convenienceConstructor: nil
                 )
-                if services.EnumerationEffectsDependOnRoot {
-                    return SpeculativePass("a call-effect summary that the bind reads depends on the caller")
-                }
                 if (globalScope.RefDelegateCache is {} && parentScope.GetSynthesizedRefDelegateCache().WasQueried) ||
                     parentScope.GetAnonymousTypeCache().Symbols.Count != anonymousTypes ||
                     parentScope.GetRichAnonymousObjectPlans().Count != richPlans ||
@@ -245,7 +248,7 @@ partial class Binder {
                     registry.ProtocolOperations.Count > 0 {
                     return SpeculativePass("the body synthesizes a type that the pass shares")
                 }
-                return SpeculativePass(result.Body, result.Diagnostics, direct, withOverrides, probe)
+                return SpeculativePass(result.Body, result.Diagnostics, summaries.MoveToImmutable(), probe)
             } finally {
                 parentScope.SetCurrentReferencingSyntaxTree(previousTree)
                 parentScope.SetCurrentDeclaringPackage(previousPackage)
@@ -317,19 +320,18 @@ partial class Binder {
         init(reason string) {
             FallbackReason = reason
             Diagnostics = ImmutableArray[Diagnostic].Empty
+            Summaries = ImmutableArray[CallEffectSummary].Empty
         }
 
         init(
             body BoundBlockStatement,
             diagnostics ImmutableArray[Diagnostic],
-            direct CallEffectSummary,
-            withOverrides CallEffectSummary,
+            summaries ImmutableArray[CallEffectSummary],
             probe Binder
         ) {
             Body = body
             Diagnostics = diagnostics
-            Direct = direct
-            WithOverrides = withOverrides
+            Summaries = summaries
             Probe = probe
         }
 
@@ -345,11 +347,9 @@ partial class Binder {
             get;
         }
 
-        prop Direct CallEffectSummary? {
-            get;
-        }
-
-        prop WithOverrides CallEffectSummary? {
+        // The member's summaries: direct and with overrides, each under a root that takes no sequence
+        // and under one that does.
+        prop Summaries ImmutableArray[CallEffectSummary] {
             get;
         }
 

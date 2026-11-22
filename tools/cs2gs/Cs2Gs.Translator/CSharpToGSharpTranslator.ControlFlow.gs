@@ -2397,6 +2397,23 @@ partial class CSharpToGSharpTranslator {
                         CompilationMeasurements.Count("translation.scope_write_candidates")
                     }
                 }
+                if current is RefExpressionSyntax refExpr {
+                    current = refExpr.Expression
+                    continue
+                }
+                if current is ConditionalExpressionSyntax condExpr &&
+                    (
+                    CSharpToGSharpTranslator.UnwrapParenthesesAndSuppressions(
+                        condExpr.WhenTrue
+                    ) is RefExpressionSyntax ||
+                        CSharpToGSharpTranslator.UnwrapParenthesesAndSuppressions(
+                        condExpr.WhenFalse
+                    ) is RefExpressionSyntax
+                ) {
+                    this.IndexScopeWriteTarget(candidates, bindings, write, condExpr.WhenTrue)
+                    this.IndexScopeWriteTarget(candidates, bindings, write, condExpr.WhenFalse)
+                    return
+                }
                 if current is TupleExpressionSyntax tuple {
                     for argument in tuple.Arguments {
                         this.IndexScopeWriteTarget(candidates, bindings, write, argument.Expression)
@@ -3033,6 +3050,18 @@ partial class CSharpToGSharpTranslator {
                 target = UnwrapParenthesesAndSuppressions(target)
                 if BindsTo(target, symbol, model) {
                     return true
+                }
+                if target is RefExpressionSyntax refTarget {
+                    target = refTarget.Expression
+                    continue
+                }
+                if target is ConditionalExpressionSyntax condTarget &&
+                    (
+                    UnwrapParenthesesAndSuppressions(condTarget.WhenTrue) is RefExpressionSyntax ||
+                        UnwrapParenthesesAndSuppressions(condTarget.WhenFalse) is RefExpressionSyntax
+                ) {
+                    return WritesStorageOf(condTarget.WhenTrue, symbol, model) ||
+                        WritesStorageOf(condTarget.WhenFalse, symbol, model)
                 }
                 let receiver ExpressionSyntax? = switch target {
                     case member is MemberAccessExpressionSyntax when member.IsKind(
