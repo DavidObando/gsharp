@@ -94,14 +94,15 @@ internal class BinderContext {
     /// Remembers [`bound`](paramref) when [`syntax`](paramref) is a call argument, so a call that
     /// fails keeps it for the semantic model (#6150). The record is keyed by the argument as the
     /// argument list holds it (inside a named argument), reached from its operand through
-    /// parentheses and `ref`/`out`; the last bind of the argument wins, so the argument's own bind
+    /// parentheses, `checked`/`unchecked` and `ref`/`out`; the last bind of the argument wins, so the argument's own bind
     /// (the address-of, the conditional reference, the inline declaration, the target-typed
     /// function literal) replaces its operand's.
     /// @param syntax The expression the binder bound.
     /// @param bound Its bound node.
     internal func RecordCallArgument(syntax SyntaxNode, bound BoundExpression) {
         var argument SyntaxNode = syntax
-        while argument.Parent is {} enclosing and (ParenthesizedExpressionSyntax or RefArgumentExpressionSyntax) {
+        while argument.Parent is {} enclosing and
+            (ParenthesizedExpressionSyntax or CheckedExpressionSyntax or RefArgumentExpressionSyntax) {
             argument = enclosing
         }
         var listed SyntaxNode = argument

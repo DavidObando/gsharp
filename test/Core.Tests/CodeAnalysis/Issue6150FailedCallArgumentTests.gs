@@ -156,12 +156,17 @@ open class Issue6150FailedCallArgumentTests {
         Assert.Equal(expected?.ToString(), model.GetTypeInfo(outArgument).Type?.ToString())
     }
 
-    @Fact
-    func FunctionLiteralArgumentOfAFailedImportedCall_BodyAnswers() {
+    @Theory
+    @InlineData("values.FindAll((v int32) -> v > x, 2)")
+    @InlineData("values.FindAll(checked((v int32) -> v > x), 2)")
+    @InlineData("values.FindAll(((v int32) -> v > x), 2)")
+    func FunctionLiteralArgumentOfAFailedImportedCall_BodyAnswers(call string) {
         // The literal is bound against the candidates' delegate type, not through the expression
         // dispatch, before the arity check rejects the call.
         let (model, tree, compilation) = CreateModel(
-            "package P\n\nimport System.Collections.Generic\n\nfunc F(values List[int32]) {\n    let x = 1\n    let k = values.FindAll((v int32) -> v > x, 2)\n}\n"
+            "package P\n\nimport System.Collections.Generic\n\nfunc F(values List[int32]) {\n    let x = 1\n    let k = " +
+                call +
+                "\n}\n"
         )
         Assert.Contains(compilation.GetDiagnostics(), (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
         let x = Assert.Single(Names(tree, "x"))
